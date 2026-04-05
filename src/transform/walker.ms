@@ -18,7 +18,9 @@ import {
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
 	HiddenDerefData, HiddenStdConvData,
 	TypeAssertionData, DestructuringDeclData, QuoteExprData, ComptimeBlockData,
-	MacroInvocationData, TestDeclData, AssertStmtData,
+	MacroInvocationData, TestDeclData, AssertStmtData, PropertyDeclData,
+	ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
+	TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData,
 } from "../ast/node";
 import { TransformContext } from "./context";
 
@@ -311,7 +313,6 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d = node.data as OutExprData;
 			d.outArg = f(d.outArg);
 		},
-		NodeKind.SizeofExpr => {},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
 			const d = node.data as HiddenDerefData;
 			d.expr = f(d.expr);
@@ -353,8 +354,77 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d = node.data as AssertStmtData;
 			d.assertExpr = f(d.assertExpr);
 		},
-		// Leaf nodes (no children to walk)
-		_ => {},
+		NodeKind.PropertyDecl => {
+			const d = node.data as PropertyDeclData;
+			if (d.propInitializer !== null) { d.propInitializer = f(d.propInitializer); }
+		},
+		NodeKind.ArrayPattern => {
+			const d = node.data as ArrayPatternData;
+			let i = 0;
+			while (i < d.patternElements.length) {
+				d.patternElements[i] = f(d.patternElements[i]);
+				i += 1;
+			}
+		},
+		NodeKind.ObjectPattern => {
+			const d = node.data as ObjectPatternData;
+			let i = 0;
+			while (i < d.patternProps.length) {
+				d.patternProps[i] = f(d.patternProps[i]);
+				i += 1;
+			}
+		},
+		NodeKind.ObjectPatternProp => {
+			const d = node.data as ObjectPatternPropData;
+			if (d.propAlias !== null) { d.propAlias = f(d.propAlias); }
+		},
+		NodeKind.TypeGeneric => {
+			const d = node.data as TypeGenericData;
+			d.typExprBase = f(d.typExprBase);
+			let i = 0;
+			while (i < d.typExprArgs.length) {
+				d.typExprArgs[i] = f(d.typExprArgs[i]);
+				i += 1;
+			}
+		},
+		NodeKind.TypeArray => {
+			const d = node.data as TypeArrayData;
+			d.typExprElement = f(d.typExprElement);
+		},
+		NodeKind.TypeUnion => {
+			const d = node.data as TypeUnionData;
+			let i = 0;
+			while (i < d.typExprMembers.length) {
+				d.typExprMembers[i] = f(d.typExprMembers[i]);
+				i += 1;
+			}
+		},
+		NodeKind.TypeFunction => {
+			const d = node.data as TypeFunctionData;
+			let i = 0;
+			while (i < d.typExprParams.length) {
+				d.typExprParams[i] = f(d.typExprParams[i]);
+				i += 1;
+			}
+			if (d.typExprReturn !== null) { d.typExprReturn = f(d.typExprReturn); }
+		},
+		NodeKind.TypeObject => {
+			const d = node.data as TypeObjectData;
+			let i = 0;
+			while (i < d.typExprFieldTypes.length) {
+				d.typExprFieldTypes[i] = f(d.typExprFieldTypes[i]);
+				i += 1;
+			}
+		},
+		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
+		// adding a new NodeKind forces an exhaustiveness error here — keeping
+		// this walker in sync with the AST by construction.
+		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral
+			| NodeKind.NullLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral
+			| NodeKind.Identifier | NodeKind.TypeAnnotation | NodeKind.SizeofExpr
+			| NodeKind.BreakStmt | NodeKind.ContinueStmt | NodeKind.UnreachableStmt
+			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl | NodeKind.EnumDecl
+			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ExternDecl => {},
 	};
 }
 

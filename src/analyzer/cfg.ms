@@ -7,6 +7,7 @@
 // enabling MOVE instead of COPY. Handles branches, loops, returns.
 
 import { Node, NodeKind, ProgramData, Symbol, IdentifierData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, MoveExprData, HiddenDerefData, HiddenStdConvData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, ExportDeclData, ForStmtData, ForOfStmtData, SymbolKind } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
 import { AliasKind, aliases, getRootSym } from "./alias";
 import { makeSymbol } from "../checker/symbol";
 import { unknownType } from "../checker/types";
@@ -202,7 +203,10 @@ function walkExpr(node: Node, ctx: BuildCtx): void {
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			walkExpr((node.data as HiddenStdConvData).convExpr, ctx);
 		},
-		_ => {},
+		// Default: descend via canonical walker so new expression kinds still
+		// contribute def/use edges. Function bodies are explicitly skipped
+		// above (higher precedence), so inner functions stay isolated.
+		_ => { forEachChild(node, (child: Node): void => { walkExpr(child, ctx); }); },
 	};
 }
 
@@ -395,7 +399,12 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 			}
 			ctx.loops.pop();
 		},
-		_ => {},
+		// Default: for any unknown statement kind, descend via the canonical
+		// walker to harvest def/use edges from sub-expressions. CFG control-flow
+		// edges (fork/goto/loop) are NOT synthesized for unknown kinds — that's
+		// a known degradation, but use tracking remains sound. Post-transform,
+		// all known control-flow kinds are listed explicitly above.
+		_ => { forEachChild(node, (child: Node): void => { walkExpr(child, ctx); }); },
 	};
 }
 
@@ -816,74 +825,27 @@ function makeTestSym(name: string): Symbol {
 	return makeSymbol(name, SymbolKind.Variable, unknownType(), false);
 }
 
+// Test helper: walk a subtree and attach `sym` to every Identifier whose
+// name matches `name`. Also tags matching VariableDecl nodes directly.
+// Scope boundaries (nested function bodies) terminate recursion.
 function attachSymAll(node: Node, name: string, sym: Symbol): void {
 	if (node === null) return;
 	if (node.kind === NodeKind.Identifier) {
 		if ((node.data as IdentifierData).name === name) node.resolvedSym = sym;
 		return;
 	}
-	if (node.kind === NodeKind.MemberExpr) {
-		attachSymAll((node.data as MemberExprData).object, name, sym);
-		return;
+	if (node.kind === NodeKind.VariableDecl) {
+		if ((node.data as VariableDeclData).declName === name) node.resolvedSym = sym;
 	}
-	if (node.kind === NodeKind.ArrayAccess) {
-		const d = node.data as ArrayAccessData;
-		attachSymAll(d.array, name, sym);
-		attachSymAll(d.index, name, sym);
-		return;
-	}
-	if (node.kind === NodeKind.CallExpr) {
-		const d = node.data as CallExprData;
-		for (const a of d.arguments) { attachSymAll(a, name, sym); }
-		return;
-	}
-	if (node.kind === NodeKind.BinaryExpr) {
-		const d = node.data as BinaryExprData;
-		attachSymAll(d.left, name, sym);
-		attachSymAll(d.right, name, sym);
-		return;
-	}
+	if (node.kind === NodeKind.FunctionDecl
+		|| node.kind === NodeKind.ArrowFunction
+		|| node.kind === NodeKind.FunctionExpr) return;
+	forEachChild(node, (c: Node): void => { attachSymAll(c, name, sym); });
 }
 
+// Test helper alias kept for backward compatibility with existing test call sites.
 function attachSymToStmts(body: Node, name: string, sym: Symbol): void {
-	if (body === null) return;
-	if (body.kind === NodeKind.Program) {
-		const d = body.data as ProgramData;
-		for (const s of d.programStmts) { attachSymToStmts(s, name, sym); }
-		return;
-	}
-	if (body.kind === NodeKind.BlockStmt) {
-		const d = body.data as BlockStmtData;
-		for (const s of d.statements) { attachSymToStmts(s, name, sym); }
-		return;
-	}
-	if (body.kind === NodeKind.ExprStmt) {
-		attachSymAll((body.data as ExprStmtData).expr, name, sym);
-		return;
-	}
-	if (body.kind === NodeKind.VariableDecl) {
-		const d = body.data as VariableDeclData;
-		if (d.declName === name) body.resolvedSym = sym;
-		attachSymAll(d.initializer, name, sym);
-		return;
-	}
-	if (body.kind === NodeKind.ReturnStmt) {
-		attachSymAll((body.data as ReturnStmtData).argument, name, sym);
-		return;
-	}
-	if (body.kind === NodeKind.IfStmt) {
-		const d = body.data as IfStmtData;
-		attachSymAll(d.condition, name, sym);
-		attachSymToStmts(d.consequent, name, sym);
-		attachSymToStmts(d.alternate, name, sym);
-		return;
-	}
-	if (body.kind === NodeKind.WhileStmt) {
-		const d = body.data as WhileStmtData;
-		attachSymAll(d.whileCondition, name, sym);
-		attachSymToStmts(d.whileBody, name, sym);
-		return;
-	}
+	attachSymAll(body, name, sym);
 }
 
 test "field-level: x.b last-read when only x.a used later" {

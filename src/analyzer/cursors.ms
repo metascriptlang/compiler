@@ -26,6 +26,7 @@ import {
 	ExportDeclData, ProgramData,
 	TypeAssertionData, HiddenStdConvData,
 } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
 import { parseInput } from "../transform/testUtil";
 
 // ===== Constants =====
@@ -508,7 +509,12 @@ function liveRanges(p: Partitions, node: Node): void {
 		NodeKind.ExportDecl => {
 			liveRanges(p, (node.data as ExportDeclData).exportedDecl);
 		},
-		_ => {},
+		// Default: descend via canonical walker so live ranges of variables
+		// referenced inside unknown kinds (future expr/stmt forms) are still
+		// tracked. Inner function bodies are explicitly handled above and
+		// terminate recursion — forEachChild will still hand them to us, but
+		// the match routes them to the skip branch on re-entry.
+		_ => { forEachChild(node, (child: Node): void => { liveRanges(p, child); }); },
 	};
 }
 
@@ -745,7 +751,12 @@ function trav(p: Partitions, node: Node): void {
 		NodeKind.ExportDecl => {
 			trav(p, (node.data as ExportDeclData).exportedDecl);
 		},
-		_ => {},
+		// Default: descend via canonical walker so graph edges are built for
+		// variables referenced inside unknown kinds. Keeps cursor inference
+		// conservative: any use we miss defaults to "not a cursor" (owned),
+		// which is always safe. Inner functions re-enter the match above and
+		// hit the explicit skip branch.
+		_ => { forEachChild(node, (child: Node): void => { trav(p, child); }); },
 	};
 }
 

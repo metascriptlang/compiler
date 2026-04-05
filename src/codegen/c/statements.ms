@@ -682,21 +682,22 @@ function genSwitchStmt(g: CGen, p: CProc, node: Node): void {
 		const cd = caseNode.data as SwitchCaseData;
 
 		if (cd.isDefault) {
-			emitStmtsLine(p, "default: {");
+			emitStmtsLine(p, "default:");
 		} else {
 			for (const test of cd.caseTests) {
 				const testSnippet = genExpr(g, p, test);
 				emitStmtsLine(p, `case ${testSnippet}:`);
 			}
-			emitStmts(p, "{");
-			emitStmtsNl(p);
 		}
 
+		// Emit case body without wrapping braces — MetaScript hoists all locals to
+		// function top, so no case-local scope is needed, and hand-written C style
+		// omits the braces. If the body is itself a BlockStmt, genStmts unwraps it
+		// naturally by iterating its statements.
 		setStmtsIndent(p, oldIndent + 2);
 		genStmts(g, p, cd.caseStmts);
 		emitStmtsLine(p, "break;");
 		setStmtsIndent(p, oldIndent + 1);
-		emitStmtsLine(p, "}");
 	}
 
 	setStmtsIndent(p, oldIndent);

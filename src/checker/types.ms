@@ -195,7 +195,39 @@ export function createPromise(innerType: Type): Type {
 	return createGenericInstance(base, [innerType]);
 }
 
+// PARALOCK Phase 1: SpawnHandle<T> is a distinct affine type produced by spawn(...).
+// Structurally identical to Promise<T> at the runtime/transform level (same GenericInstance
+// shape, same typeChildren[0] = inner type), so isPromise() accepts it and downstream
+// transform passes (spawnLower, asyncBridge, builtinLower, pointerParam) work unchanged.
+// The nominal distinction lives in isSpawnHandle() + the compat.ms upcast rule.
+export function createSpawnHandle(innerType: Type): Type {
+	const base = emptyType();
+	base.kind = TypeKind.Struct;
+	base.typeName = "SpawnHandle";
+	base.typeNames = [];
+	base.typeChildren = [];
+	return createGenericInstance(base, [innerType]);
+}
+
+// Permissive: matches both Promise<T> and SpawnHandle<T>.
+// Load-bearing for transform passes that detect spawn results by type.
+// Callers that need the strict nominal distinction must use isSpawnHandle() instead.
 export function isPromise(t: Type): boolean {
+	if (t === null) return false;
+	if (t.kind === TypeKind.Promise) return true;
+	if (t.kind !== TypeKind.GenericInstance) return false;
+	return t.typeName === "Promise" || t.typeName === "SpawnHandle";
+}
+
+// Strict: matches only SpawnHandle<T>. Used by the affine checker.
+export function isSpawnHandle(t: Type): boolean {
+	if (t === null) return false;
+	return t.kind === TypeKind.GenericInstance && t.typeName === "SpawnHandle";
+}
+
+// Strict: matches only Promise<T>, NOT SpawnHandle. Used by opt-out warning
+// when users explicitly annotate a spawn binding as Promise<T> to strip affinity.
+export function isStrictPromise(t: Type): boolean {
 	if (t === null) return false;
 	if (t.kind === TypeKind.Promise) return true;
 	return t.kind === TypeKind.GenericInstance && t.typeName === "Promise";

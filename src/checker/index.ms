@@ -55,6 +55,9 @@ export { checkExpr } from "./checkExprPass";
 // Re-exports: initTracker.ms (definite assignment)
 export { InitTracker, BreakState, createInitTracker, markInitialized, isInitialized, impliesNotNull } from "./initTracker";
 
+// Re-exports: spawnAffinity.ms (PARALOCK Phase 1 — SpawnHandle consumption tracking)
+export { AffineTracker, createAffineTracker, markConsumedName, isConsumedName, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches } from "./spawnAffinity";
+
 // Re-exports: orchestrator.ms (module graph orchestration)
 export { checkModuleGraph, getPreludeContext } from "./orchestrator";
 

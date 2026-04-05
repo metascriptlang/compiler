@@ -10,6 +10,7 @@
 // Phase 2 (future): CFG-based analysis for cross-block accuracy.
 
 import { Node, NodeKind, ProgramData, IdentifierData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, ExportDeclData, MoveExprData, HiddenDerefData, HiddenStdConvData, Symbol, isEmptyBlock, SymbolKind } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
 import { makeSymbol } from "../checker/symbol";
 import { unknownType } from "../checker/types";
 import { OuterEntry } from "./scope";
@@ -254,54 +255,11 @@ function attachSymToNode(node: Node, name: string, sym: Symbol): void {
 		if ((node.data as IdentifierData).name === name) node.resolvedSym = sym;
 		return;
 	}
-	if (node.kind === NodeKind.BinaryExpr) {
-		const d = node.data as BinaryExprData;
-		attachSymToNode(d.left, name, sym);
-		attachSymToNode(d.right, name, sym);
-		return;
-	}
-	if (node.kind === NodeKind.UnaryExpr) {
-		attachSymToNode((node.data as UnaryExprData).operand, name, sym);
-		return;
-	}
-	if (node.kind === NodeKind.CallExpr) {
-		const d = node.data as CallExprData;
-		attachSymToNode(d.callee, name, sym);
-		for (const a of d.arguments) { attachSymToNode(a, name, sym); }
-		return;
-	}
-	if (node.kind === NodeKind.MemberExpr) {
-		attachSymToNode((node.data as MemberExprData).object, name, sym);
-		return;
-	}
-	if (node.kind === NodeKind.ExprStmt) {
-		attachSymToNode((node.data as ExprStmtData).expr, name, sym);
-		return;
-	}
-	if (node.kind === NodeKind.VariableDecl) {
-		attachSymToNode((node.data as VariableDeclData).initializer, name, sym);
-		return;
-	}
-	if (node.kind === NodeKind.ReturnStmt) {
-		attachSymToNode((node.data as ReturnStmtData).argument, name, sym);
-		return;
-	}
-	if (node.kind === NodeKind.ThrowStmt) {
-		attachSymToNode((node.data as ThrowStmtData).throwArg, name, sym);
-		return;
-	}
-	if (node.kind === NodeKind.IfStmt) {
-		const d = node.data as IfStmtData;
-		attachSymToNode(d.condition, name, sym);
-		attachSymToNode(d.consequent, name, sym);
-		attachSymToNode(d.alternate, name, sym);
-		return;
-	}
-	if (node.kind === NodeKind.BlockStmt) {
-		for (const s of (node.data as BlockStmtData).statements) { attachSymToNode(s, name, sym); }
-		return;
-	}
-	// FunctionDecl, ArrowFunction, FunctionExpr: don't recurse (boundary)
+	// Scope boundary: don't recurse into nested function bodies.
+	if (node.kind === NodeKind.FunctionDecl
+		|| node.kind === NodeKind.ArrowFunction
+		|| node.kind === NodeKind.FunctionExpr) return;
+	forEachChild(node, (c: Node): void => { attachSymToNode(c, name, sym); });
 }
 
 function attachSym(nodes: Node[], name: string, sym: Symbol): void {

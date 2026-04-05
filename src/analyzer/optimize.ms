@@ -14,6 +14,7 @@ import {
 	ExportDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData,
 	ForOfStmtData, DoWhileStmtData,
 } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
 import { NameSet, createNameSet, nameSetContains, nameSetAdd, nameSetIntersect } from "../transform/context";
 import { makeIdent, makeBlock, makeExprStmt, makeCall } from "../transform/util";
 import { testLoc } from "./inject";
@@ -215,7 +216,11 @@ function walkOptimize(node: Node): void {
 		},
 		NodeKind.MethodDecl => { walkOptimize((node.data as MethodDeclData).methodBody); },
 		NodeKind.ConstructorDecl => { walkOptimize((node.data as ConstructorDeclData).ctorBody); },
-		_ => {},
+		// Default: descend via canonical walker so any new container kind still
+		// has its nested blocks reached. Block-level optimization runs on
+		// BlockStmt / SwitchCase / Program — if an unknown container wraps those,
+		// they'll be hit via forEachChild recursion. Correctness-preserving.
+		_ => { forEachChild(node, (child: Node): void => { walkOptimize(child); }); },
 	};
 }
 

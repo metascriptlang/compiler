@@ -6,22 +6,16 @@
 //
 // Uses name strings (not Symbol identity) for tracking. This avoids DRC
 // refcount issues with the save/restore pattern (truncating Symbol[] leaks refs).
+//
+// Set + branch-merge primitives live in branchSet.ms and are shared with
+// spawnAffinity.ms so both trackers stay in lockstep.
 
 import { Node, NodeKind, BlockStmtData, CallExprData, ExprStmtData, IdentifierData, BooleanLiteralData, BinaryExprData, TypeKind } from "../ast/node";
 import { hasFlag, SymbolFlag } from "./symbol";
+import { BreakState, addName, hasName, collectSince, mergeBranches } from "./branchSet";
 
-// Reference parity: BreakState for branch merging
-export enum BreakState {
-	BsNone,           // normal flow — branch contributes to merge
-	BsBreakOrReturn,  // break/return — exits branch, doesn't affect merge
-	BsNoReturn,       // raise/noreturn — never reaches merge point
-}
-
-// Reference parity: intersection count table
-class InitCount {
-	name: string;
-	count: number;
-}
+// Re-export BreakState for existing importers (checkPass, checkExprPass, etc.)
+export { BreakState } from "./branchSet";
 
 // Reference parity: effects.init + currentBlock + leftPartOfAsgn + scopes
 export interface InitTracker {
@@ -48,22 +42,12 @@ export function createInitTracker(): InitTracker {
 
 // Reference parity: initVar — marks variable initialized
 export function markInitialized(t: InitTracker, name: string): void {
-	let i = 0;
-	while (i < t.initialized.length) {
-		if (t.initialized[i] === name) return;
-		i = i + 1;
-	}
-	t.initialized.push(name);
+	addName(t.initialized, name);
 }
 
 // Reference parity: check if variable is initialized
 export function isInitialized(t: InitTracker, name: string): boolean {
-	let i = 0;
-	while (i < t.initialized.length) {
-		if (t.initialized[i] === name) return true;
-		i = i + 1;
-	}
-	return false;
+	return hasName(t.initialized, name);
 }
 
 // Reference parity: save init.len for branch merging
@@ -135,30 +119,7 @@ export function breaksBlock(node: Node): BreakState {
 
 // ===== Branch Merging =====
 
-// Reference parity: addToIntersection
-function addToIntersection(counts: InitCount[], name: string, breakState: BreakState): void {
-	// Look for existing entry
-	let j = 0;
-	while (j < counts.length) {
-		if (counts[j].name === name) {
-			if (breakState === BreakState.BsNone) {
-				counts[j].count = counts[j].count + 1;
-			}
-			return;
-		}
-		j = j + 1;
-	}
-	// New entry
-	if (breakState === BreakState.BsNone) {
-		counts.push({ name, count: 1 });
-	} else {
-		counts.push({ name, count: 0 });
-	}
-}
-
-// Reference parity: branch merge for if/match.
-// Merges initialization state from multiple branches.
-// Only promotes vars initialized in ALL non-exiting branches of exhaustive constructs.
+// Reference parity: branch merge for if/match. Delegates to shared branchSet.
 export function mergeInitBranches(
 	t: InitTracker,
 	oldState: number,
@@ -166,58 +127,12 @@ export function mergeInitBranches(
 	branchBreaks: BreakState[],
 	isExhaustive: boolean,
 ): void {
-	if (!isExhaustive) {
-		// No else branch / no default case → can't prove any var initialized on all paths
-		restoreInitState(t, oldState);
-		return;
-	}
-
-	// Build count table
-	let toCover = 0;
-	const counts: InitCount[] = [];
-
-	let b = 0;
-	while (b < branchInits.length) {
-		const inits = branchInits[b];
-		const breakState = branchBreaks[b];
-
-		if (breakState === BreakState.BsNone) {
-			toCover = toCover + 1;
-		}
-
-		// Add each newly-initialized var from this branch
-		let i = 0;
-		while (i < inits.length) {
-			addToIntersection(counts, inits[i], breakState);
-			i = i + 1;
-		}
-		b = b + 1;
-	}
-
-	// Restore to pre-branch state
-	restoreInitState(t, oldState);
-
-	// Add only vars initialized in ALL non-exiting branches
-	if (toCover > 0) {
-		let i = 0;
-		while (i < counts.length) {
-			if (counts[i].count >= toCover) {
-				markInitialized(t, counts[i].name);
-			}
-			i = i + 1;
-		}
-	}
+	mergeBranches(t.initialized, oldState, branchInits, branchBreaks, isExhaustive);
 }
 
 // Collect names initialized between oldState and current state
 export function collectNewInits(t: InitTracker, oldState: number): string[] {
-	const result: string[] = [];
-	let i = oldState;
-	while (i < t.initialized.length) {
-		result.push(t.initialized[i]);
-		i = i + 1;
-	}
-	return result;
+	return collectSince(t.initialized, oldState);
 }
 
 // ===== Helpers =====

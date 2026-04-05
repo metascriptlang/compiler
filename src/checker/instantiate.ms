@@ -4,12 +4,13 @@
 // immediately clone the function body, substitute types, and register
 // the specialized version. No separate monomorphize pass needed.
 
-import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, BlockStmtData, IfStmtData, WhileStmtData, ForOfStmtData, ReturnStmtData, ExprStmtData, VariableDeclData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, NewExprData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ArrowFunctionData, FunctionExprData, SpreadExprData, UpdateExprData, MatchExprData, MatchStmtData, MatchCaseData, DeferStmtData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, VariableDeclData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, NewExprData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
 import { instantiateGeneric, substituteType, createFunction } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, stripGenFlag } from "./context";
-import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/collect";
+import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { getIdentId } from "./idents";
 
@@ -100,27 +101,26 @@ function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext,
 // Reference parity (instantiateGenericParamList): concrete types added to scope.
 function injectConcreteTypeSyms(t: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
 	if (t === null) return;
-	if (t.kind === TypeKind.Ref && t.typeReturn !== null) {
-		if (t.typeReturn.kind === TypeKind.Struct && t.typeReturn.typeName !== "") {
-			tryInjectTypeSym(t.typeReturn.typeName, t, ctx, callerCtx, injected);
-		}
-		injectConcreteTypeSyms(t.typeReturn, ctx, callerCtx, injected);
-		return;
-	}
-	if (t.kind === TypeKind.Array && t.typeReturn !== null) {
-		injectConcreteTypeSyms(t.typeReturn, ctx, callerCtx, injected);
-		return;
-	}
-	if (t.kind === TypeKind.Struct && t.typeName !== "") {
-		tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
-		return;
-	}
-	if (t.kind === TypeKind.GenericInstance && t.typeChildren !== null) {
-		for (const child of t.typeChildren) {
-			injectConcreteTypeSyms(child, ctx, callerCtx, injected);
-		}
-		return;
-	}
+	match (t.kind) {
+		TypeKind.Ref when (t.typeReturn !== null) => {
+			if (t.typeReturn.kind === TypeKind.Struct && t.typeReturn.typeName !== "") {
+				tryInjectTypeSym(t.typeReturn.typeName, t, ctx, callerCtx, injected);
+			}
+			injectConcreteTypeSyms(t.typeReturn, ctx, callerCtx, injected);
+		},
+		TypeKind.Array when (t.typeReturn !== null) => {
+			injectConcreteTypeSyms(t.typeReturn, ctx, callerCtx, injected);
+		},
+		TypeKind.Struct when (t.typeName !== "") => {
+			tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
+		},
+		TypeKind.GenericInstance when (t.typeChildren !== null) => {
+			for (const child of t.typeChildren) {
+				injectConcreteTypeSyms(child, ctx, callerCtx, injected);
+			}
+		},
+		_ => {},
+	};
 }
 
 function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
@@ -164,17 +164,6 @@ function substituteTypeStrings(strs: string[], names: string[], types: Type[]): 
 		const cname = monoConcreteTypeName(types[i]);
 		for (let si = 0; si < strs.length; si += 1) {
 			strs[si] = monoSubstAnnotation(strs[si], pname, cname);
-		}
-	}
-}
-
-// Substitute type annotations in param types and return type
-function substituteAnnotations(cd: FunctionDeclData, names: string[], types: Type[]): void {
-	substituteTypeStrings(cd.fnParamTypes, names, types);
-	if (cd.fnReturnType !== "") {
-		for (let i = 0; i < names.length; i += 1) {
-			if (i >= types.length) break;
-			cd.fnReturnType = monoSubstAnnotation(cd.fnReturnType, names[i], monoConcreteTypeName(types[i]));
 		}
 	}
 }
@@ -240,14 +229,29 @@ function clearCheckerState(node: Node): void {
 }
 
 // ===== replaceTypeVars =====
-// Walk every node in the cloned body, clear resolvedSym for re-resolution,
-// and substitute GenericParam types with concrete types on nodeType.
+// Walk every node in the cloned body and substitute GenericParam types with
+// concrete types on nodeType plus any string-form annotations.
+//
+// Reference parity: replaceTypeVarsN iterates all children uniformly.
+// We delegate child enumeration to forEachChild (the canonical walker in
+// src/ast/visitor.ms) so every NodeKind is covered by construction — adding a
+// new NodeKind cannot silently break generic instantiation.
 
-function replaceTypeVars(node: Node, paramNames: string[], concreteTypes: Type[]): void {
-	if (node === null) return;
+// Substitute all generic param names → concrete types in a single annotation string.
+function substAnnotationAll(ann: string, paramNames: string[], concreteTypes: Type[]): string {
+	if (ann === "") return ann;
+	let out = ann;
+	for (let i = 0; i < paramNames.length; i += 1) {
+		if (i < concreteTypes.length) {
+			out = monoSubstAnnotation(out, paramNames[i], monoConcreteTypeName(concreteTypes[i]));
+		}
+	}
+	return out;
+}
 
-	// copyTree parity: preserve resolvedSym from clone (non-generic refs stay intact).
-	// Only substitute GenericParam types in nodeType — don't clear resolvedSym.
+// Apply substitutions to node-local state (nodeType + per-kind string annotations).
+// Does NOT descend into children — that's forEachChild's job.
+function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[]): void {
 	if (node.nodeType !== null) {
 		for (let i = 0; i < paramNames.length; i += 1) {
 			if (i < concreteTypes.length) {
@@ -255,113 +259,25 @@ function replaceTypeVars(node: Node, paramNames: string[], concreteTypes: Type[]
 			}
 		}
 	}
-
 	if (node.kind === NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
-		if (d.declType !== null && d.declType !== "") {
-			for (let i = 0; i < paramNames.length; i += 1) {
-				if (i < concreteTypes.length) {
-					d.declType = monoSubstAnnotation(d.declType, paramNames[i], monoConcreteTypeName(concreteTypes[i]));
-				}
-			}
+		d.declType = substAnnotationAll(d.declType, paramNames, concreteTypes);
+	} else if (node.kind === NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		d.asType = substAnnotationAll(d.asType, paramNames, concreteTypes);
+	} else if (node.kind === NodeKind.FunctionDecl) {
+		const d = node.data as FunctionDeclData;
+		d.fnReturnType = substAnnotationAll(d.fnReturnType, paramNames, concreteTypes);
+		for (let p = 0; p < d.fnParamTypes.length; p += 1) {
+			d.fnParamTypes[p] = substAnnotationAll(d.fnParamTypes[p], paramNames, concreteTypes);
 		}
-		replaceTypeVars(d.initializer, paramNames, concreteTypes);
-		return;
 	}
+}
 
-	match (node.kind) {
-		NodeKind.BlockStmt => { for (const stmt of (node.data as BlockStmtData).statements) { replaceTypeVars(stmt, paramNames, concreteTypes); } },
-		NodeKind.ExprStmt => { replaceTypeVars((node.data as ExprStmtData).expr, paramNames, concreteTypes); },
-		NodeKind.ReturnStmt => { replaceTypeVars((node.data as ReturnStmtData).argument, paramNames, concreteTypes); },
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			replaceTypeVars(d.condition, paramNames, concreteTypes);
-			replaceTypeVars(d.consequent, paramNames, concreteTypes);
-			replaceTypeVars(d.alternate, paramNames, concreteTypes);
-		},
-		NodeKind.WhileStmt => {
-			const d = node.data as WhileStmtData;
-			replaceTypeVars(d.whileCondition, paramNames, concreteTypes);
-			replaceTypeVars(d.whileBody, paramNames, concreteTypes);
-		},
-		NodeKind.ForOfStmt => {
-			const d = node.data as ForOfStmtData;
-			replaceTypeVars(d.forOfIterable, paramNames, concreteTypes);
-			replaceTypeVars(d.forOfBody, paramNames, concreteTypes);
-		},
-		NodeKind.BinaryExpr => {
-			const d = node.data as BinaryExprData;
-			replaceTypeVars(d.left, paramNames, concreteTypes);
-			replaceTypeVars(d.right, paramNames, concreteTypes);
-		},
-		NodeKind.UnaryExpr => { replaceTypeVars((node.data as UnaryExprData).operand, paramNames, concreteTypes); },
-		NodeKind.UpdateExpr => { replaceTypeVars((node.data as UpdateExprData).updateArg, paramNames, concreteTypes); },
-		NodeKind.CallExpr => {
-			const d = node.data as CallExprData;
-			replaceTypeVars(d.callee, paramNames, concreteTypes);
-			for (const arg of d.arguments) { replaceTypeVars(arg, paramNames, concreteTypes); }
-		},
-		NodeKind.MemberExpr => { replaceTypeVars((node.data as MemberExprData).object, paramNames, concreteTypes); },
-		NodeKind.ArrayAccess => {
-			const d = node.data as ArrayAccessData;
-			replaceTypeVars(d.array, paramNames, concreteTypes);
-			replaceTypeVars(d.index, paramNames, concreteTypes);
-		},
-		NodeKind.ObjectLiteral => { for (const val of (node.data as ObjectLiteralData).properties) { replaceTypeVars(val, paramNames, concreteTypes); } },
-		NodeKind.ArrayLiteral => { for (const el of (node.data as ArrayLiteralData).elements) { replaceTypeVars(el, paramNames, concreteTypes); } },
-		NodeKind.ConditionalExpr => {
-			const d = node.data as ConditionalExprData;
-			replaceTypeVars(d.ternaryCondition, paramNames, concreteTypes);
-			replaceTypeVars(d.ternaryConsequent, paramNames, concreteTypes);
-			replaceTypeVars(d.ternaryAlternate, paramNames, concreteTypes);
-		},
-		NodeKind.TypeAssertion => {
-			const tad = node.data as TypeAssertionData;
-			replaceTypeVars(tad.asExpr, paramNames, concreteTypes);
-			if (tad.asType !== "") {
-				for (let i = 0; i < paramNames.length; i += 1) {
-					if (i < concreteTypes.length) {
-						tad.asType = monoSubstAnnotation(tad.asType, paramNames[i], monoConcreteTypeName(concreteTypes[i]));
-					}
-				}
-			}
-		},
-		NodeKind.NewExpr => {
-			const d = node.data as NewExprData;
-			replaceTypeVars(d.newCallee, paramNames, concreteTypes);
-			for (const arg of d.newArguments) { replaceTypeVars(arg, paramNames, concreteTypes); }
-		},
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			replaceTypeVars(d.tryBody, paramNames, concreteTypes);
-			replaceTypeVars(d.catchBody, paramNames, concreteTypes);
-			replaceTypeVars(d.finallyBody, paramNames, concreteTypes);
-		},
-		NodeKind.SpreadExpr => { replaceTypeVars((node.data as SpreadExprData).spreadArg, paramNames, concreteTypes); },
-		NodeKind.ArrowFunction => { replaceTypeVars((node.data as ArrowFunctionData).arrowBody, paramNames, concreteTypes); },
-		NodeKind.FunctionExpr => { replaceTypeVars((node.data as FunctionExprData).funcExprBody, paramNames, concreteTypes); },
-		NodeKind.DeferStmt => { replaceTypeVars((node.data as DeferStmtData).deferExpr, paramNames, concreteTypes); },
-		NodeKind.HiddenDeref => { replaceTypeVars((node.data as HiddenDerefData).expr, paramNames, concreteTypes); },
-		NodeKind.HiddenStdConv => { replaceTypeVars((node.data as HiddenStdConvData).convExpr, paramNames, concreteTypes); },
-		NodeKind.SwitchStmt => {
-			const d = node.data as SwitchStmtData;
-			replaceTypeVars(d.switchDisc, paramNames, concreteTypes);
-			for (const c of d.switchCases) {
-				for (const s of (c.data as SwitchCaseData).caseStmts) { replaceTypeVars(s, paramNames, concreteTypes); }
-			}
-		},
-		NodeKind.MatchExpr => {
-			const d = node.data as MatchExprData;
-			replaceTypeVars(d.matchDisc, paramNames, concreteTypes);
-			for (const c of d.matchCases) { replaceTypeVars((c.data as MatchCaseData).caseBody, paramNames, concreteTypes); }
-		},
-		NodeKind.MatchStmt => {
-			const d = node.data as MatchStmtData;
-			replaceTypeVars(d.matchStmtDisc, paramNames, concreteTypes);
-			for (const c of d.matchStmtCases) { replaceTypeVars((c.data as MatchCaseData).caseBody, paramNames, concreteTypes); }
-		},
-		_ => {},
-	};
+export function replaceTypeVars(node: Node, paramNames: string[], concreteTypes: Type[]): void {
+	if (node === null) return;
+	substNodeLocal(node, paramNames, concreteTypes);
+	forEachChild(node, (child: Node): void => { replaceTypeVars(child, paramNames, concreteTypes); });
 }
 
 // ===== On-Demand Instantiation =====
@@ -405,15 +321,12 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		return null as unknown as Symbol;
 	}
 
-	// Clone AST + substitute annotations
+	// Clone AST + substitute annotations.
+	// replaceTypeVars handles the top-level FunctionDecl's fnParamTypes/fnReturnType
+	// (via substNodeLocal) and walks the body via forEachChild.
 	const cloned = monoCloneNode(fnNode);
 	const cd = cloned.data as FunctionDeclData;
-	substituteAnnotations(cd, dedup.names, dedup.types);
-
-	// replaceTypeVars: substitute GenericParam types throughout the body
-	if (cd.fnBody !== null) {
-		replaceTypeVars(cd.fnBody, dedup.names, dedup.types);
-	}
+	replaceTypeVars(cloned, dedup.names, dedup.types);
 
 	// Rename + strip flags
 	cd.fnName = mangledName;

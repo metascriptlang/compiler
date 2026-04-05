@@ -9,7 +9,8 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, Symbol, Type, TypeKind, SymbolKind } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
 import { isSinkType, createPrimitive } from "../checker/types";
 import { lookupSymbol, lookupLocal, hasFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { NameSet, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
@@ -49,65 +50,22 @@ export enum DrcMode {
 function collectIdentsInNode(node: Node, result: NameSet): void {
 	if (node === null) return;
 
-	match (node.kind) {
-		NodeKind.Identifier => {
-			nameSetAdd(result, (node.data as IdentifierData).name);
-		},
-		NodeKind.CallExpr => {
-			const cd = node.data as CallExprData;
-			collectIdentsInNode(cd.callee, result);
-			for (const arg of cd.arguments) { collectIdentsInNode(arg, result); }
-		},
-		NodeKind.BinaryExpr => {
-			const bd = node.data as BinaryExprData;
-			collectIdentsInNode(bd.left, result);
-			collectIdentsInNode(bd.right, result);
-		},
-		NodeKind.MemberExpr => {
-			collectIdentsInNode((node.data as MemberExprData).object, result);
-		},
-		NodeKind.ArrayAccess => {
-			const ad = node.data as ArrayAccessData;
-			collectIdentsInNode(ad.array, result);
-			collectIdentsInNode(ad.index, result);
-		},
-		NodeKind.ExprStmt => {
-			collectIdentsInNode((node.data as ExprStmtData).expr, result);
-		},
-		NodeKind.ReturnStmt => {
-			collectIdentsInNode((node.data as ReturnStmtData).argument, result);
-		},
-		NodeKind.BlockStmt => {
-			for (const s of (node.data as BlockStmtData).statements) { collectIdentsInNode(s, result); }
-		},
-		NodeKind.IfStmt => {
-			const id = node.data as IfStmtData;
-			collectIdentsInNode(id.condition, result);
-			collectIdentsInNode(id.consequent, result);
-			collectIdentsInNode(id.alternate, result);
-		},
-		NodeKind.WhileStmt => {
-			const wd = node.data as WhileStmtData;
-			collectIdentsInNode(wd.whileCondition, result);
-			collectIdentsInNode(wd.whileBody, result);
-		},
-		NodeKind.VariableDecl => {
-			collectIdentsInNode((node.data as VariableDeclData).initializer, result);
-		},
-		NodeKind.ConditionalExpr => {
-			const cd = node.data as ConditionalExprData;
-			collectIdentsInNode(cd.ternaryCondition, result);
-			collectIdentsInNode(cd.ternaryConsequent, result);
-			collectIdentsInNode(cd.ternaryAlternate, result);
-		},
-		NodeKind.ObjectLiteral => {
-			for (const prop of (node.data as ObjectLiteralData).properties) { collectIdentsInNode(prop, result); }
-		},
-		NodeKind.ArrayLiteral => {
-			for (const elem of (node.data as ArrayLiteralData).elements) { collectIdentsInNode(elem, result); }
-		},
-		_ => {},
-	};
+	if (node.kind === NodeKind.Identifier) {
+		nameSetAdd(result, (node.data as IdentifierData).name);
+		return;
+	}
+	// Don't descend into nested function/class boundaries. They declare fresh
+	// scopes, so identifiers inside refer to inner bindings, not outer vars
+	// that finally-protection cares about. Closures over outer vars are caught
+	// via their creation-site CallExpr (createClosure(env)) at this level.
+	if (node.kind === NodeKind.FunctionDecl
+		|| node.kind === NodeKind.ArrowFunction
+		|| node.kind === NodeKind.FunctionExpr
+		|| node.kind === NodeKind.MethodDecl
+		|| node.kind === NodeKind.ConstructorDecl
+		|| node.kind === NodeKind.ClassDecl
+		|| node.kind === NodeKind.ActorDecl) return;
+	forEachChild(node, (child: Node): void => { collectIdentsInNode(child, result); });
 }
 
 function scanFinallyBlocks(node: Node, result: NameSet): void {
@@ -133,6 +91,31 @@ function scanFinallyBlocks(node: Node, result: NameSet): void {
 		NodeKind.WhileStmt => {
 			scanFinallyBlocks((node.data as WhileStmtData).whileBody, result);
 		},
+		NodeKind.DoWhileStmt => {
+			scanFinallyBlocks((node.data as DoWhileStmtData).doBody, result);
+		},
+		NodeKind.ForStmt => {
+			scanFinallyBlocks((node.data as ForStmtData).forBody, result);
+		},
+		NodeKind.ForOfStmt => {
+			scanFinallyBlocks((node.data as ForOfStmtData).forOfBody, result);
+		},
+		NodeKind.ForInStmt => {
+			scanFinallyBlocks((node.data as ForInStmtData).forInBody, result);
+		},
+		NodeKind.SwitchStmt => {
+			const sd = node.data as SwitchStmtData;
+			for (const c of sd.switchCases) { scanFinallyBlocks(c, result); }
+		},
+		NodeKind.SwitchCase => {
+			for (const s of (node.data as SwitchCaseData).caseStmts) { scanFinallyBlocks(s, result); }
+		},
+		NodeKind.MatchStmt => {
+			const md = node.data as MatchStmtData;
+			for (const c of md.matchStmtCases) { scanFinallyBlocks((c.data as MatchCaseData).caseBody, result); }
+		},
+		// Non-control-flow kinds: don't contain try/finally for RC purposes.
+		// Function boundaries (FunctionDecl, ArrowFunction, etc.) are intentional scope stops.
 		_ => {},
 	};
 }
@@ -1647,21 +1630,23 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 		isCursor = true;
 	}
 
-	// Checker vars: use noSym on VarInfo to avoid destroy cascade through Symbol.declNode.
-	// DRC-created symbols (freshTempSym) have declNode=null and are safe.
-	// The resolvedSym on the VarDecl node is still used by makeVarRef for RC op identifiers.
+	// Pass resolvedSym so generateCleanup emits destroy/wasMoved with the correct symbol.
+	// This lets the C codegen resolve same-named variables in different scopes to unique C names.
+	// Without resolvedSym, lookupLocalName returns the last mapping, which may be from an
+	// inner scope — causing double-free when the outer scope also cleans up.
+	const varSym = stmt.resolvedSym !== null ? stmt.resolvedSym : noSym;
 
 	// Register cursor variables even without cleanup — they must be visible in DRC scope
 	// so field accesses through them (d.field) are recognized as borrows.
 	if (isCursor && !rcInfo.needsCleanup) {
-		registerVar(dctx, d.declName, rcInfo, true, noSym);
+		registerVar(dctx, d.declName, rcInfo, true, varSym);
 		return stmt;
 	}
 
 	if (!rcInfo.needsCleanup) return stmt;
 
 	// Register for scope cleanup
-	registerVar(dctx, d.declName, rcInfo, isCursor, noSym);
+	registerVar(dctx, d.declName, rcInfo, isCursor, varSym);
 
 	// Cursor variables borrow — no move/copy on initializer (source stays alive)
 	if (isCursor) return stmt;
@@ -1890,6 +1875,17 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 	setNeedsTryAll(dctx);
 
 	if (d.argument !== null) {
+		// Capture the ORIGINAL argument shape before processNode can rewrite it.
+		// processNode(Consumed) on an identifier may return a freshly-created
+		// passCopyToSink borrow temp whose name isn't registered in varInfo —
+		// if we re-inspect d.argument after processing, we'd mistake the borrow
+		// temp for a "non-local identifier" and call passCopyToSink AGAIN,
+		// producing a double-borrow chain ($borrow_N → $borrow_N+1 → return).
+		const origKind = d.argument.kind;
+		const origName = origKind === NodeKind.Identifier
+			? (d.argument.data as IdentifierData).name
+			: "";
+
 		// Process return argument recursively with Consumed mode
 		d.argument = processNode(d.argument, dctx, DrcMode.Consumed);
 
@@ -1903,7 +1899,8 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		// Covers: return d.className (string field from union variant extraction),
 		//         return state.tokens[pos] (struct with string field),
 		//         return _globalArray (module-level variable), etc.
-		if (d.argument.kind === NodeKind.ArrayAccess || d.argument.kind === NodeKind.MemberExpr) {
+		// Gate on ORIGINAL kind to avoid re-copying a passCopyToSink-produced temp.
+		if (origKind === NodeKind.ArrayAccess || origKind === NodeKind.MemberExpr) {
 			const retRc = classifyType(d.argument.nodeType, dctx.ctx);
 			if (retRc.needsCleanup && retRc.rcKind !== RcKind.Ref) {
 				d.argument = passCopyToSink(d.argument, dctx);
@@ -1913,9 +1910,10 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		// Function-local vars are handled by markReturnedVarsMoved (ownership transfer).
 		// Non-local variables (globals, module-level, outer function) are borrowed —
 		// caller's destroy would free the shared data, causing double-free.
-		if (d.argument.kind === NodeKind.Identifier) {
-			const retName = (d.argument.data as IdentifierData).name;
-			const vi = findVarInfoInFunction(dctx, retName);
+		// Gate on ORIGINAL identifier name so a fresh borrow temp introduced by
+		// processNode doesn't get copied a second time.
+		if (origKind === NodeKind.Identifier) {
+			const vi = findVarInfoInFunction(dctx, origName);
 			if (vi === null) {
 				// Not a function-local var (cursor, param, or global) — check if RC type needs copy
 				const retRc = classifyType(d.argument.nodeType, dctx.ctx);
@@ -1969,7 +1967,17 @@ function markReturnedVarsMoved(node: Node, dctx: DrcContext): void {
 			markReturnedVarsMoved(cd.callee, dctx);
 			for (const arg of cd.arguments) { markReturnedVarsMoved(arg, dctx); }
 		},
-		_ => {},
+		// CRITICAL: nested function bodies are scope stops. A returned closure
+		// captures outer vars via its env — those vars must NOT be marked moved
+		// in the enclosing scope, or wasMoved will zero the env after capture.
+		// Post-transform lambdaLifting usually erases these, but the walker's
+		// correctness must not depend on that.
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
+		// Default: descend via canonical walker so new expression kinds wrapping
+		// identifiers (e.g. future cast/conversion forms) are covered automatically.
+		// Safe because the explicit Identifier arm is the only emitter and the
+		// function-boundary branch above fires before this.
+		_ => { forEachChild(node, (child: Node): void => { markReturnedVarsMoved(child, dctx); }); },
 	};
 }
 
@@ -1985,7 +1993,14 @@ function clearPendingForReturnedVars(node: Node, dctx: DrcContext): void {
 		NodeKind.MoveExpr => {
 			clearPendingForReturnedVars((node.data as MoveExprData).moveArg, dctx);
 		},
-		_ => {},
+		// Same invariant as markReturnedVarsMoved: nested function bodies are
+		// scope stops. Captured vars in a returned closure must not have their
+		// pending wasMoved cleared by the outer return.
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
+		// Default: descend via canonical walker so new expression kinds wrapping
+		// identifiers are covered automatically. Safe because only the Identifier
+		// arm mutates state and function bodies are skipped above.
+		_ => { forEachChild(node, (child: Node): void => { clearPendingForReturnedVars(child, dctx); }); },
 	};
 }
 

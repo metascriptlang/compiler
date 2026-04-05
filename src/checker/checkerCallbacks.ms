@@ -23,6 +23,7 @@ let instantiateGenericFn: InstantiateGenericFn = (sym: Symbol, paramNames: strin
 	return null as unknown as Symbol;
 };
 
+
 export function callCheckExpr(ctx: CheckerContext, node: Node, expectedType: Type): void {
 	exprCheckerFn(ctx, node, expectedType);
 }
@@ -54,3 +55,4 @@ export function registerCheckFunctionBody(fn: BodyCheckerFn): void {
 export function registerInstantiateGeneric(fn: InstantiateGenericFn): void {
 	instantiateGenericFn = fn;
 }
+

@@ -28,6 +28,7 @@ import {
 	DeferStmtData, ThrowStmtData, TryCatchStmtData,
 	MacroInvocationData, TestDeclData, AssertStmtData,
 	QuoteExprData, ComptimeBlockData,
+	TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData,
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 
@@ -115,6 +116,17 @@ function hNumbers(h: number, nums: number[]): number {
 // ===== AST Content Hash (Salsa output-hash early cutoff) =====
 // Hashes node kind + data fields recursively. Skips: location, comments, nodeType, resolvedSym, flags.
 // Produces identical hash for structurally identical trees regardless of position.
+//
+// Invariant: Node.typeExpr / typeExprs are intentionally NOT hashed. They are
+// an LSP-only side channel carrying positioned type-annotation AST for
+// hover/goto-def. The semantic type information lives in the string-form
+// annotations INSIDE NodeData (declType, fnReturnType, interfaceFieldTypes,
+// etc.) which ARE hashed via the per-variant data walk below. Hashing
+// typeExpr would cause cache misses on trivial position shifts (newlines,
+// comments) even when the semantic AST is identical — defeating the Salsa
+// output-hash early-cutoff optimization. When a new type annotation affecting
+// semantics is added, ensure it lives inside NodeData (not Node.typeExpr) OR
+// extend this function to hash the new channel.
 
 export function transAmHashNode(node: Node): number {
 	if (node === null) return 0;
@@ -424,7 +436,26 @@ export function transAmHashNode(node: Node): number {
 			h = hNodes(h, (node.data as ProgramData).programStmts);
 		},
 
-		_ => {},
+		// === Type Expression Nodes ===
+		NodeKind.TypeGeneric => {
+			const d = node.data as TypeGenericData;
+			h = hN(h, d.typExprBase); h = hNodes(h, d.typExprArgs);
+		},
+		NodeKind.TypeArray => {
+			const d = node.data as TypeArrayData;
+			h = hN(h, d.typExprElement); h = hI(h, d.typExprSize);
+		},
+		NodeKind.TypeUnion => {
+			h = hNodes(h, (node.data as TypeUnionData).typExprMembers);
+		},
+		NodeKind.TypeFunction => {
+			const d = node.data as TypeFunctionData;
+			h = hNodes(h, d.typExprParams); h = hN(h, d.typExprReturn); h = hStrings(h, d.typExprParamNames);
+		},
+		NodeKind.TypeObject => {
+			const d = node.data as TypeObjectData;
+			h = hStrings(h, d.typExprFieldNames); h = hNodes(h, d.typExprFieldTypes);
+		},
 	};
 
 	return h;

@@ -35,6 +35,9 @@ function isAssignableInner(source: Type, target: Type): boolean {
 				for (let gi = 0; gi < limit; gi += 1) {
 					if (!isAssignable(source.typeChildren[gi], target.typeChildren[gi])) return false;
 				}
+				// PARALOCK Phase 1: SpawnHandle<T> upcasts nominally to Promise<T>.
+				// Element type compatibility already verified by the loop above.
+				if (source.typeName === "SpawnHandle" && target.typeName === "Promise") return true;
 				return source.typeName === target.typeName;
 			},
 			_ => true,

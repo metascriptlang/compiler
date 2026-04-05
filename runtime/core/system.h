@@ -243,6 +243,10 @@ static inline void msStringCopy(msString* dest, msString src) {
 /* --- Named object wasMoved (no-op for value-type named objects) --- */
 #define msObjectWasMoved(p)   /* no-op */
 
+/* AwaitGroup — structured fan-out primitive (PARALOCK Phase 2). Must precede
+ * thread.h because msSpawnCtx carries an optional msAwaitGroup* completion target. */
+#include "runtime/promise/awaitGroup.h"
+
 /* Thread runtime (msSpawn — needs msIncRef/msDecref/msException above) */
 #include "runtime/promise/thread.h"
 

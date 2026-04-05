@@ -9,7 +9,7 @@ import {
 	ProgramData, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData,
 	ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	FunctionDeclData, ArrowFunctionData, FunctionExprData,
-	ClassDeclData, MethodDeclData, ConstructorDeclData,
+	ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData,
 	ExportDeclData, DecoratedDeclData, MacroDeclData,
 	VariableDeclData, ReturnStmtData, ThrowStmtData, ExprStmtData,
 	TryCatchStmtData, DeferStmtData,
@@ -22,6 +22,8 @@ import {
 	HiddenDerefData, HiddenStdConvData,
 	TypeAssertionData, DestructuringDeclData, QuoteExprData, ComptimeBlockData,
 	MacroInvocationData, TestDeclData, AssertStmtData,
+	ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
+	TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData,
 } from "./node";
 
 type ChildVisitor = (child: Node) => void;
@@ -288,7 +290,6 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			const d = node.data as OutExprData;
 			cb(d.outArg);
 		},
-		NodeKind.SizeofExpr => {},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
 			const d = node.data as HiddenDerefData;
 			cb(d.expr);
@@ -330,7 +331,84 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			const d = node.data as AssertStmtData;
 			cb(d.assertExpr);
 		},
-		// Leaf nodes (no children to walk)
-		_ => {},
+		NodeKind.ActorDecl => {
+			const d = node.data as ActorDeclData;
+			let i = 0;
+			while (i < d.actorBody.length) {
+				cb(d.actorBody[i]);
+				i += 1;
+			}
+		},
+		NodeKind.PropertyDecl => {
+			const d = node.data as PropertyDeclData;
+			if (d.propInitializer !== null) { cb(d.propInitializer); }
+		},
+		NodeKind.ArrayPattern => {
+			const d = node.data as ArrayPatternData;
+			let i = 0;
+			while (i < d.patternElements.length) {
+				cb(d.patternElements[i]);
+				i += 1;
+			}
+		},
+		NodeKind.ObjectPattern => {
+			const d = node.data as ObjectPatternData;
+			let i = 0;
+			while (i < d.patternProps.length) {
+				cb(d.patternProps[i]);
+				i += 1;
+			}
+		},
+		NodeKind.ObjectPatternProp => {
+			const d = node.data as ObjectPatternPropData;
+			if (d.propAlias !== null) { cb(d.propAlias); }
+		},
+		NodeKind.TypeGeneric => {
+			const d = node.data as TypeGenericData;
+			cb(d.typExprBase);
+			let i = 0;
+			while (i < d.typExprArgs.length) {
+				cb(d.typExprArgs[i]);
+				i += 1;
+			}
+		},
+		NodeKind.TypeArray => {
+			const d = node.data as TypeArrayData;
+			cb(d.typExprElement);
+		},
+		NodeKind.TypeUnion => {
+			const d = node.data as TypeUnionData;
+			let i = 0;
+			while (i < d.typExprMembers.length) {
+				cb(d.typExprMembers[i]);
+				i += 1;
+			}
+		},
+		NodeKind.TypeFunction => {
+			const d = node.data as TypeFunctionData;
+			let i = 0;
+			while (i < d.typExprParams.length) {
+				cb(d.typExprParams[i]);
+				i += 1;
+			}
+			if (d.typExprReturn !== null) { cb(d.typExprReturn); }
+		},
+		NodeKind.TypeObject => {
+			const d = node.data as TypeObjectData;
+			let i = 0;
+			while (i < d.typExprFieldTypes.length) {
+				cb(d.typExprFieldTypes[i]);
+				i += 1;
+			}
+		},
+		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
+		// adding a new NodeKind forces an exhaustiveness error here, preventing
+		// the silent-gap class of bugs that bit replaceTypeVars.
+		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral
+			| NodeKind.NullLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral
+			| NodeKind.Identifier | NodeKind.TypeAnnotation | NodeKind.SizeofExpr
+			| NodeKind.BreakStmt | NodeKind.ContinueStmt | NodeKind.UnreachableStmt
+			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl | NodeKind.EnumDecl
+			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ExternDecl => {},
 	};
 }

@@ -4,8 +4,9 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { unknownType, nullType, stringType, charType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, typeNameOf, isPromise, getPromiseInner, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "./types";
-import { ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, SymbolFlag } from "./symbol";
+import { unknownType, nullType, stringType, charType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, typeNameOf, isPromise, isSpawnHandle, isStrictPromise, getPromiseInner, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "./types";
+import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
+import { Scope, ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -37,6 +38,94 @@ function formatTypeBrief(t: Type): string {
 	return name !== "" ? name : t.kind.toString();
 }
 
+// ===== PARALOCK Phase 1: Scope-Exit Affine Check =====
+
+// Called before each closeScope(). Walks all symbols in the scope, and for
+// every binding whose static type is a SpawnHandle<T>, verifies it has been
+// consumed. Unconsumed bindings produce an R1/E2 error.
+//
+// Consumption is recorded in two channels:
+//   1. The AffineTracker.consumed list (branch-aware, path-sensitive, keyed by
+//      symbolConsumeKey which distinguishes shadowed bindings).
+//   2. The SymbolFlag.Consumed bit (promoted once consumption is observed anywhere).
+// Either channel satisfies the scope-exit check. After verification, we purge
+// the key from the tracker so it doesn't pollute outer scopes.
+//
+// Lives here (not in spawnAffinity.ms) to avoid a cycle with context.ms:
+// spawnAffinity stays pure data/logic; the checker-facing glue belongs in
+// the pass that owns the scope lifecycle.
+function checkAffineConsumption(ctx: CheckerContext, scope: Ptr<Scope>, tracker: AffineTracker): void {
+	for (const sym of scope.symbols) {
+		if (sym !== null && sym.symbolType !== null && isSpawnHandle(sym.symbolType)) {
+			const key = symbolConsumeKey(sym);
+			const consumed = hasFlag(sym, SymbolFlag.Consumed) || isConsumedName(tracker, key);
+			if (!consumed) {
+				const loc = sym.location;
+				const line = loc !== null ? loc.line : 0;
+				const col = loc !== null ? loc.column : 0;
+				addError(ctx,
+					`SpawnHandle '${sym.name}' is never awaited; every spawn result must be consumed before its scope exits (PARALOCK R1/E2)`,
+					line, col);
+			} else {
+				// Promote tracker evidence to symbol flag for cross-scope visibility
+				markConsumed(sym);
+			}
+			// Purge this key from the tracker — the binding is about to go out of
+			// scope. The key is unique per declaration site so this only removes
+			// entries for THIS symbol, leaving any shadowed outer binding intact.
+			removeConsumedName(tracker, key);
+		}
+	}
+}
+
+// ===== PARALOCK Phase 1: Loop Reuse Detection =====
+
+// Walks the parent scope chain to collect consume keys of every currently-visible
+// SpawnHandle binding. Used by loop reuse detection to identify handles declared
+// OUTSIDE a loop body — consuming such a handle inside the body would reuse an
+// already-awaited value on iteration N+1.
+function collectVisibleSpawnKeys(scope: Ptr<Scope>): string[] {
+	const result: string[] = [];
+	let s = scope;
+	while (s !== null) {
+		for (const sym of s.symbols) {
+			if (sym !== null && sym.symbolType !== null && isSpawnHandle(sym.symbolType)) {
+				result.push(symbolConsumeKey(sym));
+			}
+		}
+		s = s.parent;
+	}
+	return result;
+}
+
+// Extract the name portion of a consume key ("name:line:col" → "name").
+function consumeKeyName(key: string): string {
+	let i = 0;
+	while (i < key.byteLength) {
+		if (key.charAt(i) === ":") return key.slice(0, i);
+		i = i + 1;
+	}
+	return key;
+}
+
+// After walking a loop body, flag any consumption of a handle declared in an
+// outer scope. The body can legitimately consume inner handles (scope-exit
+// check catches those), but an outer handle consumed inside a loop body would
+// be reused on the next iteration. Reports each offender once.
+function detectLoopReuse(ctx: CheckerContext, outerKeys: string[], bodyStartState: number, line: number, col: number): void {
+	const newConsumes = collectNewConsumes(ctx.affineTracker, bodyStartState);
+	for (const key of newConsumes) {
+		for (const outerKey of outerKeys) {
+			if (key === outerKey) {
+				addError(ctx,
+					`SpawnHandle '${consumeKeyName(key)}' is consumed inside a loop body; iteration N+1 would reuse an already-awaited handle. Move the spawn inside the loop, or await outside it (PARALOCK R1/E3)`,
+					line, col);
+				break;
+			}
+		}
+	}
+}
+
 // ===== Statement Checker =====
 
 export function checkStmt(ctx: CheckerContext, node: Node): void {
@@ -61,11 +150,14 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
 			checkExpr(ctx, d.expr, null);
-			// Warn: spawn result not awaited — borrowed captures may dangle
-			// Suppress inside loops: fire-and-forget spawn for worker threads is a valid pattern
+			// PARALOCK Phase 1 R1/E1: a discarded SpawnHandle (bare spawn(...) expression
+			// with no binding and no await) is a compile error. Borrowed captures would
+			// dangle and the result would be silently dropped. For fire-and-forget,
+			// users should bind and await, or (Phase 7+) use `detach`.
+			// Suppress inside loops: legacy fire-and-forget pattern (to be migrated later).
 			if (d.expr.kind === NodeKind.CallExpr && d.expr.resolvedSym !== null
 				&& d.expr.resolvedSym.builtinKind === "PromiseSpawn" && !ctx.inLoop) {
-				addWarning(ctx, "spawn result not awaited — borrowed captures may outlive scope", d.expr.location.line, d.expr.location.column);
+				addError(ctx, "spawn result is discarded — every SpawnHandle must be awaited before its scope exits (PARALOCK R1/E1)", d.expr.location.line, d.expr.location.column);
 			}
 		},
 		NodeKind.ThrowStmt => {
@@ -123,6 +215,14 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	}
 	checkExpr(ctx, d.initializer, declType);
 	const initType = d.initializer !== null ? d.initializer.nodeType : null;
+	// PARALOCK Phase 1: explicit `: Promise<T>` annotation on a SpawnHandle-producing
+	// initializer strips affine tracking. Warn so the opt-out is deliberate, not accidental.
+	if (declType !== null && initType !== null
+		&& isStrictPromise(declType) && isSpawnHandle(initType)) {
+		addWarning(ctx,
+			`explicit 'Promise<T>' annotation on a spawn result strips PARALOCK affine tracking — '${d.declName}' will not be lifetime-checked. Remove the annotation to enable affine checking, or keep it as an opt-out`,
+			d.nameLocation.line, d.nameLocation.column);
+	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
 	if (declType !== null && d.initializer !== null) {
 		d.initializer = fitNode(ctx, d.initializer, declType, initType);
@@ -628,25 +728,31 @@ function checkIfStmt(ctx: CheckerContext, node: Node): void {
 
 	// Ref parity: trackIf (sempass2 lines 847-889) — count table + exhaustiveness
 	const oldState = saveInitState(ctx.initTracker);
+	const oldAffine = saveConsumeState(ctx.affineTracker);
 	const branchInits: string[][] = [];
 	const branchBreaks: BreakState[] = [];
+	const branchConsumes: string[][] = [];
 
 	// Track consequent
 	checkNarrowedBranch(ctx, vars, d.consequent, addFact, d.condition);
 	branchInits.push(collectNewInits(ctx.initTracker, oldState));
+	branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 	branchBreaks.push(breaksBlock(d.consequent));
 
 	// Track alternate (if present)
 	const hasElse = d.alternate !== null && d.alternate.kind !== NodeKind.NullLiteral;
 	if (hasElse) {
 		restoreInitState(ctx.initTracker, oldState);
+		restoreConsumeState(ctx.affineTracker, oldAffine);
 		checkNarrowedBranch(ctx, vars, d.alternate, addFactNeg, d.condition);
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
+		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 		branchBreaks.push(breaksBlock(d.alternate));
 	}
 
-	// Ref parity: merge with exhaustiveness check
+	// Ref parity: merge with exhaustiveness check (init + affine trackers)
 	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, hasElse);
+	mergeConsumeBranches(ctx.affineTracker, oldAffine, branchConsumes, branchBreaks, hasElse);
 }
 
 // ===== Loop Statements =====
@@ -655,6 +761,9 @@ function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as WhileStmtData;
 	checkExpr(ctx, d.whileCondition, null);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
+	// PARALOCK Phase 1: snapshot affine state + outer SpawnHandle keys before the body
+	const affineSnap = saveConsumeState(ctx.affineTracker);
+	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
 	// Ref parity (sempass2 lines 1346-1360): while(true) propagates, others conservative
 	if (isAlwaysTrue(d.whileCondition)) {
 		const saved = enterLoopScope(ctx);
@@ -667,12 +776,18 @@ function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 		exitLoopScope(ctx, saved);
 		restoreInitState(ctx.initTracker, oldState);
 	}
+	// PARALOCK Phase 1: detect outer-handle consumption (reuse on iteration N+1)
+	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
+	restoreConsumeState(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
 function checkForStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForStmtData;
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
+	// PARALOCK Phase 1: snapshot before entering loop scope
+	const affineSnap = saveConsumeState(ctx.affineTracker);
+	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
 	const saved = enterLoopScope(ctx);
 	checkStmt(ctx, d.forInit);
 	checkExpr(ctx, d.forCondition, null);
@@ -682,6 +797,8 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 	checkStmt(ctx, d.forBody);
 	exitLoopScope(ctx, saved);
 	restoreInitState(ctx.initTracker, oldState);
+	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
+	restoreConsumeState(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
@@ -721,6 +838,9 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	}
 	// Ref parity: for loops — conservative, loop may not execute
 	const oldInitState = saveInitState(ctx.initTracker);
+	// PARALOCK Phase 1: snapshot before entering loop scope
+	const affineSnap = saveConsumeState(ctx.affineTracker);
+	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
 	const saved = enterLoopScope(ctx);
 	if (d.forOfPattern !== null) {
 		// Destructured for-of: define symbols for each pattern element
@@ -736,6 +856,8 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	checkStmt(ctx, d.forOfBody);
 	exitLoopScope(ctx, saved);
 	restoreInitState(ctx.initTracker, oldInitState);
+	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
+	restoreConsumeState(ctx.affineTracker, affineSnap);
 }
 
 function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean): void {
@@ -781,21 +903,31 @@ function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForInStmtData;
 	checkExpr(ctx, d.forInObject, null);
 	const oldInitState = saveInitState(ctx.initTracker);
+	const affineSnap = saveConsumeState(ctx.affineTracker);
+	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
 	const saved = enterLoopScope(ctx);
 	defineSymbol(ctx.table, makeSymbol(d.forInBinding, SymbolKind.Variable, unknownType(), !d.forInIsConst));
 	markInitialized(ctx.initTracker, d.forInBinding);
 	checkStmt(ctx, d.forInBody);
 	exitLoopScope(ctx, saved);
 	restoreInitState(ctx.initTracker, oldInitState);
+	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
+	restoreConsumeState(ctx.affineTracker, affineSnap);
 }
 
 function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as DoWhileStmtData;
 	// Ref parity: do-while body always executes once — propagate inits (no conservative restore)
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
+	// PARALOCK Phase 1: even though do-while runs at least once, iteration 2 would still
+	// reuse any outer handle consumed in iteration 1 — so the same check applies.
+	const affineSnap = saveConsumeState(ctx.affineTracker);
+	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
 	const saved = enterLoopScope(ctx);
 	checkStmt(ctx, d.doBody);
 	exitLoopScope(ctx, saved);
+	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
+	restoreConsumeState(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 	checkExpr(ctx, d.doCondition, null);
 }
@@ -825,6 +957,8 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 	}
 	restoreNarrowing(guardSyms, guardSaved);
 	restoreFacts(ctx, snap);
+	// PARALOCK Phase 1: verify every SpawnHandle declared in this block was consumed
+	checkAffineConsumption(ctx, ctx.table.current, ctx.affineTracker);
 	closeScope(ctx.table);
 }
 
@@ -857,6 +991,16 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	}
 	checkExpr(ctx, d.argument, returnExpected);
 	const retType = d.argument !== null ? d.argument.nodeType : null;
+	// PARALOCK Phase 1 R3/E4: SpawnHandle<T> cannot escape its creating scope.
+	// Returning a SpawnHandle from a function lets its lifetime leak past the await,
+	// which breaks the borrow-safety guarantee that spawn children stay pinned to
+	// their parent's frame. Existing callers that need to pass around a promise
+	// should explicitly upcast: `return spawn(...) as Promise<T>` (Phase 2+ may forbid).
+	if (retType !== null && isSpawnHandle(retType)) {
+		addError(ctx,
+			"SpawnHandle cannot be returned from a function; every spawn result must be awaited in its creating scope (PARALOCK R3/E4)",
+			d.argument.location.line, d.argument.location.column);
+	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return
 	if (returnExpected !== null) {
 		d.argument = fitNode(ctx, d.argument, returnExpected, retType);
@@ -893,15 +1037,18 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 	const d = node.data as TryCatchStmtData;
 	// Ref parity: trackTryStmt (sempass2 lines 524-597) — merge try + except
 	const oldState = saveInitState(ctx.initTracker);
+	const oldAffine = saveConsumeState(ctx.affineTracker);
 	const oldInTry = ctx.inTryExpr;
 	if (d.catchBody !== null) ctx.inTryExpr = true;
 	checkStmt(ctx, d.tryBody);
 	ctx.inTryExpr = oldInTry;
 	const branchInits: string[][] = [collectNewInits(ctx.initTracker, oldState)];
+	const branchConsumes: string[][] = [collectNewConsumes(ctx.affineTracker, oldAffine)];
 	const branchBreaks: BreakState[] = [breaksBlock(d.tryBody)];
 
 	if (d.catchBody !== null) {
 		restoreInitState(ctx.initTracker, oldState);
+		restoreConsumeState(ctx.affineTracker, oldAffine);
 		openScope(ctx.table, ScopeKind.Block);
 		if (d.catchName !== "") {
 			const catchSym = makeSymbol(d.catchName, SymbolKind.Variable, unknownType(), false);
@@ -912,12 +1059,16 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 		}
 		checkStmt(ctx, d.catchBody);
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
+		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 		branchBreaks.push(breaksBlock(d.catchBody));
+		// PARALOCK Phase 1: verify SpawnHandles in the catch binding scope are consumed
+		checkAffineConsumption(ctx, ctx.table.current, ctx.affineTracker);
 		closeScope(ctx.table);
 	}
 
-	// Merge: intersection of try + catch
+	// Merge: intersection of try + catch (init + affine trackers)
 	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, d.catchBody !== null);
+	mergeConsumeBranches(ctx.affineTracker, oldAffine, branchConsumes, branchBreaks, d.catchBody !== null);
 
 	if (d.finallyBody !== null) {
 		checkStmt(ctx, d.finallyBody);
@@ -929,16 +1080,20 @@ function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 	checkExpr(ctx, d.switchDisc, null);
 	// Ref parity: trackCase (sempass2 lines 809-845)
 	const oldState = saveInitState(ctx.initTracker);
+	const oldAffine = saveConsumeState(ctx.affineTracker);
 	const branchInits: string[][] = [];
 	const branchBreaks: BreakState[] = [];
+	const branchConsumes: string[][] = [];
 	let hasDefault = false;
 	for (const c of d.switchCases) {
 		const cd = c.data as SwitchCaseData;
 		if (cd.caseTests.length === 0) hasDefault = true;
 		restoreInitState(ctx.initTracker, oldState);
+		restoreConsumeState(ctx.affineTracker, oldAffine);
 		for (const t of cd.caseTests) { checkExpr(ctx, t, null); }
 		for (const s of cd.caseStmts) { checkStmt(ctx, s); }
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
+		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 		// Build a block from case stmts to check break state
 		if (cd.caseStmts.length > 0) {
 			branchBreaks.push(breaksBlock(cd.caseStmts[cd.caseStmts.length - 1]));
@@ -947,6 +1102,7 @@ function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 		}
 	}
 	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, hasDefault);
+	mergeConsumeBranches(ctx.affineTracker, oldAffine, branchConsumes, branchBreaks, hasDefault);
 }
 
 function checkMatchStmt(ctx: CheckerContext, node: Node): void {
@@ -971,11 +1127,14 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 	}
 
 	const oldState = saveInitState(ctx.initTracker);
+	const oldAffine = saveConsumeState(ctx.affineTracker);
 	const branchInits: string[][] = [];
 	const branchBreaks: BreakState[] = [];
+	const branchConsumes: string[][] = [];
 	for (const c of d.matchStmtCases) {
 		const cd = c.data as MatchCaseData;
 		restoreInitState(ctx.initTracker, oldState);
+		restoreConsumeState(ctx.affineTracker, oldAffine);
 		const hasGuard = cd.caseGuard !== null;
 		for (const p of cd.casePatterns) {
 			if (p.kind === NodeKind.Identifier) {
@@ -1019,6 +1178,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 		}
 
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
+		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 		branchBreaks.push(breaksBlock(cd.caseBody));
 	}
 	checkDuplicatePatterns(ctx, d.matchStmtCases);
@@ -1037,6 +1197,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 		if (allCovered && discType.typeNames.length > 0) isExhaustive = true;
 	}
 	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, isExhaustive);
+	mergeConsumeBranches(ctx.affineTracker, oldAffine, branchConsumes, branchBreaks, isExhaustive);
 	if (discType.kind === TypeKind.Enum && !hasWildcard) {
 		const discEnd = estimateExprEndCol(d.matchStmtDisc) + 1;
 		checkEnumExhaustiveness(ctx, discType, coveredMembers, node.location.line, node.location.column, discEnd);
@@ -1057,6 +1218,9 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	const savedBlock = ctx.initTracker.currentBlock;
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
 	const initSnap = saveInitState(ctx.initTracker);
+	// PARALOCK Phase 1: snapshot affine tracker so SpawnHandle consumption state
+	// doesn't leak across function body boundaries.
+	const affineSnap = saveConsumeState(ctx.affineTracker);
 	openScope(ctx.table, ScopeKind.Function);
 	let i = 0;
 	for (const param of params) {
@@ -1099,6 +1263,8 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	closeScope(ctx.table);
 	// Restore init tracking state
 	restoreInitState(ctx.initTracker, initSnap);
+	// PARALOCK Phase 1: restore affine tracker (erases this function's consumed set)
+	restoreConsumeState(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = savedBlock;
 	ctx.currentFunction = savedFunction;
 	ctx.matchExprDepth = savedMatchDepth;
@@ -1112,6 +1278,8 @@ function enterLoopScope(ctx: CheckerContext): boolean {
 }
 
 function exitLoopScope(ctx: CheckerContext, saved: boolean): void {
+	// PARALOCK Phase 1: verify SpawnHandles in loop scope are consumed
+	checkAffineConsumption(ctx, ctx.table.current, ctx.affineTracker);
 	closeScope(ctx.table);
 	ctx.inLoop = saved;
 }

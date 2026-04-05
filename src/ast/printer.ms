@@ -17,6 +17,7 @@ import { Node, NodeKind, DeclKind,
 	ExternDeclData, ExternKind, MacroDeclData, DecoratedDeclData, ProgramData,
 	TestDeclData, AssertStmtData,
 	HiddenStdConvData,
+	TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData,
 } from "./node";
 
 // ===== Indentation Helper =====
@@ -601,6 +602,45 @@ export function printNode(node: Node, level: number): void {
 			console.log(`${pad}AssertStmt: "${data.assertSource}"`);
 			printNode(data.assertExpr, level + 1);
 		},
-		_ => {},
+		NodeKind.TypeGeneric => {
+			const data = node.data as TypeGenericData;
+			console.log(`${pad}TypeGeneric:`);
+			console.log(`${indent(level + 1)}Base:`);
+			printNode(data.typExprBase, level + 2);
+			if (data.typExprArgs.length > 0) {
+				console.log(`${indent(level + 1)}Args:`);
+				for (const arg of data.typExprArgs) { printNode(arg, level + 2); }
+			}
+		},
+		NodeKind.TypeArray => {
+			const data = node.data as TypeArrayData;
+			console.log(`${pad}TypeArray: [${data.typExprSize.toString()}]`);
+			printNode(data.typExprElement, level + 1);
+		},
+		NodeKind.TypeUnion => {
+			const data = node.data as TypeUnionData;
+			console.log(`${pad}TypeUnion:`);
+			for (const m of data.typExprMembers) { printNode(m, level + 1); }
+		},
+		NodeKind.TypeFunction => {
+			const data = node.data as TypeFunctionData;
+			console.log(`${pad}TypeFunction:`);
+			if (data.typExprParams.length > 0) {
+				console.log(`${indent(level + 1)}Params:`);
+				for (const p of data.typExprParams) { printNode(p, level + 2); }
+			}
+			if (data.typExprReturn !== null) {
+				console.log(`${indent(level + 1)}Return:`);
+				printNode(data.typExprReturn, level + 2);
+			}
+		},
+		NodeKind.TypeObject => {
+			const data = node.data as TypeObjectData;
+			console.log(`${pad}TypeObject:`);
+			for (let i = 0; i < data.typExprFieldNames.length; i += 1) {
+				console.log(`${indent(level + 1)}${data.typExprFieldNames[i]}:`);
+				if (i < data.typExprFieldTypes.length) { printNode(data.typExprFieldTypes[i], level + 2); }
+			}
+		},
 	}
 }

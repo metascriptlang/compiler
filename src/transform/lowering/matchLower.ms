@@ -13,7 +13,7 @@
 // Or-patterns [p1, p2] → $m === p1 || $m === p2
 // Binding patterns (identifier) → const name = $m; prepended to body
 
-import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type, isEmptyBlock } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, containsExprKind, replaceInExpr } from "../walker";
 import {
@@ -246,10 +246,6 @@ function canUseSwitchDispatch(cases: Node[], discType: Type): boolean {
 // Build switch dispatch for enum/int patterns with guard support.
 // Groups same-pattern arms with different guards into one switch case.
 function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, ctx: TransformContext): Node {
-	const needsFlag = mode !== "return";
-	const matchedSym = freshTempSym(ctx, "matched", unknownType());
-	const matchedName = matchedSym.name;
-
 	// Build default body from wildcards: process unguarded first (base), then guarded (wrap).
 	// This ensures: _ when g1 => b1, _ when g2 => b2, _ => b3
 	// becomes: if (g1) { b1 } else if (g2) { b2 } else { b3 }
@@ -265,62 +261,84 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 		}
 	}
 
-	// Group non-wildcard arms by pattern key.
-	const patternKeys: string[] = [];
-	const patternTests: Node[][] = [];
+	// The $matched flag is ONLY needed when (a) arms can't early-return (stmt/assign
+	// mode) AND (b) the default body is observably non-empty. No wildcard, or
+	// `_ => {}`, means there's nothing to gate — skip the flag entirely to eliminate
+	// dead stores and empty `if (!$matched) {}` epilogues in the generated C.
+	const needsFlag = mode !== "return" && !isEmptyBlock(defaultBody);
+	const matchedSym = freshTempSym(ctx, "matched", unknownType());
+	const matchedName = matchedSym.name;
+
+	// Reference-aligned lowering: each MatchCase maps to ONE SwitchCase holding
+	// all of its OR-patterns (A | B | C) as caseTests. The C backend emits this
+	// as `case A: case B: case C: { body } break;` — one body with multiple
+	// fall-through labels, matching standard multi-label branch semantics.
+	//
+	// Cross-MatchCase merging: two MatchCases with the IDENTICAL pattern set
+	// (same labels, possibly in different order) merge into one SwitchCase with
+	// an if-else guard chain. This handles both:
+	//   (a) Single-pattern guard chain — `case 1 when g1 => a; case 1 => b`
+	//   (b) OR-pattern guard chain    — `case A|B when g => x; case A|B => y`
+	// Both collapse into one SwitchCase with chained bodies inside caseStmts.
+	//
+	// Partial overlap (`case A|B => x; case A when g => y`) is rejected via
+	// labelOwners bookkeeping — merging would run the second arm's body on
+	// sibling labels it wasn't meant to match, and emitting separate SwitchCases
+	// would produce duplicate C `case` labels. Reference compilers catch this
+	// at sem time as "duplicate case label"; we catch it here and push a clear
+	// error into ctx.errors.
+	const patternKeys: string[] = [];    // canonical set-signature per group
+	const patternTests: Node[][] = [];   // caseTests arrays per group
 	const armGuards: Node[][] = [];
 	const armBodies: Node[][] = [];
+	// Per-label index for partial-overlap detection.
+	const labelOwners: string[] = [];
+	const labelOwnerGroup: number[] = [];
 
 	for (let i = 0; i < cases.length; i += 1) {
 		const caseData = cases[i].data as MatchCaseData;
 		if (isWildcard(caseData.casePatterns)) continue;
 
-		// For or-patterns (A | B => body), each pattern needs its OWN body node.
-		// Sharing a single body across case arms causes DRC to mutate the shared
-		// AST (bd.right = processNode(...)) and the last arm's borrow variable
-		// overwrites all previous arms → use-after-free in generated C.
-		for (let j = 0; j < caseData.casePatterns.length; j += 1) {
-			const armBody = wrapArmBody(caseData.caseBody, mode, varName, loc);
-			const pat = caseData.casePatterns[j];
-			// Key for grouping: semantic equality (resolved symbol name for enums, value for literals)
-			let key = "";
-			if (pat.kind === NodeKind.NumberLiteral) {
-				key = "n:" + (pat.data as NumberLiteralData).value.toString();
-			} else if (pat.kind === NodeKind.Identifier) {
-				key = "id:" + (pat.data as IdentifierData).name;
-			} else if (pat.kind === NodeKind.MemberExpr) {
-				// Use resolved symbol name for semantic equality (Color.Red at any location → same key)
-				if (pat.resolvedSym !== null) {
-					key = "sym:" + pat.resolvedSym.name;
-				} else {
-					const md = pat.data as { object: Node, property: string };
-					key = "m:" + md.property;
-				}
-			} else {
-				key = "x:" + i.toString() + ":" + j.toString();
-			}
+		const setKey = patternSetKey(caseData.casePatterns, i);
 
-			// Find existing group or create new
-			let found = false;
-			for (let gi = 0; gi < patternKeys.length; gi += 1) {
-				if (patternKeys[gi] === key) {
-					armGuards[gi].push(caseData.caseGuard);
-					armBodies[gi].push(armBody);
-					found = true;
-					break;
+		// Same-set merge (handles both single-pattern and OR-pattern guard chains).
+		let mergedInto = -1;
+		for (let gi = 0; gi < patternKeys.length; gi += 1) {
+			if (patternKeys[gi] === setKey) {
+				mergedInto = gi;
+				break;
+			}
+		}
+
+		// Partial-overlap detection for new groups: any individual label that
+		// already belongs to a different group means duplicate C case labels.
+		if (mergedInto < 0) {
+			for (const pat of caseData.casePatterns) {
+				const lk = patternKey(pat, i);
+				let owner = -1;
+				for (let li = 0; li < labelOwners.length; li += 1) {
+					if (labelOwners[li] === lk) { owner = labelOwnerGroup[li]; break; }
+				}
+				if (owner >= 0) {
+					ctx.errors.push("match: duplicate case label '" + lk + "' — pattern overlaps a previous arm with a different pattern set; use either identical or non-overlapping arms");
 				}
 			}
-			if (!found) {
-				patternKeys.push(key);
-				const tests: Node[] = [];
-				tests.push(pat);
-				patternTests.push(tests);
-				const guards: Node[] = [];
-				guards.push(caseData.caseGuard);
-				armGuards.push(guards);
-				const bodies: Node[] = [];
-				bodies.push(armBody);
-				armBodies.push(bodies);
+		}
+
+		const armBody = wrapArmBody(caseData.caseBody, mode, varName, loc);
+
+		if (mergedInto >= 0) {
+			armGuards[mergedInto].push(caseData.caseGuard);
+			armBodies[mergedInto].push(armBody);
+		} else {
+			const newGroupIdx = patternKeys.length;
+			patternKeys.push(setKey);
+			patternTests.push(caseData.casePatterns);
+			armGuards.push([caseData.caseGuard]);
+			armBodies.push([armBody]);
+			for (const pat of caseData.casePatterns) {
+				labelOwners.push(patternKey(pat, i));
+				labelOwnerGroup.push(newGroupIdx);
 			}
 		}
 	}
@@ -363,7 +381,9 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 		stmts.push(makeIf(notMatched, defaultBody, makeBlock([], loc), loc));
 	} else {
 		stmts.push(switchNode);
-		stmts.push(defaultBody);
+		if (!isEmptyBlock(defaultBody)) {
+			stmts.push(defaultBody);
+		}
 	}
 	return makeBlock(stmts, loc);
 }
@@ -552,6 +572,47 @@ function getBindingName(patterns: Node[]): string {
 	return id.name;
 }
 
+// Semantic key for cross-MatchCase grouping. Two patterns with the same key
+// refer to the same discriminant value (enum member, literal). Used by the
+// guard-chain merge path in buildSwitchDispatch.
+function patternKey(pat: Node, caseIdx: number): string {
+	return match (pat.kind) {
+		NodeKind.NumberLiteral => `n:${(pat.data as NumberLiteralData).value}`,
+		NodeKind.Identifier => "id:" + (pat.data as IdentifierData).name,
+		NodeKind.MemberExpr => {
+			if (pat.resolvedSym !== null) return "sym:" + pat.resolvedSym.name;
+			return "m:" + (pat.data as { object: Node, property: string }).property;
+		},
+		// Unique fallback — never matches another pattern, effectively disables merge.
+		_ => `x:${caseIdx}`,
+	};
+}
+
+// Canonical signature of a pattern set for same-set merging. Sorts label keys
+// so that `A | B` and `B | A` collapse to the same group.
+function patternSetKey(patterns: Node[], caseIdx: number): string {
+	const keys: string[] = [];
+	for (const pat of patterns) {
+		keys.push(patternKey(pat, caseIdx));
+	}
+	// Insertion sort — pattern sets are tiny (typically 1-4 items).
+	for (let i = 1; i < keys.length; i += 1) {
+		const x = keys[i];
+		let j = i - 1;
+		while (j >= 0 && keys[j] > x) {
+			keys[j + 1] = keys[j];
+			j -= 1;
+		}
+		keys[j + 1] = x;
+	}
+	let sig = "";
+	for (let k = 0; k < keys.length; k += 1) {
+		if (k > 0) sig = sig + "|";
+		sig = sig + keys[k];
+	}
+	return sig;
+}
+
 // Build condition from pattern list: $m === p1 || $m === p2 || ...
 function buildPatternCondition(patterns: Node[], tempName: string, discType: Type, loc: SourceLocation): Node {
 	let cond = makePatternTest(patterns[0], tempName, discType, loc);
@@ -606,7 +667,19 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 	let defaultBody = makeBlock([], loc);
 	// return mode: matched arms exit via return — no flag needed, unconditional default is safe.
 	// stmt/assign mode: matched arms don't exit — need $matched flag to skip default.
-	const needsFlag = mode !== "return";
+	// Pre-scan wildcards: the flag is only meaningful when some wildcard arm has a
+	// reachable, non-empty body (guarded or non-empty block). Without a real default
+	// to gate, the flag becomes dead stores + an empty `if (!$matched)` epilogue.
+	let hasRealDefault = false;
+	for (const c of cases) {
+		const pd = c.data as MatchCaseData;
+		if (!isWildcard(pd.casePatterns)) continue;
+		if (pd.caseGuard !== null || !isEmptyBlock(pd.caseBody)) {
+			hasRealDefault = true;
+			break;
+		}
+	}
+	const needsFlag = mode !== "return" && hasRealDefault;
 	const matchedSym = freshTempSym(ctx, "matched", unknownType());
 	const matchedName = matchedSym.name;
 
@@ -692,7 +765,9 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 		// no case matched (or hash collision with guard failure). Unconditional placement
 		// keeps C compiler happy (guaranteed return path).
 		stmts.push(switchNode);
-		stmts.push(defaultBody);
+		if (!isEmptyBlock(defaultBody)) {
+			stmts.push(defaultBody);
+		}
 	}
 	return makeBlock(stmts, loc);
 }

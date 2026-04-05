@@ -371,6 +371,12 @@ export function resolveTypeExpr(node: Node, ctx: CheckerContext): void {
 				resolveTypeExpr(ft, ctx);
 			}
 		},
+		// This function is ONLY called on nodes from the typeExpr side channel,
+		// which by construction only contains type-expression shapes (Identifier +
+		// TypeGeneric/Array/Union/Function/Object). Any other NodeKind here is a
+		// no-op: there is nothing to record for LSP. When adding a NEW type-expr
+		// kind (e.g. TypeIntersection), add it to the match ABOVE — the wildcard
+		// will silently drop it otherwise.
 		_ => {},
 	};
 }

@@ -1,23 +1,58 @@
 /*
  * MetaScript Thread Runtime — spawn() support
  *
- * Runs a closure on a worker pool thread, completes an msFuture when done.
- * Uses a Malebolgia-style fixed thread pool (N = CPU cores).
+ * Runs a closure on a worker pool thread. The worker publishes the closure's
+ * result through one of two completion targets, chosen per-task:
  *
- * Spawn uses msFuture_ptr (void* value) at the thread boundary.
- * The boxed value crosses the completion pipe and gets stored in the future.
- * Caller's await code reads the void* and casts/unboxes as needed.
+ *   1. Future path (msSpawn → msFuture_ptr):
+ *      Default single-handle await. The boxed void* return value crosses the
+ *      completion pipe (msPostCompletion) onto the dispatcher thread, where
+ *      callbacks fire under the event loop. Caller's await code reads the
+ *      void* and casts/unboxes as needed.
+ *
+ *   2. Group path (msSpawnTaskSubmit → msAwaitGroup):
+ *      Structured fan-out (PARALOCK.md §6.3). The worker writes its slot in
+ *      the caller-provided AwaitGroup and decrements the group's atomic
+ *      counter directly — no completion pipe, no dispatcher round-trip, no
+ *      per-task future allocation. The submitting thread blocks in
+ *      msAwaitGroupBlocking until all slots report.
+ *
+ * Both paths share msPoolSubmit and the Malebolgia-style fixed worker pool
+ * (N = CPU cores). The dispatch branch lives in msSpawnWorkerRun below.
+ *
+ * Phase 2 completion TODO: the group path (msSpawnTaskSubmit) has no in-tree
+ * caller yet; its branch in msSpawnWorkerRun is exercised only by the
+ * standalone awaitGroup_selftest in isolation. The awaitLower.ms transform
+ * (remaining Phase 2 deliverable) will backfill an end-to-end integration
+ * test that exercises this branch through the real pool.
  */
 #ifndef MS_THREAD_H
 #define MS_THREAD_H
 
 #include "future.h"
+#include "awaitGroup.h"
 #include <stdlib.h>
 
+/* Spawn context. Workers execute fn(env) then publish the result.
+ *
+ * Two completion targets are supported, selected by which field is non-NULL:
+ *   - fut != NULL, group == NULL (default):
+ *       future path — result goes through msPostCompletion, serialized
+ *       onto the dispatcher thread so callbacks fire under the event loop.
+ *   - group != NULL (fut may be NULL):
+ *       group path — worker calls msAwaitGroupCompleteSlot / FailSlot
+ *       directly from the worker thread. No dispatcher round-trip.
+ *       Used by structured fan-out (PARALOCK Phase 2).
+ *
+ * Existing callers that designated-initialize with only {fn, env, fut} still
+ * work: C guarantees group/slot are zero-initialized, so the worker takes
+ * the future branch. */
 typedef struct msSpawnCtx {
-	void* fn;           /* closure function pointer */
-	void* env;          /* closure environment (NULL for non-capturing) */
-	void* fut;          /* msFuture_ptr* to complete when task finishes */
+	void* fn;             /* closure function pointer */
+	void* env;            /* closure environment (NULL for non-capturing) */
+	void* fut;            /* msFuture_ptr* to complete (future path) */
+	msAwaitGroup* group;  /* optional: group to complete (group path) */
+	int32_t slot;         /* group slot index (only meaningful when group != NULL) */
 } msSpawnCtx;
 
 
@@ -31,15 +66,30 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	} else {
 		result = ((void*(*)(void))ctx->fn)();
 	}
-	/* Post result to event loop thread via completion pipe */
-	if (msErr) {
-		msPostCompletion(ctx->fut, NULL, true, (void*)msCurrException);
-		msErr = false;
-		msCurrException = NULL;
+
+	if (ctx->group != NULL) {
+		/* Group path: worker completes the slot directly. AwaitGroup's own
+		 * mutex + acq_rel fetch_sub handles cross-thread publication; no
+		 * need to route through the dispatcher. */
+		if (msErr) {
+			msAwaitGroupFailSlot(ctx->group, ctx->slot, (void*)msCurrException);
+			msErr = false;
+			msCurrException = NULL;
+		} else {
+			msAwaitGroupCompleteSlot(ctx->group, ctx->slot, result);
+		}
 	} else {
-		msPostCompletion(ctx->fut, result, false, NULL);
+		/* Future path: post result to event loop thread via completion pipe. */
+		if (msErr) {
+			msPostCompletion(ctx->fut, NULL, true, (void*)msCurrException);
+			msErr = false;
+			msCurrException = NULL;
+		} else {
+			msPostCompletion(ctx->fut, result, false, NULL);
+		}
 	}
-	/* Release worker's ownership of the env */
+
+	/* Release worker's ownership of the env (same for both paths). */
 	if (ctx->env != NULL) {
 		msDecref(ctx->env);
 	}
@@ -60,6 +110,33 @@ static inline void* msSpawn(msClosure fn) {
 	}
 	msPoolSubmit(&ctx);  /* copied into queue slot — ctx can go out of scope */
 	return fut;
+}
+
+/* Submit a spawn task whose completion targets a group slot instead of a future.
+ *
+ * Used by PARALOCK structured fan-out (PARALOCK.md §6.3): the caller creates
+ * an msAwaitGroup of size N via msAwaitGroupInit, submits N closures via
+ * msSpawnTaskSubmit (slots 0..N-1), then calls msAwaitGroupBlocking and
+ * finally msAwaitGroupFree. No future is allocated per task — the group's
+ * results[] array holds the values, and cross-thread publication is handled
+ * by the AwaitGroup's acq_rel counter + mutex protocol (see awaitGroup.c).
+ *
+ * Argument order matches PARALOCK.md §6.3 lifecycle example: (group, slot, fn).
+ *
+ * Caller owns the group and must keep it alive until all submitted slots
+ * have completed (msAwaitGroupBlocking guarantees this). */
+static inline void msSpawnTaskSubmit(msAwaitGroup* group, int32_t slot, msClosure fn) {
+	msSpawnCtx ctx = {
+		.fn = (void*)fn.fn,
+		.env = fn.env,
+		.fut = NULL,
+		.group = group,
+		.slot = slot,
+	};
+	if (fn.env != NULL) {
+		msIncRef(fn.env);
+	}
+	msPoolSubmit(&ctx);
 }
 
 #endif /* MS_THREAD_H */

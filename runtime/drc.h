@@ -24,7 +24,6 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdatomic.h>
-#include <stdio.h>
 
 #include "runtime/types.h"
 
@@ -65,13 +64,7 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 
 static inline void msIncRef(void* p) {
 	if (p != NULL) {
-		msRefHeader* h = msHeader(p);
-		if (h->rc == 0x55555555 || (h->rc < -1000000 || h->rc > 1000000)) {
-			fprintf(stderr, "[DRC] USE-AFTER-FREE: incref on freed/corrupt object ptr=%p rc=%d\n", p, h->rc);
-			fflush(stderr);
-			abort();
-		}
-		h->rc++;
+		msHeader(p)->rc++;
 	}
 }
 
@@ -86,24 +79,6 @@ static inline void msAtomicIncRef(void* p) {
 static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	msRefHeader* h = msHeader(p);
-	/* Detect use-after-free: MallocScribble fills freed memory with 0x55 */
-	if (h->rc == 0x55555555 || (h->rc < -1000000 || h->rc > 1000000)) {
-		fprintf(stderr, "[DRC] USE-AFTER-FREE: decref on freed/corrupt object ptr=%p rc=%d rootIdx=%d\n", p, h->rc, h->rootIdx);
-		fflush(stderr);
-		abort();
-	}
-	/* Trace SymbolTable double-destroy */
-	if (h->rc == 0 && h->type && h->type->name) {
-		if (strcmp(h->type->name, "SymbolTable") == 0) {
-			static void* lastDestroyed = NULL;
-			if (p == lastDestroyed) {
-				fprintf(stderr, "[DRC] DOUBLE-DESTROY SymbolTable ptr=%p\n", p);
-				fflush(stderr);
-				abort();
-			}
-			lastDestroyed = p;
-		}
-	}
 	if (h->rc == 0) return true;
 	h->rc--;
 	return false;

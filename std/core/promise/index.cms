@@ -2,6 +2,7 @@
 @compile("runtime/promise/dispatch.c");
 @compile("runtime/promise/combinator.c");
 @compile("runtime/promise/pool.c");
+@compile("runtime/promise/awaitGroup.c");
 @compile("runtime/promise/selectorKqueue.c");
 @compile("runtime/promise/selectorEpoll.c");
 @compile("runtime/promise/selectorPoll.c");

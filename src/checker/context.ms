@@ -6,6 +6,7 @@ import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/
 import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
+import { AffineTracker, createAffineTracker } from "./spawnAffinity";
 
 
 // ===== Export Registry (cross-module type propagation) =====
@@ -716,6 +717,7 @@ export class CheckerContext {
 	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (reference suggest parity)
 	matchExprDepth: number;      // >0 when inside match expression block arm (return targets match, not function)
 	initTracker: InitTracker;    // ref parity: TEffects.init — definite assignment tracking
+	affineTracker: AffineTracker; // PARALOCK Phase 1 — SpawnHandle consumption tracking
 	strictDefs: boolean;         // ref parity: strictDefs — warn on all uninit var use
 	strictNullChecks: boolean;   // ref parity: strictNotNil — warn on unguarded class deref
 	inTryExpr: boolean;          // true when checking tryArg of TryExpr or body of TryCatchStmt (V2 await guard)
@@ -752,6 +754,7 @@ export function createContext(): CheckerContext {
 		symRecords: [],
 		matchExprDepth: 0,
 		initTracker: createInitTracker(),
+		affineTracker: createAffineTracker(),
 		strictDefs: false,
 		strictNullChecks: false,
 		inTryExpr: false,
