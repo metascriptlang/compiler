@@ -24,8 +24,7 @@ import { TransformContext } from "../context";
 import {
 	makeIdent, makeTypedIdent, makeVarDecl, makeExprStmt, makeReturn,
 	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeWhile, makeBool, makeNumber, makeString,
-	makeAssign, makeBinary, makeTryCatch, makeContinue, makeMoveExpr,
-	syntheticToken, extractBodyStmts, collectDeclNames,
+	makeAssign, makeBinary, makeTryCatch, makeContinue, syntheticToken, extractBodyStmts, collectDeclNames,
 } from "../util";
 import { NameSet, createNameSet, nameSetAdd } from "../context";
 import { createPromise, createFunction, createPtr, createPrimitive, voidType, unknownType, booleanType, numberType, isPromise, getPromiseInner } from "../../checker/types";

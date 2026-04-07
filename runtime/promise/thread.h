@@ -6,7 +6,7 @@
  *
  *   1. Future path (msSpawn → msFuture_ptr):
  *      Default single-handle await. The boxed void* return value crosses the
- *      completion pipe (msPostCompletion) onto the dispatcher thread, where
+ *      MPSC completion queue onto the dispatcher thread, where
  *      callbacks fire under the event loop. Caller's await code reads the
  *      void* and casts/unboxes as needed.
  *
@@ -35,7 +35,7 @@
  *
  * Two completion targets are supported, selected by which field is non-NULL:
  *   - fut != NULL, group == NULL (default):
- *       future path — result goes through msPostCompletion, serialized
+ *       future path — result goes through MPSC completion queue, serialized
  *       onto the dispatcher thread so callbacks fire under the event loop.
  *   - group != NULL (fut may be NULL):
  *       group path — worker calls msAwaitGroupCompleteSlot / FailSlot
@@ -52,11 +52,12 @@ typedef struct msSpawnCtx {
 	msAwaitGroup* group;  /* optional: group to complete (group path) */
 	int32_t slot;         /* group slot index (only meaningful when group != NULL) */
 	_Atomic(bool)* cancelFlag;  /* Phase 3: pointer to group's cancelled flag (NULL if no group) */
+	void* slotGroup;            /* msAwaitSlot* — stack-allocated fast path (Malebolgia parity) */
 } msSpawnCtx;
 
 
-/* Forward declaration — implemented in dispatch.c */
-extern void msPostCompletion(void* fut, void* value, bool isFail, void* error);
+/* Forward declarations — implemented in dispatch.c */
+extern void msCompletionQueuePush(void* fut, bool isFail, void* error);
 
 static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	void* result = NULL;
@@ -66,7 +67,17 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 		result = ((void*(*)(void))ctx->fn)();
 	}
 
-	if (ctx->group != NULL) {
+	if (ctx->slotGroup != NULL) {
+		/* Stack-allocated fast path: atomic decrement, no condvar, no pipe.
+		 * Waiter spins via msPoolHelpOne + sched_yield (Malebolgia parity). */
+		if (msErr) {
+			msAwaitSlotFail(ctx->slotGroup, (void*)msCurrException);
+			msErr = false;
+			msCurrException = NULL;
+		} else {
+			msAwaitSlotComplete(ctx->slotGroup, ctx->slot, result);
+		}
+	} else if (ctx->group != NULL) {
 		/* Group path: worker completes the slot directly. AwaitGroup's own
 		 * mutex + acq_rel fetch_sub handles cross-thread publication; no
 		 * need to route through the dispatcher. */
@@ -78,21 +89,35 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 			msAwaitGroupCompleteSlot(ctx->group, ctx->slot, result);
 		}
 	} else if (ctx->fut != NULL) {
-		/* Future path: post result to event loop thread via completion pipe. */
+		/* Future path: split completion (Pony MPSC parity).
+		 * Step 1: Store value + mark finished directly from worker thread.
+		 *         Blocking waiters (msWaitForReady) see finished immediately.
+		 * Step 2: Push to MPSC queue for callback firing on dispatcher thread.
+		 *         Async steppers (msAsyncCb) get callbacks on the correct thread. */
 		if (msErr) {
-			msPostCompletion(ctx->fut, NULL, true, (void*)msCurrException);
+			((msFutureBase*)ctx->fut)->error = (void*)msCurrException;
+			((msFutureBase*)ctx->fut)->failed = true;
+			atomic_store_explicit(&((msFutureBase*)ctx->fut)->finished, true, memory_order_release);
+			msNotifyFutureComplete();
+			msCompletionQueuePush(ctx->fut, true, (void*)msCurrException);
 			msErr = false;
 			msCurrException = NULL;
 		} else {
-			msPostCompletion(ctx->fut, result, false, NULL);
+			((msFuture_ptr*)ctx->fut)->value = result;
+			((msFutureBase*)ctx->fut)->isBoxed = true;
+			atomic_store_explicit(&((msFutureBase*)ctx->fut)->finished, true, memory_order_release);
+			msNotifyFutureComplete();
+			msCompletionQueuePush(ctx->fut, false, NULL);
 		}
 	} else {
 		/* Defensive: no completion target — clear errors to prevent stale state. */
 		if (msErr) { msErr = false; msCurrException = NULL; }
 	}
 
-	/* Release worker's ownership of the env (same for both paths). */
-	if (ctx->env != NULL) {
+	/* Release worker's ownership of the env.
+	 * Skip for slotGroup path — fused await guarantees env alive through wait,
+	 * and msSpawnSlotSubmit didn't incref (no extra ownership to release). */
+	if (ctx->slotGroup == NULL && ctx->env != NULL) {
 		msDecref(ctx->env);
 	}
 	/* No free — ctx is a local copy from the queue slot (Malebolgia: zero alloc) */
@@ -139,6 +164,21 @@ static inline void msSpawnTaskSubmit(msAwaitGroup* group, int32_t slot, msClosur
 	if (fn.env != NULL) {
 		msIncRef(fn.env);
 	}
+	msPoolSubmit(&ctx);
+}
+
+/* Stack-allocated fast path: submit a spawn task targeting an msAwaitSlot.
+ * Zero heap allocation — slot lives on caller's stack, waiter blocks via
+ * msAwaitSlotWait (spin + help-first). Malebolgia parity. */
+static inline void msSpawnSlotSubmit(void* s, int32_t slot, msClosure fn) {
+	msSpawnCtx ctx = {
+		.fn = (void*)fn.fn,
+		.env = fn.env,
+		.slotGroup = s,
+		.slot = slot,
+	};
+	/* No msIncRef — fused path guarantees env alive through msAwaitSlotWait.
+	 * Worker skips msDecref for slotGroup path (see msSpawnWorkerRun). */
 	msPoolSubmit(&ctx);
 }
 

@@ -8,7 +8,7 @@
 import { isPrimitiveKind, hasAsgnFlag, isPromise, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
-import { NodeKind, Type, TypeKind, Symbol } from "../ast/node";
+import { NodeKind, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 
 // ===== RC Classification Kind =====
 
@@ -92,7 +92,11 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		return noRcInfo();
 	}
 	// Ref/Ptr elements (class arrays) — msRefArray (all pointers are void*)
+	// Actor elements are exempt from DRC (managed by actor runtime).
 	if (elem.kind === TypeKind.Ref || elem.kind === TypeKind.Ptr) {
+		if (elem.sym !== null && elem.sym.symbolKind === SymbolKind.Actor) {
+			return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
+		}
 		return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
 	}
 	// Default: ref array for unknown element types (conservative safe fallback)
@@ -134,9 +138,22 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 	return match (t.kind) {
 		TypeKind.String => makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false),
 		TypeKind.Array => classifyArray(t, ctx),
-		TypeKind.Ref => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false),
+		TypeKind.Ref => {
+			// Actors are exempt from DRC — their lifecycle is managed by the actor
+			// runtime (mailbox processing, supervision, ORCA-style collection).
+			// DRC scope cleanup would null actor pointers in arrays/variables while
+			// messages are still in flight. Pony parity: actors are never GC'd while
+			// reachable; Malebolgia parity: concurrency primitives bypass GC entirely.
+			if (t.sym !== null && t.sym.symbolKind === SymbolKind.Actor) return noRcInfo();
+			return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
+		},
 		TypeKind.GenericInstance => {
-			if (isPromise(t)) return makeRcInfo(RcKind.Ref, "", "msFutureDrcDestroy", "", "msFutureDrcWasMoved", "", false);
+			// Futures (Promise<T>, SpawnHandle<T>) are exempt from DRC — their lifecycle
+			// is managed by the await transform (create → wait → explicit destroy).
+			// DRC scope cleanup races with worker-thread completion, corrupting values.
+			// Malebolgia parity: spawn results are caller-owned, no GC involvement.
+			// Nim FlowVar parity: handle is managed but cross-thread data is unmanaged.
+			if (isPromise(t)) return noRcInfo();
 			return makeRcInfo(RcKind.Named, "", "", "", "", "", false);
 		},
 		TypeKind.Ptr => {
@@ -156,10 +173,8 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.Tuple => {
 			// Check if any element needs RC
 			let hasRc = false;
-			let i = 0;
-			while (i < t.typeChildren.length) {
-				if (classifyType(t.typeChildren[i], ctx).needsCleanup) { hasRc = true; }
-				i += 1;
+			for (const child of t.typeChildren) {
+				if (classifyType(child, ctx).needsCleanup) { hasRc = true; }
 			}
 			// TODO: Tuples with RC elements need per-field hooks from destructorLifting.
 			// For now, emit Named with empty hooks — helper functions guard against empty fnName.

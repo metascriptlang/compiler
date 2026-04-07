@@ -190,30 +190,83 @@ msDispatcher* msGetDispatcher(void) {
 }
 
 #else
-/* POSIX: self-pipe pattern — pool threads write to pipe[1], event loop reads pipe[0]. */
+/* POSIX: MPSC queue for cross-thread completion + wake-only self-pipe.
+ * Pony parity: lock-free queue replaces pipe for data delivery (100x faster).
+ * The pipe now carries only 1-byte wake signals (no framing issues). */
 
-static int gCompletionPipe[2] = {-1, -1};
+#include "runtime/actor/mailbox.h"
 
-/* Wake event loop from another thread (Pony-style: unpark scheduler) */
-void msActorWakeEventLoop(void) {
-    if (gCompletionPipe[1] >= 0) {
-        char c = 'A';
-        (void)write(gCompletionPipe[1], &c, 1);
+static int gWakePipe[2] = {-1, -1};           /* wake-only self-pipe (1-byte signals) */
+static msMpscQueue gCompletionQueue;           /* lock-free MPSC for future completions */
+static bool gCompletionQueueInited = false;
+static _Atomic(bool) gWakePending = false;     /* amortize wake writes: N completions → 1 syscall */
+
+/* Push a future completion to the MPSC queue + wake the selector.
+ * Called from worker threads. Dispatcher drains the queue and fires callbacks. */
+void msCompletionQueuePush(void* fut, bool isFail, void* error) {
+    if (!gCompletionQueueInited) return;  /* guard: dispatcher not yet initialized */
+    msMessage* msg = msMsgAlloc(/*kind=*/isFail ? -1 : 0, /*replyFut=*/fut);
+    msMsgSetPtr(msg, 0, error);
+    msMpscPush(&gCompletionQueue, msg);
+    /* Amortized wake: at most 1 syscall per drain batch */
+    if (!atomic_exchange_explicit(&gWakePending, true, memory_order_acq_rel)) {
+        if (gWakePipe[1] >= 0) {
+            char c = 1;
+            (void)write(gWakePipe[1], &c, 1);
+        }
     }
+}
+
+/* Ensure wake pipe + MPSC queue are initialized (called by actor init).
+ * Separate from msGetDispatcher because actors may send messages before
+ * any await/event-loop code runs — the wake pipe must exist for those
+ * early sends to signal correctly. */
+void msEnsureWakePipe(void) {
+    if (gWakePipe[0] < 0) {
+        pipe(gWakePipe);
+        fcntl(gWakePipe[0], F_SETFL, O_NONBLOCK);
+    }
+    if (!gCompletionQueueInited) {
+        msMpscInit(&gCompletionQueue);
+        gCompletionQueueInited = true;
+    }
+}
+
+/* Wake event loop from another thread (Pony-style: unpark scheduler).
+ * Used by actor subsystem when scheduling work on the main thread. */
+void msActorWakeEventLoop(void) {
+    if (gWakePipe[1] >= 0) {
+        if (!atomic_exchange_explicit(&gWakePending, true, memory_order_acq_rel)) {
+            char c = 1;
+            (void)write(gWakePipe[1], &c, 1);
+        }
+    }
+}
+
+/* Drain all pending completions from the MPSC queue.
+ * Fires callbacks on the dispatcher thread (correct thread for async steppers). */
+static bool msCompletionQueueDrain(void) {
+    bool didWork = false;
+    if (!gCompletionQueueInited) return false;
+    msMessage* msg;
+    while ((msg = msMpscPop(&gCompletionQueue)) != NULL) {
+        void* fut = msg->replyFuture;
+        msMsgFree(msg);
+        if (fut != NULL) {
+            msFutureFireCallbacks((msFutureBase*)fut);
+        }
+        didWork = true;
+    }
+    return didWork;
 }
 
 msDispatcher* msGetDispatcher(void) {
 	if (gDispatcher == NULL) {
 		gDispatcher = (msDispatcher*)calloc(1, sizeof(msDispatcher));
 		gDispatcher->selector = msSelectorCreate();
-		if (gCompletionPipe[0] < 0) {
-			pipe(gCompletionPipe);
-			fcntl(gCompletionPipe[0], F_SETFL, O_NONBLOCK);
-		}
-		gDispatcher->completionPipe[0] = gCompletionPipe[0];
-		gDispatcher->completionPipe[1] = gCompletionPipe[1];
+		msEnsureWakePipe();  /* wake pipe + MPSC queue (may already be initialized by actor init) */
 		if (gDispatcher->selector) {
-			msSelectorRegister(gDispatcher->selector, gDispatcher->completionPipe[0], MS_EVENT_READ, NULL);
+			msSelectorRegister(gDispatcher->selector, gWakePipe[0], MS_EVENT_READ, NULL);
 		}
 		msCallSoonProc = msDispatcherCallSoon;
 	}
@@ -355,28 +408,31 @@ bool msRunOnce(int timeoutMs) {
 		msSleepMs(adj);
 	}
 #else
-	/* POSIX: selector poll + completion pipe drain */
+	/* POSIX: pre-poll MPSC drain + selector poll + post-poll drain.
+	 * Completions arrive via lock-free MPSC queue (not pipe). The wake pipe
+	 * only carries 1-byte signals to unblock the selector. */
+	if (msCompletionQueueDrain()) didWork = true;  /* pre-poll: process without blocking */
 	if (d->selector != NULL) {
 		msReadyEvent readyBuf[64];
-		int nready = msSelectorPoll(d->selector, adj, readyBuf, 64);
+		int nready = msSelectorPoll(d->selector, didWork ? 0 : adj, readyBuf, 64);
 		for (int i = 0; i < nready; i++) {
 			didWork = true;
-			/* Completion pipe: drain cross-thread spawn results */
-			int pipeFdRead = d->completionPipe[0];
-			if (readyBuf[i].fd == pipeFdRead) {
-				msCompletionMsg msg;
-				while (read(pipeFdRead, &msg, sizeof(msg)) == (ssize_t)sizeof(msg)) {
-					if (msg.isFail) msFutureFail(msg.fut, msg.error);
-					else msFutureComplete(msg.fut, msg.value);
-				}
+			/* Wake pipe: drain bytes, actual data is in MPSC queue */
+			if (readyBuf[i].fd == gWakePipe[0]) {
+				char buf[64];
+				(void)read(gWakePipe[0], buf, sizeof(buf));
+				atomic_store_explicit(&gWakePending, false, memory_order_release);
 				continue;
 			}
+			/* I/O events (unchanged) */
 			void* ud = readyBuf[i].userdata;
 			if (ud != NULL && !msFutureFinished(ud)) {
 				msSelectorUnregister(d->selector, readyBuf[i].fd);
 				msFutureCompleteVoid(ud);
 			}
 		}
+		/* Post-poll: drain completions that arrived during selector block */
+		if (msCompletionQueueDrain()) didWork = true;
 	} else if (adj > 0 && msDequeLen(&d->callbacks) == 0) {
 		msSleepMs(adj);  /* fallback: no selector */
 	}
@@ -394,7 +450,8 @@ bool msRunOnce(int timeoutMs) {
 	/* Step 6: Drain actor mailboxes (if actors are linked in).
 	 * msActorPollHook is set by actor runtime init — NULL if no actors. */
 	if (msActorPollHook != NULL) {
-		didWork = msActorPollHook() || didWork;
+		bool actorWork = msActorPollHook();
+		didWork = actorWork || didWork;
 	}
 
 	return didWork;
@@ -405,22 +462,18 @@ void msPoll(int timeoutMs) {
 	(void)msRunOnce(timeoutMs);
 }
 
-/* Dual-path wait: main thread runs event loop, workers use condvar.
- * Detection: if the completion pipe is initialized but this thread has no
- * dispatcher, we're a worker. Otherwise we're the main thread (or first
- * caller — create dispatcher on demand). */
+/* Dual-path wait: main thread runs event loop (msRunOnce), workers use condvar.
+ * Uses the pool's TLS worker flag — set in msPoolWorkerLoop at thread entry. */
 static inline bool msIsWorkerWait(void) {
-#ifdef _WIN32
-	return false; /* TODO: Windows worker detection */
-#else
-	return gCompletionPipe[0] >= 0 && !msHasDispatcher();
-#endif
+	extern _Thread_local bool msIsPoolWorker;
+	return msIsPoolWorker;
 }
 
 void* msWaitFor(void* fp) {
 	msFutureBase* fut = (msFutureBase*)fp;
 	bool worker = msIsWorkerWait();
 	if (!worker) msGetDispatcher(); /* ensure event loop exists on main thread */
+	if (worker) msPoolBusyDec();  /* signal availability while waiting */
 	while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
 		if (msPoolHelpOne()) continue;
 		if (!worker) {
@@ -429,6 +482,7 @@ void* msWaitFor(void* fp) {
 			msWorkerWaitOnFuture(fp);
 		}
 	}
+	if (worker) msPoolBusyInc();  /* back to own work */
 	return msFutureRead(fp);
 }
 
@@ -436,14 +490,23 @@ void msWaitForReady(void* fp) {
 	msFutureBase* fut = (msFutureBase*)fp;
 	bool worker = msIsWorkerWait();
 	if (!worker) msGetDispatcher(); /* ensure event loop exists on main thread */
+	if (worker) msPoolBusyDec();  /* signal availability while waiting */
+	int spins = 0;
+	bool helped = false;
 	while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
-		if (msPoolHelpOne()) continue;
+		if (msPoolHelpOne()) { spins = 0; helped = true; continue; }
 		if (!worker) {
 			msRunOnce(500);
+		} else if (helped && spins < 32) {
+			spins++;
+			sched_yield();
 		} else {
 			msWorkerWaitOnFuture(fp);
+			spins = 0;
+			helped = false;
 		}
 	}
+	if (worker) msPoolBusyInc();  /* back to own work */
 }
 
 /* Standard reference runForever pattern */
@@ -454,8 +517,8 @@ void msRunForever(void) {
 }
 
 /* Post completion from pool thread to event loop. Thread-safe.
- * POSIX: pipe write (atomic for messages < PIPE_BUF).
- * Windows: PostQueuedCompletionStatus to IOCP. */
+ * POSIX: MPSC queue push (lock-free, Pony parity).
+ * Windows: PostQueuedCompletionStatus to IOCP (native MPSC). */
 void msPostCompletion(void* fut, void* value, bool isFail, void* error) {
 #ifdef _WIN32
 	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
@@ -471,14 +534,7 @@ void msPostCompletion(void* fut, void* value, bool isFail, void* error) {
 		else msFutureComplete(fut, value);
 	}
 #else
-	msCompletionMsg msg = { .fut = fut, .value = value, .isFail = isFail, .error = error };
-	int wfd = gCompletionPipe[1];
-	if (wfd >= 0) {
-		write(wfd, &msg, sizeof(msg));
-	} else {
-		if (isFail) msFutureFail(fut, error);
-		else msFutureComplete(fut, value);
-	}
+	msCompletionQueuePush(fut, isFail, error);
 #endif
 }
 
@@ -541,7 +597,7 @@ void msAsyncStart(void* retFut, msClosure stepper) {
 	 * Worker threads that call msAsyncStart get a local dispatcher — acceptable
 	 * because msWorkerWaitOnFuture handles the wait correctly regardless. */
 #else
-	isWorker = (gCompletionPipe[0] >= 0 && !msHasDispatcher());
+	{ extern _Thread_local bool msIsPoolWorker; isWorker = msIsPoolWorker; }
 #endif
 	if (!isWorker) {
 		msGetDispatcher();
@@ -574,8 +630,9 @@ void msDestroyDispatcher(void) {
 	if (d->iocp != NULL) { CloseHandle(d->iocp); d->iocp = NULL; }
 #else
 	if (d->selector != NULL) msSelectorDestroy(d->selector);
-	if (gCompletionPipe[0] >= 0) { close(gCompletionPipe[0]); gCompletionPipe[0] = -1; }
-	if (gCompletionPipe[1] >= 0) { close(gCompletionPipe[1]); gCompletionPipe[1] = -1; }
+	if (gWakePipe[0] >= 0) { close(gWakePipe[0]); gWakePipe[0] = -1; }
+	if (gWakePipe[1] >= 0) { close(gWakePipe[1]); gWakePipe[1] = -1; }
+	if (gCompletionQueueInited) { msMpscDestroy(&gCompletionQueue); gCompletionQueueInited = false; }
 #endif
 	/* Reset globals */
 	msCallSoonProc = NULL;

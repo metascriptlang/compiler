@@ -66,6 +66,12 @@ void msPoolShutdown(void);
  * Self-contained: caller needs no access to msSpawnCtx. */
 bool msPoolHelpOne(void);
 
+/* busyCount signaling for wait paths. Workers decrement on entering wait
+ * (msAwaitSlotWait, msWaitForReady) so shouldSend sees available capacity.
+ * Re-increment when exiting the wait loop. */
+void msPoolBusyDec(void);
+void msPoolBusyInc(void);
+
 /* Wake a specific worker by scheduler ID (targeted: no spurious wakeups) */
 void msPoolWakeWorker(int schedulerID);
 

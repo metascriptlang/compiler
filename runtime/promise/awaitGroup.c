@@ -19,16 +19,21 @@
 #include "awaitGroup.h"
 #include "pool.h"    /* Phase 8: msPoolHelpOne for help-first scheduling */
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <assert.h>
 
 /* Phase 3: need monotonic time for deadline-based wait */
 extern int64_t msMonoTimeMs(void);
-/* Phase 4: route doneFut completion through the dispatcher thread.
- * msPostCompletion writes to the completion pipe — the dispatcher thread
- * calls msFutureComplete on its event loop iteration, firing callbacks
- * (msAsyncCb) on the correct thread. */
-extern void msPostCompletion(void* fut, void* value, bool isFail, void* error);
+/* Phase 4: route doneFut completion through MPSC queue to dispatcher thread.
+ * Worker sets finished directly (for blocking waiters), then pushes to
+ * the completion queue so callbacks fire on the dispatcher thread. */
+extern void msCompletionQueuePush(void* fut, bool isFail, void* error);
+extern void msNotifyFutureComplete(void);
+/* Minimal forward declaration: msFutureBase.finished is the first field (_Atomic(bool)).
+ * We only need to set it from finishSlot without pulling in all of future.h.
+ * Layout verified by _Static_assert in future.h (offsetof(msFutureBase, finished) == 0). */
+typedef struct { _Atomic(bool) finished; } msFutureBaseMinimal;
 
 msAwaitGroup* msAwaitGroupInit(int32_t n) {
 	if (n < 0) n = 0;
@@ -102,12 +107,13 @@ static void finishSlot(msAwaitGroup* g) {
 		pthread_mutex_unlock(&g->mutex);
 #endif
 		/* Phase 4: complete done future for async cooperative path.
-		 * Route through msPostCompletion so the future completes on the
-		 * dispatcher thread (not the worker thread), ensuring msAsyncCb
-		 * runs on the correct thread. */
+		 * Set finished directly (blocking waiters), push to MPSC queue
+		 * (dispatcher fires callbacks for async steppers). */
 		void* df = atomic_load_explicit(&g->doneFut, memory_order_acquire);
 		if (df != NULL) {
-			msPostCompletion(df, NULL, false, NULL);
+			atomic_store_explicit(&((msFutureBaseMinimal*)df)->finished, true, memory_order_release);
+			msNotifyFutureComplete();
+			msCompletionQueuePush(df, false, NULL);
 		}
 	}
 }
@@ -264,4 +270,41 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 void msAwaitGroupCancel(msAwaitGroup* g) {
 	if (g == NULL) return;
 	atomic_store_explicit(&g->cancelled, true, memory_order_release);
+}
+
+/* ===== msAwaitSlot — Thread-Local Pool with Heap Fallback ===== */
+
+#define MS_SLOT_POOL_SIZE 64
+static _Thread_local msAwaitSlot msSlotPool[MS_SLOT_POOL_SIZE];
+static _Thread_local int32_t msSlotPoolIdx = 0;
+
+void* msAwaitSlotCreate(int32_t n) {
+	msAwaitSlot* s;
+	if (msSlotPoolIdx < MS_SLOT_POOL_SIZE) {
+		s = &msSlotPool[msSlotPoolIdx++];
+	} else {
+		/* Heap fallback for deep recursion + work stealing (24 bytes) */
+		s = (msAwaitSlot*)malloc(sizeof(msAwaitSlot));
+	}
+	atomic_store_explicit(&s->pending, n, memory_order_relaxed);
+	atomic_store_explicit(&s->failed, false, memory_order_relaxed);
+	s->error = NULL;
+	s->result = NULL;
+	return (void*)s;
+}
+
+void msAwaitSlotRelease(void* sp) {
+	msAwaitSlot* s = (msAwaitSlot*)sp;
+	/* Check if pointer is within the TLS pool or heap-allocated */
+	if (s >= &msSlotPool[0] && s < &msSlotPool[MS_SLOT_POOL_SIZE]) {
+		/* Pool slot — decrement index. With help-first work stealing,
+		 * release order may not be strict LIFO (stolen tasks can create
+		 * and release slots interleaved with the parent's slots). The
+		 * pool is still safe: slots are independent (no aliasing), and
+		 * the worst case is a small gap that gets reused on next create. */
+		if (msSlotPoolIdx > 0) msSlotPoolIdx--;
+	} else {
+		/* Heap fallback — free */
+		free(s);
+	}
 }

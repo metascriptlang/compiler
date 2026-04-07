@@ -41,6 +41,7 @@ typedef struct {
     int32_t rc;
     int32_t rootIdx;
     const msTypeInfo* type;
+    uint32_t allocSize;
 } msRefHeader;
 
 static inline msRefHeader* msHeader(void* p) {
@@ -105,6 +106,7 @@ static inline void* msAlloc(size_t size) {
     h->rc = 0;
     h->rootIdx = -1;
     h->type = NULL;
+    h->allocSize = (uint32_t)(sizeof(msRefHeader) + size);
     return (void*)(h + 1);
 }
 
@@ -113,6 +115,7 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
     h->rc = 0;
     h->rootIdx = -1;
     h->type = type;
+    h->allocSize = (uint32_t)(sizeof(msRefHeader) + size);
     return (void*)(h + 1);
 }
 

@@ -41,6 +41,28 @@ export function targetLinuxX86_64(): TargetInfo {
 	};
 }
 
+export function targetLinuxAarch64(): TargetInfo {
+	return {
+		triple: TargetTriple.LinuxAarch64,
+		tripleName: "aarch64-linux-gnu",
+		pointerSize: 8, pointerAlign: 8,
+		shortSize: 2, intSize: 4, longSize: 8, longLongSize: 8,
+		floatSize: 4, doubleSize: 8, longDoubleSize: 16,
+		sizeTSigned: false, charSigned: false, // aarch64 char is unsigned
+	};
+}
+
+export function targetMacosX86_64(): TargetInfo {
+	return {
+		triple: TargetTriple.MacosX86_64,
+		tripleName: "x86_64-apple-darwin",
+		pointerSize: 8, pointerAlign: 8,
+		shortSize: 2, intSize: 4, longSize: 8, longLongSize: 8,
+		floatSize: 4, doubleSize: 8, longDoubleSize: 16,
+		sizeTSigned: false, charSigned: true,
+	};
+}
+
 export function targetMacosAarch64(): TargetInfo {
 	return {
 		triple: TargetTriple.MacosAarch64,
@@ -77,6 +99,30 @@ export function targetWasm32(): TargetInfo {
 // Default host target for macOS arm64 (development machine)
 export function defaultHostTarget(): TargetInfo {
 	return targetMacosAarch64();
+}
+
+// Lookup by triple enum.
+export function targetFromTriple(triple: TargetTriple): TargetInfo {
+	return match (triple) {
+		TargetTriple.LinuxX86_64 => targetLinuxX86_64(),
+		TargetTriple.LinuxAarch64 => targetLinuxAarch64(),
+		TargetTriple.MacosX86_64 => targetMacosX86_64(),
+		TargetTriple.MacosAarch64 => targetMacosAarch64(),
+		TargetTriple.WindowsX64 => targetWindowsX64(),
+		TargetTriple.Wasm32 => targetWasm32(),
+		_ => targetMacosAarch64(),
+	};
+}
+
+// Parse a triple name string to a TargetTriple enum. Returns null-ish on unknown.
+export function parseTripleName(name: string): TargetTriple {
+	if (name === "x86_64-linux-gnu" || name === "linux-x86_64") return TargetTriple.LinuxX86_64;
+	if (name === "aarch64-linux-gnu" || name === "linux-aarch64") return TargetTriple.LinuxAarch64;
+	if (name === "x86_64-apple-darwin" || name === "macos-x86_64") return TargetTriple.MacosX86_64;
+	if (name === "arm64-apple-darwin" || name === "macos-aarch64") return TargetTriple.MacosAarch64;
+	if (name === "x86_64-pc-windows-msvc" || name === "windows-x64") return TargetTriple.WindowsX64;
+	if (name === "wasm32-unknown-unknown" || name === "wasm32") return TargetTriple.Wasm32;
+	return TargetTriple.MacosAarch64; // fallback to host
 }
 
 // Predefined macro as a (name, value) pair. The preprocessor ingests these
@@ -148,4 +194,38 @@ test "linux x86_64 predefined includes __LP64__" {
 		if (md.name === "__LP64__") found = true;
 	}
 	assert found;
+}
+
+test "linux aarch64 char is unsigned" {
+	const t = targetLinuxAarch64();
+	assert t.charSigned === false;
+	assert t.longSize === 8;
+}
+
+test "macos x86_64 long double is 16" {
+	const t = targetMacosX86_64();
+	assert t.longDoubleSize === 16;
+}
+
+test "targetFromTriple round-trips" {
+	const t = targetFromTriple(TargetTriple.WindowsX64);
+	assert t.longSize === 4;
+}
+
+test "parseTripleName linux" {
+	assert parseTripleName("linux-x86_64") === TargetTriple.LinuxX86_64;
+	assert parseTripleName("x86_64-linux-gnu") === TargetTriple.LinuxX86_64;
+}
+
+test "parseTripleName wasm" {
+	assert parseTripleName("wasm32") === TargetTriple.Wasm32;
+}
+
+test "all 6 triples have predefined macros" {
+	assert predefinedMacros(targetLinuxX86_64()).length > 3;
+	assert predefinedMacros(targetLinuxAarch64()).length > 3;
+	assert predefinedMacros(targetMacosX86_64()).length > 3;
+	assert predefinedMacros(targetMacosAarch64()).length > 3;
+	assert predefinedMacros(targetWindowsX64()).length > 3;
+	assert predefinedMacros(targetWasm32()).length > 3;
 }

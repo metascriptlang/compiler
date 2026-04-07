@@ -33,6 +33,7 @@ typedef struct {
 	_Atomic(int32_t) rc;     /* Reference count (0 = unique, >0 = shared). Atomic for thread safety. */
 	int32_t rootIdx;         /* ORC rootset index (-1 = not registered) */
 	const msTypeInfo* type;  /* RTTI (NULL for untyped allocs) */
+	uint32_t allocSize;      /* Total allocation size (header + payload) — for slab recycling */
 } msRefHeader;
 
 /* Get header from user pointer: header lives right before the object */
@@ -40,23 +41,78 @@ static inline msRefHeader* msHeader(void* p) {
 	return (msRefHeader*)((char*)p - sizeof(msRefHeader));
 }
 
+/* ===== Small-Object Free-List Cache ===== */
+
+/* Thread-local free-list for DRC objects ≤ MS_SLAB_MAX bytes (header + payload).
+ * Avoids calloc/free overhead for short-lived objects (e.g., spawn closure envs).
+ * Objects are bucketed by rounded-up size. Each bucket is a singly-linked list
+ * using the first 8 bytes of the freed block as the next pointer. */
+#define MS_SLAB_MAX 128        /* max total size (header + payload) for caching */
+#define MS_SLAB_BUCKET_SIZE 32 /* bucket granularity: 32, 64, 96, 128 */
+#define MS_SLAB_BUCKETS 4
+#define MS_SLAB_LIMIT 256      /* max cached entries per bucket (prevents unbounded growth) */
+
+typedef struct msSlab {
+	void* free[MS_SLAB_BUCKETS];       /* free-list heads per bucket */
+	int32_t count[MS_SLAB_BUCKETS];    /* entries per bucket */
+} msSlab;
+
+static _Thread_local msSlab msSlabTLS;
+
+static inline int msSlabBucket(size_t totalSize) {
+	if (totalSize <= 32) return 0;
+	if (totalSize <= 64) return 1;
+	if (totalSize <= 96) return 2;
+	if (totalSize <= 128) return 3;
+	return -1;
+}
+
+static inline void* msSlabAlloc(size_t totalSize) {
+	int b = msSlabBucket(totalSize);
+	if (b >= 0 && msSlabTLS.free[b] != NULL) {
+		void* p = msSlabTLS.free[b];
+		msSlabTLS.free[b] = *(void**)p;
+		msSlabTLS.count[b]--;
+		/* Zero only the header area — payload zeroed separately by codegen (memset).
+		 * Saves zeroing unused bytes in the bucket. */
+		memset(p, 0, sizeof(msRefHeader));
+		return p;
+	}
+	return calloc(1, totalSize);
+}
+
+static inline void msSlabFree(void* p, size_t totalSize) {
+	int b = msSlabBucket(totalSize);
+	if (b >= 0 && msSlabTLS.count[b] < MS_SLAB_LIMIT) {
+		*(void**)p = msSlabTLS.free[b];
+		msSlabTLS.free[b] = p;
+		msSlabTLS.count[b]++;
+		return;
+	}
+	free(p);
+}
+
 /* ===== Allocation ===== */
 
 /* Allocate object with ref header. Returns pointer to user data (past header). */
 static inline void* msAlloc(size_t size) {
-	msRefHeader* h = (msRefHeader*)calloc(1, sizeof(msRefHeader) + size);
+	size_t total = sizeof(msRefHeader) + size;
+	msRefHeader* h = (msRefHeader*)msSlabAlloc(total);
 	h->rc = 0;
 	h->rootIdx = -1;
 	h->type = NULL;
+	h->allocSize = (uint32_t)total;
 	return (void*)(h + 1);
 }
 
 /* Allocate with RTTI — for typed class instances (ORC-aware). */
 static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
-	msRefHeader* h = (msRefHeader*)calloc(1, sizeof(msRefHeader) + size);
+	size_t total = sizeof(msRefHeader) + size;
+	msRefHeader* h = (msRefHeader*)msSlabAlloc(total);
 	h->rc = 0;
 	h->rootIdx = -1;
 	h->type = type;
+	h->allocSize = (uint32_t)total;
 	return (void*)(h + 1);
 }
 
@@ -84,8 +140,11 @@ static inline bool msDecRefIsLast(void* p) {
 	 * old value — if it was 1, this was the last reference. If 0, it was
 	 * already dead (defensive). */
 	int32_t prev = atomic_fetch_sub_explicit(&h->rc, 1, memory_order_acq_rel);
-	if (prev <= 1) {
-		/* Was 0 or 1 before decrement — this is the last owner */
+	if (prev <= 0) {
+		/* Was 0 before decrement — sole owner, safe to free.
+		 * Nim parity: rc=0 means one reference (the creator). incRef bumps to 1
+		 * (two refs), 2 (three refs), etc. Only free when the last ref decrements
+		 * from 0. prev<=0 also handles negative rc defensively. */
 		return true;
 	}
 	return false;
@@ -93,7 +152,8 @@ static inline bool msDecRefIsLast(void* p) {
 
 static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {
-		free(msHeader(p));
+		msRefHeader* h = msHeader(p);
+		msSlabFree(h, h->allocSize);
 	}
 }
 

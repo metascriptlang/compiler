@@ -762,7 +762,6 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 		// Fresh values → sink (ownership transfer, no copy needed)
 		NodeKind.CallExpr => {
 			const preStmts = processCallArgs(rhs, idx, stmts, dctx, loc);
-			// IsDecl: no old value — just process call args (sink)
 			if ((flags & MOC_IS_DECL) !== 0) {
 				return wrapWithCallArgPre(stmt, preStmts, loc);
 			}
@@ -905,10 +904,27 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 
 // ===== MoveExpr Source Classification =====
 
-// Classify RC type of a member expression's field
+// Classify RC type of a member expression's field.
+// Falls back to looking up the field type from the object's type when nodeType is null.
+// This covers cases where the checker didn't propagate nodeType to MemberExpr nodes
+// (e.g., assignment LHS, object literal fields), preventing missing RC operations.
 function classifyMemberFieldRc(memberExpr: Node, dctx: DrcContext): RcInfo {
-	if (memberExpr.nodeType === null) return noRcInfo();
-	return classifyType(memberExpr.nodeType, dctx.ctx);
+	if (memberExpr.nodeType !== null) return classifyType(memberExpr.nodeType, dctx.ctx);
+	// Fallback: infer field type from the object's type + field name
+	const md = memberExpr.data as MemberExprData;
+	let objType = md.object.nodeType;
+	if (objType === null) return noRcInfo();
+	// Unwrap Ref → get the struct/interface underneath
+	if (objType.kind === TypeKind.Ref && objType.typeReturn !== null) objType = objType.typeReturn;
+	if (objType.typeNames === null || objType.typeChildren === null) return noRcInfo();
+	let fi = 0;
+	while (fi < objType.typeNames.length) {
+		if (objType.typeNames[fi] === md.property && fi < objType.typeChildren.length) {
+			return classifyType(objType.typeChildren[fi], dctx.ctx);
+		}
+		fi += 1;
+	}
+	return noRcInfo();
 }
 
 // Classify RC type of an array element
@@ -1737,7 +1753,13 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 
 	// Member assignment: obj.field = expr
 	if (bd.left.kind === NodeKind.MemberExpr) {
-		const rcInfo = classifyMemberFieldRc(bd.left, dctx);
+		let rcInfo = classifyMemberFieldRc(bd.left, dctx);
+		// Fallback: if LHS nodeType is null (checker didn't propagate), infer from RHS.
+		// Without this, field assignments like table.current = scope get no RC treatment,
+		// causing premature frees and dangling references.
+		if (!rcInfo.needsCleanup && bd.right.nodeType !== null) {
+			rcInfo = classifyType(bd.right.nodeType, dctx.ctx);
+		}
 		if (!rcInfo.needsCleanup) return stmt;
 		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);
 		return moveOrCopy(stmt, bd.left, "", bd.right, rcInfo, MOC_IS_FIELD, idx, stmts, dctx, loc);

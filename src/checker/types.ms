@@ -214,7 +214,6 @@ export function createSpawnHandle(innerType: Type): Type {
 // Callers that need the strict nominal distinction must use isSpawnHandle() instead.
 export function isPromise(t: Type): boolean {
 	if (t === null) return false;
-	if (t.kind === TypeKind.Promise) return true;
 	if (t.kind !== TypeKind.GenericInstance) return false;
 	return t.typeName === "Promise" || t.typeName === "SpawnHandle";
 }
@@ -229,7 +228,6 @@ export function isSpawnHandle(t: Type): boolean {
 // when users explicitly annotate a spawn binding as Promise<T> to strip affinity.
 export function isStrictPromise(t: Type): boolean {
 	if (t === null) return false;
-	if (t.kind === TypeKind.Promise) return true;
 	return t.kind === TypeKind.GenericInstance && t.typeName === "Promise";
 }
 

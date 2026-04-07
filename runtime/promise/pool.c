@@ -47,6 +47,17 @@ static inline int msCtz64(uint64_t x) { unsigned long idx; _BitScanForward64(&id
 
 #define MS_POOL_MAX_QUEUE 256  /* max queue size before backpressure kicks in */
 
+/* Atomic busyCount + workerCount for lock-free shouldSend (Malebolgia parity).
+ * Checked BEFORE acquiring pool mutex — avoids lock overhead on inline path. */
+static _Atomic(int32_t) msPoolBusyCount = 0;
+static int32_t msPoolWorkerCount = 0;
+
+/* Thread-local: true when current thread is a pool worker executing a task.
+ * Used by shouldSend: only inline when caller is already a worker (recursive spawn).
+ * Main thread always queues to ensure initial fan-out reaches workers.
+ * Matches Malebolgia's activeProducer flag. */
+_Thread_local bool msIsPoolWorker = false;
+
 /* ===== CPU Detection ===== */
 
 static int msDetectCPUs(void) {
@@ -95,6 +106,7 @@ static DWORD WINAPI msPoolWorkerLoop(LPVOID arg) {
 static void* msPoolWorkerLoop(void* arg) {
 #endif
 	msThreadPool* pool = (msThreadPool*)arg;
+	msIsPoolWorker = true;
 	/* Assign scheduler ID: workers are 1..N-1 (main thread is 0) */
 	int mySchedID = atomic_fetch_add(&msWorkerSchedIdx, 1) + 1;
 	int myWorkerIdx = mySchedID - 1;  /* 0-based index into workerConds[] */
@@ -121,6 +133,7 @@ static void* msPoolWorkerLoop(void* arg) {
 			item = pool->queue[pool->head];
 			pool->head = (pool->head + 1) % pool->cap;
 			pool->busyCount++;
+			atomic_fetch_add_explicit(&msPoolBusyCount, 1, memory_order_relaxed);
 			hasTask = true;
 			MS_SIGNAL(pool->space);
 		}
@@ -131,6 +144,7 @@ static void* msPoolWorkerLoop(void* arg) {
 			msSpawnWorkerRun(&item);
 			MS_LOCK(pool);
 			pool->busyCount--;
+			atomic_fetch_sub_explicit(&msPoolBusyCount, 1, memory_order_relaxed);
 			MS_UNLOCK(pool);
 		}
 
@@ -179,6 +193,7 @@ static pthread_once_t gPoolOnce = PTHREAD_ONCE_INIT;
 static void msPoolInit(void) {
 	gPool = (msThreadPool*)calloc(1, sizeof(msThreadPool));
 	gPool->workerCount = msDetectCPUs();
+	msPoolWorkerCount = gPool->workerCount;  /* init lock-free shouldSend threshold */
 	gPool->cap = MS_POOL_MAX_QUEUE;
 	gPool->queue = (msSpawnCtx*)calloc(gPool->cap, sizeof(msSpawnCtx));
 
@@ -201,12 +216,20 @@ static void msPoolInit(void) {
 	}
 	pthread_cond_init(&gPool->space, NULL);
 	gPool->workers = (pthread_t*)calloc(gPool->workerCount, sizeof(pthread_t));
+	/* 4MB stack per worker — inline fallback (shouldSend) can create deep
+	 * recursion chains (fib: spawn→submit→inline→fib→spawn...). Default
+	 * 512KB overflows at moderate depth. Matches Malebolgia's assumption
+	 * that workers run user code with recursive spawn patterns. */
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setstacksize(&attr, 4 * 1024 * 1024);
 	int created = 0;
 	for (int i = 0; i < gPool->workerCount; i++) {
-		if (pthread_create(&gPool->workers[i], NULL, msPoolWorkerLoop, gPool) == 0) {
+		if (pthread_create(&gPool->workers[i], &attr, msPoolWorkerLoop, gPool) == 0) {
 			created++;
 		}
 	}
+	pthread_attr_destroy(&attr);
 #endif
 
 	if (created < gPool->workerCount) {
@@ -234,25 +257,24 @@ msThreadPool* msPoolGet(void) {
 /* ===== Submit Task ===== */
 
 void msPoolSubmit(struct msSpawnCtx* ctx) {
-	msThreadPool* pool = msPoolGet();
-	MS_LOCK(pool);
-
-	/* Backpressure: if queue full AND all workers busy, execute inline on caller thread.
-	 * (Malebolgia parity: shouldSend returns false when busyThreads >= ThreadPoolSize-1)
-	 * Only inline when there's truly no capacity — prevents recursive stack overflow. */
-	if (msPoolQueueLen(pool) >= pool->cap - 1 && pool->busyCount >= pool->workerCount) {
-		MS_UNLOCK(pool);
+	/* Lock-free inline check — Malebolgia's shouldSend parity.
+	 * Only inline when caller is a WORKER (recursive spawn inside a task).
+	 * Main thread always queues to ensure initial fan-out reaches workers.
+	 * This matches Malebolgia's activeProducer: main thread is always a producer. */
+	if (msIsPoolWorker &&
+	    atomic_load_explicit(&msPoolBusyCount, memory_order_relaxed) >= msPoolWorkerCount) {
 		msSpawnWorkerRun(ctx);
 		return;
 	}
 
-	/* Backpressure: wait if queue is full but workers available to drain it */
-	while (msPoolQueueLen(pool) >= pool->cap - 1 && !pool->shutdown) {
-		MS_WAIT(pool->space, pool);
-	}
-	if (pool->shutdown) {
+	msThreadPool* pool = msPoolGet();
+	MS_LOCK(pool);
+
+	/* Under lock: only check queue capacity and shutdown.
+	 * busyCount authority is the lock-free atomic (adjusted by Change 2 dec/inc in wait). */
+	if (msPoolQueueLen(pool) >= pool->cap - 1 || pool->shutdown) {
 		MS_UNLOCK(pool);
-		msSpawnWorkerRun(ctx); /* drain during shutdown */
+		msSpawnWorkerRun(ctx);
 		return;
 	}
 
@@ -284,6 +306,25 @@ bool msPoolHelpOne(void) {
 	MS_UNLOCK(pool);
 	msSpawnWorkerRun(&task);
 	return true;
+}
+
+/* ===== Busy Signaling (for wait paths) ===== */
+
+/* Called when a worker enters a wait loop (msAwaitSlotWait, msWaitForReady).
+ * Decrements the atomic busyCount so shouldSend sees available capacity,
+ * allowing new spawns to be queued instead of inlined. Re-increment on exit. */
+void msPoolBusyDec(void) {
+	/* Saturating decrement — prevent underflow from nested help-first wait chains.
+	 * CAS loop: only decrement if current value > 0. */
+	int32_t prev = atomic_load_explicit(&msPoolBusyCount, memory_order_relaxed);
+	while (prev > 0) {
+		if (atomic_compare_exchange_weak_explicit(&msPoolBusyCount, &prev, prev - 1,
+				memory_order_relaxed, memory_order_relaxed)) break;
+	}
+}
+
+void msPoolBusyInc(void) {
+	atomic_fetch_add_explicit(&msPoolBusyCount, 1, memory_order_relaxed);
 }
 
 /* ===== Shutdown ===== */

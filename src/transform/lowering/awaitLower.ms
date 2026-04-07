@@ -33,12 +33,19 @@ import {
 	Type, NodeData, createNodeAt,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { walkExpandBlocks, containsExprKind, replaceInExpr } from "../walker";
+import { walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeString, makeIf, makeBinary } from "../util";
-import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
+import { createPtr, createPrimitive, getPromiseInner, booleanType } from "../../checker/types";
 import { typedFutureReadFn } from "../native/builtinLower";
-import { TypeKind, FunctionExprData, ArrowFunctionData } from "../../ast/node";
+import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
 import { injectCancelSafePoints } from "./cancelSafePoints";
+
+// ===== Scoped Deferred → msAwaitSlot (Change 1) =====
+// Tracks `const h = spawn(fn);` declarations. When `await h` is later found
+// in the same scope, rewrites to zero-alloc msAwaitSlot path instead of
+// heap-allocated msFuture. Cleared at function boundaries.
+struct SpawnSlotEntry { slotIdent: Node; closureArg: Node; innerType: Type; }
+let _spawnSlotMap: Map<string, SpawnSlotEntry> = new Map<string, SpawnSlotEntry>();
 
 // Opaque pointer type → void* in C codegen. Used for AwaitGroup and result temps.
 export const VOID_PTR_TYPE: Type = createPtr(createPrimitive(TypeKind.Void));
@@ -83,7 +90,7 @@ export function makeUnboxCall(voidPtrExpr: Node, innerType: Type, loc: SourceLoc
 // extract T. Otherwise returns null (let C handle it as void*).
 function getAwaitInnerType(awaitArgExpr: Node): Type {
 	if (awaitArgExpr === null || awaitArgExpr.nodeType === null) return null;
-	return awaitedType(awaitArgExpr.nodeType);
+	return getPromiseInner(awaitArgExpr.nodeType);
 }
 
 // ===== Spawn Detection =====
@@ -153,35 +160,68 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node, loc: Source
 	return stmts;
 }
 
-// ===== Fused Path: await spawn(fn) → AwaitGroup lifecycle =====
+// ===== Fused Path: await spawn(fn) → zero-alloc or AwaitGroup lifecycle =====
 
-// Emits the full AwaitGroup lifecycle from PARALOCK §6.3 — used when the
-// spawn and await are in the same expression (no intermediate future).
+// Fast path (no timeout): stack-allocated msAwaitSlot — zero heap alloc, zero condvar.
+// Emits: $as = msAwaitSlotCreate(1); msSpawnSlotSubmit($as, 0, closure);
+//        msAwaitSlotWait($as); result = msAwaitSlotResult($as); msAwaitSlotRelease();
+// Slow path (timeout): heap-allocated msAwaitGroup with mutex/condvar for timed wait.
 function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node): { stmts: Node[], resultIdent: Node } {
+	// Timeout requires mutex+condvar → fall back to heap AwaitGroup
+	if (timeoutExpr !== null) {
+		return expandFusedAwaitHeap(closureArg, loc, ctx, timeoutExpr);
+	}
+
+	// Fast path: stack-allocated msAwaitSlot (Malebolgia parity)
+	const stmts: Node[] = [];
+
+	// 1. const $as = msAwaitSlotCreate(1);
+	const as = makeTempDecl(ctx, "as", makeCall(makeIdent("msAwaitSlotCreate", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
+	stmts.push(as.decl);
+
+	// 2. msSpawnSlotSubmit($as, 0, closure);
+	stmts.push(makeExprStmt(
+		makeCall(makeIdent("msSpawnSlotSubmit", loc), [as.ident, makeNumber(0, loc), closureArg], loc), loc));
+
+	// 3. msAwaitSlotWait($as);
+	stmts.push(makeExprStmt(
+		makeCall(makeIdent("msAwaitSlotWait", loc), [as.ident], loc), loc));
+
+	// 4. const $agr = msAwaitSlotResult($as);
+	const agr = makeTempDecl(ctx, "agr", makeCall(makeIdent("msAwaitSlotResult", loc), [as.ident], loc), VOID_PTR_TYPE, loc);
+	stmts.push(agr.decl);
+
+	// 5. msAwaitSlotRelease($as);
+	stmts.push(makeExprStmt(
+		makeCall(makeIdent("msAwaitSlotRelease", loc), [as.ident], loc), loc));
+
+	return { stmts, resultIdent: agr.ident };
+}
+
+// Heap-allocated AwaitGroup path — used when timeout is needed (mutex+condvar for timed wait).
+function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node): { stmts: Node[], resultIdent: Node } {
 	const stmts: Node[] = [];
 
 	// 1. const $ag = msAwaitGroupInit(1);
 	const ag = makeTempDecl(ctx, "ag", makeCall(makeIdent("msAwaitGroupInit", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
 	stmts.push(ag.decl);
 
-	// 2. Phase 3: inject cancel safe-points into the closure body (only when timeout)
-	if (timeoutExpr !== null) {
-		let closureBody: Node = null;
-		if (closureArg.kind === NodeKind.FunctionExpr) {
-			closureBody = (closureArg.data as FunctionExprData).funcExprBody;
-		} else if (closureArg.kind === NodeKind.ArrowFunction) {
-			closureBody = (closureArg.data as ArrowFunctionData).arrowBody;
-		}
-		if (closureBody !== null) {
-			injectCancelSafePoints(closureBody, ag.ident, loc);
-		}
+	// 2. Inject cancel safe-points into the closure body
+	let closureBody: Node = null;
+	if (closureArg.kind === NodeKind.FunctionExpr) {
+		closureBody = (closureArg.data as FunctionExprData).funcExprBody;
+	} else if (closureArg.kind === NodeKind.ArrowFunction) {
+		closureBody = (closureArg.data as ArrowFunctionData).arrowBody;
+	}
+	if (closureBody !== null) {
+		injectCancelSafePoints(closureBody, ag.ident, loc);
 	}
 
 	// 3. msSpawnTaskSubmit($ag, 0, closure);
 	stmts.push(makeExprStmt(
 		makeCall(makeIdent("msSpawnTaskSubmit", loc), [ag.ident, makeNumber(0, loc), closureArg], loc), loc));
 
-	// 4. Blocking wait (with or without deadline)
+	// 4. Blocking wait with deadline
 	const waitStmts = emitAwaitGroupWait(ag.ident, timeoutExpr, loc, ctx);
 	for (const ws of waitStmts) stmts.push(ws);
 
@@ -252,6 +292,32 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 		}
 		return expansion;
 	}
+	// Scoped deferred: `const h = spawn(fn); ... await h;` → msAwaitSlot
+	// Check if the awaited identifier was registered as a spawn handle in this scope.
+	if (awaitArg.kind === NodeKind.Identifier) {
+		const name = (awaitArg.data as IdentifierData).name;
+		if (_spawnSlotMap.has(name)) {
+			const slotEntry = _spawnSlotMap.get(name);
+			_spawnSlotMap.delete(name);
+			const stmts: Node[] = [];
+			// msAwaitSlotWait($slot);
+			stmts.push(makeExprStmt(
+				makeCall(makeIdent("msAwaitSlotWait", loc), [slotEntry.slotIdent], loc), loc));
+			// const $agr = msAwaitSlotResult($slot);
+			const agr = makeTempDecl(ctx, "agr", makeCall(makeIdent("msAwaitSlotResult", loc), [slotEntry.slotIdent], loc), VOID_PTR_TYPE, loc);
+			stmts.push(agr.decl);
+			// msAwaitSlotRelease($slot);
+			stmts.push(makeExprStmt(
+				makeCall(makeIdent("msAwaitSlotRelease", loc), [slotEntry.slotIdent], loc), loc));
+			// Apply unboxing
+			let resultIdent = agr.ident;
+			if (slotEntry.innerType !== null) {
+				resultIdent = makeUnboxCall(resultIdent, slotEntry.innerType, loc);
+			}
+			return { stmts, resultIdent };
+		}
+	}
+
 	// Deferred path: typed future reader for primitives, msWaitFor for rest.
 	// expandDeferredAwait signals via `typed` whether it used msFutureReadT
 	// (no unboxing needed) or fell back to void* msWaitFor (needs unboxing).
@@ -290,6 +356,31 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	match (stmt.kind) {
 		NodeKind.VariableDecl => {
 			const d = stmt.data as VariableDeclData;
+			// Scoped deferred detection: `const h = spawn(fn);` with no timeout
+			// → rewrite to msAwaitSlotCreate + msSpawnSlotSubmit, register for later await.
+			// Only matches builtin spawn() (builtinKind=PromiseSpawn), not raw msSpawn FFI.
+			// spawn() handles are SpawnHandle used exclusively with await, safe to eliminate.
+			if (d.declKind === DeclKind.Const && d.initializer !== null) {
+				const si = getSpawnInfo(d.initializer);
+				const initSym = d.initializer.resolvedSym !== null ? d.initializer.resolvedSym
+					: (d.initializer.kind === NodeKind.CallExpr ? (d.initializer.data as CallExprData).callee.resolvedSym : null);
+				if (si.closure !== null && si.timeout === null
+					&& initSym !== null && initSym.builtinKind === "PromiseSpawn"
+					&& !_spawnSlotMap.has(d.declName)) {
+					const innerType = getAwaitInnerType(d.initializer);
+					const stmts: Node[] = [];
+					const loc = stmt.location;
+					// const $slot = msAwaitSlotCreate(1);
+					const slot = makeTempDecl(ctx, "sl", makeCall(makeIdent("msAwaitSlotCreate", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
+					stmts.push(slot.decl);
+					// msSpawnSlotSubmit($slot, 0, closure);
+					stmts.push(makeExprStmt(
+						makeCall(makeIdent("msSpawnSlotSubmit", loc), [slot.ident, makeNumber(0, loc), si.closure], loc), loc));
+					// Register for later `await h` lookup
+					_spawnSlotMap.set(d.declName, { slotIdent: slot.ident, closureArg: si.closure, innerType });
+					return stmts;  // Original VarDecl is eliminated (h is never emitted)
+				}
+			}
 			const expanded = tryExpandAwaitExpr(d.initializer, stmt, ctx);
 			if (expanded.replacement !== null) {
 				d.initializer = expanded.replacement;
@@ -368,6 +459,9 @@ function hoistNestedAwait(expr: Node, loc: SourceLocation, ctx: TransformContext
 // ===== Entry Point =====
 
 export function lowerAwait(program: Node, ctx: TransformContext): Node {
-	walkExpandBlocks(program, expandStmt, ctx);
+	_spawnSlotMap = new Map<string, SpawnSlotEntry>();
+	walkExpandBlocksHooked(program, expandStmt, ctx,
+		(_fn: Node): void => { _spawnSlotMap = new Map<string, SpawnSlotEntry>(); },
+		(_fn: Node): void => { _spawnSlotMap = new Map<string, SpawnSlotEntry>(); });
 	return program;
 }

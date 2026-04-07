@@ -28,7 +28,7 @@ import {
 import { TransformContext } from "../context";
 import { walkExpandBlocksHooked } from "../walker";
 import { makeIdent, makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral } from "../util";
-import { awaitedType } from "../../checker/types";
+import { getPromiseInner } from "../../checker/types";
 import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, makeUnboxCall, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";
 
@@ -70,7 +70,7 @@ function getMultiSpawnSlots(awaitArg: Node): SpawnSlot[] {
 	for (const elem of ad.elements) {
 		const info = getSpawnInfo(elem);
 		if (info.closure === null) return [] as SpawnSlot[];
-		const innerType = awaitedType(elem.nodeType);
+		const innerType = getPromiseInner(elem.nodeType);
 		slots.push({ closure: info.closure, timeout: info.timeout, innerType });
 	}
 	return slots;

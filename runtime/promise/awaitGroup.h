@@ -178,4 +178,59 @@ static inline bool msSpawnCheckCancel(msAwaitGroup* g) {
 	return g != NULL && atomic_load_explicit(&g->cancelled, memory_order_relaxed);
 }
 
+/* ===== msAwaitSlot — Stack-Allocated Fast Path (Malebolgia parity) ===== */
+
+/* Minimal completion target for fused await-spawn. Stack-allocated (24 bytes),
+ * no mutex, no condvar. Waiter spins via help-first (msPoolHelpOne).
+ * Replaces heap-allocated msAwaitGroup for the common `await spawn(fn)` pattern. */
+
+extern bool msPoolHelpOne(void);  /* pool.h — avoid circular include */
+extern void msPoolBusyDec(void);
+extern void msPoolBusyInc(void);
+
+typedef struct msAwaitSlot {
+    _Atomic(int32_t) pending;     /* starts at N, decremented per completion */
+    _Atomic(bool) failed;
+    void* error;
+    void* result;                 /* single-slot result (void*, boxed) */
+} msAwaitSlot;
+
+/* Thread-local slot pool — avoids heap alloc while keeping void* API.
+ * Each thread gets MS_SLOT_POOL_SIZE slots. Slots are reused LIFO.
+ * Safe because fused await-spawn has strict scope: create → submit → wait → done.
+ * Defined in awaitGroup.c to avoid per-TU TLS duplication. */
+void* msAwaitSlotCreate(int32_t n);
+void msAwaitSlotRelease(void* sp);
+
+static inline void msAwaitSlotComplete(void* sp, int32_t idx, void* value) {
+    msAwaitSlot* s = (msAwaitSlot*)sp;
+    if (idx == 0) s->result = value;
+    atomic_fetch_sub_explicit(&s->pending, 1, memory_order_acq_rel);
+}
+
+static inline void msAwaitSlotFail(void* sp, void* error) {
+    msAwaitSlot* s = (msAwaitSlot*)sp;
+    atomic_store_explicit(&s->failed, true, memory_order_release);
+    s->error = error;
+    atomic_fetch_sub_explicit(&s->pending, 1, memory_order_acq_rel);
+}
+
+/* msIsPoolWorker declared in pool.c — true only for pool worker threads */
+extern _Thread_local bool msIsPoolWorker;
+
+static inline void msAwaitSlotWait(void* sp) {
+    msAwaitSlot* s = (msAwaitSlot*)sp;
+    bool isWorker = msIsPoolWorker;
+    if (isWorker) msPoolBusyDec();  /* signal: I'm available to help while waiting */
+    while (atomic_load_explicit(&s->pending, memory_order_acquire) > 0) {
+        if (msPoolHelpOne()) continue;
+        sched_yield();
+    }
+    if (isWorker) msPoolBusyInc();  /* back to own work */
+}
+
+static inline void* msAwaitSlotResult(void* sp) {
+    return ((msAwaitSlot*)sp)->result;
+}
+
 #endif /* MS_AWAITGROUP_H */

@@ -11,6 +11,7 @@
 
 #include <stdbool.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <assert.h>
 
@@ -79,6 +80,10 @@ typedef struct msFutureBase {
 	msFutureCb* callbacks;
 	msFutureCb* cbTail;   /* tail pointer for O(1) append */
 } msFutureBase;
+
+/* Verify: finished is the first field. awaitGroup.c uses msFutureBaseMinimal
+ * (a 1-field struct) to set finished without including all of future.h. */
+_Static_assert(offsetof(msFutureBase, finished) == 0, "msFutureBase.finished must be at offset 0");
 
 /* ===== Monomorphic Future Structs =====
  * Each Future<T> gets a typed struct with base as FIRST field.

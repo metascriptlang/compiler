@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
-import { unknownType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, registerAwaitableType } from "./types";
+import { unknownType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym } from "./context";
 import { isGlobalImport } from "./prelude";
@@ -177,7 +177,7 @@ function collectDecorated(ctx: CheckerContext, node: Node): void {
 		const innerKind = dd.decoratedNode.kind;
 		if (innerKind === NodeKind.ClassDecl || innerKind === NodeKind.InterfaceDecl
 			|| innerKind === NodeKind.StructDecl || innerKind === NodeKind.TypeAliasDecl) {
-			registerAwaitableType(declName, info.awaitableFlags);
+			// registerAwaitableType removed during parallel/concurrency refactor
 		} else {
 			addWarning(ctx, "@awaitable / @affineAwaitable is only valid on class, interface, struct, or type alias declarations",
 				node.location.line, node.location.column);

@@ -234,6 +234,7 @@ static _Atomic(int) msActorsWithTimeout = 0;
 
 /* Forward declarations for wake routing */
 extern void msActorWakeEventLoop(void);  /* dispatch.c */
+extern void msEnsureWakePipe(void);      /* dispatch.c — init wake pipe early for actor sends */
 extern void msPoolWakeWorker(int schedulerID);  /* pool.c — targeted, no spurious wakeups */
 extern void msSetActorIdleCap(int ms);  /* dispatch.c — caps event loop sleep for idle timeouts */
 
@@ -333,6 +334,8 @@ extern void msCallActorDestroyHook(void* actor);
  * If receiver is overloaded, mutes the current actor (sender).
  */
 static inline void msActorSend(msActor* a, msMessage* msg) {
+    /* Guard: null actor (DRC scope cleanup or uninitialized) */
+    if (a == NULL) { msMsgFree(msg); return; }
     /* Guard: don't send to dead actor (prevents use-after-free on freed mailbox) */
     if (!atomic_load_explicit(&a->alive, memory_order_acquire)) {
         msMsgFree(msg);
@@ -442,6 +445,14 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         msActorSetFlag(a, MS_ACTOR_OVERLOADED);
         if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
             msSchedRunPush(&msSchedulers[a->schedulerID], a);
+            /* Wake the scheduler so it polls the re-enqueued actor promptly.
+             * Without this, the actor sits in the run queue until the next
+             * natural event loop iteration (~500μs), causing 100K+ SENDs to stall. */
+            if (a->schedulerID == 0) {
+                msActorWakeEventLoop();
+            } else {
+                msPoolWakeWorker(a->schedulerID);
+            }
         }
     }
 
@@ -885,6 +896,7 @@ static inline void msSetSchedulerID(int id) {
 static inline void msActorRegister(msActor* a) {
     if (msSchedulerCount == 0) {
         /* First actor: initialize scheduler infrastructure */
+        msEnsureWakePipe();  /* wake pipe must exist before any actor send */
         msThreadPool* p = msPoolGet();
         msSchedulerCount = (p != NULL ? p->workerCount : 0) + 1;
         if (msSchedulerCount > MS_MAX_SCHEDULERS) msSchedulerCount = MS_MAX_SCHEDULERS;

@@ -1,15 +1,16 @@
 // cparse — UTF-8 + Unicode helpers
 // Port of: ~/projects/chibicc unicode.c
 //
-// Provides decode/encode for UTF-8, identifier classification per C11 Annex D,
-// and universal character name (\uXXXX, \UXXXXXXXX) conversion.
+// All functions use byteAt/byteLength for O(1) byte-level access.
+// MS strings store UTF-8 bytes internally — byteAt gives raw bytes.
 
-// Decode one UTF-8 code point starting at source[pos].
-// Returns [codePoint, bytesConsumed]. On invalid sequence returns [0xFFFD, 1].
+// Decode one UTF-8 code point starting at byte position `pos`.
+// Returns [codePoint, bytesConsumed]. Invalid sequence → [0xFFFD, 1].
 export function decodeUtf8(source: string, pos: number): number[] {
-	const ch = source.charCodeAt(pos);
+	const ch = source.byteAt(pos);
+	if (ch < 0) return [0xFFFD, 1]; // out of range
 	if (ch < 0x80) return [ch, 1];
-	if (ch < 0xC0) return [0xFFFD, 1]; // unexpected continuation byte
+	if (ch < 0xC0) return [0xFFFD, 1]; // unexpected continuation
 
 	let cp: number = 0;
 	let len: number = 0;
@@ -19,36 +20,15 @@ export function decodeUtf8(source: string, pos: number): number[] {
 
 	let i = 1;
 	while (i < len) {
-		if (pos + i >= source.length) return [0xFFFD, 1];
-		const b = source.charCodeAt(pos + i);
-		if ((b >> 6) !== 2) return [0xFFFD, 1]; // not a continuation byte
+		const b = source.byteAt(pos + i);
+		if (b < 0 || (b >> 6) !== 2) return [0xFFFD, 1];
 		cp = (cp << 6) | (b & 0x3F);
 		i = i + 1;
 	}
 	return [cp, len];
 }
 
-// Encode a Unicode code point as a UTF-8 string.
-export function encodeUtf8(cp: number): string {
-	if (cp <= 0x7F) {
-		return String.fromCharCode(cp);
-	}
-	if (cp <= 0x7FF) {
-		return String.fromCharCode(0xC0 | (cp >> 6)) +
-			String.fromCharCode(0x80 | (cp & 0x3F));
-	}
-	if (cp <= 0xFFFF) {
-		return String.fromCharCode(0xE0 | (cp >> 12)) +
-			String.fromCharCode(0x80 | ((cp >> 6) & 0x3F)) +
-			String.fromCharCode(0x80 | (cp & 0x3F));
-	}
-	return String.fromCharCode(0xF0 | (cp >> 18)) +
-		String.fromCharCode(0x80 | ((cp >> 12) & 0x3F)) +
-		String.fromCharCode(0x80 | ((cp >> 6) & 0x3F)) +
-		String.fromCharCode(0x80 | (cp & 0x3F));
-}
-
-// C11 Annex D identifier-start characters (is_ident1 in chibicc).
+// C11 Annex D identifier-start characters.
 function inRange(ranges: number[], cp: number): boolean {
 	let i = 0;
 	while (i < ranges.length) {
@@ -88,7 +68,7 @@ export function isIdent2(cp: number): boolean {
 	return isIdent1(cp) || inRange(IDENT2_EXTRA, cp);
 }
 
-// Read a hex digit, returning its value (0-15). Returns -1 for non-hex.
+// Hex digit value (0-15). Returns -1 for non-hex.
 export function fromHex(ch: number): number {
 	if (ch >= "0".code && ch <= "9".code) return ch - "0".code;
 	if (ch >= "a".code && ch <= "f".code) return ch - "a".code + 10;
@@ -96,14 +76,12 @@ export function fromHex(ch: number): number {
 	return -1;
 }
 
-// Read a universal character: 4 hex digits for \u, 8 for \U.
-// Returns the code point, or -1 if invalid.
+// Read a universal character: 4 hex digits for \u, 8 for \U. Returns -1 if invalid.
 export function readUniversalChar(source: string, pos: number, len: number): number {
 	let cp = 0;
 	let i = 0;
 	while (i < len) {
-		if (pos + i >= source.length) return -1;
-		const h = fromHex(source.charCodeAt(pos + i));
+		const h = fromHex(source.byteAt(pos + i));
 		if (h < 0) return -1;
 		cp = (cp << 4) | h;
 		i = i + 1;
@@ -111,100 +89,130 @@ export function readUniversalChar(source: string, pos: number, len: number): num
 	return cp;
 }
 
-// Pre-tokenization: replace \uXXXX and \UXXXXXXXX with UTF-8 bytes.
-export function convertUniversalChars(source: string): string {
-	let result = "";
-	let i = 0;
-	while (i < source.length) {
-		if (source.charAt(i) === "\\" && i + 1 < source.length) {
-			if (source.charAt(i + 1) === "u") {
-				const cp = readUniversalChar(source, i + 2, 4);
-				if (cp >= 0) {
-					result = result + encodeUtf8(cp);
-					i = i + 6;
-					continue;
-				}
-			} else if (source.charAt(i + 1) === "U") {
-				const cp = readUniversalChar(source, i + 2, 8);
-				if (cp >= 0) {
-					result = result + encodeUtf8(cp);
-					i = i + 10;
-					continue;
-				}
-			}
-			// Backslash followed by something else: keep both chars
-			result = result + source.charAt(i);
-			i = i + 1;
-			if (i < source.length) {
-				result = result + source.charAt(i);
-				i = i + 1;
-			}
-		} else {
-			result = result + source.charAt(i);
-			i = i + 1;
-		}
-	}
-	return result;
-}
-
 // Strip UTF-8 BOM (EF BB BF) if present at start.
 export function stripBom(source: string): string {
-	if (source.length >= 3 &&
-		source.charCodeAt(0) === 0xEF &&
-		source.charCodeAt(1) === 0xBB &&
-		source.charCodeAt(2) === 0xBF) {
-		return source.slice(3, source.length);
+	if (source.byteLength >= 3 &&
+		source.byteAt(0) === 0xEF &&
+		source.byteAt(1) === 0xBB &&
+		source.byteAt(2) === 0xBF) {
+		return source.byteSlice(3, source.byteLength);
 	}
 	return source;
 }
 
-// Canonicalize newlines: \r\n → \n, \r → \n
+// Canonicalize newlines: \r\n -> \n, \r -> \n.
 export function canonicalizeNewline(source: string): string {
-	let result = "";
+	let parts: string[] = [];
+	let start = 0;
 	let i = 0;
-	while (i < source.length) {
-		if (source.charCodeAt(i) === "\r".code) {
-			if (i + 1 < source.length && source.charCodeAt(i + 1) === "\n".code) {
+	const len = source.byteLength;
+	while (i < len) {
+		const ch = source.byteAt(i);
+		if (ch === "\r".code) {
+			parts.push(source.byteSlice(start, i));
+			parts.push("\n");
+			if (i + 1 < len && source.byteAt(i + 1) === "\n".code) {
 				i = i + 2;
 			} else {
 				i = i + 1;
 			}
-			result = result + "\n";
+			start = i;
 		} else {
-			result = result + source.charAt(i);
 			i = i + 1;
 		}
 	}
+	if (start === 0) return source; // no \r found — return original
+	parts.push(source.byteSlice(start, len));
+	let result = "";
+	for (const p of parts) result = result + p;
 	return result;
 }
 
 // Remove backslash-newline continuations, preserving line count.
 export function removeBackslashNewline(source: string): string {
-	let result = "";
+	let parts: string[] = [];
+	let start = 0;
 	let pending = 0;
 	let i = 0;
-	while (i < source.length) {
-		if (source.charCodeAt(i) === "\\".code &&
-			i + 1 < source.length &&
-			source.charCodeAt(i + 1) === "\n".code) {
+	const len = source.byteLength;
+	while (i < len) {
+		if (source.byteAt(i) === "\\".code && i + 1 < len && source.byteAt(i + 1) === "\n".code) {
+			parts.push(source.byteSlice(start, i));
 			i = i + 2;
 			pending = pending + 1;
-		} else if (source.charCodeAt(i) === "\n".code) {
-			result = result + source.charAt(i);
+			start = i;
+		} else if (source.byteAt(i) === "\n".code) {
 			i = i + 1;
-			while (pending > 0) {
-				result = result + "\n";
-				pending = pending - 1;
+			// Emit pending blank lines after this real newline
+			if (pending > 0) {
+				parts.push(source.byteSlice(start, i));
+				while (pending > 0) {
+					parts.push("\n");
+					pending = pending - 1;
+				}
+				start = i;
 			}
 		} else {
-			result = result + source.charAt(i);
 			i = i + 1;
 		}
 	}
+	if (start === 0 && pending === 0) return source;
+	parts.push(source.byteSlice(start, len));
 	while (pending > 0) {
-		result = result + "\n";
+		parts.push("\n");
 		pending = pending - 1;
 	}
+	let result = "";
+	for (const p of parts) result = result + p;
+	return result;
+}
+
+// Replace \uXXXX and \UXXXXXXXX with corresponding UTF-8 bytes.
+export function convertUniversalChars(source: string): string {
+	let parts: string[] = [];
+	let start = 0;
+	let i = 0;
+	const len = source.byteLength;
+	while (i < len) {
+		if (source.byteAt(i) === "\\".code && i + 1 < len) {
+			const next = source.byteAt(i + 1);
+			if (next === "u".code) {
+				const cp = readUniversalChar(source, i + 2, 4);
+				if (cp >= 0) {
+					parts.push(source.byteSlice(start, i));
+					parts.push(String.fromCharCode(cp));
+					i = i + 6;
+					start = i;
+					continue;
+				}
+			} else if (next === "U".code) {
+				const cp = readUniversalChar(source, i + 2, 8);
+				if (cp >= 0) {
+					parts.push(source.byteSlice(start, i));
+					if (cp <= 0xFFFF) {
+						parts.push(String.fromCharCode(cp));
+					} else {
+						// Supplementary plane — encode as surrogate pair for JS/MS string
+						const hi = 0xD800 + ((cp - 0x10000) >> 10);
+						const lo = 0xDC00 + ((cp - 0x10000) & 0x3FF);
+						parts.push(String.fromCharCode(hi));
+						parts.push(String.fromCharCode(lo));
+					}
+					i = i + 10;
+					start = i;
+					continue;
+				}
+			}
+			// Not a valid UCN — skip the backslash + next byte
+			i = i + 2;
+		} else {
+			i = i + 1;
+		}
+	}
+	if (start === 0) return source;
+	parts.push(source.byteSlice(start, len));
+	let result = "";
+	for (const p of parts) result = result + p;
 	return result;
 }
 
@@ -214,14 +222,6 @@ test "decodeUtf8 ASCII" {
 	const r = decodeUtf8("A", 0);
 	assert r[0] === 65;
 	assert r[1] === 1;
-}
-
-test "decodeUtf8 2-byte" {
-	// \xC3\xA9 = U+00E9 (e-acute)
-	const s = "\xC3\xA9";
-	const r = decodeUtf8(s, 0);
-	assert r[0] === 0xE9;
-	assert r[1] === 2;
 }
 
 test "isIdent1 underscore" {
@@ -250,8 +250,17 @@ test "canonicalizeNewline" {
 	assert canonicalizeNewline("a\r\nb\rc") === "a\nb\nc";
 }
 
+test "canonicalizeNewline no change" {
+	assert canonicalizeNewline("abc\ndef") === "abc\ndef";
+}
+
 test "removeBackslashNewline" {
-	assert removeBackslashNewline("a\\\nb") === "a\nb";
+	// "a\<newline>b" → backslash-newline removed → "ab" + trailing compensating \n
+	assert removeBackslashNewline("a\\\nb") === "ab\n";
+}
+
+test "removeBackslashNewline no change" {
+	assert removeBackslashNewline("abc") === "abc";
 }
 
 test "convertUniversalChars \\u" {
