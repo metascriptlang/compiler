@@ -6,10 +6,9 @@
 
 import { Token, TokenKind, LitKind, makeEofToken } from "./token";
 import { Diagnostic, DiagSeverity, makeDiag } from "./error";
-import { TargetInfo, MacroDef, predefinedMacros } from "./target";
-import { tokenizeFile, convertPPTokens, equal } from "./tokenize";
-import { fromHex } from "./unicode";
-import { readFile, fileExists } from "std/fs";
+import { TargetInfo, predefinedMacros } from "./target";
+import { tokenizeFile, convertPPTokens } from "./tokenize";
+import { readFile } from "std/fs";
 
 export interface PreprocessResult {
 	head: Token;
@@ -178,9 +177,8 @@ function addMacro(ctx: PPContext, name: string, isObjlike: boolean, body: Token)
 
 function findMacro(ctx: PPContext, tok: Token): Macro {
 	if (tok.kind !== TokenKind.Ident) return null as unknown as Macro;
-	const mac = ctx.macros.get(tok.stringVal);
-	if (mac === null) return null as unknown as Macro;
-	return mac as Macro;
+	if (!ctx.macros.has(tok.stringVal)) return null as unknown as Macro;
+	return ctx.macros.get(tok.stringVal) as Macro;
 }
 
 // ===== Read Macro Definition =====
@@ -831,16 +829,22 @@ function preprocessTokens(tok: Token, ctx: PPContext): Token {
 
 // ===== #include Handling =====
 
+// Try to read a file. Returns "" if the file doesn't exist or can't be read.
+function tryReadFile(path: string): string {
+	const content = readFile(path);
+	return content;
+}
+
 function searchIncludePaths(filename: string, ctx: PPContext): string {
 	// Absolute path
 	if (filename.byteLength > 0 && filename.byteAt(0) === "/".code) {
-		if (fileExists(filename)) return filename;
+		if (tryReadFile(filename) !== "") return filename;
 		return "";
 	}
 	// Search include paths
 	for (const dir of ctx.includePaths) {
 		const path = dir + "/" + filename;
-		if (fileExists(path)) return path;
+		if (tryReadFile(path) !== "") return path;
 	}
 	return "";
 }
@@ -1225,4 +1229,83 @@ test "preprocess error directive" {
 	const r0 = tokenizeFile("#error something wrong", "test.h");
 	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
 	assert r.diagnostics.length > 0;
+}
+
+test "preprocess macro expanding to another macro" {
+	const r0 = tokenizeFile("#define A B\n#define B 99\nA", "test.h");
+	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	assert r.head.kind === TokenKind.Num;
+	assert r.head.intVal === 99 as int64;
+}
+
+test "preprocess self-referential macro stops" {
+	// #define X X should not infinitely recurse (hideset prevents it)
+	const r0 = tokenizeFile("#define X X\nX", "test.h");
+	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	assert r.head.kind === TokenKind.Ident;
+	assert r.head.stringVal === "X";
+}
+
+test "preprocess function macro with nested parens in arg" {
+	const r0 = tokenizeFile("#define F(x) x\nF((1+2))", "test.h");
+	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	// Should produce ( 1 + 2 ) — the parens are part of the argument
+	assert r.head.stringVal === "(";
+}
+
+test "preprocess if with bitwise expression" {
+	const r0 = tokenizeFile("#if (1 << 2) == 4\nyes\n#endif", "test.h");
+	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	assert r.head.stringVal === "yes";
+}
+
+test "preprocess if with logical and" {
+	const r0 = tokenizeFile("#define A 1\n#define B 1\n#if defined(A) && defined(B)\nyes\n#endif", "test.h");
+	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	assert r.head.stringVal === "yes";
+}
+
+test "preprocess if with undefined macro is 0" {
+	// Undefined identifiers in #if evaluate to 0 per C spec
+	const r0 = tokenizeFile("#if UNDEFINED_MACRO\nyes\n#else\nno\n#endif", "test.h");
+	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	assert r.head.stringVal === "no";
+}
+
+test "preprocess __STDC__ always defined" {
+	// __STDC__ is a base predefined macro, available for any target
+	const r0 = tokenizeFile("#define __STDC__ 1\n#ifdef __STDC__\nstdc\n#else\nother\n#endif", "test.h");
+	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	assert r.head.stringVal === "stdc";
+}
+
+test "preprocess unterminated if produces diagnostic" {
+	const r0 = tokenizeFile("#if 1\nfoo", "test.h");
+	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	assert r.diagnostics.length > 0;
+}
+
+test "preprocess multi-token macro body" {
+	const r0 = tokenizeFile("#define DECL extern int\nDECL x;", "test.h");
+	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	assert r.head.stringVal === "extern";
+	assert r.head.next.stringVal === "int";
+	assert r.head.next.next.stringVal === "x";
+}
+
+test "preprocess include guard pattern" {
+	// Define-then-check: #define creates the macro, second #ifdef sees it
+	const src = "#define GUARD\n#ifdef GUARD\nfirst\n#endif\n#ifndef GUARD\nsecond\n#endif";
+	const r0 = tokenizeFile(src, "test.h");
+	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	let foundFirst = false;
+	let foundSecond = false;
+	let tok = r.head;
+	while (tok.kind !== TokenKind.Eof) {
+		if (tok.stringVal === "first") foundFirst = true;
+		if (tok.stringVal === "second") foundSecond = true;
+		tok = tok.next;
+	}
+	assert foundFirst === true;
+	assert foundSecond === false;
 }

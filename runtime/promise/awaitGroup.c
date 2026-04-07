@@ -45,6 +45,7 @@ msAwaitGroup* msAwaitGroupInit(int32_t n) {
 	atomic_store_explicit(&g->pending, n, memory_order_relaxed);
 	atomic_store_explicit(&g->failed, false, memory_order_relaxed);
 	atomic_store_explicit(&g->cancelled, false, memory_order_relaxed);
+	atomic_store_explicit(&g->finishDone, (n == 0), memory_order_relaxed);
 	g->error = NULL;
 	g->deadlineMs = 0;
 	g->timedOut = false;
@@ -73,6 +74,15 @@ msAwaitGroup* msAwaitGroupInit(int32_t n) {
 
 void msAwaitGroupFree(msAwaitGroup* g) {
 	if (g == NULL) return;
+
+	/* Wait for the last worker to fully exit finishSlot.
+	 * Without this, the caller (who saw pending==0 via help-first or
+	 * fast-path) could free the group while a worker is still accessing
+	 * g->doneFut or g->mutex inside finishSlot. Spin is fine — the
+	 * window is nanoseconds (just the condvar signal + doneFut write). */
+	while (!atomic_load_explicit(&g->finishDone, memory_order_acquire)) {
+		/* yield to avoid burning CPU — sched_yield or just spin */
+	}
 
 #ifdef _WIN32
 	DeleteCriticalSection(&g->cs);
@@ -115,6 +125,11 @@ static void finishSlot(msAwaitGroup* g) {
 			msNotifyFutureComplete();
 			msCompletionQueuePush(df, false, NULL);
 		}
+		/* Signal that the last worker has fully exited finishSlot.
+		 * msAwaitGroupFree must wait for this before freeing the group,
+		 * because the caller may observe pending==0 (via help-first or
+		 * fast-path) and call free while we're still in this function. */
+		atomic_store_explicit(&g->finishDone, true, memory_order_release);
 	}
 }
 

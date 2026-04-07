@@ -180,7 +180,7 @@ export function convertUniversalChars(source: string): string {
 				const cp = readUniversalChar(source, i + 2, 4);
 				if (cp >= 0) {
 					parts.push(source.byteSlice(start, i));
-					parts.push(String.fromCharCode(cp));
+					parts.push(fromCodePoint(cp));
 					i = i + 6;
 					start = i;
 					continue;
@@ -190,13 +190,13 @@ export function convertUniversalChars(source: string): string {
 				if (cp >= 0) {
 					parts.push(source.byteSlice(start, i));
 					if (cp <= 0xFFFF) {
-						parts.push(String.fromCharCode(cp));
+						parts.push(fromCodePoint(cp));
 					} else {
 						// Supplementary plane — encode as surrogate pair for JS/MS string
 						const hi = 0xD800 + ((cp - 0x10000) >> 10);
 						const lo = 0xDC00 + ((cp - 0x10000) & 0x3FF);
-						parts.push(String.fromCharCode(hi));
-						parts.push(String.fromCharCode(lo));
+						parts.push(fromCodePoint(hi));
+						parts.push(fromCodePoint(lo));
 					}
 					i = i + 10;
 					start = i;

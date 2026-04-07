@@ -625,7 +625,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 						addError(ctx, `Fixed-size array expects at most ${expectedLen} element(s), got ${d.elements.length}`, node.location.line, node.location.column);
 					}
 					return arrExpected;
-				} else if (arrExpected !== null && arrExpected.kind === TypeKind.Array) {
+				} else if (arrExpected !== null && arrExpected.kind === TypeKind.Array && !hasGenericParams(arrExpected)) {
 					return arrExpected;
 				} else {
 					return createArray(elemType);

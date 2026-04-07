@@ -233,7 +233,8 @@ void msEnsureWakePipe(void) {
 }
 
 /* Wake event loop from another thread (Pony-style: unpark scheduler).
- * Used by actor subsystem when scheduling work on the main thread. */
+ * Used by actor subsystem when scheduling work on the main thread.
+ * Amortized: only writes if not already pending (one byte suffices). */
 void msActorWakeEventLoop(void) {
     if (gWakePipe[1] >= 0) {
         if (!atomic_exchange_explicit(&gWakePending, true, memory_order_acq_rel)) {
@@ -251,9 +252,12 @@ static bool msCompletionQueueDrain(void) {
     msMessage* msg;
     while ((msg = msMpscPop(&gCompletionQueue)) != NULL) {
         void* fut = msg->replyFuture;
-        msMsgFree(msg);
+        bool isFail = msg->kind < 0;
+        /* Don't free msg — it's the queue's new tail/stub (Vyukov MPSC invariant).
+         * It gets freed on the NEXT pop when a newer message takes its place. */
         if (fut != NULL) {
-            msFutureFireCallbacks((msFutureBase*)fut);
+            if (isFail) msFutureFail(fut, msMsgGetPtr(msg, 0));
+            else msFutureFireCallbacks((msFutureBase*)fut);
         }
         didWork = true;
     }
@@ -387,6 +391,15 @@ bool msRunOnce(int timeoutMs) {
 	/* Step 1: Process expired timers */
 	int nextTimer = msProcessTimers(d, &didWork);
 
+	/* Step 1b: Drain actor mailboxes FIRST — actors may re-enqueue and write
+	 * to the wake pipe. Processing them before the selector ensures the
+	 * selector sees any pending wake bytes from re-enqueue, avoiding a
+	 * 500ms stall when actor batches overflow. */
+	if (msActorPollHook != NULL) {
+		bool actorWork = msActorPollHook();
+		didWork = actorWork || didWork;
+	}
+
 	/* Step 2: Poll for cross-thread completions + I/O events */
 	int adj = msAdjustTimeout(d, timeoutMs, nextTimer);
 #ifdef _WIN32
@@ -447,12 +460,7 @@ bool msRunOnce(int timeoutMs) {
 	/* Step 5: I/O engine poll is driven by std/net event loops, not here.
 	 * Programs that don't use networking don't compile the engine. */
 
-	/* Step 6: Drain actor mailboxes (if actors are linked in).
-	 * msActorPollHook is set by actor runtime init — NULL if no actors. */
-	if (msActorPollHook != NULL) {
-		bool actorWork = msActorPollHook();
-		didWork = actorWork || didWork;
-	}
+	/* Step 6: Actor poll moved to step 1b (before selector). */
 
 	return didWork;
 }

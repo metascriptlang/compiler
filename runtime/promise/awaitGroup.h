@@ -58,6 +58,7 @@ typedef struct msAwaitGroup {
 	_Atomic(int32_t) pending;     /* starts at size, decremented per completion */
 	_Atomic(bool) failed;         /* set by first failing slot */
 	_Atomic(bool) cancelled;      /* Phase 3: set by timeout or explicit cancel */
+	_Atomic(bool) finishDone;     /* set after the last worker exits finishSlot — msAwaitGroupFree must wait for this */
 	void* error;                  /* first error payload (protected by mutex) */
 	void** results;               /* size-length array of void* result values */
 	int64_t deadlineMs;           /* Phase 3: absolute monotonic deadline (0 = none) */

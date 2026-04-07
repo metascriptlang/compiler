@@ -28,9 +28,10 @@ import {
 import { TransformContext } from "../context";
 import { walkExpandBlocksHooked } from "../walker";
 import { makeIdent, makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral } from "../util";
-import { getPromiseInner } from "../../checker/types";
+import { getPromiseInner, unknownType } from "../../checker/types";
 import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, makeUnboxCall, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";
+import { boxReturns, boxForType } from "./spawnLower";
 
 // ===== Async Context Tracking =====
 
@@ -107,6 +108,27 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 			}
 			if (closureBody !== null) {
 				injectCancelSafePoints(closureBody, ag.ident, loc);
+			}
+		}
+		// Box return values in closure body (spawnGroupLower runs before spawnLower,
+		// so closures extracted here bypass spawnLower's boxing pass).
+		// Also update closure return type to void* so codegen emits correct signature.
+		if (slot.innerType !== null) {
+			if (slot.closure.kind === NodeKind.FunctionExpr) {
+				const fd = slot.closure.data as FunctionExprData;
+				if (fd.funcExprBody !== null) { boxReturns(fd.funcExprBody, slot.innerType); }
+			} else if (slot.closure.kind === NodeKind.ArrowFunction) {
+				const ad = slot.closure.data as ArrowFunctionData;
+				if (ad.arrowBody !== null) {
+					if (ad.arrowBody.kind === NodeKind.BlockStmt) {
+						boxReturns(ad.arrowBody, slot.innerType);
+					} else {
+						ad.arrowBody = boxForType(ad.arrowBody, slot.innerType, ad.arrowBody.location);
+					}
+				}
+			}
+			if (slot.closure.nodeType !== null && slot.closure.nodeType.kind === TypeKind.Function) {
+				slot.closure.nodeType.typeReturn = unknownType();
 			}
 		}
 		// Wrap bare function reference as msClosure {fn, env: null}
@@ -188,6 +210,10 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 				if (slots.length > 0) {
 					const expansion = expandSpawnGroup(slots, stmt.location, ctx, _isAsync);
 					if (expansion.resultExpr !== null) {
+						// Synthetic ArrayLiteral must carry type — codegen reads initializer nodeType
+						if (expansion.resultExpr.nodeType === null && stmt.nodeType !== null) {
+							expansion.resultExpr.nodeType = stmt.nodeType;
+						}
 						d.initializer = expansion.resultExpr;
 						expansion.stmts.push(stmt);
 					}

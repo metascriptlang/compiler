@@ -26,7 +26,7 @@ function needsBoxing(t: Type): boolean {
 }
 
 // Build the boxing call for a given type (doesn't rely on retVal.nodeType)
-function boxForType(retVal: Node, retType: Type, loc: SourceLocation): Node {
+export function boxForType(retVal: Node, retType: Type, loc: SourceLocation): Node {
 	if (retVal === null || retType === null) return retVal;
 	return match (retType.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(makeIdent("msBoxDouble", loc), [retVal], loc),
@@ -46,7 +46,7 @@ function boxForType(retVal: Node, retType: Type, loc: SourceLocation): Node {
 
 // Recursively wrap ReturnStmt values in boxing calls.
 // Stops at nested function boundaries. Covers all control flow.
-function boxReturns(node: Node, retType: Type): void {
+export function boxReturns(node: Node, retType: Type): void {
 	if (node === null) return;
 	if (node.kind === NodeKind.FunctionDecl || node.kind === NodeKind.FunctionExpr || node.kind === NodeKind.ArrowFunction) return;
 	match (node.kind) {

@@ -92,6 +92,12 @@ static void (*msPoolSchedIdSetterFn)(int id) = NULL;
 /* Scheduler ID assignment counter (workers get 1..N-1, main thread gets 0) */
 static _Atomic(int) msWorkerSchedIdx = 0;
 
+/* Per-worker actor wake flag: set by msPoolWakeWorker, checked in sleep predicate.
+ * Prevents lost-wake race: if the condvar signal arrives while the worker is
+ * still running (between poll return and entering wait), the signal is lost.
+ * The flag survives across the race window and prevents the worker from sleeping. */
+static _Atomic(bool) msPoolActorWake[MS_POOL_MAX_WORKERS] = {false};
+
 /* Called by actor.h to register the poll + ID setter functions */
 void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int)) {
     msPoolActorPollFn = pollFn;
@@ -115,12 +121,17 @@ static void* msPoolWorkerLoop(void* arg) {
 	while (1) {
 		MS_LOCK(pool);
 		/* Wait on OWN condvar — targeted wake, no spurious wakeups.
-		 * Set idle bit so submit can find us. Clear on wake. */
-		if (pool->head == pool->tail && !pool->shutdown) {
+		 * Check spawn queue AND actor wake flag: prevents lost-wake race where
+		 * msPoolWakeWorker signals while we're still running (signal lost). */
+		if (pool->head == pool->tail &&
+			!atomic_load_explicit(&msPoolActorWake[myWorkerIdx], memory_order_acquire) &&
+			!pool->shutdown) {
 			atomic_fetch_or_explicit(&pool->idleMask, (uint64_t)1 << myWorkerIdx, memory_order_release);
 			MS_WAIT(pool->workerConds[myWorkerIdx], pool);
 			atomic_fetch_and_explicit(&pool->idleMask, ~((uint64_t)1 << myWorkerIdx), memory_order_acquire);
 		}
+		/* Clear actor wake flag after waking (inside lock, before poll) */
+		atomic_store_explicit(&msPoolActorWake[myWorkerIdx], false, memory_order_relaxed);
 		/* Check shutdown with empty queue — exit cleanly */
 		if (pool->shutdown && pool->head == pool->tail) {
 			MS_UNLOCK(pool);
@@ -136,6 +147,16 @@ static void* msPoolWorkerLoop(void* arg) {
 			atomic_fetch_add_explicit(&msPoolBusyCount, 1, memory_order_relaxed);
 			hasTask = true;
 			MS_SIGNAL(pool->space);
+			/* Chain-wake: if more tasks in queue, wake next idle worker.
+			 * Rapid submits may signal the same worker (idle bit not cleared
+			 * fast enough). Chain-wake ensures each queued task gets a worker. */
+			if (pool->head != pool->tail) {
+				uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire);
+				if (idle != 0) {
+					int wake = msCtz64(idle);
+					MS_SIGNAL(pool->workerConds[wake]);
+				}
+			}
 		}
 		MS_UNLOCK(pool);
 
@@ -148,8 +169,10 @@ static void* msPoolWorkerLoop(void* arg) {
 			MS_UNLOCK(pool);
 		}
 
-		/* Poll local actors (opportunistic between spawn tasks) */
-		if (msPoolActorPollFn != NULL) msPoolActorPollFn();
+		/* Poll local actors (opportunistic between spawn tasks).
+		 * If actor work was found, loop back immediately to check for more
+		 * (actor re-enqueue may have added new work during processing). */
+		if (msPoolActorPollFn != NULL && msPoolActorPollFn()) continue;
 	}
 #ifdef _WIN32
 	return 0;
@@ -164,6 +187,8 @@ void msPoolWakeWorker(int schedulerID) {
 	if (pool == NULL) return;
 	int idx = schedulerID - 1;  /* scheduler 1 → workerConds[0] */
 	if (idx < 0 || idx >= pool->workerCount) return;
+	/* Set wake flag BEFORE signaling — survives if worker hasn't entered wait yet */
+	atomic_store_explicit(&msPoolActorWake[idx], true, memory_order_release);
 	MS_LOCK(pool);
 	MS_SIGNAL(pool->workerConds[idx]);
 	MS_UNLOCK(pool);

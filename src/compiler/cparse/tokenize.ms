@@ -259,7 +259,7 @@ function readStringLiteral(s: ScanState, tokenStart: number, startLine: number, 
 			if (s.pos > batchStart) val = val + s.source.byteSlice(batchStart, s.pos);
 			advance(s);
 			const c = readEscapedChar(s);
-			val = val + String.fromCharCode(c);
+			val = val + fromCodePoint(c);
 			batchStart = s.pos;
 		} else {
 			advance(s);
@@ -799,4 +799,86 @@ test "tokenize backslash newline removed" {
 	const r = tokenizeFile("in\\\nt", "test.h");
 	assert r.head.kind === TokenKind.Ident;
 	assert r.head.stringVal === "int";
+}
+
+test "tokenize octal escape in string" {
+	const r = tokenizeFile("\"\\0\\101\"", "test.h");
+	// \0 = 0, \101 = 65 = 'A'
+	assert r.head.kind === TokenKind.Str;
+}
+
+test "tokenize hex escape in string" {
+	const r = tokenizeFile("\"\\x41\"", "test.h");
+	// \x41 = 65 = 'A'
+	assert r.head.kind === TokenKind.Str;
+	assert r.head.stringVal === "A";
+}
+
+test "tokenize float with exponent" {
+	const r = tokenizeFile("1.5e-3", "test.h");
+	assert r.head.kind === TokenKind.PPNum;
+	assert r.head.stringVal === "1.5e-3";
+}
+
+test "tokenize dot not followed by digit is punct" {
+	const r = tokenizeFile("a.b", "test.h");
+	assert r.head.stringVal === "a";
+	assert r.head.next.stringVal === ".";
+	assert r.head.next.kind === TokenKind.Punct;
+	assert r.head.next.next.stringVal === "b";
+}
+
+test "tokenize arrow operator" {
+	const r = tokenizeFile("p->x", "test.h");
+	assert r.head.stringVal === "p";
+	assert r.head.next.stringVal === "->";
+	assert r.head.next.next.stringVal === "x";
+}
+
+test "tokenize all 2-char punctuators" {
+	const r = tokenizeFile("== != <= >= -> += -= *= /= ++ -- %= &= |= ^= && || << >> ##", "test.h");
+	let tok = r.head;
+	const expected: string[] = ["==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=", "++", "--", "%=", "&=", "|=", "^=", "&&", "||", "<<", ">>", "##"];
+	let i = 0;
+	while (i < expected.length) {
+		assert tok.stringVal === expected[i];
+		assert tok.kind === TokenKind.Punct;
+		tok = tok.next;
+		i = i + 1;
+	}
+}
+
+test "tokenize line tracking across newlines" {
+	const r = tokenizeFile("a\nb\nc", "test.h");
+	assert r.head.line === 1;
+	assert r.head.next.line === 2;
+	assert r.head.next.next.line === 3;
+}
+
+test "convertPPInt octal" {
+	const tok = makeEofToken("t");
+	tok.kind = TokenKind.PPNum;
+	tok.stringVal = "0777";
+	assert convertPPInt(tok) === true;
+	assert tok.intVal === 511 as int64; // 7*64 + 7*8 + 7
+}
+
+test "convertPPNumber float suffix f" {
+	const tok = makeEofToken("t");
+	tok.kind = TokenKind.PPNum;
+	tok.stringVal = "3.14f";
+	const diags: Diagnostic[] = [];
+	convertPPNumber(tok, diags);
+	assert tok.kind === TokenKind.Num;
+	assert tok.litKind === LitKind.Float;
+}
+
+test "tokenize unclosed string produces diagnostic" {
+	const r = tokenizeFile("\"hello\n", "test.h");
+	assert r.diagnostics.length > 0;
+}
+
+test "tokenize unclosed block comment produces diagnostic" {
+	const r = tokenizeFile("/* unclosed", "test.h");
+	assert r.diagnostics.length > 0;
 }

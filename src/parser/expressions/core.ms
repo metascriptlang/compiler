@@ -373,10 +373,11 @@ function parsePrimary(state: ParserState): ExprResult {
 		return Result.ok(newNode2);
 	}
 
-	// Await expression: await expr
+	// Await expression: await expr (unary precedence — same as !, -, ~)
+	// `await a + await b` → `(await a) + (await b)`, not `await (a + await b)`
 	if (token.kind === TokenKind.Await) {
 		advance(state);
-		const awaitOperand = try parseExprWithPrec(state, 0);
+		const awaitOperand = try parseExprWithPrec(state, 70);
 		return Result.ok(createNode(NodeKind.AwaitExpr, { awaitArg: awaitOperand }, token));
 	}
 

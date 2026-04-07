@@ -1077,7 +1077,12 @@ function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): 
 	// Map<K,V> (formal, with GenericParam children) vs Map<string,string> (concrete)
 	// Base type must match: Map<K,V> unifies with Map<string,string> but NOT Set<string>
 	if (formal.kind === TypeKind.GenericInstance && concrete.kind === TypeKind.GenericInstance) {
-		if (formal.typeName !== concrete.typeName) return;
+		// PARALOCK: SpawnHandle<T> is structurally identical to Promise<T> for generic inference.
+		// The nominal distinction (affine tracking) is preserved — only unification is relaxed.
+		const namesMatch = formal.typeName === concrete.typeName
+			|| (formal.typeName === "Promise" && concrete.typeName === "SpawnHandle")
+			|| (formal.typeName === "SpawnHandle" && concrete.typeName === "Promise");
+		if (!namesMatch) return;
 		const limit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
 		for (let gi = 0; gi < limit; gi += 1) {
 			unifyType(formal.typeChildren[gi], concrete.typeChildren[gi], bindings);

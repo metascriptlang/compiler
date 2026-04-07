@@ -192,8 +192,13 @@ static inline bool msMpscPush(msMpscQueue* q, msMessage* msg) {
     bool wasEmpty = ((uintptr_t)prev & 1) != 0;
     prev = (msMessage*)((uintptr_t)prev & ~(uintptr_t)1);
 
-    /* Link previous head to new message */
-    atomic_store_explicit(&prev->next, msg, memory_order_relaxed);
+    /* Link previous head to new message.
+     * Must be release (not relaxed) so the consumer's acquire load on
+     * tail->next sees this store when processing on a different thread.
+     * Relaxed would cause the consumer to see stale NULL — thinking the
+     * mailbox is empty when messages exist (observed at >1000 messages
+     * when pool workers steal the actor from a different core). */
+    atomic_store_explicit(&prev->next, msg, memory_order_release);
 
     return wasEmpty;
 }

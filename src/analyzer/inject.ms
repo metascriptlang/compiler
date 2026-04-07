@@ -909,7 +909,18 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 // This covers cases where the checker didn't propagate nodeType to MemberExpr nodes
 // (e.g., assignment LHS, object literal fields), preventing missing RC operations.
 function classifyMemberFieldRc(memberExpr: Node, dctx: DrcContext): RcInfo {
-	if (memberExpr.nodeType !== null) return classifyType(memberExpr.nodeType, dctx.ctx);
+	if (memberExpr.nodeType !== null) {
+		let fieldType = memberExpr.nodeType;
+		// Ptr<Ref<T>>: the checker wraps field types in Ptr when accessed through a pointer
+		// dereference (e.g., table.current where table is Ref<SymbolTable>). The Ptr is
+		// C-level indirection; the underlying Ref IS reference-counted. Unwrap so the
+		// classifier sees the Ref and emits proper RC ops for field assignments.
+		if (fieldType.kind === TypeKind.Ptr && fieldType.typeReturn !== null
+			&& fieldType.typeReturn.kind === TypeKind.Ref) {
+			fieldType = fieldType.typeReturn;
+		}
+		return classifyType(fieldType, dctx.ctx);
+	}
 	// Fallback: infer field type from the object's type + field name
 	const md = memberExpr.data as MemberExprData;
 	let objType = md.object.nodeType;

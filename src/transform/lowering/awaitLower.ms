@@ -430,7 +430,6 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 let _hoistStmts: Node[] = [];
 let _hoistCtx: TransformContext = null as unknown as TransformContext;
 let _hoistLoc: SourceLocation = null as unknown as SourceLocation;
-let _hoistDone: boolean = false;
 
 function hoistNestedAwait(expr: Node, loc: SourceLocation, ctx: TransformContext): { stmts: Node[], replacement: Node } {
 	if (expr === null) return null;
@@ -439,16 +438,15 @@ function hoistNestedAwait(expr: Node, loc: SourceLocation, ctx: TransformContext
 	_hoistStmts = [];
 	_hoistCtx = ctx;
 	_hoistLoc = loc;
-	_hoistDone = false;
 
 	const replaced = replaceInExpr(expr, (node: Node): Node => {
-		if (_hoistDone) return node;
 		if (node.kind !== NodeKind.AwaitExpr) return node;
-		// Found the first AwaitExpr — expand and replace with result ident.
+		// Extract every AwaitExpr into preceding statements + replace with result ident.
+		// replaceInExpr is bottom-up (left subtrees first), so evaluation order is preserved:
+		// `await a + await b` → expand(a) stmts, expand(b) stmts, then $aw0 + $aw1.
 		const ad = node.data as AwaitExprData;
 		const expansion = expandSingleAwait(ad.awaitArg, _hoistLoc, _hoistCtx);
 		for (const s of expansion.stmts) { _hoistStmts.push(s); }
-		_hoistDone = true;
 		return expansion.resultIdent;
 	});
 

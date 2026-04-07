@@ -16,7 +16,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	ExprStmtData, ReturnStmtData,
 	Symbol, SymbolKind, SymbolState, createNode } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { containsExprKind } from "../walker";
+import { containsExprKind, replaceInExpr } from "../walker";
 import { makeSymbol } from "../../checker/symbol";
 import {
 	syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
@@ -696,13 +696,139 @@ function findWireInfo(infos: ActorWireInfo[], actorName: string): ActorWireInfo 
 	return null as unknown as ActorWireInfo;
 }
 
+// ===== Generate actor pid wiring statements for a variable =====
+
+function generateActorWiring(varName: string, actorName: string, dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], loc: SourceLocation, newExprNode: Node): Node[] {
+	const result: Node[] = [];
+	let dSym: Symbol = null as unknown as Symbol;
+	for (let di = 0; di < dispatchNames.length; di = di + 1) {
+		if (dispatchNames[di] === actorName) { dSym = dispatchSyms[di]; }
+	}
+	const dispatchRef = dSym !== null
+		? makeIdentResolved(dSym, loc)
+		: makeIdent(actorName + "_dispatch", loc);
+	const createCall = makeCall(makeIdent("msActorCreatePid", loc), [
+		makeIdent(varName, loc),
+		dispatchRef,
+	], loc);
+	const assignActor = makeBinary(
+		makeMember(makeIdent(varName, loc), "pid", loc),
+		"=", createCall, loc
+	);
+	result.push(makeExprStmt(assignActor, loc));
+	const pidRef = makeMember(makeIdent(varName, loc), "pid", loc);
+	const registerCall = makeCall(makeIdent("msActorRegister", loc), [
+		makeCall(makeIdent("msActorFromPid", loc), [pidRef], loc),
+	], loc);
+	result.push(makeExprStmt(registerCall, loc));
+	const increfCall = makeCall(makeIdent("msIncRef", loc), [
+		makeIdent(varName, loc),
+	], loc);
+	result.push(makeExprStmt(increfCall, loc));
+	const wi = findWireInfo(wireInfos, actorName);
+	if (wi !== null && wi.hasOnTerminate) {
+		const pidRef2 = makeMember(makeIdent(varName, loc), "pid", loc);
+		const setTermCall = makeCall(makeIdent("msActorSetOnTerminate", loc), [
+			makeCall(makeIdent("msActorFromPid", loc), [pidRef2], loc),
+			makeIdent(actorName + "_onTerminate_impl", loc),
+		], loc);
+		result.push(makeExprStmt(setTermCall, loc));
+	}
+	if (wi !== null && wi.hasSysMsg) {
+		const pidRef3 = makeMember(makeIdent(varName, loc), "pid", loc);
+		const setSysCall = makeCall(makeIdent("msActorSetSystemMsgHandler", loc), [
+			makeCall(makeIdent("msActorFromPid", loc), [pidRef3], loc),
+			makeIdent(actorName + "_systemMsg_impl", loc),
+		], loc);
+		result.push(makeExprStmt(setSysCall, loc));
+	}
+	if (wi !== null && wi.hasTrapExits) {
+		const trapCall = makeCall(makeIdent("msActorTrapExits", loc), [
+			makeMember(makeIdent(varName, loc), "pid", loc),
+			makeNumber(1, loc),
+		], loc);
+		result.push(makeExprStmt(trapCall, loc));
+	}
+	if (wi !== null && wi.hasCtor && newExprNode !== null) {
+		const ne = newExprNode.data as NewExprData;
+		const ctorArgs: Node[] = [makeIdent(varName, loc)];
+		if (ne.newArguments !== null) {
+			for (const arg of ne.newArguments) ctorArgs.push(arg);
+		}
+		const ctorCall = makeCall(makeIdent(actorName + "_constructor", loc), ctorArgs, loc);
+		result.push(makeExprStmt(ctorCall, loc));
+	}
+	return result;
+}
+
+// ===== Extract `new ActorType()` from arbitrary expression positions =====
+// Handles cases like `actors.push(new Counter())` or `doSomething(new MyActor())`
+// where the NewExpr is not directly in a VarDecl initializer.
+// Returns pre-statements to inject before the original statement.
+
+function extractActorNewExprs(stmt: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], ctx: TransformContext): Node[] {
+	// Skip VarDecl with direct NewExpr initializer — handled by existing code path
+	if (stmt.kind === NodeKind.VariableDecl) {
+		const vd = stmt.data as VariableDeclData;
+		if (vd.initializer !== null && vd.initializer.kind === NodeKind.NewExpr) return [];
+	}
+	// Get the expression(s) from the statement. containsExprKind/replaceInExpr
+	// use mapExprChildren which only traverses expression nodes, not statement wrappers.
+	let targetExpr: Node = null as unknown as Node;
+	if (stmt.kind === NodeKind.ExprStmt) {
+		targetExpr = (stmt.data as ExprStmtData).expr;
+	} else if (stmt.kind === NodeKind.VariableDecl) {
+		targetExpr = (stmt.data as VariableDeclData).initializer;
+	} else if (stmt.kind === NodeKind.ReturnStmt) {
+		targetExpr = (stmt.data as ReturnStmtData).argument;
+	}
+	if (targetExpr === null) return [];
+	if (!containsExprKind(targetExpr, NodeKind.NewExpr)) return [];
+
+	const preStmts: Node[] = [];
+	const replacer = (node: Node): Node => {
+		if (node.kind !== NodeKind.NewExpr) return node;
+		const ne = node.data as NewExprData;
+		if (ne.newCallee.kind !== NodeKind.Identifier) return node;
+		const id = ne.newCallee.data as IdentifierData;
+		let actorName = "";
+		for (const n of names) {
+			if (n === id.name) actorName = n;
+		}
+		if (actorName === "") return node;
+		const loc = node.location;
+		const tmpSym = freshTempSym(ctx, "actor", node.nodeType);
+		const tmpName = tmpSym.name;
+		const tmpDecl = makeVarDecl(tmpName, node, DeclKind.Const, loc);
+		tmpDecl.resolvedSym = tmpSym;
+		preStmts.push(tmpDecl);
+		const wiring = generateActorWiring(tmpName, actorName, dispatchSyms, dispatchNames, wireInfos, loc, node);
+		for (const w of wiring) preStmts.push(w);
+		return makeIdentResolved(tmpSym, loc);
+	};
+	const replaced = replaceInExpr(targetExpr, replacer);
+	// Write back the replaced expression
+	if (stmt.kind === NodeKind.ExprStmt) {
+		(stmt.data as ExprStmtData).expr = replaced;
+	} else if (stmt.kind === NodeKind.VariableDecl) {
+		(stmt.data as VariableDeclData).initializer = replaced;
+	} else if (stmt.kind === NodeKind.ReturnStmt) {
+		(stmt.data as ReturnStmtData).argument = replaced;
+	}
+	return preStmts;
+}
+
 // ===== Wire actor creation after `new ActorType()` in any statement list =====
 
-function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[]): Node[] {
+function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], ctx: TransformContext): Node[] {
 	const out: Node[] = [];
 	for (const stmt of stmts) {
 		// Recurse into nested blocks first
-		wireActorInNode(stmt, names, dispatchSyms, dispatchNames, wireInfos);
+		wireActorInNode(stmt, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		// Extract `new ActorType()` from non-VarDecl-initializer positions into temp vars.
+		// e.g. `actors.push(new Counter())` → `const _a0 = new Counter(); _a0.pid = ...; actors.push(_a0);`
+		const preStmts = extractActorNewExprs(stmt, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		for (const ps of preStmts) out.push(ps);
 		out.push(stmt);
 		// After VarDecl with `new ActorType()`, inject pid wiring
 		if (stmt.kind === NodeKind.VariableDecl) {
@@ -716,68 +842,8 @@ function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[]
 						if (n === id.name) actorName = n;
 					}
 					if (actorName !== "") {
-						const loc = stmt.location;
-						let dSym: Symbol = null as unknown as Symbol;
-						for (let di = 0; di < dispatchNames.length; di = di + 1) {
-							if (dispatchNames[di] === actorName) { dSym = dispatchSyms[di]; }
-						}
-						const dispatchRef = dSym !== null
-							? makeIdentResolved(dSym, loc)
-							: makeIdent(actorName + "_dispatch", loc);
-						// msActorCreatePid returns int64 (pointer cast) — matches pid field type
-						const createCall = makeCall(makeIdent("msActorCreatePid", loc), [
-							makeIdent(vd.declName, loc),
-							dispatchRef,
-						], loc);
-						const assignActor = makeBinary(
-							makeMember(makeIdent(vd.declName, loc), "pid", loc),
-							"=", createCall, loc
-						);
-						out.push(makeExprStmt(assignActor, loc));
-						// msActorFromPid converts int64 back to msActor* for runtime calls
-						const pidRef = makeMember(makeIdent(vd.declName, loc), "pid", loc);
-						const registerCall = makeCall(makeIdent("msActorRegister", loc), [
-							makeCall(makeIdent("msActorFromPid", loc), [pidRef], loc),
-						], loc);
-						out.push(makeExprStmt(registerCall, loc));
-						// Keep actor state alive past DRC scope — registry holds a ref
-						const increfCall = makeCall(makeIdent("msIncRef", loc), [
-							makeIdent(vd.declName, loc),
-						], loc);
-						out.push(makeExprStmt(increfCall, loc));
-						const wi = findWireInfo(wireInfos, actorName);
-						if (wi !== null && wi.hasOnTerminate) {
-							const pidRef2 = makeMember(makeIdent(vd.declName, loc), "pid", loc);
-							const setTermCall = makeCall(makeIdent("msActorSetOnTerminate", loc), [
-								makeCall(makeIdent("msActorFromPid", loc), [pidRef2], loc),
-								makeIdent(actorName + "_onTerminate_impl", loc),
-							], loc);
-							out.push(makeExprStmt(setTermCall, loc));
-						}
-						if (wi !== null && wi.hasSysMsg) {
-							const pidRef3 = makeMember(makeIdent(vd.declName, loc), "pid", loc);
-							const setSysCall = makeCall(makeIdent("msActorSetSystemMsgHandler", loc), [
-								makeCall(makeIdent("msActorFromPid", loc), [pidRef3], loc),
-								makeIdent(actorName + "_systemMsg_impl", loc),
-							], loc);
-							out.push(makeExprStmt(setSysCall, loc));
-						}
-						if (wi !== null && wi.hasTrapExits) {
-							const trapCall = makeCall(makeIdent("msActorTrapExits", loc), [
-								makeMember(makeIdent(vd.declName, loc), "pid", loc),
-								makeNumber(1, loc),
-							], loc);
-							out.push(makeExprStmt(trapCall, loc));
-						}
-						if (wi !== null && wi.hasCtor) {
-							// Forward constructor args from `new Actor(args...)` to deferred constructor
-							const ctorArgs: Node[] = [makeIdent(vd.declName, loc)];
-							if (ne.newArguments !== null) {
-								for (const arg of ne.newArguments) ctorArgs.push(arg);
-							}
-							const ctorCall = makeCall(makeIdent(actorName + "_constructor", loc), ctorArgs, loc);
-							out.push(makeExprStmt(ctorCall, loc));
-						}
+						const wiring = generateActorWiring(vd.declName, actorName, dispatchSyms, dispatchNames, wireInfos, stmt.location, vd.initializer);
+						for (const w of wiring) out.push(w);
 					}
 				}
 			}
@@ -788,51 +854,51 @@ function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[]
 
 // ===== Recursively walk into nodes that contain statement lists =====
 
-function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[]): void {
+function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], ctx: TransformContext): void {
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
-		if (fd.fnBody !== null) wireActorInNode(fd.fnBody, names, dispatchSyms, dispatchNames, wireInfos);
+		if (fd.fnBody !== null) wireActorInNode(fd.fnBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 	} else if (node.kind === NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
-		bd.statements = wireActorInStmts(bd.statements, names, dispatchSyms, dispatchNames, wireInfos);
+		bd.statements = wireActorInStmts(bd.statements, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 	} else if (node.kind === NodeKind.IfStmt) {
 		const id = node.data as IfStmtData;
-		wireActorInNode(id.consequent, names, dispatchSyms, dispatchNames, wireInfos);
-		if (id.alternate !== null) wireActorInNode(id.alternate, names, dispatchSyms, dispatchNames, wireInfos);
+		wireActorInNode(id.consequent, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		if (id.alternate !== null) wireActorInNode(id.alternate, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 	} else if (node.kind === NodeKind.WhileStmt) {
 		const wd = node.data as WhileStmtData;
-		wireActorInNode(wd.whileBody, names, dispatchSyms, dispatchNames, wireInfos);
+		wireActorInNode(wd.whileBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 	} else if (node.kind === NodeKind.DoWhileStmt) {
 		const dd = node.data as DoWhileStmtData;
-		wireActorInNode(dd.doBody, names, dispatchSyms, dispatchNames, wireInfos);
+		wireActorInNode(dd.doBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 	} else if (node.kind === NodeKind.ForOfStmt) {
 		const fd = node.data as ForOfStmtData;
-		wireActorInNode(fd.forOfBody, names, dispatchSyms, dispatchNames, wireInfos);
+		wireActorInNode(fd.forOfBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 	} else if (node.kind === NodeKind.ForStmt) {
 		const fd = node.data as ForStmtData;
-		wireActorInNode(fd.forBody, names, dispatchSyms, dispatchNames, wireInfos);
+		wireActorInNode(fd.forBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 	} else if (node.kind === NodeKind.TryCatchStmt) {
 		const td = node.data as TryCatchStmtData;
-		wireActorInNode(td.tryBody, names, dispatchSyms, dispatchNames, wireInfos);
-		if (td.catchBody !== null) wireActorInNode(td.catchBody, names, dispatchSyms, dispatchNames, wireInfos);
-		if (td.finallyBody !== null) wireActorInNode(td.finallyBody, names, dispatchSyms, dispatchNames, wireInfos);
+		wireActorInNode(td.tryBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		if (td.catchBody !== null) wireActorInNode(td.catchBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		if (td.finallyBody !== null) wireActorInNode(td.finallyBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 	} else if (node.kind === NodeKind.SwitchStmt) {
 		const sd = node.data as SwitchStmtData;
-		for (const c of sd.switchCases) wireActorInNode(c, names, dispatchSyms, dispatchNames, wireInfos);
+		for (const c of sd.switchCases) wireActorInNode(c, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 	} else if (node.kind === NodeKind.SwitchCase) {
 		const sc = node.data as SwitchCaseData;
-		sc.caseStmts = wireActorInStmts(sc.caseStmts, names, dispatchSyms, dispatchNames, wireInfos);
+		sc.caseStmts = wireActorInStmts(sc.caseStmts, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 	}
 }
 
 // ===== Top-level: wire actors at all scopes + inject poll at exit =====
 
-function rewriteAndInjectPoll(program: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[]): Node {
+function rewriteAndInjectPoll(program: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], ctx: TransformContext): Node {
 	if (program.kind !== NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
 
 	// Recursively wire actor creation at all scope levels
-	pd.programStmts = wireActorInStmts(pd.programStmts, names, dispatchSyms, dispatchNames, wireInfos);
+	pd.programStmts = wireActorInStmts(pd.programStmts, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 
 	// Drain all actor mailboxes at exit
 	const exitLoc = program.location;
@@ -987,5 +1053,5 @@ export function lowerActor(program: Node, ctx: TransformContext): Node {
 	const wireInfos: ActorWireInfo[] = [];
 	const expanded = expandActorDecls(program, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 	if (names.length === 0) return expanded;
-	return rewriteAndInjectPoll(expanded, names, dispatchSyms, dispatchNames, wireInfos);
+	return rewriteAndInjectPoll(expanded, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 }

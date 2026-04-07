@@ -135,18 +135,15 @@ static inline void msAtomicIncRef(void* p) {
 static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	msRefHeader* h = msHeader(p);
-	/* Atomic decrement: multiple threads may hold refs to the same object
-	 * (e.g., spawn closures sharing captured data). fetch_sub returns the
-	 * old value — if it was 1, this was the last reference. If 0, it was
-	 * already dead (defensive). */
-	int32_t prev = atomic_fetch_sub_explicit(&h->rc, 1, memory_order_acq_rel);
-	if (prev <= 0) {
-		/* Was 0 before decrement — sole owner, safe to free.
-		 * Nim parity: rc=0 means one reference (the creator). incRef bumps to 1
-		 * (two refs), 2 (three refs), etc. Only free when the last ref decrements
-		 * from 0. prev<=0 also handles negative rc defensively. */
+	/* Nim parity (arc.nim:234-240): check count BEFORE decrementing.
+	 * rc starts at 0 from msAlloc. rc=0 means "sole owner".
+	 * If rc == 0: last reference — return true for destruction (do NOT decrement).
+	 * If rc > 0: other references exist — decrement and return false.
+	 * This matches Nim's non-atomic path exactly. */
+	if (h->rc == 0) {
 		return true;
 	}
+	h->rc--;
 	return false;
 }
 
