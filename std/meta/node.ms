@@ -13,7 +13,10 @@ export enum TypeKind {
 	GenericParam, GenericInstance,
 	Ref, Ptr, Borrow,
 	Sink, Lent, Var,
-	TypeReference, Union, Enum, Result, Promise,
+	TypeReference, Union, Enum, Result,
+	// REPROMISE T2: legacy `Promise` variant removed. Promise<T> and SpawnHandle<T>
+	// are both represented as GenericInstance with nominal typeName and the
+	// AwaitableAffine / AwaitableScopeBound flags on typeFlags.
 	Distinct,
 	Error,
 	StringLiteral,
@@ -29,10 +32,12 @@ export enum CallingConvention {
 
 // ===== Type Flags =====
 export enum TypeFlag {
-	IsStruct = 1,       // bit 0
-	IsMaybe = 16,       // bit 4
-	HasAsgn = 32,       // bit 5
-	Substituting = 1048576, // bit 20 (high to avoid SizedArray size collision)
+	IsStruct = 1,                // bit 0
+	IsMaybe = 16,                // bit 4
+	HasAsgn = 32,                // bit 5
+	AwaitableAffine = 64,        // bit 6 — PARALOCK affine (was SpawnHandle nominal check)
+	AwaitableScopeBound = 128,   // bit 7 — PARALOCK R3/E4 (cannot escape creating scope)
+	Substituting = 1048576,      // bit 20 (high to avoid SizedArray size collision)
 }
 
 // ===== Attached Lifecycle Ops =====

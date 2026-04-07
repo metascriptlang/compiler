@@ -57,6 +57,12 @@ function emitInstanceFieldDefaults(g: CGen, p: CProc, tmp: string, classType: Ty
 			const pd = member.data as PropertyDeclData;
 			if (!pd.propIsStatic) {
 				if (pd.propInitializer !== null && fieldIdx >= argCount) {
+					// Propagate declared property type to untyped initializer so codegen
+					// (e.g., genArrayLiteral) can choose the correct C type instead of
+					// defaulting to msRefArray for empty array literals.
+					if (pd.propInitializer.nodeType === null && member.nodeType !== null) {
+						pd.propInitializer.nodeType = member.nodeType;
+					}
 					const initVal = genExpr(g, p, pd.propInitializer);
 					emitStmtsLine(p, `${tmp}->${mangleFieldName(pd.propName)} = ${initVal};`);
 				}
@@ -1634,7 +1640,6 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// spawnLower emits this for struct returns. nodeType carries the type.
 	if (callee === "msBoxStruct" && node.nodeType !== null) {
 		const boxType = getTypeDesc(g, node.nodeType);
-		truncResults(ctx, cc);
 		// Explicitly add & — ccgIntroducedPtr won't fire for synthetic calls
 		const addrArg = argsStr.length > 0 && argsStr.charAt(0) === "&" ? argsStr : "&(" + argsStr + ")";
 		ctx.results.push(`msBoxStruct(${addrArg}, sizeof(${boxType}))`);
@@ -1647,7 +1652,6 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// memset(&val, 0, sizeof(T)) is equivalent to wasMoved for all types.
 	if (callee === "msSinkBoxStruct" && node.nodeType !== null) {
 		const sinkType = getTypeDesc(g, node.nodeType);
-		truncResults(ctx, cc);
 		const boxTmp = getTemp(p, "void*");
 		const addrArg = argsStr.length > 0 && argsStr.charAt(0) === "&" ? argsStr : "&(" + argsStr + ")";
 		emitStmtsLine(p, `${boxTmp.snippet} = malloc(sizeof(${sinkType}));`);
@@ -1662,7 +1666,6 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// WaitFor builtin emits this for struct returns from spawn. nodeType carries the target type.
 	if (callee === "msUnboxStruct" && node.nodeType !== null) {
 		const unboxType = getTypeDesc(g, node.nodeType);
-		truncResults(ctx, cc);
 		const ptrTmp = getTemp(p, "void*");
 		const valTmp = getTemp(p, unboxType);
 		emitStmtsLine(p, `${ptrTmp.snippet} = ${argsStr};`);

@@ -30,7 +30,7 @@
 /* ===== Reference Header ===== */
 
 typedef struct {
-	int32_t rc;              /* Reference count (0 = unique, >0 = shared) */
+	_Atomic(int32_t) rc;     /* Reference count (0 = unique, >0 = shared). Atomic for thread safety. */
 	int32_t rootIdx;         /* ORC rootset index (-1 = not registered) */
 	const msTypeInfo* type;  /* RTTI (NULL for untyped allocs) */
 } msRefHeader;
@@ -72,15 +72,22 @@ static inline void msIncRef(void* p) {
  * Uses relaxed ordering — sufficient for refcount increment (no data dependency). */
 static inline void msAtomicIncRef(void* p) {
 	if (p != NULL) {
-		atomic_fetch_add_explicit((_Atomic(int32_t)*)&msHeader(p)->rc, 1, memory_order_relaxed);
+		atomic_fetch_add_explicit(&msHeader(p)->rc, 1, memory_order_relaxed);
 	}
 }
 
 static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	msRefHeader* h = msHeader(p);
-	if (h->rc == 0) return true;
-	h->rc--;
+	/* Atomic decrement: multiple threads may hold refs to the same object
+	 * (e.g., spawn closures sharing captured data). fetch_sub returns the
+	 * old value — if it was 1, this was the last reference. If 0, it was
+	 * already dead (defensive). */
+	int32_t prev = atomic_fetch_sub_explicit(&h->rc, 1, memory_order_acq_rel);
+	if (prev <= 1) {
+		/* Was 0 or 1 before decrement — this is the last owner */
+		return true;
+	}
 	return false;
 }
 

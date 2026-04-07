@@ -269,6 +269,23 @@ void msPoolSubmit(struct msSpawnCtx* ctx) {
 	MS_UNLOCK(pool);
 }
 
+/* ===== Phase 8: Help-First Scheduling ===== */
+
+bool msPoolHelpOne(void) {
+	msThreadPool* pool = msPoolGet();
+	MS_LOCK(pool);
+	if (pool->head == pool->tail) {
+		MS_UNLOCK(pool);
+		return false;
+	}
+	struct msSpawnCtx task = pool->queue[pool->head];
+	pool->head = (pool->head + 1) % pool->cap;
+	MS_SIGNAL(pool->space);  /* wake any backpressured submitter */
+	MS_UNLOCK(pool);
+	msSpawnWorkerRun(&task);
+	return true;
+}
+
 /* ===== Shutdown ===== */
 
 void msPoolShutdown(void) {

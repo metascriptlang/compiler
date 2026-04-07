@@ -488,6 +488,7 @@ export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: Transf
 }
 
 export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+	if (node === null) return;
 	match (node.kind) {
 		NodeKind.Program => {
 			replaceProgStmts(node, expander, ctx, onFnEntry, onFnExit);

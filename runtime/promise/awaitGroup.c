@@ -17,9 +17,18 @@
  * safely read results[] after the wait returns.
  */
 #include "awaitGroup.h"
+#include "pool.h"    /* Phase 8: msPoolHelpOne for help-first scheduling */
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+
+/* Phase 3: need monotonic time for deadline-based wait */
+extern int64_t msMonoTimeMs(void);
+/* Phase 4: route doneFut completion through the dispatcher thread.
+ * msPostCompletion writes to the completion pipe — the dispatcher thread
+ * calls msFutureComplete on its event loop iteration, firing callbacks
+ * (msAsyncCb) on the correct thread. */
+extern void msPostCompletion(void* fut, void* value, bool isFail, void* error);
 
 msAwaitGroup* msAwaitGroupInit(int32_t n) {
 	if (n < 0) n = 0;
@@ -30,7 +39,11 @@ msAwaitGroup* msAwaitGroupInit(int32_t n) {
 	g->size = n;
 	atomic_store_explicit(&g->pending, n, memory_order_relaxed);
 	atomic_store_explicit(&g->failed, false, memory_order_relaxed);
+	atomic_store_explicit(&g->cancelled, false, memory_order_relaxed);
 	g->error = NULL;
+	g->deadlineMs = 0;
+	g->timedOut = false;
+	atomic_store_explicit(&g->doneFut, NULL, memory_order_relaxed);
 
 	if (n > 0) {
 		g->results = (void**)calloc((size_t)n, sizeof(void*));
@@ -88,6 +101,14 @@ static void finishSlot(msAwaitGroup* g) {
 		pthread_cond_broadcast(&g->cv);
 		pthread_mutex_unlock(&g->mutex);
 #endif
+		/* Phase 4: complete done future for async cooperative path.
+		 * Route through msPostCompletion so the future completes on the
+		 * dispatcher thread (not the worker thread), ensuring msAsyncCb
+		 * runs on the correct thread. */
+		void* df = atomic_load_explicit(&g->doneFut, memory_order_acquire);
+		if (df != NULL) {
+			msPostCompletion(df, NULL, false, NULL);
+		}
 	}
 }
 
@@ -132,17 +153,115 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 		return;
 	}
 
+	/* Phase 8: Help-first scheduling — before parking on the condvar, try
+	 * to dequeue and execute tasks from the global pool queue inline. This
+	 * prevents deadlock when all pool workers are blocked in await groups
+	 * while their child tasks sit in the global queue.
+	 *
+	 * Lock ordering: we never hold both group mutex and pool mutex at once.
+	 * Drop group lock → msPoolHelpOne (acquires/releases pool lock internally)
+	 * → re-acquire group lock. */
 #ifdef _WIN32
 	EnterCriticalSection(&g->cs);
 	while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-		SleepConditionVariableCS(&g->cv, &g->cs, INFINITE);
+		LeaveCriticalSection(&g->cs);
+		if (msPoolHelpOne()) {
+			EnterCriticalSection(&g->cs);
+			continue;
+		}
+		EnterCriticalSection(&g->cs);
+		if (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
+			SleepConditionVariableCS(&g->cv, &g->cs, INFINITE);
+		}
 	}
 	LeaveCriticalSection(&g->cs);
 #else
 	pthread_mutex_lock(&g->mutex);
 	while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-		pthread_cond_wait(&g->cv, &g->mutex);
+		pthread_mutex_unlock(&g->mutex);
+		if (msPoolHelpOne()) {
+			pthread_mutex_lock(&g->mutex);
+			continue;
+		}
+		pthread_mutex_lock(&g->mutex);
+		if (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
+			pthread_cond_wait(&g->cv, &g->mutex);
+		}
 	}
 	pthread_mutex_unlock(&g->mutex);
 #endif
+}
+
+void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
+	if (g == NULL) return;
+	g->deadlineMs = deadlineMs;
+
+	/* Fast path: already done. */
+	if (atomic_load_explicit(&g->pending, memory_order_acquire) == 0) {
+		return;
+	}
+
+	/* Phase 8: same help-first pattern as msAwaitGroupBlocking, with
+	 * deadline check after each steal attempt. */
+#ifdef _WIN32
+	EnterCriticalSection(&g->cs);
+	while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
+		LeaveCriticalSection(&g->cs);
+		if (msPoolHelpOne()) {
+			EnterCriticalSection(&g->cs);
+			continue;
+		}
+		EnterCriticalSection(&g->cs);
+		if (atomic_load_explicit(&g->pending, memory_order_acquire) <= 0) break;
+		int64_t now = msMonoTimeMs();
+		if (now >= deadlineMs) {
+			g->timedOut = true;
+			atomic_store_explicit(&g->cancelled, true, memory_order_release);
+			LeaveCriticalSection(&g->cs);
+			return;
+		}
+		DWORD remainMs = (DWORD)(deadlineMs - now);
+		SleepConditionVariableCS(&g->cv, &g->cs, remainMs);
+	}
+	LeaveCriticalSection(&g->cs);
+#else
+	pthread_mutex_lock(&g->mutex);
+	while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
+		pthread_mutex_unlock(&g->mutex);
+		if (msPoolHelpOne()) {
+			pthread_mutex_lock(&g->mutex);
+			continue;
+		}
+		pthread_mutex_lock(&g->mutex);
+		if (atomic_load_explicit(&g->pending, memory_order_acquire) <= 0) break;
+		int64_t now = msMonoTimeMs();
+		if (now >= deadlineMs) {
+			g->timedOut = true;
+			atomic_store_explicit(&g->cancelled, true, memory_order_release);
+			pthread_mutex_unlock(&g->mutex);
+			return;
+		}
+		/* Convert remaining time to absolute CLOCK_REALTIME timespec.
+		 * POSIX pthread_cond_timedwait requires CLOCK_REALTIME.
+		 * macOS lacks pthread_condattr_setclock for CLOCK_MONOTONIC.
+		 * Clock-jump risk: NTP adjustments can cause early/late wake —
+		 * mitigated by the while-loop recheck of deadline vs monotonic now. */
+		struct timespec ts;
+		clock_gettime(CLOCK_REALTIME, &ts);
+		int64_t remainMs = deadlineMs - now;
+		ts.tv_sec += remainMs / 1000;
+		ts.tv_nsec += (remainMs % 1000) * 1000000;
+		if (ts.tv_nsec >= 1000000000) {
+			ts.tv_sec += 1;
+			ts.tv_nsec -= 1000000000;
+		}
+		pthread_cond_timedwait(&g->cv, &g->mutex, &ts);
+	}
+	pthread_mutex_unlock(&g->mutex);
+#endif
+}
+
+void msAwaitGroupCancel(msAwaitGroup* g) {
+	if (g == NULL) return;
+	atomic_store_explicit(&g->cancelled, true, memory_order_release);
 }

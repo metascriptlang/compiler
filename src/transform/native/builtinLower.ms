@@ -195,8 +195,23 @@ function unboxFnForType(t: Type): string {
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
 		TypeKind.Boolean => "msUnboxBool",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => "msUnboxInt32",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "msUnboxInt32",
 		TypeKind.String => "msUnboxString",
+		_ => "",
+	};
+}
+
+// Typed future readers — msFutureReadT handles both boxed (isBoxed=true, from spawn)
+// and typed (isBoxed=false, from async) paths internally. Replaces the
+// msUnboxT(msWaitFor(fut)) chain with a single call. See future.h per-type readers.
+export function typedFutureReadFn(t: Type): string {
+	if (t === null) return "";
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
+		TypeKind.Boolean => "msFutureReadBool",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "msFutureReadInt32",
 		_ => "",
 	};
 }
@@ -274,7 +289,10 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 
 	if (builtinKind === "WaitFor") {
 		// waitFor(fut) → msUnboxT(msWaitFor(fut))
-		// msWaitFor returns void* (boxed). Wrap with unbox for the return type.
+		// msWaitFor blocks + returns void* (boxed). Wrap with unbox for the return type.
+		// Note: builtinLower operates at expression level (single node replacement),
+		// so we can't use the msWaitForReady + msFutureReadT two-statement pattern
+		// here. That pattern is used by awaitLower (statement-level expansion).
 		const waitCall = makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
 		const retType = node.nodeType;
 		if (retType === null || retType.kind === TypeKind.Void) return waitCall;

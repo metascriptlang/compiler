@@ -78,10 +78,10 @@ export function ed25519Verify(signature: string, publicKey: string, message: str
 
 // ===== Async (spawn for batch signing) =====
 
-export function ed25519GenerateAsync(): Promise<Result<string, CryptoError>> {
-	return spawn(() => { return ed25519Generate(); });
+export async function ed25519GenerateAsync(): Promise<Result<string, CryptoError>> {
+	return await spawn(() => { return ed25519Generate(); });
 }
 
-export function ed25519SignAsync(secretKey: string, message: string): Promise<Result<string, CryptoError>> {
-	return spawn(() => { return ed25519Sign(secretKey, message); });
+export async function ed25519SignAsync(secretKey: string, message: string): Promise<Result<string, CryptoError>> {
+	return await spawn(() => { return ed25519Sign(secretKey, message); });
 }

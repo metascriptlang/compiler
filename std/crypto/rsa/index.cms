@@ -184,26 +184,26 @@ export function ecFree(key: int64): void {
 
 // ===== Async Versions (spawn to worker thread for heavy key generation) =====
 
-export function rsaGenerateAsync(bits: int32): Promise<Result<int64, CryptoError>> {
-	return spawn(() => { return rsaGenerate(bits); });
+export async function rsaGenerateAsync(bits: int32): Promise<Result<int64, CryptoError>> {
+	return await spawn(() => { return rsaGenerate(bits); });
 }
 
-export function rsaSignAsync(key: int64, data: string, algorithm: string): Promise<Result<string, CryptoError>> {
-	return spawn(() => { return rsaSign(key, data, algorithm); });
+export async function rsaSignAsync(key: int64, data: string, algorithm: string): Promise<Result<string, CryptoError>> {
+	return await spawn(() => { return rsaSign(key, data, algorithm); });
 }
 
-export function rsaEncryptAsync(key: int64, data: string): Promise<Result<string, CryptoError>> {
-	return spawn(() => { return rsaEncrypt(key, data); });
+export async function rsaEncryptAsync(key: int64, data: string): Promise<Result<string, CryptoError>> {
+	return await spawn(() => { return rsaEncrypt(key, data); });
 }
 
-export function rsaDecryptAsync(key: int64, data: string): Promise<Result<string, CryptoError>> {
-	return spawn(() => { return rsaDecrypt(key, data); });
+export async function rsaDecryptAsync(key: int64, data: string): Promise<Result<string, CryptoError>> {
+	return await spawn(() => { return rsaDecrypt(key, data); });
 }
 
-export function ecGenerateAsync(curve: string): Promise<Result<int64, CryptoError>> {
-	return spawn(() => { return ecGenerate(curve); });
+export async function ecGenerateAsync(curve: string): Promise<Result<int64, CryptoError>> {
+	return await spawn(() => { return ecGenerate(curve); });
 }
 
-export function ecdsaSignAsync(key: int64, data: string, algorithm: string): Promise<Result<string, CryptoError>> {
-	return spawn(() => { return ecdsaSign(key, data, algorithm); });
+export async function ecdsaSignAsync(key: int64, data: string, algorithm: string): Promise<Result<string, CryptoError>> {
+	return await spawn(() => { return ecdsaSign(key, data, algorithm); });
 }

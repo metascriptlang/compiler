@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, unknownType, neverType, errorType, isResult, getResultOkType, getResultErrType } from "./types";
+import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, unknownType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable } from "./types";
 import { ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
@@ -501,6 +501,12 @@ export function sgFormatHover(suggest: SgSuggest): string {
 // Hover documentation section — doc comments only (TS-Go: no file paths in hover)
 export function sgFormatHoverDoc(suggest: SgSuggest, docComment: string): string {
 	if (suggest === null) return "";
+	// PARALOCK Phase 9: affine awaitable hint for SpawnHandle-typed bindings
+	if (suggest.symType !== null && isAffineAwaitable(suggest.symType)) {
+		const hint = "SpawnHandle — affine handle, must be awaited before scope exits (PARALOCK R1)";
+		if (docComment !== "") return docComment + "\n\n" + hint;
+		return hint;
+	}
 	return docComment;
 }
 

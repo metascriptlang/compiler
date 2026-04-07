@@ -59,6 +59,13 @@ void msPoolSubmit(struct msSpawnCtx* ctx);
 /* Shutdown pool — drain queue, join all workers. Called at process exit. */
 void msPoolShutdown(void);
 
+/* Phase 8: Help-first scheduling — try to dequeue one task from the global
+ * queue and execute it inline. Returns true if a task was found and executed.
+ * Called from all blocking wait points (msAwaitGroupBlocking, msWaitFor,
+ * msWaitForReady) to let blocked workers drain queued work instead of parking.
+ * Self-contained: caller needs no access to msSpawnCtx. */
+bool msPoolHelpOne(void);
+
 /* Wake a specific worker by scheduler ID (targeted: no spurious wakeups) */
 void msPoolWakeWorker(int schedulerID);
 

@@ -5,20 +5,22 @@
 // Wraps return values in msBoxDouble/msBoxBool/msBoxInt32 so the
 // C runtime can store them as void* in msFuture.value.
 
-import { Node, NodeKind, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind } from "../../ast/node";
 import { unknownType, isPromise, getPromiseInner } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall } from "../util";
+import { makeIdent, makeCall, makeNull, makeObjectLiteral } from "../util";
 
 function needsBoxing(t: Type): boolean {
 	if (t === null) return false;
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => true,
 		TypeKind.Boolean => true,
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => true,
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => true,
 		TypeKind.String => true,
 		TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Tuple => true,
+		TypeKind.Array => true,
 		_ => false,
 	};
 }
@@ -29,9 +31,10 @@ function boxForType(retVal: Node, retType: Type, loc: SourceLocation): Node {
 	return match (retType.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(makeIdent("msBoxDouble", loc), [retVal], loc),
 		TypeKind.Boolean => makeCall(makeIdent("msBoxBool", loc), [retVal], loc),
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => makeCall(makeIdent("msBoxInt32", loc), [retVal], loc),
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => makeCall(makeIdent("msBoxInt32", loc), [retVal], loc),
 		TypeKind.String => makeCall(makeIdent("msBoxString", loc), [retVal], loc),
-		TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Tuple => {
+		TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Tuple | TypeKind.Array => {
 			// msSinkBoxStruct: codegen expands to malloc+memcpy+wasMoved (DRC-aware)
 			const call = makeCall(makeIdent("msSinkBoxStruct", loc), [retVal], loc);
 			call.nodeType = retType;
@@ -95,7 +98,18 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 		}
 		if (!isSpawn || cd.arguments.length < 1) return node;
 
-		const closureArg = cd.arguments[0];
+		let closureArg = cd.arguments[0];
+
+		// Bare function reference (Identifier): wrap as msClosure {fn, env=null}
+		// so codegen emits the struct literal expected by msSpawn/msSpawnTaskSubmit.
+		if (closureArg.kind === NodeKind.Identifier) {
+			const loc = closureArg.location;
+			const pair = makeObjectLiteral(["fn", "env"], [closureArg, makeNull(loc)], loc);
+			pair.flags = pair.flags | NodeFlag.Closure;
+			pair.nodeType = closureArg.nodeType;
+			cd.arguments[0] = pair;
+			closureArg = pair;
+		}
 		// Get return type from Promise<T> on the CallExpr (set by checker's Spawn inference)
 		let closureRetType: Type = null;
 		if (node.nodeType !== null && isPromise(node.nodeType)) {

@@ -33,6 +33,7 @@ export function isDrcLifecycleName(name: string): boolean {
 // Emit forward prototype for DRC lifecycle functions called cross-module.
 // Signatures are known by convention (suffix determines parameter pattern).
 export function ensureDrcProto(g: CGen, callee: string): void {
+	if (callee === null || callee === "") return;
 	const suffix = findSuffix(callee, DRC_SUFFIXES);
 	if (suffix === "") return;
 	// Skip built-in runtime functions (ms* prefix) — they're defined in C headers, not generated.

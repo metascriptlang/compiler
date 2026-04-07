@@ -237,6 +237,7 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msArrayStringSink(d, s)        do { (d) = (s); } while(0)
 #define msArrayRefDestroy(arr)         ((void)0)
 #define msArrayRefCopy(d, s)           do { (d) = (s); } while(0)
+#define msArrayRefSink(d, s)           do { (d) = (s); } while(0)
 #define msArrayRefTrace(arr, cb)       ((void)0)
 #define msArrayRefWasMoved(arr)        msArrayWasMoved(arr)
 #define msArrayUint8Destroy(arr)       ((void)0)
@@ -367,6 +368,7 @@ MS_FUTURE_STRUCT(msFuture_bool, bool);
 MS_FUTURE_STRUCT(msFuture_msString, msString);
 
 static inline void* msWaitFor(void* fut)    { (void)fut; return (void*)0; }
+static inline void msWaitForReady(void* fut) { (void)fut; }
 static inline void msCallSoon(msClosure cb) { (void)cb; }
 typedef void (*msCallSoonFn)(msClosure);
 static msCallSoonFn msCallSoonProc = (msCallSoonFn)0;

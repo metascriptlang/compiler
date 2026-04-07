@@ -20,11 +20,9 @@
  * Both paths share msPoolSubmit and the Malebolgia-style fixed worker pool
  * (N = CPU cores). The dispatch branch lives in msSpawnWorkerRun below.
  *
- * Phase 2 completion TODO: the group path (msSpawnTaskSubmit) has no in-tree
- * caller yet; its branch in msSpawnWorkerRun is exercised only by the
- * standalone awaitGroup_selftest in isolation. The awaitLower.ms transform
- * (remaining Phase 2 deliverable) will backfill an end-to-end integration
- * test that exercises this branch through the real pool.
+ * Both paths are exercised end-to-end by the transform pipeline:
+ *   - awaitLower.ms: fused await(spawn(fn)) single-slot groups
+ *   - spawnGroupLower.ms: await [spawn(f), spawn(g), ...] N-slot groups
  */
 #ifndef MS_THREAD_H
 #define MS_THREAD_H
@@ -53,6 +51,7 @@ typedef struct msSpawnCtx {
 	void* fut;            /* msFuture_ptr* to complete (future path) */
 	msAwaitGroup* group;  /* optional: group to complete (group path) */
 	int32_t slot;         /* group slot index (only meaningful when group != NULL) */
+	_Atomic(bool)* cancelFlag;  /* Phase 3: pointer to group's cancelled flag (NULL if no group) */
 } msSpawnCtx;
 
 
@@ -78,7 +77,7 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 		} else {
 			msAwaitGroupCompleteSlot(ctx->group, ctx->slot, result);
 		}
-	} else {
+	} else if (ctx->fut != NULL) {
 		/* Future path: post result to event loop thread via completion pipe. */
 		if (msErr) {
 			msPostCompletion(ctx->fut, NULL, true, (void*)msCurrException);
@@ -87,6 +86,9 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 		} else {
 			msPostCompletion(ctx->fut, result, false, NULL);
 		}
+	} else {
+		/* Defensive: no completion target — clear errors to prevent stale state. */
+		if (msErr) { msErr = false; msCurrException = NULL; }
 	}
 
 	/* Release worker's ownership of the env (same for both paths). */
@@ -132,6 +134,7 @@ static inline void msSpawnTaskSubmit(msAwaitGroup* group, int32_t slot, msClosur
 		.fut = NULL,
 		.group = group,
 		.slot = slot,
+		.cancelFlag = group ? &group->cancelled : NULL,
 	};
 	if (fn.env != NULL) {
 		msIncRef(fn.env);

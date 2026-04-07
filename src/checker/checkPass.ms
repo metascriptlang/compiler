@@ -153,7 +153,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 			// PARALOCK Phase 1 R1/E1: a discarded SpawnHandle (bare spawn(...) expression
 			// with no binding and no await) is a compile error. Borrowed captures would
 			// dangle and the result would be silently dropped. For fire-and-forget,
-			// users should bind and await, or (Phase 7+) use `detach`.
+			// users should bind and await. For fire-and-forget, use actor SEND.
 			// Suppress inside loops: legacy fire-and-forget pattern (to be migrated later).
 			if (d.expr.kind === NodeKind.CallExpr && d.expr.resolvedSym !== null
 				&& d.expr.resolvedSym.builtinKind === "PromiseSpawn" && !ctx.inLoop) {
@@ -2151,6 +2151,28 @@ test "pure function calling impure warns" {
 }
 
 test "pure calling pure is ok" { assert checkOk("@pure function helper(x: number): number { return x; } @pure function main(a: number): number { return helper(a); }"); }
+
+// ----- REPROMISE T2 Stage C: @awaitable / @affineAwaitable end-to-end -----
+
+test "@awaitable class parses and type-checks" {
+	assert checkOk("@awaitable class Task<T> { value: T; }");
+}
+
+test "@affineAwaitable class parses and type-checks" {
+	assert checkOk("@affineAwaitable class LocalFlow<T> { value: T; }");
+}
+
+test "@awaitable class used as parameter type" {
+	// The @awaitable annotation flows through collectPass → registry →
+	// createGenericInstance without producing checker errors.
+	assert checkOk("@awaitable class Task<T> { value: T; } function takeTask(t: Task<number>): number { return 42; }");
+}
+
+test "@awaitable on function emits warning but compiles" {
+	// @awaitable is only valid on type declarations. On a function it emits a
+	// warning (not an error) and does NOT register the function name as awaitable.
+	assert checkOk("@awaitable function foo(): number { return 1; }");
+}
 
 test "type alias resolves to type" {
 	const ctx = checkSource("type ID = number;");

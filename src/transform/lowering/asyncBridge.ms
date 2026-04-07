@@ -24,11 +24,11 @@ import { TransformContext } from "../context";
 import {
 	makeIdent, makeTypedIdent, makeVarDecl, makeExprStmt, makeReturn,
 	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeWhile, makeBool, makeNumber, makeString,
-	makeAssign, makeBinary, makeTryCatch, makeContinue,
+	makeAssign, makeBinary, makeTryCatch, makeContinue, makeMoveExpr,
 	syntheticToken, extractBodyStmts, collectDeclNames,
 } from "../util";
 import { NameSet, createNameSet, nameSetAdd } from "../context";
-import { createPromise, createFunction, voidType, unknownType, booleanType, numberType, isPromise, getPromiseInner } from "../../checker/types";
+import { createPromise, createFunction, createPtr, createPrimitive, voidType, unknownType, booleanType, numberType, isPromise, getPromiseInner } from "../../checker/types";
 import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, makeStateAssign } from "./generatorLower";
 import { stmtCountAfter } from "../testUtil";
 
@@ -137,34 +137,52 @@ function hasYieldInBody(node: Node): boolean {
 
 // Rewrite return stmts in the body for the state machine:
 // return val → msFutureComplete($retFut, val); return;
+// Build the msFutureCompleteT or msFutureCompleteVoid statement(s) for a return value.
+// Returns an array of statements (usually 1, but 2 for arrays due to msSinkBoxStruct expansion).
+function makeFutureCompleteStmts(valueExpr: Node, isVoid: boolean, promiseType: Type, fnReturnInner: Type, loc: SourceLocation): Node[] {
+	if (isVoid || valueExpr === null) {
+		return [makeExprStmt(makeCall(
+			makeIdent("msFutureCompleteVoid", loc),
+			[makeTypedIdent("$retFut", promiseType, loc)],
+			loc,
+		), loc)];
+	}
+	// Arrays: box into void* (heap-allocate), then store pointer in future.
+	// msSinkBoxStruct is a multi-statement codegen expansion — can't nest inside
+	// another call. Use separate VarDecl + complete call.
+	if (fnReturnInner !== null && fnReturnInner.kind === TypeKind.Array) {
+		const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [valueExpr], loc);
+		boxCall.nodeType = fnReturnInner;  // codegen reads this for sizeof(T)
+		const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
+		const boxDecl = makeVarDecl("$boxed", boxCall, DeclKind.Const, loc);
+		boxDecl.nodeType = voidPtrType;  // variable holds void* (the boxed pointer)
+		const completeStmt = makeExprStmt(makeCall(
+			makeIdent("msFutureComplete", loc),
+			[makeTypedIdent("$retFut", promiseType, loc), makeIdent("$boxed", loc)],
+			loc,
+		), loc);
+		return [boxDecl, completeStmt];
+	}
+	return [makeExprStmt(makeCall(
+		makeIdent("msFutureCompleteT", loc),
+		[makeTypedIdent("$retFut", promiseType, loc), valueExpr],
+		loc,
+	), loc)];
+}
+
 function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Type, loc: SourceLocation): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt === null) continue;
 		if (stmt.kind === NodeKind.ReturnStmt) {
 			const rd = stmt.data as ReturnStmtData;
-			// Monomorphic: typed complete (no boxing). Consumer uses per-type read
-			// functions (msFutureReadDouble etc.) that handle both boxed and typed via isBoxed flag.
 			const isVoidReturn = fnReturnInner === null || fnReturnInner.kind === TypeKind.Void;
-			let completeCall: Node = null as unknown as Node;
-			if (isVoidReturn || rd.argument === null) {
-				completeCall = makeExprStmt(makeCall(
-					makeIdent("msFutureCompleteVoid", loc),
-					[makeTypedIdent("$retFut", promiseType, loc)],
-					loc,
-				), loc);
-			} else {
-				completeCall = makeExprStmt(makeCall(
-					makeIdent("msFutureCompleteT", loc),
-					[makeTypedIdent("$retFut", promiseType, loc), rd.argument],
-					loc,
-				), loc);
-			}
-			const block = makeBlock([
-				makeStateAssign(-1, loc),
-				completeCall,
-				makeReturn(makeNull(loc), loc),
-			], loc);
+
+			const completeStmts = makeFutureCompleteStmts(rd.argument, isVoidReturn, promiseType, fnReturnInner, loc);
+			const blockStmts: Node[] = [makeStateAssign(-1, loc)];
+			for (const cs of completeStmts) blockStmts.push(cs);
+			blockStmts.push(makeReturn(makeNull(loc), loc));
+			const block = makeBlock(blockStmts, loc);
 			stmts[i] = block;
 		} else if (stmt.kind === NodeKind.BlockStmt) {
 			const bd = stmt.data as BlockStmtData;
@@ -284,11 +302,20 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 			if (readFn !== "") {
 				readExpr = makeCall(makeIdent(readFn, loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
 			} else {
-				// Fallback for string/pointer: use legacy msFutureRead
-				readExpr = makeCall(makeIdent("msFutureRead", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
+				// Fallback for array/struct/string: msFutureRead returns void*.
+				// The void* is a heap-allocated box (from msSinkBoxStruct or msFutureComplete).
+				// msUnboxStruct: codegen expands to *(T*)ptr + free(ptr) — correct for boxed values.
+				const rawRead = makeCall(makeIdent("msFutureRead", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
+				if (varType !== null && (varType.kind === TypeKind.Array || varType.kind === TypeKind.Struct
+						|| varType.kind === TypeKind.Tuple || varType.kind === TypeKind.GenericInstance)) {
+					readExpr = makeCall(makeIdent("msUnboxStruct", loc), [rawRead], loc);
+					readExpr.nodeType = varType;
+				} else {
+					readExpr = rawRead;
+				}
 			}
 			stateStmts.push(makeExprStmt(
-				makeAssign(makeIdent(varName, loc), readExpr, loc),
+				makeAssign(makeTypedIdent(varName, varType, loc), readExpr, loc),
 				loc,
 			));
 		}
@@ -526,30 +553,6 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type): Node {
 	return makeBlock(outerStmts, loc);
 }
 
-// Box a return value for msFutureComplete(fut, void*). Non-void non-pointer values
-// need boxing (msBoxDouble/msBoxBool/msBoxInt32/msBoxString). Void returns pass NULL.
-// Uses the function's declared return type (fnReturnInner) for consistency with unbox side.
-function boxReturnValue(retVal: Node, fnReturnInner: Type, loc: SourceLocation): Node {
-	if (retVal === null) return makeNull(loc);
-	// Use the function's declared return type for boxing (matches unbox side which uses variable type)
-	const t = fnReturnInner !== null ? fnReturnInner : retVal.nodeType;
-	if (t !== null) {
-		return match (t.kind) {
-			TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(makeIdent("msBoxDouble", loc), [retVal], loc),
-			TypeKind.Boolean => makeCall(makeIdent("msBoxBool", loc), [retVal], loc),
-			TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => makeCall(makeIdent("msBoxInt32", loc), [retVal], loc),
-			TypeKind.String => makeCall(makeIdent("msBoxString", loc), [retVal], loc),
-			_ => retVal,
-		};
-	}
-	// Fallback: box based on node kind (nodeType may be null for literals after transforms)
-	return match (retVal.kind) {
-		NodeKind.NumberLiteral => makeCall(makeIdent("msBoxDouble", loc), [retVal], loc),
-		NodeKind.StringLiteral => makeCall(makeIdent("msBoxString", loc), [retVal], loc),
-		NodeKind.BooleanLiteral => makeCall(makeIdent("msBoxBool", loc), [retVal], loc),
-		_ => retVal,
-	};
-}
 
 // Recursively rewrite all ReturnStmt nodes to msFutureComplete + return $retFut.
 // Stops at nested function boundaries (each function has its own return semantics).
@@ -569,11 +572,24 @@ function rewriteReturns(node: Node, promiseType: Type, fnReturnInner: Type): voi
 					if (isVoid || rd.argument === null) {
 						completeCall = makeCall(makeIdent("msFutureCompleteVoid", loc),
 							[makeTypedIdent("$retFut", promiseType, loc)], loc);
+					} else if (fnReturnInner !== null && fnReturnInner.kind === TypeKind.Array) {
+						// Arrays: box into void* via separate VarDecl (msSinkBoxStruct is a
+						// multi-statement codegen expansion — nesting it corrupts the result stack).
+						const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [rd.argument], loc);
+						boxCall.nodeType = fnReturnInner;
+						const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
+						const boxDecl = makeVarDecl("$boxed", boxCall, DeclKind.Const, loc);
+						boxDecl.nodeType = voidPtrType;
+						newStmts.push(boxDecl);
+						completeCall = makeCall(makeIdent("msFutureComplete", loc),
+							[makeTypedIdent("$retFut", promiseType, loc), makeIdent("$boxed", loc)], loc);
 					} else {
 						completeCall = makeCall(makeIdent("msFutureCompleteT", loc),
 							[makeTypedIdent("$retFut", promiseType, loc), rd.argument], loc);
 					}
 					newStmts.push(makeExprStmt(completeCall, loc));
+					newStmts.push(makeExprStmt(
+						makeCall(makeIdent("msIncRef", loc), [makeTypedIdent("$retFut", promiseType, loc)], loc), loc));
 					newStmts.push(makeReturn(makeTypedIdent("$retFut", promiseType, loc), loc));
 				} else {
 					rewriteReturns(stmt, promiseType, fnReturnInner);
@@ -626,7 +642,10 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type): Node {
 		newStmts.push(stmt);
 	}
 
-	// If no explicit return at end, add implicit void completion
+	// If no explicit return at end, add implicit void completion.
+	// msIncRef($retFut) before return: DRC scope cleanup will decref $retFut,
+	// but the caller receives the reference. The extra incref ensures the future
+	// survives past the function scope. (DRC doesn't yet track return-value escaping.)
 	if (rewrittenStmts.length === 0 || rewrittenStmts[rewrittenStmts.length - 1].kind !== NodeKind.ReturnStmt) {
 		const completeCall = makeCall(
 			makeIdent("msFutureCompleteVoid", loc),
@@ -634,6 +653,8 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type): Node {
 			loc,
 		);
 		newStmts.push(makeExprStmt(completeCall, loc));
+		newStmts.push(makeExprStmt(
+			makeCall(makeIdent("msIncRef", loc), [makeTypedIdent("$retFut", retFutType, loc)], loc), loc));
 		newStmts.push(makeReturn(makeTypedIdent("$retFut", retFutType, loc), loc));
 	}
 

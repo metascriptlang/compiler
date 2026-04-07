@@ -24,13 +24,13 @@ export class Promise<T> {
 
 	// Static combinators
 	@builtin("PromiseAll")
-	static extern all(promises: Promise<void>[]): Promise<void> from "msPromiseAll";
+	static extern all<T>(promises: Promise<T>[]): Promise<T[]> from "msPromiseAll";
 	@builtin("PromiseRace")
-	static extern race(promises: Promise<void>[]): Promise<void> from "msPromiseRace";
+	static extern race<T>(promises: Promise<T>[]): Promise<T> from "msPromiseRace";
 	@builtin("PromiseAllSettled")
-	static extern allSettled(promises: Promise<void>[]): Promise<void> from "msPromiseAllSettled";
+	static extern allSettled<T>(promises: Promise<T>[]): Promise<T[]> from "msPromiseAllSettled";
 	@builtin("PromiseAny")
-	static extern any(promises: Promise<void>[]): Promise<void> from "msPromiseAny";
+	static extern any<T>(promises: Promise<T>[]): Promise<T> from "msPromiseAny";
 
 	// Static constructors
 	@builtin("PromiseResolve")

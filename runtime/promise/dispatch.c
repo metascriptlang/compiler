@@ -11,6 +11,7 @@
 #define MS_EVENT_READ 1
 #endif
 #include "dispatch.h"
+#include "pool.h"    /* Phase 8: msPoolHelpOne for help-first in msWaitForReady */
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -37,6 +38,62 @@ void msCallActorDestroyHook(void* actor) {
 	if (msActorDestroyHook != NULL) msActorDestroyHook(actor);
 }
 
+
+/* ===== Global Future Completion Condvar (worker thread await) =====
+ * Signaled on every future completion. Worker threads block here instead
+ * of spinning, since they have no event loop. Thundering herd is acceptable
+ * for <64 concurrent worker waits; 1ms timeout caps worst-case latency. */
+
+#ifdef _WIN32
+static CRITICAL_SECTION gFutCompCs;
+static CONDITION_VARIABLE gFutCompCv;
+static volatile LONG gFutCompInitFlag = 0;
+
+static void msInitFutComp(void) {
+	if (InterlockedCompareExchange(&gFutCompInitFlag, 1, 0) == 0) {
+		InitializeCriticalSection(&gFutCompCs);
+		InitializeConditionVariable(&gFutCompCv);
+		InterlockedExchange(&gFutCompInitFlag, 2);
+	} else {
+		while (InterlockedCompareExchange(&gFutCompInitFlag, 2, 2) != 2) { Sleep(0); }
+	}
+}
+
+void msNotifyFutureComplete(void) {
+	if (gFutCompInitFlag == 2) WakeAllConditionVariable(&gFutCompCv);
+}
+
+void msWorkerWaitOnFuture(void* fp) {
+	msInitFutComp();
+	msFutureBase* fut = (msFutureBase*)fp;
+	EnterCriticalSection(&gFutCompCs);
+	if (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
+		SleepConditionVariableCS(&gFutCompCv, &gFutCompCs, 1);
+	}
+	LeaveCriticalSection(&gFutCompCs);
+}
+#else
+#include <time.h>
+static pthread_mutex_t gFutCompMtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  gFutCompCv  = PTHREAD_COND_INITIALIZER;
+
+void msNotifyFutureComplete(void) {
+	pthread_cond_broadcast(&gFutCompCv);
+}
+
+void msWorkerWaitOnFuture(void* fp) {
+	msFutureBase* fut = (msFutureBase*)fp;
+	pthread_mutex_lock(&gFutCompMtx);
+	if (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
+		struct timespec ts;
+		clock_gettime(CLOCK_REALTIME, &ts);
+		ts.tv_nsec += 1000000; /* 1ms timeout */
+		if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+		pthread_cond_timedwait(&gFutCompCv, &gFutCompMtx, &ts);
+	}
+	pthread_mutex_unlock(&gFutCompMtx);
+}
+#endif
 
 /* ===== Platform-specific time + sleep ===== */
 
@@ -348,17 +405,45 @@ void msPoll(int timeoutMs) {
 	(void)msRunOnce(timeoutMs);
 }
 
-/* Standard reference waitFor pattern — delegates to runOnce (same as reference: while !finished: poll).
- * This ensures all event sources (timers, I/O selector, completion pipe, callbacks) are processed. */
+/* Dual-path wait: main thread runs event loop, workers use condvar.
+ * Detection: if the completion pipe is initialized but this thread has no
+ * dispatcher, we're a worker. Otherwise we're the main thread (or first
+ * caller — create dispatcher on demand). */
+static inline bool msIsWorkerWait(void) {
+#ifdef _WIN32
+	return false; /* TODO: Windows worker detection */
+#else
+	return gCompletionPipe[0] >= 0 && !msHasDispatcher();
+#endif
+}
+
 void* msWaitFor(void* fp) {
 	msFutureBase* fut = (msFutureBase*)fp;
-	while (!fut->finished) {
-		msRunOnce(500);
+	bool worker = msIsWorkerWait();
+	if (!worker) msGetDispatcher(); /* ensure event loop exists on main thread */
+	while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
+		if (msPoolHelpOne()) continue;
+		if (!worker) {
+			msRunOnce(500);
+		} else {
+			msWorkerWaitOnFuture(fp);
+		}
 	}
-	/* Return the void* value from the future (for backward compat with boxing path).
-	 * Treats future as msFuture_ptr and reads its value field.
-	 * For void futures, this returns NULL (harmless). */
 	return msFutureRead(fp);
+}
+
+void msWaitForReady(void* fp) {
+	msFutureBase* fut = (msFutureBase*)fp;
+	bool worker = msIsWorkerWait();
+	if (!worker) msGetDispatcher(); /* ensure event loop exists on main thread */
+	while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
+		if (msPoolHelpOne()) continue;
+		if (!worker) {
+			msRunOnce(500);
+		} else {
+			msWorkerWaitOnFuture(fp);
+		}
+	}
 }
 
 /* Standard reference runForever pattern */
@@ -420,7 +505,7 @@ void msAsyncCb(void* raw) {
 		: ((msFutureBase*(*)(void))e->stepper.fn)();
 
 	/* Eager resume: loop while yielded future is already resolved */
-	while (next != NULL && next->finished) {
+	while (next != NULL && atomic_load_explicit(&next->finished, memory_order_acquire)) {
 		next = e->stepper.env != NULL
 			? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)
 			: ((msFutureBase*(*)(void))e->stepper.fn)();
@@ -441,9 +526,26 @@ void msAsyncCb(void* raw) {
 
 void msAsyncStart(void* retFut, msClosure stepper) {
 	(void)retFut;
-	/* Ensure dispatcher exists BEFORE any spawn can happen.
-	 * The stepper may call msSpawn which needs the IOCP/pipe for cross-thread completion. */
-	msGetDispatcher();
+	/* Main thread: ensure dispatcher exists (needs IOCP/pipe for cross-thread completion).
+	 * Worker threads: skip dispatcher creation. Workers have no event loop — they rely on
+	 * inline callback execution (msCallSoonProc == NULL → msCallSoon fires immediately)
+	 * and the global completion condvar for blocking waits.
+	 *
+	 * Detection: if msCallSoonProc is set, dispatcher already exists (main thread re-entry).
+	 * If not set but completion pipe isn't initialized yet, this is the first call on the
+	 * main thread — must create. If pipe IS initialized but this thread has no dispatcher,
+	 * we're a worker — skip. */
+	bool isWorker = false;
+#ifdef _WIN32
+	/* Windows: no simple global check. Always create on first call per thread.
+	 * Worker threads that call msAsyncStart get a local dispatcher — acceptable
+	 * because msWorkerWaitOnFuture handles the wait correctly regardless. */
+#else
+	isWorker = (gCompletionPipe[0] >= 0 && !msHasDispatcher());
+#endif
+	if (!isWorker) {
+		msGetDispatcher();
+	}
 	msAsyncCbEnv* env = (msAsyncCbEnv*)malloc(sizeof(msAsyncCbEnv));
 	env->stepper = stepper;
 	if (stepper.env) msIncRef(stepper.env);

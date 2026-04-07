@@ -769,13 +769,28 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 			// Non-IsDecl: save old → assign → incref(new) → destroy(old)
 			// Identity-case safety: incref new before decref old (Reference: =copy on result)
 			if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
-				// Named/String: =copy(&dest, callResult) handles atomically
+				// Named/String: =copy(&dest, callResult) handles atomically.
+				// Reference parity (withTmpIfNeeded): hoist the call result to a temp
+				// before passing it to the copy function. Without this, multi-
+				// statement-expanding calls (msUnboxStruct, msSinkBoxStruct) inside
+				// a call argument position corrupt the iterative codegen's shared
+				// result stack via truncResults.
+				const callTmpSym = freshTempSym(dctx.ctx, "callRes", rhs.nodeType);
+				const callTmpDecl = makeVarDecl(callTmpSym.name, rhs, DeclKind.Const, loc);
+				callTmpDecl.nodeType = rhs.nodeType;
+				callTmpDecl.resolvedSym = callTmpSym;
+				const callTmpRef = makeIdentResolved(callTmpSym, loc);
+				callTmpRef.nodeType = rhs.nodeType;
 				const lhsExpr = resolveLhs(flags, dest, destName, destSym, loc);
 				const destArg = needsDestAddr(rcInfo) ? makeHiddenAddr(lhsExpr, loc) : lhsExpr;
-				const srcArg = isCopySrcByValue(rcInfo) ? rhs : makeHiddenAddr(rhs, loc);
+				const srcArg = isCopySrcByValue(rcInfo) ? callTmpRef : makeHiddenAddr(callTmpRef, loc);
 				const copyCall = makeExprStmt(
 					makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
-				return wrapWithCallArgPre(copyCall, preStmts, loc);
+				const hoisted: Node[] = [];
+				for (const p of preStmts) hoisted.push(p);
+				hoisted.push(callTmpDecl);
+				hoisted.push(copyCall);
+				return makeBlock(hoisted, loc);
 			}
 			// Ref/Closure: save → assign → incref → destroy
 			const saveExpr = resolveLhs(flags, dest, destName, destSym, loc);
@@ -1792,6 +1807,10 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 	// Identifier: function-local RC vars are moved (not borrowed) — no incref
 	if (expr.kind === NodeKind.Identifier) {
 		const name = (expr.data as IdentifierData).name;
+		// $borrow_N_ temps from passCopyToSink are already owned copies (passCopyToSink
+		// incref'd them at creation). Returning one directly transfers that ownership
+		// to the caller — emitReturnWithIncref would cascade into a double-incref.
+		if (name.startsWith("$borrow_")) return false;
 		// Cursor variables (for-of bindings, $-prefix borrows): borrowed references.
 		// Returning a cursor creates a new reference — must incref.
 		// Reference parity: the reference incref's at the assignment site inside the function;

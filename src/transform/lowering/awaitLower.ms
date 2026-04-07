@@ -1,0 +1,373 @@
+// Await Lowering — sync-context AwaitExpr → typed future read or AwaitGroup
+//
+// Runs AFTER asyncDesugar (which converts await → yield inside async functions)
+// and AFTER spawnLower (which boxes spawn closure return values). Any AwaitExpr
+// node that survives past asyncDesugar is by definition in sync context — no
+// ExecContext flags needed.
+//
+// Two paths based on expression shape:
+//
+// 1. Deferred (await handle): typed future reader for primitives, void* for rest.
+//      const x = await handle;
+//      →  (primitive: double, int32, bool)
+//      msWaitForReady(handle);
+//      const x = msFutureReadDouble(handle);
+//      →  (struct/string/ref — void* fallback)
+//      const x = msUnboxT(msWaitFor(handle));
+//
+// 2. Fused (await spawn(fn)): AwaitGroup lifecycle (PARALOCK §6.3).
+//      const x = await spawn(fn);
+//      →
+//      const $ag = msAwaitGroupInit(1);
+//      msSpawnTaskSubmit($ag, 0, fn);
+//      msAwaitGroupBlocking($ag);
+//      const x = msUnboxT(msAwaitGroupResult($ag, 0));
+//      msAwaitGroupFree($ag);
+//
+// REPROMISE T3 Stage A. See docs/PARALOCK.md §6.3 for the AwaitGroup lifecycle.
+
+import {
+	Node, NodeKind, DeclKind, SourceLocation,
+	VariableDeclData, ExprStmtData, ReturnStmtData,
+	AwaitExprData, CallExprData, ObjectLiteralData,
+	Type, NodeData, createNodeAt,
+} from "../../ast/node";
+import { TransformContext, freshTempSym } from "../context";
+import { walkExpandBlocks, containsExprKind, replaceInExpr } from "../walker";
+import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeString, makeIf, makeBinary } from "../util";
+import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
+import { typedFutureReadFn } from "../native/builtinLower";
+import { TypeKind, FunctionExprData, ArrowFunctionData } from "../../ast/node";
+import { injectCancelSafePoints } from "./cancelSafePoints";
+
+// Opaque pointer type → void* in C codegen. Used for AwaitGroup and result temps.
+export const VOID_PTR_TYPE: Type = createPtr(createPrimitive(TypeKind.Void));
+
+// P9 DRY: extract the 5-line "temp sym → call → typed VarDecl" pattern that
+// repeats across fused, deferred, and timeout paths.
+export function makeTempDecl(ctx: TransformContext, prefix: string, initExpr: Node, t: Type, loc: SourceLocation): { decl: Node, ident: Node } {
+	const sym = freshTempSym(ctx, prefix, t);
+	initExpr.nodeType = t;
+	const decl = makeVarDecl(sym.name, initExpr, DeclKind.Const, loc);
+	decl.nodeType = t;
+	decl.resolvedSym = sym;
+	return { decl, ident: makeIdentResolved(sym, loc) };
+}
+
+// ===== Unboxing =====
+// spawnLower.ms boxes primitive return values via msBoxDouble/msBoxInt32/msBoxBool/msBoxString.
+// After await, we unbox the void* result back to the original type. Struct types don't need
+// unboxing — they're already pointers in the C representation.
+function unboxFnName(kind: TypeKind): string {
+	return match (kind) {
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
+		TypeKind.Boolean => "msUnboxBool",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "msUnboxInt32",
+		TypeKind.String => "msUnboxString",
+		_ => "",
+	};
+}
+
+export function makeUnboxCall(voidPtrExpr: Node, innerType: Type, loc: SourceLocation): Node {
+	if (innerType === null) return voidPtrExpr;
+	const fn = unboxFnName(innerType.kind);
+	if (fn === "") return voidPtrExpr;
+	const c = makeCall(makeIdent(fn, loc), [voidPtrExpr], loc);
+	c.nodeType = innerType;
+	return c;
+}
+
+// Get the inner type that an await expression should produce.
+// Uses the T1/T2 semantic layer: if the expression type is Promise<T>/SpawnHandle<T>,
+// extract T. Otherwise returns null (let C handle it as void*).
+function getAwaitInnerType(awaitArgExpr: Node): Type {
+	if (awaitArgExpr === null || awaitArgExpr.nodeType === null) return null;
+	return awaitedType(awaitArgExpr.nodeType);
+}
+
+// ===== Spawn Detection =====
+
+// Check if a node is a spawn() call. Returns the closure argument and optional
+// timeout from the options object: spawn(fn, { timeout: N }).
+export function getSpawnInfo(node: Node): { closure: Node, timeout: Node } {
+	if (node === null || node.kind !== NodeKind.CallExpr) return { closure: null as unknown as Node, timeout: null as unknown as Node };
+	const cd = node.data as CallExprData;
+	const sym = node.resolvedSym !== null ? node.resolvedSym : cd.callee.resolvedSym;
+	if (sym === null || (sym.builtinKind !== "PromiseSpawn" && sym.nativeName !== "msSpawn")) return { closure: null as unknown as Node, timeout: null as unknown as Node };
+	if (cd.arguments.length < 1) return { closure: null as unknown as Node, timeout: null as unknown as Node };
+	const closure = cd.arguments[0];
+	let timeout: Node = null;
+	// Extract timeout from options object: spawn(fn, { timeout: N })
+	if (cd.arguments.length >= 2 && cd.arguments[1].kind === NodeKind.ObjectLiteral) {
+		const opts = cd.arguments[1].data as ObjectLiteralData;
+		let i = 0;
+		while (i < opts.keys.length) {
+			if (opts.keys[i] === "timeout") {
+				timeout = opts.properties[i];
+				break;
+			}
+			i = i + 1;
+		}
+	}
+	return { closure, timeout };
+}
+
+// ===== Timeout Helper =====
+
+// Emits timeout handling stmts for AwaitGroup: compute deadline, timed wait,
+// check timedOut → free + throw. Returns the blocking call stmts (replaces
+// the single msAwaitGroupBlocking call). If no timeout, returns single blocking call.
+export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node, loc: SourceLocation, ctx: TransformContext): Node[] {
+	const stmts: Node[] = [];
+	if (timeoutExpr === null) {
+		// No timeout — simple blocking wait
+		stmts.push(makeExprStmt(
+			makeCall(makeIdent("msAwaitGroupBlocking", loc), [agIdent], loc), loc));
+		return stmts;
+	}
+	// Phase 3: timed wait — const $deadline = msMonoTimeMs() + timeoutExpr;
+	const int64Type = createPrimitive(TypeKind.Int64);
+	const nowCall = makeCall(makeIdent("msMonoTimeMs", loc), [], loc);
+	nowCall.nodeType = int64Type;
+	const dl = makeTempDecl(ctx, "deadline", makeBinary(nowCall, "+", timeoutExpr, loc), int64Type, loc);
+	stmts.push(dl.decl);
+
+	// msAwaitGroupBlockingWithDeadline($ag, $deadline);
+	stmts.push(makeExprStmt(
+		makeCall(makeIdent("msAwaitGroupBlockingWithDeadline", loc), [
+			agIdent, dl.ident,
+		], loc), loc));
+
+	// if (msAwaitGroupTimedOut($ag)) { msAwaitGroupFree($ag); throw "await timeout"; }
+	const timedOutCall = makeCall(makeIdent("msAwaitGroupTimedOut", loc), [agIdent], loc);
+	timedOutCall.nodeType = booleanType();
+	const freeCall = makeExprStmt(
+		makeCall(makeIdent("msAwaitGroupFree", loc), [agIdent], loc), loc);
+	const throwData: NodeData = { throwArg: makeString("await timeout", loc) };
+	const throwNode = createNodeAt(NodeKind.ThrowStmt, throwData, loc);
+	const ifBody = makeBlock([freeCall, throwNode], loc);
+	const ifNode = makeIf(timedOutCall, ifBody, null, loc);
+	stmts.push(ifNode);
+
+	return stmts;
+}
+
+// ===== Fused Path: await spawn(fn) → AwaitGroup lifecycle =====
+
+// Emits the full AwaitGroup lifecycle from PARALOCK §6.3 — used when the
+// spawn and await are in the same expression (no intermediate future).
+function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node): { stmts: Node[], resultIdent: Node } {
+	const stmts: Node[] = [];
+
+	// 1. const $ag = msAwaitGroupInit(1);
+	const ag = makeTempDecl(ctx, "ag", makeCall(makeIdent("msAwaitGroupInit", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
+	stmts.push(ag.decl);
+
+	// 2. Phase 3: inject cancel safe-points into the closure body (only when timeout)
+	if (timeoutExpr !== null) {
+		let closureBody: Node = null;
+		if (closureArg.kind === NodeKind.FunctionExpr) {
+			closureBody = (closureArg.data as FunctionExprData).funcExprBody;
+		} else if (closureArg.kind === NodeKind.ArrowFunction) {
+			closureBody = (closureArg.data as ArrowFunctionData).arrowBody;
+		}
+		if (closureBody !== null) {
+			injectCancelSafePoints(closureBody, ag.ident, loc);
+		}
+	}
+
+	// 3. msSpawnTaskSubmit($ag, 0, closure);
+	stmts.push(makeExprStmt(
+		makeCall(makeIdent("msSpawnTaskSubmit", loc), [ag.ident, makeNumber(0, loc), closureArg], loc), loc));
+
+	// 4. Blocking wait (with or without deadline)
+	const waitStmts = emitAwaitGroupWait(ag.ident, timeoutExpr, loc, ctx);
+	for (const ws of waitStmts) stmts.push(ws);
+
+	// 5. const $agr = msAwaitGroupResult($ag, 0);
+	const agr = makeTempDecl(ctx, "agr", makeCall(makeIdent("msAwaitGroupResult", loc), [ag.ident, makeNumber(0, loc)], loc), VOID_PTR_TYPE, loc);
+	stmts.push(agr.decl);
+
+	// 6. msAwaitGroupFree($ag);
+	stmts.push(makeExprStmt(
+		makeCall(makeIdent("msAwaitGroupFree", loc), [ag.ident], loc), loc));
+
+	return { stmts, resultIdent: agr.ident };
+}
+
+// ===== Deferred Path: await handle → msFutureReadT(handle) or msWaitFor(handle) =====
+
+// Used when the spawn result was stored in a variable first. For primitive
+// types (double, int32, bool), emits a typed future reader (msFutureReadDouble
+// etc.) that handles both boxed and typed future layouts internally via the
+// isBoxed flag — no separate unbox step needed. For structs/refs/strings,
+// falls back to msWaitFor + unbox.
+function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: TransformContext, innerType: Type): { stmts: Node[], resultIdent: Node, typed: boolean } {
+	const stmts: Node[] = [];
+
+	// If handleExpr is a complex expression (call, member, etc.), hoist it into
+	// a temp so it's only evaluated once. Without this, actor CALL futures get
+	// created twice — once for msWaitForReady and once for msFutureReadT — and
+	// the second future is never awaited, causing an assertion failure.
+	let futIdent = handleExpr;
+	if (handleExpr.kind !== NodeKind.Identifier) {
+		const tmp = makeTempDecl(ctx, "fut", handleExpr, handleExpr.nodeType, loc);
+		stmts.push(tmp.decl);
+		futIdent = tmp.ident;
+	}
+
+	// Typed path: msWaitForReady(handle) + msFutureReadT(handle) → typed value
+	// msWaitForReady blocks until the future finishes (without consuming the value),
+	// then msFutureReadT extracts the typed value from the future struct.
+	const readFn = innerType !== null ? typedFutureReadFn(innerType) : "";
+	if (readFn !== "") {
+		stmts.push(makeExprStmt(
+			makeCall(makeIdent("msWaitForReady", loc), [futIdent], loc), loc));
+		const res = makeTempDecl(ctx, "aw", makeCall(makeIdent(readFn, loc), [futIdent], loc), innerType, loc);
+		stmts.push(res.decl);
+		return { stmts, resultIdent: res.ident, typed: true };
+	}
+
+	// Fallback: void* path (structs, refs, strings) — caller must apply unboxing
+	const res = makeTempDecl(ctx, "aw", makeCall(makeIdent("msWaitFor", loc), [futIdent], loc), VOID_PTR_TYPE, loc);
+	stmts.push(res.decl);
+	return { stmts, resultIdent: res.ident, typed: false };
+}
+
+// ===== Unified Expansion =====
+
+// Dispatches to fused (AwaitGroup) or deferred (msFutureReadT / msWaitFor)
+// based on whether the awaited expression is a direct spawn() call.
+// Fused path: AwaitGroup stores void* — still needs unboxing.
+// Deferred path: typed reader handles both boxed/typed futures internally.
+function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformContext): { stmts: Node[], resultIdent: Node } {
+	const spawnInfo = getSpawnInfo(awaitArg);
+	const innerType = getAwaitInnerType(awaitArg);
+	if (spawnInfo.closure !== null) {
+		// Fused path: AwaitGroup → void* results, needs unboxing
+		let expansion = expandFusedAwait(spawnInfo.closure, loc, ctx, spawnInfo.timeout);
+		if (innerType !== null) {
+			expansion.resultIdent = makeUnboxCall(expansion.resultIdent, innerType, loc);
+		}
+		return expansion;
+	}
+	// Deferred path: typed future reader for primitives, msWaitFor for rest.
+	// expandDeferredAwait signals via `typed` whether it used msFutureReadT
+	// (no unboxing needed) or fell back to void* msWaitFor (needs unboxing).
+	let expansion = expandDeferredAwait(awaitArg, loc, ctx, innerType);
+	if (!expansion.typed && innerType !== null) {
+		expansion.resultIdent = makeUnboxCall(expansion.resultIdent, innerType, loc);
+	}
+	return { stmts: expansion.stmts, resultIdent: expansion.resultIdent };
+}
+
+// ===== Statement Expander (1:N) =====
+
+// Shared expansion logic for any statement whose "expression slot" may contain
+// an AwaitExpr (directly or nested). Returns expanded stmts + replacement node,
+// or null if no await was found. Caller sets the replacement back on the stmt's
+// data field and appends the stmt. (P9 DRY — 3 match arms share this pattern.)
+function tryExpandAwaitExpr(expr: Node, stmt: Node, ctx: TransformContext): { stmts: Node[], replacement: Node } {
+	const noResult: { stmts: Node[], replacement: Node } = { stmts: null as unknown as Node[], replacement: null as unknown as Node };
+	if (expr === null) return noResult;
+	// Direct: expr IS the AwaitExpr
+	if (expr.kind === NodeKind.AwaitExpr) {
+		const ad = expr.data as AwaitExprData;
+		const expansion = expandSingleAwait(ad.awaitArg, stmt.location, ctx);
+		return { stmts: expansion.stmts, replacement: expansion.resultIdent };
+	}
+	// Nested: expr CONTAINS an AwaitExpr (e.g. f(await g()), x + await y)
+	if (containsExprKind(expr, NodeKind.AwaitExpr)) {
+		return hoistNestedAwait(expr, stmt.location, ctx);
+	}
+	return noResult;
+}
+
+// Called by walkExpandBlocks for each statement in a block. Returns the
+// original statement unchanged (as [stmt]) or the expanded sequence.
+function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
+	match (stmt.kind) {
+		NodeKind.VariableDecl => {
+			const d = stmt.data as VariableDeclData;
+			const expanded = tryExpandAwaitExpr(d.initializer, stmt, ctx);
+			if (expanded.replacement !== null) {
+				d.initializer = expanded.replacement;
+				expanded.stmts.push(stmt);
+				return expanded.stmts;
+			}
+		},
+		NodeKind.ExprStmt => {
+			const d = stmt.data as ExprStmtData;
+			if (d.expr !== null && d.expr.kind === NodeKind.AwaitExpr) {
+				// Bare `await expr;` — expand and discard result (no stmt appended).
+				const ad = d.expr.data as AwaitExprData;
+				const expansion = expandSingleAwait(ad.awaitArg, stmt.location, ctx);
+				return expansion.stmts;
+			}
+			const expanded = tryExpandAwaitExpr(d.expr, stmt, ctx);
+			if (expanded.replacement !== null) {
+				d.expr = expanded.replacement;
+				expanded.stmts.push(stmt);
+				return expanded.stmts;
+			}
+		},
+		NodeKind.ReturnStmt => {
+			const d = stmt.data as ReturnStmtData;
+			const expanded = tryExpandAwaitExpr(d.argument, stmt, ctx);
+			if (expanded.replacement !== null) {
+				d.argument = expanded.replacement;
+				expanded.stmts.push(stmt);
+				return expanded.stmts;
+			}
+		},
+		_ => {},
+	};
+	return [stmt];
+}
+
+// ===== Nested Await Hoisting =====
+
+// For expressions like `f(await g())`, `x + await f()`, `(await f()).prop`,
+// extract the first AwaitExpr into a preceding variable declaration and replace
+// the await site with the temp identifier. Uses replaceInExpr for generic
+// coverage across all expression kinds (CallExpr, BinaryExpr, MemberExpr, etc.).
+// Deeply nested multiple awaits are handled by repeated passes — walkExpandBlocks
+// re-enters after expansion and catches the next one.
+//
+// Returns null if no AwaitExpr was found.
+let _hoistStmts: Node[] = [];
+let _hoistCtx: TransformContext = null as unknown as TransformContext;
+let _hoistLoc: SourceLocation = null as unknown as SourceLocation;
+let _hoistDone: boolean = false;
+
+function hoistNestedAwait(expr: Node, loc: SourceLocation, ctx: TransformContext): { stmts: Node[], replacement: Node } {
+	if (expr === null) return null;
+	if (expr.kind === NodeKind.AwaitExpr) return null;
+
+	_hoistStmts = [];
+	_hoistCtx = ctx;
+	_hoistLoc = loc;
+	_hoistDone = false;
+
+	const replaced = replaceInExpr(expr, (node: Node): Node => {
+		if (_hoistDone) return node;
+		if (node.kind !== NodeKind.AwaitExpr) return node;
+		// Found the first AwaitExpr — expand and replace with result ident.
+		const ad = node.data as AwaitExprData;
+		const expansion = expandSingleAwait(ad.awaitArg, _hoistLoc, _hoistCtx);
+		for (const s of expansion.stmts) { _hoistStmts.push(s); }
+		_hoistDone = true;
+		return expansion.resultIdent;
+	});
+
+	if (_hoistStmts.length === 0) return null;
+	return { stmts: _hoistStmts, replacement: replaced };
+}
+
+// ===== Entry Point =====
+
+export function lowerAwait(program: Node, ctx: TransformContext): Node {
+	walkExpandBlocks(program, expandStmt, ctx);
+	return program;
+}

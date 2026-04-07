@@ -78,6 +78,7 @@ int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs);
 bool msRunOnce(int timeoutMs);
 void msPoll(int timeoutMs);
 void* msWaitFor(void* fut);
+void msWaitForReady(void* fut);
 void msRunForever(void);
 
 /* Post completion from pool thread to event loop (libuv pattern) */
@@ -88,5 +89,13 @@ msFuture_void* msSleepAsync(int ms);
 
 int64_t msMonoTimeMs(void);
 void msSleepMs(int ms);
+
+/* Global future completion notification — wakes worker threads blocking on futures.
+ * Called by msFutureFireCallbacks after setting finished=true. */
+void msNotifyFutureComplete(void);
+
+/* Worker-side future wait — blocks on global condvar until any future completes.
+ * Used by dual-path msWaitForReady on worker threads (no event loop). */
+void msWorkerWaitOnFuture(void* fut);
 
 #endif /* MS_DISPATCH_H */

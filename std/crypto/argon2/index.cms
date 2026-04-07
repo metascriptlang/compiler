@@ -74,10 +74,10 @@ export function argon2HashRaw(password: string, salt: string, timeCost: int32 = 
 
 // ===== Async (spawn to worker thread — Argon2 is intentionally slow) =====
 
-export function argon2HashAsync(password: string, salt: string, timeCost: int32 = 3, memoryCost: int32 = 65536, parallelism: int32 = 4, hashLen: int32 = 32): Promise<Result<string, CryptoError>> {
-	return spawn(() => { return argon2Hash(password, salt, timeCost, memoryCost, parallelism, hashLen); }) as Promise<Result<string, CryptoError>>;
+export async function argon2HashAsync(password: string, salt: string, timeCost: int32 = 3, memoryCost: int32 = 65536, parallelism: int32 = 4, hashLen: int32 = 32): Promise<Result<string, CryptoError>> {
+	return await spawn(() => { return argon2Hash(password, salt, timeCost, memoryCost, parallelism, hashLen); });
 }
 
-export function argon2VerifyAsync(encoded: string, password: string): Promise<boolean> {
-	return spawn(() => { return argon2Verify(encoded, password); }) as Promise<boolean>;
+export async function argon2VerifyAsync(encoded: string, password: string): Promise<boolean> {
+	return await spawn(() => { return argon2Verify(encoded, password); });
 }

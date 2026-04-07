@@ -369,6 +369,7 @@ function walkStmtList(stmts: Node[], ctx: TransformContext): void {
 // ===== Recursive DCE Walker =====
 
 function dceInNode(node: Node, ctx: TransformContext): void {
+	if (node === null) return;
 	match (node.kind) {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;

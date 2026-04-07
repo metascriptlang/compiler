@@ -128,8 +128,18 @@ static inline void msStringCopy(msString* dest, msString src) {
 /* Reference parity: payloads are never shared. DRC emits deep copy or move. */
 #define msArrayDestroy(arr)            do { if ((arr).p) { free((arr).p); } (arr).p = NULL; (arr).len = 0; } while(0)
 #define msArrayWasMoved(arr)           do { (arr).len = 0; (arr).p = NULL; } while(0)
-/* msArrayCopy: 1-arg = in-place copy marker (no-op for primitives), 2-arg = deep copy (allocate + memcpy) */
-#define msArrayCopy1(arr)              /* primitive: bitwise copy handled by assignment */
+/* msArrayCopy: 1-arg = in-place deep copy (detach from shared payload), 2-arg = deep copy into different dest.
+ * Reference parity: =copy for seq always allocates a fresh payload (unique ownership). */
+#define msArrayCopy1(arr) do { \
+	if ((arr).p != NULL) { \
+		size_t _ac1_esz = sizeof((arr).p->data[0]); \
+		size_t _ac1_sz = sizeof(msArrayPayloadBase) + (size_t)(arr).p->cap * _ac1_esz; \
+		__typeof__((arr).p) _ac1_newp = (__typeof__((arr).p))malloc(_ac1_sz); \
+		_ac1_newp->cap = (arr).p->cap; \
+		memcpy(_ac1_newp->data, (arr).p->data, (size_t)(arr).len * _ac1_esz); \
+		(arr).p = _ac1_newp; \
+	} \
+} while(0)
 #define msArrayCopy2(d, s)             do { \
 	if ((s).p != NULL) { \
 		size_t _ac_esz = sizeof((s).p->data[0]); \
@@ -150,10 +160,12 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msArrayNumberWasMoved(arr)     msArrayWasMoved(arr)
 #define msArrayNumberSink(d, s)        do { msArrayDestroy(d); (d) = (s); } while(0)
 #define msArrayStringDestroy(arr)      msStringArrayDestroy(&(arr))
-/* Deep copy: allocate new payload, copy each string element */
+/* Deep copy: allocate new payload, copy each string element.
+ * Cache (s) in a local to prevent double-evaluation when `s` is a call. */
 #define msArrayStringCopy(d, s)        do { \
-	int64_t _asc_len = (s).len; \
-	msStringPayload* _asc_sp = (s).p; \
+	msStringArray _asc_src = (s); \
+	int64_t _asc_len = _asc_src.len; \
+	msStringPayload* _asc_sp = _asc_src.p; \
 	msStringPayload* _asc_newp = NULL; \
 	if (_asc_sp) { \
 		size_t _asc_sz = sizeof(msStringPayload) + (size_t)_asc_sp->cap * sizeof(msString); \
@@ -171,10 +183,12 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msArrayStringWasMoved(arr)     msArrayWasMoved(arr)
 #define msArrayStringSink(d, s)        do { msArrayDestroy(d); (d) = (s); } while(0)
 #define msArrayRefDestroy(arr)         msRefArrayDestroy((msRefArray*)&(arr))
-/* Deep copy: allocate new payload, copy each ref element with incref */
+/* Deep copy: allocate new payload, copy each ref element with incref.
+ * Cache (s) in a local to prevent double-evaluation when `s` is a call. */
 #define msArrayRefCopy(d, s)           do { \
-	int64_t _arc_len = (s).len; \
-	msRefPayload* _arc_sp = (msRefPayload*)(s).p; \
+	msRefArray _arc_src = (s); \
+	int64_t _arc_len = _arc_src.len; \
+	msRefPayload* _arc_sp = (msRefPayload*)_arc_src.p; \
 	msRefPayload* _arc_newp = NULL; \
 	if (_arc_sp) { \
 		size_t _arc_sz = sizeof(msRefPayload) + (size_t)_arc_sp->cap * sizeof(void*); \
@@ -188,6 +202,13 @@ static inline void msStringCopy(msString* dest, msString src) {
 	msRefArrayDestroy((msRefArray*)&(d)); \
 	(d).len = _arc_len; \
 	(d).p = (void*)_arc_newp; \
+} while(0)
+/* Sink semantics: old dest payload freed (elements NOT decref'd — ownership
+ * transfers from source which already holds the only refs). */
+#define msArrayRefSink(d, s)           do { \
+	msRefArray _ars_src = (s); \
+	if ((d).p != NULL) { free((msRefPayload*)(d).p); } \
+	(d) = _ars_src; \
 } while(0)
 #define msArrayRefTrace(arr, cb)       do { \
 	for (int64_t _art_i = 0; _art_i < (arr).len && (arr).p; _art_i++) { \
@@ -284,7 +305,7 @@ MS_FUTURE_STRUCT(msFuture_msString, msString);
  * Handles both boxed (spawn, isBoxed=true) and typed (async, isBoxed=false). */
 static inline msString msFutureReadString(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
-	assert(f->finished && "Future not yet finished");
+	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
 	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return MS_EMPTY_STRING; }
 	if (f->isBoxed) return msUnboxString(((msFuture_ptr*)fp)->value);
 	return ((msFuture_msString*)fp)->value;

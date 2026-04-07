@@ -56,7 +56,9 @@ function flattenConcat(node: Node): Node {
 	if (parts.length === 2) {
 		if (!hasNonString) return node; // both strings, binary + is fine
 		const args: Node[] = [coerceToString(parts[0], loc), coerceToString(parts[1], loc)];
-		return makeCall(makeIdent("msStringConcat", loc), args, loc);
+		const call2 = makeCall(makeIdent("msStringConcat", loc), args, loc);
+		call2.nodeType = stringType();
+		return call2;
 	}
 
 	// 3+ parts: msStringConcatMany(N, a, b, c, ...)
@@ -65,7 +67,9 @@ function flattenConcat(node: Node): Node {
 	for (const p of parts) {
 		allArgs.push(coerceToString(p, loc));
 	}
-	return makeCall(makeIdent("msStringConcatMany", loc), allArgs, loc);
+	const callN = makeCall(makeIdent("msStringConcatMany", loc), allArgs, loc);
+	callN.nodeType = stringType();
+	return callN;
 }
 
 // Check if a node needs string coercion (is non-string in a string concat context)

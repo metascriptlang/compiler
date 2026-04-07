@@ -7,34 +7,38 @@
 // - FunctionDecl dispatch (switches on msg kind, calls _impl handlers)
 // - @include("runtime/actor/actor.h") injected for C compilation
 
-import { Node, NodeKind, SourceLocation, DeclKind, Type, TypeKind,
+import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	ActorDeclData, MethodDeclData, ConstructorDeclData,
 	DecoratedDeclData, ExportDeclData, ProgramData, NewExprData,
 	IdentifierData, VariableDeclData, FunctionDeclData, IfStmtData,
 	WhileStmtData, ForOfStmtData, ForStmtData, BlockStmtData,
 	DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData,
+	ExprStmtData, ReturnStmtData,
 	Symbol, SymbolKind, SymbolState, createNode } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
+import { containsExprKind } from "../walker";
 import { makeSymbol } from "../../checker/symbol";
 import {
 	syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
 } from "../util";
-import { voidType, unknownType, createFunction, createRef, createStruct, getSysType } from "../../checker/types";
+import { voidType, unknownType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType } from "../../checker/types";
 
 // msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
 const MS_MSG_MAX_ARGS = 7;
+// void* type for HiddenStdConv casts in actor message packing/completion.
+const VOID_PTR: Type = createPtr(createPrimitive(TypeKind.Void));
 
-// Classify param type for message packing:
-//   "double" → msMsgSetDouble/GetDouble (1 slot)
-//   "string" → msMsgSetString/GetString (2 slots — msString is 16 bytes)
-//   "ptr"    → msMsgSetPtr/GetPtr (1 slot — pointers, Ref<T>)
-function paramMsgKind(paramTypes: Type[], idx: number): string {
-	if (paramTypes === null || idx >= paramTypes.length) return "ptr";
-	const t = paramTypes[idx];
+// Classify a Type for message slot packing:
+//   "double" → msMsgSetDouble/GetDouble, msMsgCompleteDouble (1 slot, 8 bytes)
+//   "string" → msMsgSetString/GetString, msMsgCompleteString (2 slots, 16 bytes)
+//   "array"  → msMsgSetString/GetString + reinterpret cast (2 slots, 16 bytes — same layout as string)
+//   "ptr"    → msMsgSetPtr/GetPtr, msMsgCompletePtr (1 slot — pointers, Ref<T>)
+function typeMsgKind(t: Type): string {
 	if (t === null) return "ptr";
 	return match (t.kind) {
 		TypeKind.String => "string",
+		TypeKind.Array => "array",
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32
 			| TypeKind.Int32 | TypeKind.Int64 | TypeKind.Int16 | TypeKind.Int8
 			| TypeKind.Uint32 | TypeKind.Uint64 | TypeKind.Uint16 | TypeKind.Uint8
@@ -43,11 +47,16 @@ function paramMsgKind(paramTypes: Type[], idx: number): string {
 	};
 }
 
+function paramMsgKind(paramTypes: Type[], idx: number): string {
+	if (paramTypes === null || idx >= paramTypes.length) return "ptr";
+	return typeMsgKind(paramTypes[idx]);
+}
+
 // Map message kind to C setter/getter function names
 function msgSetterName(mk: string): string {
 	return match (mk) {
 		"double" => "msMsgSetDouble",
-		"string" => "msMsgSetString",
+		"string" | "array" => "msMsgSetString",
 		_ => "msMsgSetPtr",
 	};
 }
@@ -55,14 +64,24 @@ function msgSetterName(mk: string): string {
 function msgGetterName(mk: string): string {
 	return match (mk) {
 		"double" => "msMsgGetDouble",
-		"string" => "msMsgGetString",
+		"string" | "array" => "msMsgGetString",
 		_ => "msMsgGetPtr",
 	};
 }
 
-// Slot width: strings use 2 slots (16 bytes), everything else 1 slot (8 bytes).
+function msgCompleteName(mk: string): string {
+	return match (mk) {
+		"double" => "msMsgCompleteDouble",
+		"string" => "msMsgCompleteString",
+		"array" => "msMsgCompletePtr",
+		_ => "msMsgCompletePtr",
+	};
+}
+
+// Slot width: strings and arrays use 2 slots (16 bytes), everything else 1 slot (8 bytes).
 function paramSlotWidth(paramTypes: Type[], idx: number): number {
-	return paramMsgKind(paramTypes, idx) === "string" ? 2 : 1;
+	const mk = paramMsgKind(paramTypes, idx);
+	return mk === "string" || mk === "array" ? 2 : 1;
 }
 
 // ===== Build proxy body for a void method (send semantics) =====
@@ -178,19 +197,74 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 				makeIdent("_dmsg", loc),
 				makeNumber(dSlot, loc),
 			], loc);
-			handlerArgs.push(getCall);
+			if (mk === "array" && ai < mParamTypes.length && mParamTypes[ai] !== null) {
+				// msMsgGetString returns msString compound literal. Reinterpret as the
+				// actual array type (identical binary layout: {int64_t len, T* p}).
+				// Cursor flag → codegen emits *((TargetType*)&(expr)) which is a safe
+				// bitcast for compound literals (have address in C99).
+				const conv = createNode(NodeKind.HiddenStdConv, {
+					convExpr: getCall,
+					convType: mParamTypes[ai],
+				}, syntheticToken(loc));
+				conv.nodeType = mParamTypes[ai];
+				conv.flags = conv.flags | NodeFlag.Cursor;
+				handlerArgs.push(conv);
+			} else if (mk === "ptr") {
+				// msMsgGetPtr returns void*. _impl takes pointer (ccgIntroducedPtr).
+				// void* → T* is implicit in C. Set nodeType so codegen temps use void*.
+				getCall.nodeType = VOID_PTR;
+				handlerArgs.push(getCall);
+			} else {
+				handlerArgs.push(getCall);
+			}
 			dSlot = dSlot + paramSlotWidth(mParamTypes, ai);
 		}
 		const handlerCall = makeCall(makeIdent(actorName + "_" + md.methodName + "_impl", loc), handlerArgs, loc);
 		let body: Node;
-		if (isVoid) {
+		const isSuspending = md.methodFlags === "async_actor";
+		if (isSuspending) {
+			// Phase 5: async _impl returns msFuture*. Suspend actor, chain reply.
+			const bodyStmts: Node[] = [];
+			const implFutDecl = makeVarDecl("_implFut", handlerCall, DeclKind.Const, loc);
+			implFutDecl.nodeType = VOID_PTR;
+			bodyStmts.push(implFutDecl);
+			let replyFutArg: Node = makeNull(loc);
+			if (!isVoid) {
+				// CALL: store reply future, chain _impl's future → reply future
+				const futAccessCall = makeCall(makeIdent("msMsgReplyFuture", loc), [makeIdent("_dmsg", loc)], loc);
+				const replyDecl = makeVarDecl("_replyFut", futAccessCall, DeclKind.Const, loc);
+				replyDecl.nodeType = VOID_PTR;
+				bodyStmts.push(replyDecl);
+				bodyStmts.push(makeExprStmt(
+					makeCall(makeIdent("msFutureChain", loc), [makeIdent("_implFut", loc), makeIdent("_replyFut", loc)], loc), loc));
+				replyFutArg = makeIdent("_replyFut", loc);
+			}
+			// Derive msActor* from _self.pid, pass reply future for R1 stop
+			const actorPtr = makeCall(makeIdent("msActorFromPid", loc), [
+				makeMember(makeIdent("_self", loc), "pid", loc),
+			], loc);
+			bodyStmts.push(makeExprStmt(
+				makeCall(makeIdent("msActorSuspend", loc), [actorPtr, makeIdent("_implFut", loc), replyFutArg], loc), loc));
+			body = makeBlock(bodyStmts, loc);
+		} else if (isVoid) {
 			body = makeBlock([makeExprStmt(handlerCall, loc)], loc);
 		} else {
-			// Call-semantics: result = handler(); msMsgCompleteDouble(msMsgReplyFuture(_dmsg), result)
+			const retType = m.nodeType !== null && m.nodeType.typeReturn !== null ? m.nodeType.typeReturn : null;
+			const retMk = typeMsgKind(retType);
+			const completeFn = msgCompleteName(retMk);
 			const resultDecl = makeVarDecl("_result", handlerCall, DeclKind.Const, loc);
 			const futAccessCall = makeCall(makeIdent("msMsgReplyFuture", loc), [makeIdent("_dmsg", loc)], loc);
-			const completeCall = makeCall(makeIdent("msMsgCompleteDouble", loc), [futAccessCall, makeIdent("_result", loc)], loc);
-			body = makeBlock([resultDecl, makeExprStmt(completeCall, loc)], loc);
+			if (retMk === "array" && retType !== null) {
+				const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [makeIdent("_result", loc)], loc);
+				boxCall.nodeType = retType;
+				const boxDecl = makeVarDecl("_boxed", boxCall, DeclKind.Const, loc);
+				boxDecl.nodeType = VOID_PTR;
+				const completeCall = makeCall(makeIdent(completeFn, loc), [futAccessCall, makeIdent("_boxed", loc)], loc);
+				body = makeBlock([resultDecl, boxDecl, makeExprStmt(completeCall, loc)], loc);
+			} else {
+				const completeCall = makeCall(makeIdent(completeFn, loc), [futAccessCall, makeIdent("_result", loc)], loc);
+				body = makeBlock([resultDecl, makeExprStmt(completeCall, loc)], loc);
+			}
 		}
 		const emptyBlock = makeBlock([], loc);
 		const ifNode = createNode(NodeKind.IfStmt, {
@@ -300,29 +374,30 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 				console.log(`warning: actor method '${name}.${md.methodName}' has ${argCount} args (max ${MS_MSG_MAX_ARGS} for inline message buffer)`);
 			}
 
-			// _impl handler: original body, nativeName for predictable C name
+			// _impl handler: original body, nativeName for predictable C name.
+			// Phase 5: skip if already extracted by lowerActorPre (sentinel "async_actor").
 			const implNativeName = name + "_" + md.methodName + "_impl";
-			const implNode = createNode(NodeKind.FunctionDecl, {
-				fnName: implNativeName,
-				params: md.methodParams,
-				fnParamTypes: md.methodParamTypes,
-				fnBody: md.methodBody,
-				fnFlags: md.methodFlags,
-				fnReturnType: md.methodReturnType,
-				fnDefaults: [],
-				nativeName: implNativeName,
-				nameLocation: md.nameLocation,
-			}, syntheticToken(loc));
-			implNode.nodeType = m.nodeType;
-			implNode.typeExprs = m.typeExprs;
-			implNode.paramLocations = m.paramLocations;
-			// resolvedSym with Function type — DRC uses this for param type classification.
-			// Without it, DRC falls back to lookupSymbol(paramName) which can find wrong-scope variables.
-			const implSym = makeSymbol(implNativeName, SymbolKind.Function, m.nodeType !== null ? m.nodeType : unknownType(), false);
-			implSym.nativeName = implNativeName;
-			implSym.state = SymbolState.Checked;
-			implNode.resolvedSym = implSym;
-			result.push(implNode);
+			if (md.methodFlags !== "async_actor") {
+				const implNode = createNode(NodeKind.FunctionDecl, {
+					fnName: implNativeName,
+					params: md.methodParams,
+					fnParamTypes: md.methodParamTypes,
+					fnBody: md.methodBody,
+					fnFlags: md.methodFlags,
+					fnReturnType: md.methodReturnType,
+					fnDefaults: [],
+					nativeName: implNativeName,
+					nameLocation: md.nameLocation,
+				}, syntheticToken(loc));
+				implNode.nodeType = m.nodeType;
+				implNode.typeExprs = m.typeExprs;
+				implNode.paramLocations = m.paramLocations;
+				const implSym = makeSymbol(implNativeName, SymbolKind.Function, m.nodeType !== null ? m.nodeType : unknownType(), false);
+				implSym.nativeName = implNativeName;
+				implSym.state = SymbolState.Checked;
+				implNode.resolvedSym = implSym;
+				result.push(implNode);
+			}
 
 			// Proxy: enqueues message (what extensionMethodLower resolves to)
 			const methodParamTypes = m.nodeType !== null ? m.nodeType.typeChildren : [];
@@ -763,6 +838,143 @@ function rewriteAndInjectPoll(program: Node, names: string[], dispatchSyms: Symb
 	const exitLoc = program.location;
 	pd.programStmts.push(makeExprStmt(makeCall(makeIdent("msActorPollAll", exitLoc), [], exitLoc), exitLoc));
 
+	return program;
+}
+
+// ===== Phase 5: Pre-async extraction of suspending actor methods =====
+
+// Check if an expression tree contains AwaitExpr anywhere (nested calls, binary, etc.)
+function exprContainsAwait(expr: Node): boolean {
+	return containsExprKind(expr, NodeKind.AwaitExpr);
+}
+
+// Check if a node tree contains any AwaitExpr (recursive, stops at function boundaries).
+function bodyContainsAwait(node: Node): boolean {
+	if (node === null) return false;
+	if (node.kind === NodeKind.AwaitExpr) return true;
+	if (node.kind === NodeKind.FunctionDecl || node.kind === NodeKind.FunctionExpr
+		|| node.kind === NodeKind.ArrowFunction) return false;
+	return match (node.kind) {
+		NodeKind.BlockStmt => {
+			const d = node.data as BlockStmtData;
+			let f = false;
+			for (const s of d.statements) { if (!f && bodyContainsAwait(s)) { f = true; } }
+			return f;
+		},
+		NodeKind.IfStmt => {
+			const d = node.data as IfStmtData;
+			return bodyContainsAwait(d.consequent) || bodyContainsAwait(d.alternate);
+		},
+		NodeKind.WhileStmt => bodyContainsAwait((node.data as WhileStmtData).whileBody),
+		NodeKind.ForOfStmt => bodyContainsAwait((node.data as ForOfStmtData).forOfBody),
+		NodeKind.ForStmt => bodyContainsAwait((node.data as ForStmtData).forBody),
+		NodeKind.DoWhileStmt => bodyContainsAwait((node.data as DoWhileStmtData).doBody),
+		NodeKind.TryCatchStmt => {
+			const d = node.data as TryCatchStmtData;
+			return bodyContainsAwait(d.tryBody) || bodyContainsAwait(d.catchBody) || bodyContainsAwait(d.finallyBody);
+		},
+		NodeKind.ExprStmt => {
+			const d = node.data as ExprStmtData;
+			return d.expr !== null && exprContainsAwait(d.expr);
+		},
+		NodeKind.VariableDecl => {
+			const d = node.data as VariableDeclData;
+			return d.initializer !== null && exprContainsAwait(d.initializer);
+		},
+		NodeKind.ReturnStmt => {
+			const d = node.data as ReturnStmtData;
+			return d.argument !== null && exprContainsAwait(d.argument);
+		},
+		_ => false,
+	};
+}
+
+// Pre-async pipeline: extract async actor methods as top-level FunctionDecl so
+// asyncDesugar + asyncBridge can process them into stepper state machines.
+// Marks extracted methods with methodFlags = "async_actor" sentinel for Phase B.
+export function lowerActorPre(program: Node, ctx: TransformContext): Node {
+	if (program.kind !== NodeKind.Program) return program;
+	const pd = program.data as ProgramData;
+	const extracted: Node[] = [];
+
+	for (const stmt of pd.programStmts) {
+		let actorNode = stmt;
+		if (stmt.kind === NodeKind.ExportDecl) {
+			const ed = stmt.data as ExportDeclData;
+			if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.ActorDecl) {
+				actorNode = ed.exportedDecl;
+			}
+		}
+		if (actorNode.kind !== NodeKind.ActorDecl) continue;
+		const d = actorNode.data as ActorDeclData;
+		const name = d.actorName;
+
+		for (const member of d.actorBody) {
+			let m = member;
+			if (m.kind === NodeKind.DecoratedDecl) {
+				const dd = m.data as DecoratedDeclData;
+				if (dd.decoratedNode !== null) m = dd.decoratedNode;
+			}
+			if (m.kind !== NodeKind.MethodDecl) continue;
+			const md = m.data as MethodDeclData;
+			// Skip lifecycle hooks — not message-dispatched
+			const isLifecycle = match (md.methodName) {
+				"onTerminate" | "onExit" | "onDown" | "onIdle" => true,
+				_ => false,
+			};
+			if (isLifecycle) continue;
+			// Detect: method is explicitly async OR its body contains await
+			const isAsync = md.methodFlags === "async" || bodyContainsAwait(md.methodBody);
+			if (!isAsync) continue;
+
+			// Extract as top-level FunctionDecl with fnFlags: "async"
+			const implNativeName = name + "_" + md.methodName + "_impl";
+			const implNode = createNode(NodeKind.FunctionDecl, {
+				fnName: implNativeName,
+				params: md.methodParams,
+				fnParamTypes: md.methodParamTypes,
+				fnBody: md.methodBody,
+				fnFlags: "async",
+				fnReturnType: md.methodReturnType,
+				fnDefaults: [],
+				nativeName: implNativeName,
+				nameLocation: md.nameLocation,
+			}, syntheticToken(actorNode.location));
+			// Wrap return type in Promise<T> so asyncBridge can extract the inner type.
+			// The method's original type is (self, args) → T; we need (self, args) → Promise<T>.
+			let implType = m.nodeType;
+			if (implType !== null && implType.kind === TypeKind.Function && implType.typeReturn !== null) {
+				const promiseRet = createPromise(implType.typeReturn);
+				implType = createFunction(
+					implType.typeChildren !== null ? implType.typeChildren : [],
+					implType.typeNames !== null ? implType.typeNames : [],
+					promiseRet,
+				);
+			}
+			implNode.nodeType = implType;
+			implNode.typeExprs = m.typeExprs;
+			implNode.paramLocations = m.paramLocations;
+			const implSym = makeSymbol(implNativeName, SymbolKind.Function,
+				implType !== null ? implType : unknownType(), false);
+			implSym.nativeName = implNativeName;
+			implSym.state = SymbolState.Checked;
+			implNode.resolvedSym = implSym;
+			extracted.push(implNode);
+
+			// Mark as extracted so emitActorMethods (Phase B) skips _impl creation.
+			// Clear the original body to prevent double-processing by intermediate passes
+			// (e.g., spawnLower walking into both the ActorDecl and the extracted _impl).
+			md.methodFlags = "async_actor";
+			md.methodBody = makeBlock([], actorNode.location);
+		}
+	}
+
+	// Append extracted _impl functions to program top-level
+	if (extracted.length > 0) {
+		for (const fn of extracted) {
+			pd.programStmts.push(fn);
+		}
+	}
 	return program;
 }
 

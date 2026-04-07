@@ -1,8 +1,8 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
-import { unknownType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
+import { unknownType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, registerAwaitableType } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym } from "./context";
+import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { getModuleDir, appendFlag } from "../utils/string";
@@ -165,6 +165,23 @@ function collectDecorated(ctx: CheckerContext, node: Node): void {
 		if (info.builtinKind !== "") sym.overloads[idx].builtinKind = info.builtinKind;
 	} else {
 		if (info.builtinKind !== "") sym.builtinKind = info.builtinKind;
+	}
+	// REPROMISE T2 Stage C: @awaitable / @affineAwaitable on a class, interface,
+	// struct, or type alias registers the name in the awaitable registry. Every
+	// subsequent GenericInstance of that name will get the flag bits propagated
+	// onto its typeFlags via createGenericInstance, and isAwaitable() will
+	// recognize it via the registry.
+	// Restrict to type-like declarations — @awaitable on a function or variable
+	// makes no sense and would silently pollute the registry (audit finding #125).
+	if (info.isAwaitableAnnotated) {
+		const innerKind = dd.decoratedNode.kind;
+		if (innerKind === NodeKind.ClassDecl || innerKind === NodeKind.InterfaceDecl
+			|| innerKind === NodeKind.StructDecl || innerKind === NodeKind.TypeAliasDecl) {
+			registerAwaitableType(declName, info.awaitableFlags);
+		} else {
+			addWarning(ctx, "@awaitable / @affineAwaitable is only valid on class, interface, struct, or type alias declarations",
+				node.location.line, node.location.column);
+		}
 	}
 }
 

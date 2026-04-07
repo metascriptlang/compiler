@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, getMinArity } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, getMinArity, isSpawnHandle, isPromise } from "./types";
 
 
 // ===== Assignability =====
@@ -35,9 +35,12 @@ function isAssignableInner(source: Type, target: Type): boolean {
 				for (let gi = 0; gi < limit; gi += 1) {
 					if (!isAssignable(source.typeChildren[gi], target.typeChildren[gi])) return false;
 				}
-				// PARALOCK Phase 1: SpawnHandle<T> upcasts nominally to Promise<T>.
-				// Element type compatibility already verified by the loop above.
-				if (source.typeName === "SpawnHandle" && target.typeName === "Promise") return true;
+				// PARALOCK Phase 1: an affine awaitable (SpawnHandle) upcasts to any
+				// non-affine awaitable (Promise) with compatible inner — this is the
+				// opt-out path that strips affinity. Element type compatibility is
+				// already verified by the loop above.
+				// REPROMISE T2: flag read, not nominal typeName comparison.
+				if (isSpawnHandle(source) && isPromise(target) && !isSpawnHandle(target)) return true;
 				return source.typeName === target.typeName;
 			},
 			_ => true,

@@ -1,11 +1,19 @@
 // Decorator accessor helpers — returns only primitives to avoid DRC cross-module Node lifecycle bugs.
 
-import { Node, NodeKind, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData } from "../ast/node";
+import { Node, NodeKind, TypeFlag, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData } from "../ast/node";
 
 export interface DecoratorInfo {
 	builtinKind: string;
 	nativeName: string;
 	nonisolated: boolean;
+	// REPROMISE T2 Stage C: awaitable annotation.
+	// 0 = not annotated. Non-zero = annotated, with these TypeFlag bits to set on
+	// every GenericInstance of this type's name. Uses AwaitableAffine (64) +
+	// AwaitableScopeBound (128). The two shipping decorators:
+	//   @awaitable        → awaitableFlags = 0  + isAwaitableAnnotated = true
+	//   @affineAwaitable  → awaitableFlags = AwaitableAffine | AwaitableScopeBound (192)
+	awaitableFlags: int32;
+	isAwaitableAnnotated: boolean;
 }
 
 // Extract all decorator metadata from a DecoratedDecl node as primitives.
@@ -13,6 +21,8 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 	const dd = node.data as DecoratedDeclData;
 	let btKind = "";
 	let hasNonisolated = false;
+	let awFlags: int32 = 0;
+	let awAnnotated = false;
 	for (let i = 0; i < dd.decorators.length; i += 1) {
 		const dec = dd.decorators[i];
 		if (dec.kind === NodeKind.MacroInvocation) {
@@ -26,6 +36,13 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 				btKind = "pure";
 			} else if (md.macroName === "nonisolated") {
 				hasNonisolated = true;
+			} else if (md.macroName === "awaitable") {
+				awAnnotated = true;
+				// Plain @awaitable — non-affine, like Promise. No flag bits.
+			} else if (md.macroName === "affineAwaitable") {
+				awAnnotated = true;
+				// Affine + scope-bound, like SpawnHandle. Both bits.
+				awFlags = (TypeFlag.AwaitableAffine | TypeFlag.AwaitableScopeBound) as int32;
 			}
 		}
 	}
@@ -38,5 +55,11 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 		_ => "",
 	};
 	if (natName === null) natName = "";
-	return { builtinKind: btKind, nativeName: natName, nonisolated: hasNonisolated };
+	return {
+		builtinKind: btKind,
+		nativeName: natName,
+		nonisolated: hasNonisolated,
+		awaitableFlags: awFlags,
+		isAwaitableAnnotated: awAnnotated,
+	};
 }

@@ -57,8 +57,12 @@ typedef struct msAwaitGroup {
 	int32_t size;                 /* total slot count, immutable after create */
 	_Atomic(int32_t) pending;     /* starts at size, decremented per completion */
 	_Atomic(bool) failed;         /* set by first failing slot */
+	_Atomic(bool) cancelled;      /* Phase 3: set by timeout or explicit cancel */
 	void* error;                  /* first error payload (protected by mutex) */
 	void** results;               /* size-length array of void* result values */
+	int64_t deadlineMs;           /* Phase 3: absolute monotonic deadline (0 = none) */
+	bool timedOut;                /* Phase 3: set when blocking returns due to timeout */
+	_Atomic(void*) doneFut;       /* Phase 4: msFuture_void* completed when all slots done (NULL = blocking path) */
 
 #ifdef _WIN32
 	CRITICAL_SECTION cs;
@@ -121,6 +125,16 @@ void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error);
  * scheduling (waiting workers steal tasks from the queue) to prevent this. */
 void msAwaitGroupBlocking(msAwaitGroup* g);
 
+/* Block until all slots done OR deadline expires (Phase 3).
+ * deadlineMs is an absolute monotonic timestamp (from msMonoTimeMs + offset).
+ * Sets g->timedOut = true and g->cancelled = true if deadline expires before
+ * all slots complete. Workers check cancelled at safe points to early-return. */
+void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs);
+
+/* Cancel all pending tasks. Sets the cancelled flag so workers can check at
+ * safe points and early-return. Does NOT block or wait for workers to stop. */
+void msAwaitGroupCancel(msAwaitGroup* g);
+
 /* ===== Queries (non-blocking, for advanced use) ===== */
 
 /* Returns true if all slots have completed (successfully or failed). */
@@ -144,6 +158,24 @@ static inline void* msAwaitGroupResult(msAwaitGroup* g, int32_t slot) {
 /* Read the first error encountered. Returns NULL if no slot failed. */
 static inline void* msAwaitGroupError(msAwaitGroup* g) {
 	return g != NULL ? g->error : NULL;
+}
+
+/* Phase 3: Did the timed wait expire before all slots completed? */
+static inline bool msAwaitGroupTimedOut(msAwaitGroup* g) {
+	return g != NULL && g->timedOut;
+}
+
+/* Phase 4b: set the done future for async cooperative group await.
+ * Called by transform-generated code before submitting tasks. */
+static inline void msAwaitGroupSetDoneFut(msAwaitGroup* g, void* fut) {
+	if (g != NULL) atomic_store_explicit(&g->doneFut, fut, memory_order_release);
+}
+
+/* Phase 3: Fast-path cancellation check for spawn safe points.
+ * Called at loop backedges inside spawn closures. Single branch on
+ * relaxed atomic load — ~1ns overhead per check. */
+static inline bool msSpawnCheckCancel(msAwaitGroup* g) {
+	return g != NULL && atomic_load_explicit(&g->cancelled, memory_order_relaxed);
 }
 
 #endif /* MS_AWAITGROUP_H */

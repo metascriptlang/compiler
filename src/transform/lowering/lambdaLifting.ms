@@ -585,9 +585,13 @@ function isEnvPtrField(envStructType: Type, fieldName: string): boolean {
 	let i = 0;
 	while (i < envStructType.typeNames.length) {
 		if (envStructType.typeNames[i] === fieldName) {
-			return i < envStructType.typeChildren.length
-				&& envStructType.typeChildren[i] !== null
-				&& envStructType.typeChildren[i].kind === TypeKind.Ptr;
+			if (i >= envStructType.typeChildren.length) return false;
+			const ft = envStructType.typeChildren[i];
+			if (ft === null || ft.kind !== TypeKind.Ptr) return false;
+			// Only match ccgIntroducedPtr captures (Array, Union, Span stored as Ptr<T>).
+			// Regular Ptr-typed variables (void*, msAwaitGroup*, etc.) should NOT get extra deref.
+			const inner = ft.typeReturn;
+			return inner !== null && (inner.kind === TypeKind.Array || inner.kind === TypeKind.Union || inner.kind === TypeKind.Span);
 		}
 		i += 1;
 	}
@@ -1057,6 +1061,7 @@ function walkLiftStmtList(stmts: Node[], state: LiftState): Node[] {
 }
 
 function walkLift(node: Node, state: LiftState): void {
+	if (node === null) return;
 	match (node.kind) {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;

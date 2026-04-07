@@ -10,6 +10,7 @@
 #define MS_FUTURE_H
 
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <assert.h>
 
@@ -69,7 +70,7 @@ typedef struct msFutureCb {
 /* ===== Future Base (shared fields — used by event loop, callbacks, dispatch) ===== */
 
 typedef struct msFutureBase {
-	bool finished;
+	_Atomic(bool) finished; /* atomic: cross-thread visibility for worker await */
 	bool failed;          /* set by msFutureFail (even when error payload is NULL) */
 	bool cancelled;       /* set by msFutureCancel */
 	bool isBoxed;         /* true = void* boxed value, false = typed value in struct */
@@ -149,8 +150,12 @@ static inline void msFutureDestroy(void* f) { msFutureDestroyInner(f); }
 
 /* Standard reference future.finished parity */
 static inline bool msFutureFinished(void* fp) {
-	return ((msFutureBase*)fp)->finished;
+	return atomic_load_explicit(&((msFutureBase*)fp)->finished, memory_order_acquire);
 }
+
+/* Global completion notification — wakes worker threads blocking on futures.
+ * Implemented in dispatch.c (Change 4: global completion condvar). */
+extern void msNotifyFutureComplete(void);
 
 /* Fire all registered callbacks via callSoon (reference parity).
  * Deferred execution prevents reentrancy during msProcessTimers/msFutureComplete. */
@@ -164,23 +169,24 @@ static inline void msFutureFireCallbacks(msFutureBase* f) {
 		free(cb);
 		cb = next;
 	}
+	msNotifyFutureComplete();
 }
 
 /* Standard reference fail(fut, err) parity — sets error + fires callbacks.
  * Works on any future type via msFutureBase*. */
 static inline void msFutureFail(void* fp, void* err) {
 	msFutureBase* f = (msFutureBase*)fp;
-	if (f->finished) return;
+	if (atomic_load_explicit(&f->finished, memory_order_acquire)) return;
 	f->error = err;
 	f->failed = true;
-	f->finished = true;
+	atomic_store_explicit(&f->finished, true, memory_order_release);
 	msFutureFireCallbacks(f);
 }
 
 /* Cancel a pending future — clears callbacks without firing, marks finished+cancelled. */
 static inline void msFutureCancel(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
-	if (f->finished) return;
+	if (atomic_load_explicit(&f->finished, memory_order_acquire)) return;
 	msFutureCb* cb = f->callbacks;
 	f->callbacks = NULL;
 	f->cbTail = NULL;
@@ -190,7 +196,8 @@ static inline void msFutureCancel(void* fp) {
 		cb = next;
 	}
 	f->cancelled = true;
-	f->finished = true;
+	atomic_store_explicit(&f->finished, true, memory_order_release);
+	msNotifyFutureComplete();
 }
 
 /* Check if future was failed */
@@ -202,7 +209,7 @@ static inline bool msFutureCancelled(void* fp) { return ((msFutureBase*)fp)->can
 /* Add callback — if already finished, defer via callSoon; else append to list. */
 static inline void msFutureAddCallback(void* fp, msClosure cb) {
 	msFutureBase* f = (msFutureBase*)fp;
-	if (f->finished) {
+	if (atomic_load_explicit(&f->finished, memory_order_acquire)) {
 		msCallSoon(cb);
 		return;
 	}
@@ -225,29 +232,60 @@ static inline void msFutureAddCallback(void* fp, msClosure cb) {
  * Usage: msFutureCompleteT(myDoubleFut, 3.14);
  * Works for any MS_FUTURE_STRUCT type. For void futures, use msFutureCompleteVoid. */
 #define msFutureCompleteT(f, val) do { \
-	if (((msFutureBase*)(f))->finished) break; \
+	if (atomic_load_explicit(&((msFutureBase*)(f))->finished, memory_order_acquire)) break; \
 	(f)->value = (val); \
 	((msFutureBase*)(f))->isBoxed = false; \
-	((msFutureBase*)(f))->finished = true; \
+	atomic_store_explicit(&((msFutureBase*)(f))->finished, true, memory_order_release); \
 	msFutureFireCallbacks((msFutureBase*)(f)); \
 } while(0)
 
 /* Complete a void future (no value) */
 static inline void msFutureCompleteVoid(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
-	if (f->finished) return;
-	f->finished = true;
+	if (atomic_load_explicit(&f->finished, memory_order_acquire)) return;
+	atomic_store_explicit(&f->finished, true, memory_order_release);
 	msFutureFireCallbacks(f);
 }
 
 /* Complete with void* value (boxed path — spawn pipe, combinators) */
 static inline void msFutureComplete(void* fp, void* val) {
 	msFuture* f = (msFuture*)fp;
-	if (f->base.finished) return;
+	if (atomic_load_explicit(&f->base.finished, memory_order_acquire)) return;
 	f->value = val;
 	f->base.isBoxed = true;
-	f->base.finished = true;
+	atomic_store_explicit(&f->base.finished, true, memory_order_release);
 	msFutureFireCallbacks(&f->base);
+}
+
+/* ===== Phase 5: Future Chaining (actor suspension) ===== */
+
+/* Chain src → dst: when src completes, copy its result into dst and fire dst's callbacks.
+ * Used by actor dispatch to pipe async _impl's $retFut into CALL reply future.
+ * NOTE: reads msFuture_ptr.value — only correct for boxed/ptr futures (not typed).
+ * asyncBridge creates $retFut via msFutureCreate() which IS msFuture_ptr. */
+typedef struct { void* src; void* dst; } msFutureChainPair;
+
+static inline void msFutureChainCb(void* raw, ...) {
+    msFutureChainPair* pair = (msFutureChainPair*)raw;
+    msFutureBase* src = (msFutureBase*)pair->src;
+    if (src->failed) {
+        msFutureFail(pair->dst, src->error);
+    } else {
+        void* val = ((msFuture*)pair->src)->value;
+        msFutureComplete(pair->dst, val);
+    }
+    free(pair);
+}
+
+static inline void msFutureChain(void* src, void* dst) {
+    if (src == NULL || dst == NULL) return;
+    msFutureChainPair* pair = (msFutureChainPair*)malloc(sizeof(msFutureChainPair));
+    pair->src = src;
+    pair->dst = dst;
+    msFutureAddCallback(src, (msClosure){
+        .fn = (msClosureFn)msFutureChainCb,
+        .env = (void*)pair
+    });
 }
 
 /* ===== Error Re-raising (Standard reference read parity) ===== */
@@ -258,7 +296,7 @@ extern MS_THREAD_LOCAL void* msErrPayload;
 /* Check error status on a future base (used before typed read) */
 static inline bool msFutureCheckErr(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
-	assert(f->finished && "Future not yet finished");
+	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
 	if (f->cancelled) { msErr = true; msErrPayload = NULL; return true; }
 	if (f->failed) { msErr = true; msErrPayload = f->error; return true; }
 	return false;
@@ -290,7 +328,7 @@ static inline bool msUnboxBool(void* p) { return (bool)(intptr_t)p; }
 
 static inline double msFutureReadDouble(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
-	assert(f->finished && "Future not yet finished");
+	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
 	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return 0.0; }
 	if (f->isBoxed) return msUnboxDouble(((msFuture_ptr*)fp)->value);
 	return ((msFuture_double*)fp)->value;
@@ -298,7 +336,7 @@ static inline double msFutureReadDouble(void* fp) {
 
 static inline int32_t msFutureReadInt32(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
-	assert(f->finished && "Future not yet finished");
+	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
 	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return 0; }
 	if (f->isBoxed) return msUnboxInt32(((msFuture_ptr*)fp)->value);
 	return ((msFuture_int32*)fp)->value;
@@ -306,7 +344,7 @@ static inline int32_t msFutureReadInt32(void* fp) {
 
 static inline bool msFutureReadBool(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
-	assert(f->finished && "Future not yet finished");
+	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
 	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return false; }
 	if (f->isBoxed) return msUnboxBool(((msFuture_ptr*)fp)->value);
 	return ((msFuture_bool*)fp)->value;
@@ -318,7 +356,7 @@ static inline bool msFutureReadBool(void* fp) {
 /* Legacy untyped read (for combinators, backward compat) */
 static inline void* msFutureRead(void* fp) {
 	msFuture* f = (msFuture*)fp;
-	assert(f->base.finished && "Future not yet finished");
+	assert(atomic_load_explicit(&f->base.finished, memory_order_acquire) && "Future not yet finished");
 	if (f->base.cancelled) { msErr = true; msErrPayload = NULL; return NULL; }
 	if (f->base.failed) { msErr = true; msErrPayload = f->base.error; return NULL; }
 	void* v = f->value;
@@ -328,7 +366,10 @@ static inline void* msFutureRead(void* fp) {
 
 /* ===== DRC lifecycle ===== */
 
-#define msFutureDrcDestroy(f) do { if ((f) != NULL) { msFutureDestroyInner(f); } } while(0)
+/* DRC scope cleanup: decref and destroy only if last reference.
+ * Futures may escape via return values (msIncRef'd), so unconditional
+ * destroy is wrong — must respect refcount. */
+#define msFutureDrcDestroy(f) do { if ((f) != NULL && msDecRefIsLast(f)) { msFutureDestroyInner(f); } } while(0)
 #define msFutureDrcWasMoved(f) do { (f) = NULL; } while(0)
 
 /* (Boxing functions moved above per-type read functions for forward declaration order) */

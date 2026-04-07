@@ -50,6 +50,8 @@ import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
 import { lowerSpawn } from "./lowering/spawnLower";
+import { lowerSpawnGroup } from "./lowering/spawnGroupLower";
+import { lowerAwait } from "./lowering/awaitLower";
 import { lowerVarHoist } from "./lowering/varHoist";
 import { lowerLambda } from "./lowering/lambdaLifting";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
@@ -67,7 +69,7 @@ import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
 import { lowerRestParams } from "./lowering/restParamLower";
-import { lowerActor } from "./lowering/actorLower";
+import { lowerActorPre, lowerActor } from "./lowering/actorLower";
 
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -92,10 +94,13 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = lowerResultFieldCheck(result, ctx); }
 	result = lowerMatch(result, ctx);
 	if (!jsBackend) { result = lowerTailCall(result, ctx); }
+	if (!jsBackend) { result = lowerActorPre(result, ctx); }
+	if (!jsBackend) { result = lowerSpawnGroup(result, ctx); }
 	if (!jsBackend) { result = lowerAsync(result, ctx); }
 	if (!jsBackend) { result = lowerAsyncBridge(result, ctx); }
 	if (!jsBackend) { result = lowerGenerator(result, ctx); }
 	if (!jsBackend) { result = lowerSpawn(result, ctx); }
+	if (!jsBackend) { result = lowerAwait(result, ctx); }
 	if (!jsBackend) { result = lowerActor(result, ctx); }
 	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
 	result = lowerExtensionMethod(result, ctx);

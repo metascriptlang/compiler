@@ -42,6 +42,7 @@ typedef void (*msActorSystemMsgFn)(void* state, void* msg);
 #define MS_ACTOR_MUTED          0x04  /* paused by scheduler (target overloaded) */
 #define MS_ACTOR_BLOCKED        0x08  /* idle + RC > 0 (cycle detection candidate) */
 #define MS_ACTOR_CYCLE_MARKED   0x10  /* internal: marked for cycle collection (do not reuse MUTED) */
+#define MS_ACTOR_SUSPENDED      0x20  /* Phase 5: actor awaiting spawn completion (cooperative) */
 
 /* ===== Actor Struct ===== */
 
@@ -81,6 +82,11 @@ typedef struct msActor {
     int64_t lastActivityMs;    /* monotonic timestamp of last message receipt */
     /* Alive guard: prevents double-stop / use-after-free on dangling pid */
     _Atomic(bool) alive;
+    /* Phase 5: cooperative suspension during spawn-inside-actor */
+    void* suspendedFut;       /* msFuture* from async _impl (NULL = not suspended) */
+    void* suspendedReplyFut;  /* CALL reply future (NULL for SEND). Used by R1 stop. */
+    /* Phase 6 R1: out-of-band stop — supervisor can kill suspended actor without mailbox */
+    _Atomic(bool) stopRequested;
 } msActor;
 
 /* ===== Batch Size ===== */
@@ -238,6 +244,48 @@ static inline void msActorRemoveLink(msActor* a, msActor* target);
 static inline void msActorStop(int64_t pid, int32_t reason);
 static inline void msActorUnregisterByPtr(msActor* a);
 
+/* ===== Phase 5: Cooperative Actor Suspension ===== */
+
+/* Resume callback: re-enqueues actor on scheduler after spawn completion.
+ * Signature matches msClosureFn (void*, ...) — called by msFutureFireCallbacks. */
+static inline void msActorResumeFromFut(void* rawActor, ...) {
+    msActor* a = (msActor*)rawActor;
+    /* R1: if stop was requested during suspension, don't resume — fail reply and abandon */
+    if (atomic_load_explicit(&a->stopRequested, memory_order_acquire)) {
+        msActorClearFlag(a, MS_ACTOR_SUSPENDED);
+        if (a->suspendedReplyFut != NULL) {
+            msFutureFail(a->suspendedReplyFut, NULL);
+        }
+        a->suspendedFut = NULL;
+        a->suspendedReplyFut = NULL;
+        return;
+    }
+    msActorClearFlag(a, MS_ACTOR_SUSPENDED);
+    /* Re-enqueue on scheduler run queue */
+    if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
+        msSchedRunPush(&msSchedulers[a->schedulerID], a);
+    }
+    /* Wake the scheduler thread */
+    if (a->schedulerID == 0) {
+        msActorWakeEventLoop();
+    } else {
+        msPoolWakeWorker(a->schedulerID);
+    }
+}
+
+/* Suspend actor: save async _impl future, register resume callback.
+ * For CALL methods, replyFut is chained separately by the dispatch function. */
+static inline void msActorSuspend(msActor* a, void* implFut, void* replyFut) {
+    a->suspendedFut = implFut;
+    a->suspendedReplyFut = replyFut;
+    msActorSetFlag(a, MS_ACTOR_SUSPENDED);
+    /* When implFut completes, resume the actor on its scheduler */
+    msFutureAddCallback(implFut, (msClosure){
+        .fn = (msClosureFn)msActorResumeFromFut,
+        .env = (void*)a
+    });
+}
+
 /* Name registry data (forward declaration — functions defined after monitors section) */
 #define MS_NAME_REGISTRY_INIT_CAP 256
 typedef struct { msString name; msActor* actor; } msNameEntry;
@@ -331,6 +379,22 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     msActor* prevActor = msCurrentActor;
     msCurrentActor = a;
 
+    /* Phase 5: check for pending suspension before draining mailbox */
+    if (a->suspendedFut != NULL) {
+        msFutureBase* sf = (msFutureBase*)a->suspendedFut;
+        if (atomic_load_explicit(&sf->finished, memory_order_acquire)) {
+            /* Resumed: _impl stepper already completed the reply future via
+             * msFutureChain. Clear suspension state, fall through to mailbox drain. */
+            a->suspendedFut = NULL;
+            a->suspendedReplyFut = NULL;
+        } else {
+            /* Still suspended — release processing lock, don't drain mailbox */
+            msCurrentActor = prevActor;
+            atomic_store_explicit(&a->processing, false, memory_order_release);
+            return 0;
+        }
+    }
+
     /* Clear BLOCKED — we're actively processing */
     msActorClearFlag(a, MS_ACTOR_BLOCKED);
 
@@ -372,8 +436,13 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
             }
         }
     } else {
-        /* Still has messages after batch: mark overloaded */
+        /* Still has messages after batch: mark overloaded, re-enqueue for next poll.
+         * Without re-enqueue, the actor stalls — msActorSend only enqueues when
+         * wasEmpty is true, so once the batch limit is hit no one re-schedules it. */
         msActorSetFlag(a, MS_ACTOR_OVERLOADED);
+        if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
+            msSchedRunPush(&msSchedulers[a->schedulerID], a);
+        }
     }
 
     msCurrentActor = prevActor;
@@ -395,18 +464,29 @@ static inline void* msMsgReplyFuture(void* msg) {
  * These call into future.h APIs. Include future.h before actor.h for call-semantics. */
 static inline void msMsgCompleteDouble(void* fut, double val) {
     if (fut == NULL) return;
-    /* Cast to msFuture_double* and complete. Requires future.h to be included. */
-    typedef struct { bool finished; bool failed; bool cancelled; bool isBoxed; void* error; void (*vd)(void*); void* cb; void* cbTail; double value; } msFutSimpleDouble;
-    msFutSimpleDouble* f = (msFutSimpleDouble*)fut;
+    msFutureCompleteT((msFuture_double*)fut, val);
+}
+
+static inline void msMsgCompletePtr(void* fut, void* val) {
+    if (fut == NULL) return;
+    msFutureComplete(fut, val);
+}
+
+static inline void msMsgCompleteString(void* fut, msString val) {
+    if (fut == NULL) return;
+    /* msString is 16 bytes — use msFuture_msString layout via MS_FUTURE_STRUCT.
+     * Codegen emits MS_FUTURE_STRUCT(msFuture_msString, msString) for Promise<string>. */
+    typedef struct { msFutureBase base; msString value; } msFuture_msString_local;
+    msFuture_msString_local* f = (msFuture_msString_local*)fut;
+    if (atomic_load_explicit(&f->base.finished, memory_order_acquire)) return;
     f->value = val;
-    f->finished = true;
+    atomic_store_explicit(&f->base.finished, true, memory_order_release);
+    msFutureFireCallbacks(&f->base);
 }
 
 static inline void msMsgCompleteVoid(void* fut) {
     if (fut == NULL) return;
-    typedef struct { bool finished; } msFutSimpleVoid;
-    msFutSimpleVoid* f = (msFutSimpleVoid*)fut;
-    f->finished = true;
+    msFutureCompleteVoid(fut);
 }
 
 /* Set onTerminate callback (called by actorLower wiring).
@@ -481,10 +561,13 @@ static inline void msActorDestroy(msActor* a) {
     msActorDestroyWithReason(a, MS_EXIT_NORMAL);
 }
 
-/* Stop an actor by pid — removes from scheduler, triggers onTerminate, then destroys */
+/* Stop an actor by pid — removes from scheduler, triggers onTerminate, then destroys.
+ * R1: sets stopRequested so suspended actors don't resume. */
 static inline void msActorStop(int64_t pid, int32_t reason) {
     msActor* a = msActorFromPid(pid);
     if (a == NULL || !atomic_load_explicit(&a->alive, memory_order_acquire)) return;
+    /* R1: signal suspended actor to not resume */
+    atomic_store_explicit(&a->stopRequested, true, memory_order_release);
     /* Remove from scheduler registry to prevent use-after-free in poll */
     if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
         msSchedActors* sched = &msSchedulers[a->schedulerID];

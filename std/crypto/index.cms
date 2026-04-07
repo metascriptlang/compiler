@@ -310,6 +310,6 @@ export async function pbkdf2Async(password: string, salt: string, iterations: in
 	return await spawn(() => { return pbkdf2(password, salt, iterations, keyLength, digest); });
 }
 
-export function hashAsync(algorithm: string, data: string, encoding: string): Promise<Result<string, CryptoError>> {
-	return spawn(() => { return hash(algorithm, data, encoding); }) as Promise<Result<string, CryptoError>>;
+export async function hashAsync(algorithm: string, data: string, encoding: string): Promise<Result<string, CryptoError>> {
+	return await spawn(() => { return hash(algorithm, data, encoding); });
 }

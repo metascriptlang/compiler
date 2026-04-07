@@ -24,11 +24,11 @@
  * Scans all registered actors for dead cycles and collects them.
  */
 static inline void msCycleDetectorRun(void) {
-    /* Pass 1: find all BLOCKED actors */
+    /* Pass 1: find all BLOCKED actors (exclude SUSPENDED — they're alive, waiting on spawns) */
     int blockedCount = 0;
     for (int i = 0; i < msGlobalActors.count; i++) {
         msActor* a = msGlobalActors.actors[i];
-        if (msActorHasFlag(a, MS_ACTOR_BLOCKED)) {
+        if (msActorHasFlag(a, MS_ACTOR_BLOCKED) && !msActorHasFlag(a, MS_ACTOR_SUSPENDED)) {
             blockedCount++;
         }
     }
@@ -38,7 +38,7 @@ static inline void msCycleDetectorRun(void) {
      * If so, this actor is part of a dead cycle candidate. */
     for (int i = 0; i < msGlobalActors.count; i++) {
         msActor* a = msGlobalActors.actors[i];
-        if (!msActorHasFlag(a, MS_ACTOR_BLOCKED)) continue;
+        if (!msActorHasFlag(a, MS_ACTOR_BLOCKED) || msActorHasFlag(a, MS_ACTOR_SUSPENDED)) continue;
         if (a->refsCount == 0) continue;
 
         bool allRefsBlocked = true;
