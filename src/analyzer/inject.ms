@@ -294,12 +294,15 @@ function processArrayAccess(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const ad = node.data as ArrayAccessData;
 	ad.array = processNode(ad.array, dctx, DrcMode.Normal);
 	ad.index = processNode(ad.index, dctx, DrcMode.Normal);
-	// Reference parity (ArrayAccess sinkArg): element access is a borrow —
-	// must copy for ownership transfer.
-	if (mode === DrcMode.SinkArg && node.nodeType !== null) {
+	// Nim parity (injectdestructors:1191-1208): array element access is a borrow.
+	// In SinkArg or Consumed mode, must copy (incref) because the element belongs
+	// to the array — we don't own it. Without this, returning arr[i] or storing it
+	// in a field transfers a "reference" that was never incref'd, causing the
+	// array-owned object to be double-freed when both the field destructor and
+	// the array destructor decref it.
+	if ((mode === DrcMode.SinkArg || mode === DrcMode.Consumed) && node.nodeType !== null) {
 		const rcInfo = classifyType(node.nodeType, dctx.ctx);
 		if (rcInfo.needsCleanup) {
-			// Always copy from ArrayAccess: source element may belong to a shared object.
 			return passCopyToSink(node, dctx);
 		}
 	}
@@ -909,18 +912,7 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 // This covers cases where the checker didn't propagate nodeType to MemberExpr nodes
 // (e.g., assignment LHS, object literal fields), preventing missing RC operations.
 function classifyMemberFieldRc(memberExpr: Node, dctx: DrcContext): RcInfo {
-	if (memberExpr.nodeType !== null) {
-		let fieldType = memberExpr.nodeType;
-		// Ptr<Ref<T>>: the checker wraps field types in Ptr when accessed through a pointer
-		// dereference (e.g., table.current where table is Ref<SymbolTable>). The Ptr is
-		// C-level indirection; the underlying Ref IS reference-counted. Unwrap so the
-		// classifier sees the Ref and emits proper RC ops for field assignments.
-		if (fieldType.kind === TypeKind.Ptr && fieldType.typeReturn !== null
-			&& fieldType.typeReturn.kind === TypeKind.Ref) {
-			fieldType = fieldType.typeReturn;
-		}
-		return classifyType(fieldType, dctx.ctx);
-	}
+	if (memberExpr.nodeType !== null) return classifyType(memberExpr.nodeType, dctx.ctx);
 	// Fallback: infer field type from the object's type + field name
 	const md = memberExpr.data as MemberExprData;
 	let objType = md.object.nodeType;
@@ -1768,7 +1760,11 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		// Fallback: if LHS nodeType is null (checker didn't propagate), infer from RHS.
 		// Without this, field assignments like table.current = scope get no RC treatment,
 		// causing premature frees and dangling references.
-		if (!rcInfo.needsCleanup && bd.right.nodeType !== null) {
+		// IMPORTANT: skip fallback if LHS is explicitly Ptr<T> — Ptr fields are borrows
+		// and must NOT get RC treatment. The RHS may be Ref<T> (owned) being assigned
+		// to a Ptr<T> (borrowed) field, but the field doesn't own a reference.
+		const lhsIsPtr = bd.left.nodeType !== null && bd.left.nodeType.kind === TypeKind.Ptr;
+		if (!rcInfo.needsCleanup && !lhsIsPtr && bd.right.nodeType !== null) {
 			rcInfo = classifyType(bd.right.nodeType, dctx.ctx);
 		}
 		if (!rcInfo.needsCleanup) return stmt;

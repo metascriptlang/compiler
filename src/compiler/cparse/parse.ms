@@ -297,8 +297,8 @@ function funcParams(ctx: ParseCtx, returnTy: CType): CType {
 		const dummyAttr: VarAttr = { isTypedef: false, isStatic: false, isExtern: false, isInline: false };
 		let paramTy = declspec(ctx, dummyAttr);
 		const declResult = declarator(ctx, paramTy);
-		paramTy = declResult[0];
-		const paramName = declResult[1];
+		paramTy = declResult.type;
+		const paramName = declResult.name;
 
 		// Array decay to pointer (C rule)
 		if (paramTy.kind === CTypeKind.Array) {
@@ -345,9 +345,13 @@ function arrayDimensions(ctx: ParseCtx, ty: CType): CType {
 }
 
 // ===== Declarator =====
-// Returns [type, name]. Name is "" for abstract declarators.
 
-function declarator(ctx: ParseCtx, ty: CType): CType[] {
+interface DeclResult {
+	type: CType;
+	name: string;
+}
+
+function declarator(ctx: ParseCtx, ty: CType): DeclResult {
 	ty = pointers(ctx, ty);
 
 	// Grouped declarator: (declarator)
@@ -359,7 +363,7 @@ function declarator(ctx: ParseCtx, ty: CType): CType[] {
 			const saved = ctx.tok;
 			advance(ctx); // skip (
 			// First pass: skip the declarator to find )
-			const dummy = skipDeclarator(ctx);
+			skipDeclarator(ctx);
 			expect(ctx, ")");
 			// Apply suffix (array/function) to the OUTER type
 			ty = typeSuffix(ctx, ty);
@@ -377,7 +381,7 @@ function declarator(ctx: ParseCtx, ty: CType): CType[] {
 	}
 
 	ty = typeSuffix(ctx, ty);
-	return [ty, name] as unknown as CType[];
+	return { type: ty, name };
 }
 
 function isTypenameStr(ctx: ParseCtx, s: string): boolean {
@@ -516,8 +520,8 @@ function structMembers(ctx: ParseCtx): CMember[] {
 			first = false;
 
 			const declResult = declarator(ctx, baseTy);
-			let memTy = declResult[0] as CType;
-			const memName = declResult[1] as unknown as string;
+			let memTy = declResult.type;
+			const memName = declResult.name;
 
 			// Bitfield: int x : 3;
 			let bitWidth = -1;
@@ -639,8 +643,8 @@ export function parseTranslationUnit(head: Token, target: TargetInfo): ParseResu
 
 		// Parse declarator
 		const declResult = declarator(ctx, baseTy);
-		const ty = declResult[0] as CType;
-		const name = declResult[1] as unknown as string;
+		const ty = declResult.type;
+		const name = declResult.name;
 
 		// Function declaration or definition
 		if (ty.kind === CTypeKind.Func) {
@@ -680,8 +684,8 @@ export function parseTranslationUnit(head: Token, target: TargetInfo): ParseResu
 		// Handle multiple declarators: int a, b;
 		while (consume(ctx, ",")) {
 			const declResult2 = declarator(ctx, baseTy);
-			const ty2 = declResult2[0] as CType;
-			const name2 = declResult2[1] as unknown as string;
+			const ty2 = declResult2.type;
+			const name2 = declResult2.name;
 			ctx.objs.push({
 				kind: ObjKind.Variable,
 				name: name2,
@@ -715,8 +719,8 @@ function parseTypedef(ctx: ParseCtx, baseTy: CType): void {
 		first = false;
 
 		const declResult = declarator(ctx, baseTy);
-		const ty = declResult[0] as CType;
-		const name = declResult[1] as unknown as string;
+		const ty = declResult.type;
+		const name = declResult.name;
 
 		if (name !== "") {
 			ctx.typedefs.set(name, ty);

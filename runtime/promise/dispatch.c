@@ -199,7 +199,6 @@ msDispatcher* msGetDispatcher(void) {
 static int gWakePipe[2] = {-1, -1};           /* wake-only self-pipe (1-byte signals) */
 static msMpscQueue gCompletionQueue;           /* lock-free MPSC for future completions */
 static bool gCompletionQueueInited = false;
-static _Atomic(bool) gWakePending = false;     /* amortize wake writes: N completions → 1 syscall */
 
 /* Push a future completion to the MPSC queue + wake the selector.
  * Called from worker threads. Dispatcher drains the queue and fires callbacks. */
@@ -208,12 +207,12 @@ void msCompletionQueuePush(void* fut, bool isFail, void* error) {
     msMessage* msg = msMsgAlloc(/*kind=*/isFail ? -1 : 0, /*replyFut=*/fut);
     msMsgSetPtr(msg, 0, error);
     msMpscPush(&gCompletionQueue, msg);
-    /* Amortized wake: at most 1 syscall per drain batch */
-    if (!atomic_exchange_explicit(&gWakePending, true, memory_order_acq_rel)) {
-        if (gWakePipe[1] >= 0) {
-            char c = 1;
-            (void)write(gWakePipe[1], &c, 1);
-        }
+    /* Always wake — no amortization. Two writers (actor send + spawn completion)
+     * sharing one flag caused missed wakes and 500ms selector stalls. The wake
+     * pipe absorbs duplicates (64KB buffer, 1 byte each, drained in bulk). */
+    if (gWakePipe[1] >= 0) {
+        char c = 1;
+        (void)write(gWakePipe[1], &c, 1);
     }
 }
 
@@ -234,13 +233,11 @@ void msEnsureWakePipe(void) {
 
 /* Wake event loop from another thread (Pony-style: unpark scheduler).
  * Used by actor subsystem when scheduling work on the main thread.
- * Amortized: only writes if not already pending (one byte suffices). */
+ * Always writes (no amortization) — same rationale as msCompletionQueuePush. */
 void msActorWakeEventLoop(void) {
     if (gWakePipe[1] >= 0) {
-        if (!atomic_exchange_explicit(&gWakePending, true, memory_order_acq_rel)) {
-            char c = 1;
-            (void)write(gWakePipe[1], &c, 1);
-        }
+        char c = 1;
+        (void)write(gWakePipe[1], &c, 1);
     }
 }
 
@@ -434,7 +431,6 @@ bool msRunOnce(int timeoutMs) {
 			if (readyBuf[i].fd == gWakePipe[0]) {
 				char buf[64];
 				(void)read(gWakePipe[0], buf, sizeof(buf));
-				atomic_store_explicit(&gWakePending, false, memory_order_release);
 				continue;
 			}
 			/* I/O events (unchanged) */
@@ -477,6 +473,13 @@ static inline bool msIsWorkerWait(void) {
 	return msIsPoolWorker;
 }
 
+/* Active-wait timeout for msWaitFor/msWaitForReady.
+ * Short timeout (5ms) bounds worst-case latency when pipe wakes miss the
+ * selector (timing race between worker completion and kqueue poll start).
+ * Cost: ~1 kqueue syscall per 5ms while waiting — negligible.
+ * Production runtimes use similar bounds (Tokio ~50μs, Go ~10ms, Pony ~1ms). */
+#define MS_ACTIVE_WAIT_MS 5
+
 void* msWaitFor(void* fp) {
 	msFutureBase* fut = (msFutureBase*)fp;
 	bool worker = msIsWorkerWait();
@@ -485,7 +488,7 @@ void* msWaitFor(void* fp) {
 	while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
 		if (msPoolHelpOne()) continue;
 		if (!worker) {
-			msRunOnce(500);
+			msRunOnce(MS_ACTIVE_WAIT_MS);
 		} else {
 			msWorkerWaitOnFuture(fp);
 		}
@@ -504,7 +507,7 @@ void msWaitForReady(void* fp) {
 	while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
 		if (msPoolHelpOne()) { spins = 0; helped = true; continue; }
 		if (!worker) {
-			msRunOnce(500);
+			msRunOnce(MS_ACTIVE_WAIT_MS);
 		} else if (helped && spins < 32) {
 			spins++;
 			sched_yield();

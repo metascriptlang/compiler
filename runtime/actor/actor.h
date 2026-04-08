@@ -203,7 +203,6 @@ typedef struct msSchedActors {
     _Atomic(int) count;           /* atomic: CD reads while main thread may register */
     int pollCount;                /* for periodic cycle detection (scheduler 0 only) */
     _Atomic(msActor*) runHead;    /* lock-free run queue: actors with pending messages */
-    _Atomic(bool) wakeAmortized;  /* amortize wakes: true = worker already woken, skip syscall */
 } msSchedActors;
 
 static msSchedActors msSchedulers[MS_MAX_SCHEDULERS];
@@ -366,16 +365,10 @@ static inline void msActorSend(msActor* a, msMessage* msg) {
             int sid = a->schedulerID;
             if (sid >= 0 && sid < msSchedulerCount) {
                 msSchedRunPush(&msSchedulers[sid], a);
-                /* Amortized wake: only issue syscall if worker hasn't been woken yet.
-                 * Workers clear the flag when they go to sleep. This turns O(actors)
-                 * wake syscalls into O(schedulers) — critical at 1M+ actors. */
-                if (!atomic_exchange_explicit(&msSchedulers[sid].wakeAmortized, true,
-                        memory_order_acq_rel)) {
-                    if (sid == 0) {
-                        msActorWakeEventLoop();
-                    } else {
-                        msPoolWakeWorker(sid);
-                    }
+                if (sid == 0) {
+                    msActorWakeEventLoop();
+                } else {
+                    msPoolWakeWorker(sid);
                 }
             }
         }
@@ -979,11 +972,6 @@ static inline bool msActorPollLocal(void) {
         if (msActorHasFlag(a, MS_ACTOR_MUTED)) continue;
         int n = msActorProcess(a, MS_ACTOR_BATCH);
         if (n > 0) didWork = true;
-    }
-    /* Clear amortized wake flag — next sender must re-wake us.
-     * Placed after drain: ensures all queued work is processed before we allow sleep. */
-    if (!didWork) {
-        atomic_store_explicit(&sched->wakeAmortized, false, memory_order_release);
     }
 
     /* Phase 2: Work stealing — if idle, pop from other schedulers' run queues.
