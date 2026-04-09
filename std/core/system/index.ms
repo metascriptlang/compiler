@@ -1,5 +1,6 @@
 @include("runtime/core/system.h");
 @compile("runtime/core/system.c");
+@compile("runtime/drc.c");
 
 export class console {
 	/**

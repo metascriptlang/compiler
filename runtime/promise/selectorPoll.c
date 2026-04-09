@@ -1,4 +1,4 @@
-#ifndef MS_BARE
+#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
 /*
  * MetaScript I/O Selector — poll() fallback (POSIX, Windows via WSAPoll)
  *
@@ -138,4 +138,4 @@ int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEve
 
 #endif /* fallback guard */
 
-#endif /* MS_BARE */
+#endif /* !MSOS_BARE && !MSOS_WASM */

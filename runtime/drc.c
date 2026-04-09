@@ -10,7 +10,7 @@
  * Adaptive threshold: 128 default, increase if <50% freed, decrease otherwise.
  */
 
-#ifdef MS_ORC
+#ifdef MSGC_ORC
 
 #include "runtime/drc.h"
 #include <stdlib.h>
@@ -66,7 +66,7 @@ msCellSeq msRoots;
 int32_t msRootsThreshold = 128;
 
 /* ===== ORC Diagnostics ===== */
-#ifdef MS_ORC_STATS
+#ifdef MSGC_ORC_STATS
 int32_t msFreedCyclicObjects = 0;
 #endif
 
@@ -115,13 +115,17 @@ static inline void incCount(msRefHeader* h) {
 	h->rc += MS_RC_INCREMENT;
 }
 
-/* ===== Trace Ref (Standard reference parity) ===== */
-/* Called by generated trace hooks. Pushes child to traceStack. No recursion. */
+/* ===== Trace Ref (Nim orc.nim:128 parity) ===== */
+/* Called by generated trace hooks. Receives ADDRESS of pointer slot, not the value.
+ * This enables collectColor to null out slots (entry[] = nil) so destructors
+ * don't follow dangling pointers to moribund objects. */
 
-void msOrcTraceRef(void* child, void* env) {
-	if (child == NULL || env == NULL) return;
+void msOrcTraceRef(void* slotAddr, void* env) {
+	if (slotAddr == NULL || env == NULL) return;
+	void* child = *(void**)slotAddr;
+	if (child == NULL) return;
 	msGcEnv* j = (msGcEnv*)env;
-	msCell cell = { child, msHeader(child)->type };
+	msCell cell = { slotAddr, msHeader(child)->type };
 	msCellSeqPush(&j->traceStack, cell);
 }
 
@@ -133,22 +137,33 @@ static inline void msTrace(void* p, const msTypeInfo* type, msGcEnv* j) {
 	}
 }
 
-/* ===== Phase 1: Mark Gray (Standard reference parity) ===== */
-/* Tentatively decrement all children of gray suspects. Iterative via traceStack. */
+/* ===== Phase 1: Mark Gray ===== */
+/* Tentatively decrement all children of gray suspects. Iterative via traceStack.
+ * Tracks rcSum (total refcounts) and edges (internal edges) for the
+ * rcSum==edges shortcut that skips scan when all roots are pure garbage. */
 
 static void markGray(msGcEnv* j, void* p, const msTypeInfo* type) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
 	if (getColor(h) == MS_COL_GRAY) return;
 	setColor(h, MS_COL_GRAY);
+	j->touched++;
+	/* +1 because rc is 0-based (0 = sole owner = 1 reference) */
+	j->rcSum += getCount(h) + 1;
 	msTrace(p, type, j);
 	while (j->traceStack.len > 0) {
 		msCell entry = j->traceStack.data[--j->traceStack.len];
-		msRefHeader* ch = msHeader(entry.ptr);
+		void* child = *(void**)entry.ptr;  /* dereference slot address */
+		if (child == NULL) continue;
+		msRefHeader* ch = msHeader(child);
 		decCount(ch);
+		j->edges++;
 		if (getColor(ch) != MS_COL_GRAY) {
 			setColor(ch, MS_COL_GRAY);
-			msTrace(entry.ptr, entry.type, j);
+			j->touched++;
+			/* +2: +1 for 0-based, +1 because we already decremented */
+			j->rcSum += getCount(ch) + 2;
+			msTrace(child, entry.type, j);
 		}
 	}
 }
@@ -161,38 +176,54 @@ static void scanBlack(msGcEnv* j, void* p, const msTypeInfo* type) {
 	msTrace(p, type, j);
 	while (j->traceStack.len > until) {
 		msCell entry = j->traceStack.data[--j->traceStack.len];
-		msRefHeader* ch = msHeader(entry.ptr);
+		void* child = *(void**)entry.ptr;  /* dereference slot address */
+		if (child == NULL) continue;
+		msRefHeader* ch = msHeader(child);
 		incCount(ch);
 		if (getColor(ch) != MS_COL_BLACK) {
 			setColor(ch, MS_COL_BLACK);
-			msTrace(entry.ptr, entry.type, j);
+			msTrace(child, entry.type, j);
 		}
 	}
 }
 
+/* Phase 2: Scan — fully iterative, no recursion.
+ * >= 0 means "has external references" (alive), < 0 means "only internal refs" (garbage). */
 static void scan(msGcEnv* j, void* p, const msTypeInfo* type) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
 	if (getColor(h) != MS_COL_GRAY) return;
 
-	if (getCount(h) > 0) {
+	if (getCount(h) >= 0) {
 		scanBlack(j, p, type);
 	} else {
 		setColor(h, MS_COL_WHITE);
 		msTrace(p, type, j);
 		while (j->traceStack.len > 0) {
 			msCell entry = j->traceStack.data[--j->traceStack.len];
-			scan(j, entry.ptr, entry.type);
+			void* child = *(void**)entry.ptr;  /* dereference slot address */
+			if (child == NULL) continue;
+			msRefHeader* ch = msHeader(child);
+			if (getColor(ch) == MS_COL_GRAY) {
+				if (getCount(ch) >= 0) {
+					scanBlack(j, child, entry.type);
+				} else {
+					setColor(ch, MS_COL_WHITE);
+					msTrace(child, entry.type, j);
+				}
+			}
 		}
 	}
 }
 
-/* ===== Phase 3: Collect White (Standard reference parity) ===== */
+/* ===== Phase 3: Collect by Color (collectColor) ===== */
+/* Collect objects of the given color whose rootIdx has been cleared (-1).
+ * Caller must clear rootIdx on all roots BEFORE calling this. */
 
-static void collectWhite(msGcEnv* j, void* p, const msTypeInfo* type) {
+static void collectColor(msGcEnv* j, void* p, const msTypeInfo* type, int32_t col) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
-	if (getColor(h) != MS_COL_WHITE || h->rootIdx != 0) return;
+	if (getColor(h) != col || h->rootIdx >= 0) return;
 
 	setColor(h, MS_COL_BLACK);
 	msCell cell = { p, type };
@@ -200,45 +231,48 @@ static void collectWhite(msGcEnv* j, void* p, const msTypeInfo* type) {
 	msTrace(p, type, j);
 	while (j->traceStack.len > 0) {
 		msCell entry = j->traceStack.data[--j->traceStack.len];
-		msRefHeader* ch = msHeader(entry.ptr);
-		if (getColor(ch) == MS_COL_WHITE && ch->rootIdx == 0) {
+		void* child = *(void**)entry.ptr;  /* dereference slot address */
+		*(void**)entry.ptr = NULL;          /* Nim parity: null out slot so destructors see nil */
+		if (child == NULL) continue;
+		msRefHeader* ch = msHeader(child);
+		if (getColor(ch) == col && ch->rootIdx < 0) {
 			setColor(ch, MS_COL_BLACK);
-			msCell child = { entry.ptr, entry.type };
-			msCellSeqPush(&j->toFree, child);
-			msTrace(entry.ptr, entry.type, j);
+			msCell childCell = { child, entry.type };
+			msCellSeqPush(&j->toFree, childCell);
+			msTrace(child, entry.type, j);
 		}
 	}
 }
 
-/* ===== Main Collection Entry Point ===== */
+/* ===== Core Collection (Nim collectCyclesBacon parity) ===== */
 
-void msOrcCollect(void) {
-	if (msRoots.len == 0) return;
-
-	msGcEnv j;
-	msCellSeqInit(&j.traceStack);
-	msCellSeqInit(&j.toFree);
+static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
+	int32_t last = msRoots.len - 1;
 
 	/* Phase 1: Mark all roots gray, tentatively decrement children */
-	for (int32_t i = 0; i < msRoots.len; i++) {
-		markGray(&j, msRoots.data[i].ptr, msRoots.data[i].type);
+	for (int32_t i = last; i >= lowMark; i--) {
+		markGray(j, msRoots.data[i].ptr, msRoots.data[i].type);
 	}
 
-	/* Phase 2: Scan — restore live objects to black, mark garbage white */
-	for (int32_t i = 0; i < msRoots.len; i++) {
-		scan(&j, msRoots.data[i].ptr, msRoots.data[i].type);
+	/* Shortcut: if rcSum == edges, every reference is internal —
+	 * all roots form pure cycles with no external refs. Skip scan, collect all gray. */
+	int32_t colToCollect = MS_COL_WHITE;
+	if (j->rcSum == j->edges) {
+		colToCollect = MS_COL_GRAY;
+		j->keepThreshold = true;
+	} else {
+		/* Phase 2: Scan — restore live objects to black, mark garbage white */
+		for (int32_t i = last; i >= lowMark; i--) {
+			scan(j, msRoots.data[i].ptr, msRoots.data[i].type);
+		}
 	}
 
-	/* Phase 3: Collect white objects */
-	for (int32_t i = 0; i < msRoots.len; i++) {
-		collectWhite(&j, msRoots.data[i].ptr, msRoots.data[i].type);
-	}
-
-	/* Clear rootIdx on all root objects before freeing */
-	int32_t rootCount = msRoots.len;
+	/* Clear rootIdx on all roots BEFORE Phase 3.
+	 * collectColor checks rootIdx < 0 to confirm the object is eligible. */
 	for (int32_t i = 0; i < msRoots.len; i++) {
 		msRefHeader* h = msHeader(msRoots.data[i].ptr);
 		h->rootIdx = -1;
+		collectColor(j, msRoots.data[i].ptr, msRoots.data[i].type, colToCollect);
 	}
 
 	/* Protect against re-entrancy: destructors may trigger registerCycle */
@@ -247,40 +281,80 @@ void msOrcCollect(void) {
 	msRoots.len = 0;
 
 	/* Destroy and free collected objects */
-	int32_t freed = j.toFree.len;
-	for (int32_t i = 0; i < j.toFree.len; i++) {
-		void* p = j.toFree.data[i].ptr;
-		const msTypeInfo* type = j.toFree.data[i].type;
-		msRefHeader* h = msHeader(p);
-		h->rootIdx = -1;
+	for (int32_t i = 0; i < j->toFree.len; i++) {
+		void* p = j->toFree.data[i].ptr;
+		const msTypeInfo* type = j->toFree.data[i].type;
 		if (type != NULL && type->destroyFn != NULL) {
 			type->destroyFn(p);
 		}
 		msDestroyAndDispose(p);
 	}
 
-	/* Restore threshold */
 	msRootsThreshold = oldThreshold;
-	msCellSeqFree(&j.traceStack);
-	msCellSeqFree(&j.toFree);
+	j->freed += j->toFree.len;
+	msCellSeqFree(&j->toFree);
+}
 
-#ifdef MS_ORC_STATS
-	msFreedCyclicObjects += freed;
+/* ===== Public API (Nim GC_runOrc / GC_partialCollect parity) ===== */
+
+void msOrcCollect(void) {
+	if (msRoots.len == 0) return;
+
+	msGcEnv j;
+	msCellSeqInit(&j.traceStack);
+	msCellSeqInit(&j.toFree);
+	j.freed = 0;
+	j.touched = 0;
+	j.edges = 0;
+	j.rcSum = 0;
+	j.keepThreshold = false;
+
+	collectCyclesBacon(&j, 0);
+
+	msCellSeqFree(&j.traceStack);
+	if (msRoots.len == 0) {
+		msCellSeqFree(&msRoots);
+	}
+
+#ifdef MSGC_ORC_STATS
+	msFreedCyclicObjects += j.freed;
 #endif
 
-	/* Adaptive threshold */
-	if (rootCount > 0) {
-		if (freed * 2 < rootCount) {
-			if (msRootsThreshold < 16384) {
-				msRootsThreshold = msRootsThreshold * 3 / 2;
-			}
-		} else {
-			if (msRootsThreshold > 128) {
-				msRootsThreshold = msRootsThreshold * 2 / 3;
-				if (msRootsThreshold < 128) msRootsThreshold = 128;
-			}
+	/* Adaptive threshold:
+	 * keepThreshold: rcSum==edges shortcut fired — don't change
+	 * effective (freed >= 50% of touched) → shrink threshold
+	 * ineffective → grow threshold */
+	if (!j.keepThreshold) {
+		if (j.freed * 2 >= j.touched) {
+			msRootsThreshold = msRootsThreshold * 2 / 3;
+			if (msRootsThreshold < 16) msRootsThreshold = 16;
+		} else if (msRootsThreshold < 16384) {
+			if (msRootsThreshold <= 0) msRootsThreshold = 128;
+			msRootsThreshold = msRootsThreshold / 2 + msRootsThreshold;  /* * 3/2, Nim order */
 		}
 	}
 }
 
-#endif /* MS_ORC */
+void msOrcPartialCollect(int32_t lowMark) {
+	if (msRoots.len <= lowMark) return;
+
+	msGcEnv j;
+	msCellSeqInit(&j.traceStack);
+	msCellSeqInit(&j.toFree);
+	j.freed = 0;
+	j.touched = 0;
+	j.edges = 0;
+	j.rcSum = 0;
+	j.keepThreshold = false;
+
+	collectCyclesBacon(&j, lowMark);
+	msRoots.len = lowMark;
+
+	msCellSeqFree(&j.traceStack);
+
+#ifdef MSGC_ORC_STATS
+	msFreedCyclicObjects += j.freed;
+#endif
+}
+
+#endif /* MSGC_ORC */

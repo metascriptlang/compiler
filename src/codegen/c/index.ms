@@ -45,11 +45,11 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 		// so any subsequent @include("runtime/core/system.h") from prelude is a C-level no-op.
 		match (ctx.osTarget) {
 			"solana" => {
-				addLine(sec(g, CSection.Headers), "#define MS_SOLANA");
-				addLine(sec(g, CSection.Headers), "#define MS_BARE");
+				addLine(sec(g, CSection.Headers), "#define MSOS_SOLANA");
+				addLine(sec(g, CSection.Headers), "#define MSOS_BARE");
 			},
 			"bare" => {
-				addLine(sec(g, CSection.Headers), "#define MS_BARE");
+				addLine(sec(g, CSection.Headers), "#define MSOS_BARE");
 			},
 			_ => {},
 		};
@@ -57,6 +57,12 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 		nameSetAdd(g.declaredThings, "inc:runtime/manual.h");
 		nameSetAdd(g.declaredThings, "inc:runtime/core/system.h");
 	} else {
+		if (ctx !== null && ctx.osTarget === "wasm") {
+			addLine(sec(g, CSection.Headers), "#define MSOS_WASM");
+		}
+		if (ctx !== null && ctx.osTarget === "emcc") {
+			addLine(sec(g, CSection.Headers), "#define MSOS_EMCC");
+		}
 		addLine(sec(g, CSection.Headers), "#include \"runtime/core/system.h\"");
 		nameSetAdd(g.declaredThings, "inc:runtime/core/system.h");
 	}
@@ -153,8 +159,9 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	const b = createBuilder();
 	const retType = (mainRetType.length > 0) ? mainRetType : "void";
 
-	// Include stdint.h for int32_t and system header for async futures
+	// Include stdint.h for int32_t, drc.h for msOrcCollect, system.h for async futures
 	addLine(b, "#include <stdint.h>");
+	addLine(b, "#include \"runtime/drc.h\"");
 	if (retType.startsWith("msFuture_")) {
 		addLine(b, "#include \"runtime/core/system.h\"");
 	}
@@ -216,6 +223,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	addLine(b, "void MsMain(void) {");
 	addLine(b, "  MsPreMainInner();");
 	addLine(b, "  MsMainInner();");
+	addLine(b, "  msOrcCollect();");
 	addLine(b, "}");
 	addNewline(b);
 
@@ -231,6 +239,13 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 			addLine(b, "  (void)input;");
 			addLine(b, "  MsMain();");
 			addLine(b, "  return (uint64_t)msProgramResult;");
+			addLine(b, "}");
+		},
+		"wasm" => {
+			// WASI crt1 provides _start which calls main().
+			addLine(b, "int main(void) {");
+			addLine(b, "  MsMain();");
+			addLine(b, "  return msProgramResult;");
 			addLine(b, "}");
 		},
 		_ => {

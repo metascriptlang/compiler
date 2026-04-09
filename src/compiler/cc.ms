@@ -238,6 +238,18 @@ export function cliCompileFlags(opts: CliOptions): string {
 		if (opts.passC !== "") flags = appendFlag(flags, opts.passC);
 		return flags;
 	}
+	// Emscripten (browser WASM): emcc handles everything
+	if (opts.osTarget === "emcc") {
+		if (opts.passC !== "") flags = appendFlag(flags, opts.passC);
+		return flags;
+	}
+	// WASM32-WASI: zig cc handles sysroot + libc automatically
+	if (opts.osTarget === "wasm") {
+		flags = appendFlag(flags, "-target wasm32-wasi");
+		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
+		if (opts.passC !== "") flags = appendFlag(flags, opts.passC);
+		return flags;
+	}
 	// Cross-compilation target triple
 	// zig cc: -target cpu-os-abi (bundled sysroot, no --target= prefix)
 	// clang/gcc: --target=cpu-vendor-os-abi
@@ -253,6 +265,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	if (opts.osTarget === "windows" && opts.ccBinary !== "zig cc") {
 		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0600");
 	}
+	if (opts.gcMode === "orc") flags = appendFlag(flags, "-DMSGC_ORC");
 	if (opts.sanitize !== "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
 	flags = appendFlag(flags, "-fdata-sections");
@@ -266,6 +279,19 @@ export function cliCompileFlags(opts: CliOptions): string {
 export function cliLinkFlags(base: string, opts: CliOptions): string {
 	// Solana: sbpf-linker handles everything, no extra link flags
 	if (opts.osTarget === "solana") return appendFlag(base, opts.passL);
+	// Emscripten: emcc links to .js + .wasm bundle
+	if (opts.osTarget === "emcc") {
+		let eflags = appendFlag(base, "-sWASM=1 -sALLOW_MEMORY_GROWTH=1");
+		eflags = appendFlag(eflags, opts.passL);
+		return eflags;
+	}
+	// WASM: zig cc links with -target wasm32-wasi, strip dead sections + debug info
+	if (opts.osTarget === "wasm") {
+		let wflags = appendFlag(base, "-target wasm32-wasi");
+		wflags = appendFlag(wflags, "-Wl,--gc-sections -Wl,--strip-all");
+		wflags = appendFlag(wflags, opts.passL);
+		return wflags;
+	}
 	let flags = base;
 	flags = appendFlag(flags, opts.passL);
 	if (opts.strip) flags = appendFlag(flags, "-s");

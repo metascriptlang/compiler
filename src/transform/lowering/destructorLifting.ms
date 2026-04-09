@@ -387,7 +387,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 
 // --- Standard atomic reference hook generator ---
 // isCyclic: true for types that can form reference cycles (reference parity: atomicRefOp)
-// Cyclic types use msDecrefCyclic/msIncrefCyclic (ORC-aware when MS_ORC defined)
+// Cyclic types use msDecrefCyclic/msIncrefCyclic (ORC-aware when MSGC_ORC defined)
 function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, buf: NodeBuf, loc: SourceLocation): void {
 	const decrefFn = isCyclic ? "msDecrefCyclic" : "msDecref";
 	const increfFn = isCyclic ? "msIncrefCyclic" : "msIncref";
@@ -397,7 +397,8 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 		"sink" => { buf.items.push(makeExprStmt(makeAssign(xf, yf, loc), loc)); },
 		"wasMoved" => { genCall("msPtrWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
-			buf.items.push(makeExprStmt(makeCall(makeIdent("msOrcTraceRef", loc), [xf, yf], loc), loc));
+			// Nim parity: pass &field (slot address) so ORC can null it during collection
+			buf.items.push(makeExprStmt(makeCall(makeIdent("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
 		},
 		_ => {},
 	};

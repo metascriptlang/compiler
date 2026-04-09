@@ -64,9 +64,13 @@ function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): v
 	for (const sym of exports) {
 		if (sym.name.length === 0) continue;
 		if (registry.nameIndex.has(sym.name)) {
-			const arr = registry.nameIndex.get(sym.name);
-			arr.push(sym);
-			registry.nameIndex.set(sym.name, arr);
+			const old = registry.nameIndex.get(sym.name);
+			const updated: ExportedSymInfo[] = [];
+			for (let ai = 0; ai < old.length; ai += 1) {
+				updated.push(old[ai]);
+			}
+			updated.push(sym);
+			registry.nameIndex.set(sym.name, updated);
 		} else {
 			registry.nameIndex.set(sym.name, [sym]);
 		}
@@ -78,10 +82,6 @@ export function removeFromNameIndex(registry: ExportRegistry, exports: ExportedS
 		if (sym.name.length === 0) continue;
 		if (!registry.nameIndex.has(sym.name)) continue;
 		const arr = registry.nameIndex.get(sym.name);
-		// Build new array instead of in-place compaction.
-		// Map.get() returns a value copy of the array struct — in-place mutation
-		// through the copy leaves stale duplicate pointers in the Map's stored array,
-		// causing double-decref and heap corruption when the entry is later freed.
 		const kept: ExportedSymInfo[] = [];
 		for (let ri = 0; ri < arr.length; ri += 1) {
 			if (arr[ri] !== sym) kept.push(arr[ri]);
@@ -690,12 +690,14 @@ export interface CheckerError {
 
 // ===== GC Mode =====
 // GC mode — explicitly chosen, drives DRC and allocation behavior.
-// Drc: default, deterministic reference counting with cycle detection (malloc + refcount + ORC tracing).
-// None: skip DRC, use malloc, never free (debug/leak testing).
-// Manual: skip DRC, freestanding — arena allocator, no malloc, no POSIX (see docs/BARE.md).
+// Orc: default, ARC + cycle collector (malloc + refcount + ORC cycle detection).
+// Drc: ARC only, no cycle collection (malloc + refcount, no ORC).
+// None: no RC, use malloc, never free (debug/leak testing).
+// Manual: no RC, freestanding — arena allocator, no malloc, no POSIX (see docs/BARE.md).
 
 export enum GcMode {
 	Drc,
+	Orc,
 	None,
 	Manual,
 }
@@ -703,7 +705,7 @@ export enum GcMode {
 export class CheckerContext {
 	table: SymbolTable;
 	errors: CheckerError[];
-	gcMode: GcMode;                // Drc (default: RC + ORC), None (malloc, no free), Manual (freestanding, arena)
+	gcMode: GcMode;                // Drc (ARC), Orc (ARC + cycle collector), None (malloc, no free), Manual (freestanding, arena)
 	osTarget: string;              // "" (auto), "bare", "solana", "linux", "macos", "windows"
 	currentFunction: Symbol;   // innermost function (for return type validation)
 	currentActorName: string;  // non-empty when inside an actor body (isolation checking)
@@ -741,7 +743,7 @@ export function createContext(): CheckerContext {
 	return {
 		table,
 		errors: [],
-		gcMode: GcMode.Drc,
+		gcMode: GcMode.Orc,
 		osTarget: "",
 		currentFunction: null as unknown as Symbol,
 		currentActorName: "",

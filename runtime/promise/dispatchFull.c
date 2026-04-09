@@ -1,4 +1,4 @@
-#ifndef MS_BARE
+#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
 /*
  * MetaScript Async Dispatcher — Standard reference implementation parity
  *
@@ -659,4 +659,6 @@ void msDestroyDispatcher(void) {
 	gDispatcher = NULL;
 }
 
-#endif /* MS_BARE */
+#endif /* !MSOS_BARE && !MSOS_WASM && !MSOS_EMCC */
+
+/* Emscripten dispatcher: see dispatchEmcc.c */

@@ -70,12 +70,15 @@ function evictAt(cache: TaCacheStore, idx: number): void {
 	const fid = evicted.key.fileId;
 	if (cache.fileIndex.has(fid)) {
 		const arr = cache.fileIndex.get(fid);
-		let wi = 0;
+		const kept: TaCacheEntry[] = [];
 		for (let ri = 0; ri < arr.length; ri += 1) {
-			if (arr[ri] !== evicted) { arr[wi] = arr[ri]; wi = wi + 1; }
+			if (arr[ri] !== evicted) kept.push(arr[ri]);
 		}
-		arr.length = wi;
-		if (wi === 0) cache.fileIndex.delete(fid);
+		if (kept.length === 0) {
+			cache.fileIndex.delete(fid);
+		} else {
+			cache.fileIndex.set(fid, kept);
+		}
 	}
 	// Manual removal: shift elements left, then pop
 	for (let i = idx; i < cache.entries.length - 1; i = i + 1) {
@@ -98,9 +101,11 @@ export function cachePut(cache: TaCacheStore, entry: TaCacheEntry): void {
 		const fid = entry.key.fileId;
 		if (cache.fileIndex.has(fid)) {
 			const arr = cache.fileIndex.get(fid);
+			const replaced: TaCacheEntry[] = [];
 			for (let fi = 0; fi < arr.length; fi += 1) {
-				if (arr[fi] === old) { arr[fi] = entry; break; }
+				if (arr[fi] === old) { replaced.push(entry); } else { replaced.push(arr[fi]); }
 			}
+			cache.fileIndex.set(fid, replaced);
 		}
 		return;
 	}
@@ -116,9 +121,11 @@ export function cachePut(cache: TaCacheStore, entry: TaCacheEntry): void {
 	// Update file index
 	const fid = entry.key.fileId;
 	if (cache.fileIndex.has(fid)) {
-		const arr = cache.fileIndex.get(fid);
-		arr.push(entry);
-		cache.fileIndex.set(fid, arr);
+		const old = cache.fileIndex.get(fid);
+		const updated: TaCacheEntry[] = [];
+		for (let ui = 0; ui < old.length; ui += 1) { updated.push(old[ui]); }
+		updated.push(entry);
+		cache.fileIndex.set(fid, updated);
 	} else {
 		cache.fileIndex.set(fid, [entry]);
 	}

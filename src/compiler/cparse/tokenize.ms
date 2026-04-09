@@ -68,7 +68,7 @@ function isAlnum(ch: number): boolean {
 }
 
 function isSpace(ch: number): boolean {
-	return ch === " ".code || ch === "\t".code || ch === "\v".code || ch === "\f".code;
+	return ch === " ".code || ch === "\t".code || ch === 11 || ch === 12;
 }
 
 function isPunct(ch: number): boolean {

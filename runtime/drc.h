@@ -1,7 +1,9 @@
 /*
- * MetaScript DRC Runtime — Deterministic Reference Counting + ORC Cycle Collector
+ * MetaScript DRC Runtime — ARC + ORC Cycle Collector
  *
- * Merged from arc.h (refcount primitives) + orc.h (cycle collection).
+ * ARC: refcount primitives (incref/decref). Active under --gc=drc and --gc=orc.
+ * ORC: cycle collector (Bacon's trial deletion). Active under --gc=orc (MSGC_ORC defined).
+ *
  * RefHeader prepended to all heap-allocated RC objects.
  * Layout: [rc:4][rootIdx:4][type:8] = 16 bytes on 64-bit
  *
@@ -9,15 +11,11 @@
  * use plain ARC (zero overhead). Cyclic objects get registered in the
  * root set; periodically the collector runs a 3-phase mark-scan-collect.
  *
- * When MS_ORC is not defined, all ORC functions are no-ops.
+ * When MSGC_ORC is not defined (--gc=drc), ORC functions are no-ops.
  */
 
-#ifndef MS_DRC_H
-#define MS_DRC_H
-
-/* Also define legacy guards for backward compatibility */
-#define MS_ARC_H
-#define MS_ORC_H
+#ifndef MSGC_DRC_H
+#define MSGC_DRC_H
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -26,6 +24,19 @@
 #include <stdatomic.h>
 
 #include "runtime/types.h"
+
+/* ===== RC Encoding ===== */
+/* Under --gc=orc (MSGC_ORC), rc field = [count:28][flags:4].
+ * Lower 4 bits reserved for ORC cycle collector (color + maybeCycle).
+ * ALL rc operations use MS_RC_INCREMENT to preserve the lower bits.
+ * Under --gc=drc (plain ARC), rc is a simple counter. */
+#ifdef MSGC_ORC
+#define MS_RC_INCREMENT 16
+#define MS_RC_MASK      15   /* lower 4 bits: color + flags */
+#else
+#define MS_RC_INCREMENT 1
+#define MS_RC_MASK      0
+#endif
 
 /* ===== Reference Header ===== */
 
@@ -67,6 +78,9 @@ static inline int msSlabBucket(size_t totalSize) {
 	return -1;
 }
 
+/* Round up to bucket max so any request in the bucket range fits a reused entry. */
+static const size_t msSlabBucketSize[] = {32, 64, 96, 128};
+
 static inline void* msSlabAlloc(size_t totalSize) {
 	int b = msSlabBucket(totalSize);
 	if (b >= 0 && msSlabTLS.free[b] != NULL) {
@@ -78,7 +92,8 @@ static inline void* msSlabAlloc(size_t totalSize) {
 		memset(p, 0, sizeof(msRefHeader));
 		return p;
 	}
-	return calloc(1, totalSize);
+	/* Allocate bucket max, not exact size — slab reuses by bucket, not by exact size */
+	return calloc(1, b >= 0 ? msSlabBucketSize[b] : totalSize);
 }
 
 static inline void msSlabFree(void* p, size_t totalSize) {
@@ -117,10 +132,12 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 }
 
 /* ===== ARC Operations ===== */
+/* All rc arithmetic uses MS_RC_INCREMENT to preserve ORC's lower bits.
+ * Under --gc=drc, MS_RC_INCREMENT=1 and MS_RC_MASK=0 — same as plain rc++/rc--. */
 
 static inline void msIncRef(void* p) {
 	if (p != NULL) {
-		msHeader(p)->rc++;
+		msHeader(p)->rc += MS_RC_INCREMENT;
 	}
 }
 
@@ -128,21 +145,20 @@ static inline void msIncRef(void* p) {
  * Uses relaxed ordering — sufficient for refcount increment (no data dependency). */
 static inline void msAtomicIncRef(void* p) {
 	if (p != NULL) {
-		atomic_fetch_add_explicit(&msHeader(p)->rc, 1, memory_order_relaxed);
+		atomic_fetch_add_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_relaxed);
 	}
 }
 
 static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	msRefHeader* h = msHeader(p);
-	/* Reference parity: check count BEFORE decrementing.
-	 * rc starts at 0 from msAlloc. rc=0 means "sole owner".
-	 * If rc == 0: last reference — return true for destruction (do NOT decrement).
-	 * If rc > 0: other references exist — decrement and return false. */
-	if (h->rc == 0) {
+	/* Check count portion (upper bits) is zero — ignores ORC color/flag bits.
+	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner.
+	 * Under --gc=drc, MS_RC_MASK=0 so this reduces to h->rc==0. */
+	if ((h->rc & ~MS_RC_MASK) == 0) {
 		return true;
 	}
-	h->rc--;
+	h->rc -= MS_RC_INCREMENT;
 	return false;
 }
 
@@ -156,15 +172,15 @@ static inline void msDestroyAndDispose(void* p) {
 #define msWasMoved(p) ((p) = NULL)
 
 /* ===== ORC Cycle Collector ===== */
+/* Enabled by --gc=orc (defines MSGC_ORC). --gc=drc uses plain ARC below. */
 
-#ifdef MS_ORC
+#ifdef MSGC_ORC
 
 #define MS_COL_BLACK   0
 #define MS_COL_GRAY    1
 #define MS_COL_WHITE   2
 #define MS_MAYBE_CYCLE 4
 #define MS_COLOR_MASK  3
-#define MS_RC_INCREMENT 16
 #define MS_RC_SHIFT    4
 
 typedef struct {
@@ -197,7 +213,7 @@ static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* de
 			msUnregisterCycle(p);
 		}
 	} else {
-		if (h->rootIdx < 0 && desc != NULL && desc->traceFn != NULL) {
+		if (h->rootIdx < 0 && desc != NULL && desc->isCyclic) {
 			h->rc = (h->rc & ~MS_COLOR_MASK) | MS_COL_BLACK;
 			msRegisterCycle(p, desc);
 		}
@@ -206,9 +222,7 @@ static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* de
 
 static inline void msOrcIncRef(void* p) {
 	if (p == NULL) return;
-	msRefHeader* h = msHeader(p);
-	h->rc += MS_RC_INCREMENT;
-	h->rc |= MS_MAYBE_CYCLE;
+	msHeader(p)->rc += MS_RC_INCREMENT;
 }
 
 static inline bool msOrcDecRefIsLast(void* p) {
@@ -231,24 +245,35 @@ static inline void msMarkMaybeCycle(void* p) {
 	}
 }
 
+/* Nim GC_runOrc / GC_enableOrc / GC_disableOrc parity */
 void msOrcCollect(void);
+void msOrcPartialCollect(int32_t lowMark);
+
+static inline void msOrcEnable(void) { msRootsThreshold = 0; }
+static inline void msOrcDisable(void) { msRootsThreshold = INT32_MAX; }
+static inline int32_t msOrcPrepare(void) { return msRoots.len; }
 
 typedef struct {
 	msCellSeq traceStack;
 	msCellSeq toFree;
+	int32_t freed;
+	int32_t touched;
+	int32_t edges;
+	int32_t rcSum;
+	bool keepThreshold;
 } msGcEnv;
 
 void msOrcTraceRef(void* child, void* env);
 
-#ifdef MS_ORC_STATS
+#ifdef MSGC_ORC_STATS
 extern int32_t msFreedCyclicObjects;
 #endif
 
-#else /* !MS_ORC — plain ARC mode */
+#else /* !MSGC_ORC — plain ARC (--gc=drc) */
 
 static inline void msOrcCollect(void) {}
 static inline void msOrcTraceRef(void* child, void* env) { (void)child; (void)env; }
 
-#endif /* MS_ORC */
+#endif /* MSGC_ORC */
 
-#endif /* MS_DRC_H */
+#endif /* MSGC_DRC_H */

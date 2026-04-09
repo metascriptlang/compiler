@@ -8,14 +8,16 @@
 #define MS_DISPATCH_H
 
 #include "future.h"
-#ifndef _WIN32
-#include "runtime/actor/selector.h"
-#endif
 #include <stdint.h>
 #include <stdbool.h>
-#ifdef _WIN32
-#include <winsock2.h>
-#include <windows.h>
+#if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
+  #ifndef _WIN32
+  #include "runtime/actor/selector.h"
+  #endif
+  #ifdef _WIN32
+  #include <winsock2.h>
+  #include <windows.h>
+  #endif
 #endif
 
 /* ===== Callback Ring Buffer (Standard reference pattern) ===== */
@@ -41,27 +43,27 @@ typedef struct msTimerHeap {
 } msTimerHeap;
 
 /* ===== Cross-Thread Completion ===== */
-/* Pool threads post completion messages. Event loop receives + completes futures.
- * POSIX: self-pipe pattern (write to pipe, selector wakes event loop).
- * Windows: IOCP (PostQueuedCompletionStatus, native completion port). */
-
+#if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
 typedef struct {
 	void* fut;          /* msFuture_ptr* — spawn results use void* value */
 	void* value;
 	bool isFail;
 	void* error;
 } msCompletionMsg;
+#endif
 
-/* ===== Dispatcher (Standard reference pattern) ===== */
+/* ===== Dispatcher ===== */
 
 typedef struct msDispatcher {
 	msTimerHeap timers;
 	msCallbackDeque callbacks;
-#ifdef _WIN32
+#if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
+  #ifdef _WIN32
 	HANDLE iocp;             /* I/O Completion Port for cross-thread signaling */
-#else
+  #else
 	msSelector* selector;    /* I/O event notification (kqueue/epoll/poll) */
 	int completionPipe[2];   /* [0]=read (event loop), [1]=write (pool threads) */
+  #endif
 #endif
 } msDispatcher;
 

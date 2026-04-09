@@ -217,6 +217,7 @@ export function applyGcMode(opts: CliOptions): void {
 	if (graphPreludeCtx === null) return;
 	if (opts.gcMode === "none") graphPreludeCtx.gcMode = GcMode.None;
 	else if (opts.gcMode === "manual") graphPreludeCtx.gcMode = GcMode.Manual;
+	else if (opts.gcMode === "orc") graphPreludeCtx.gcMode = GcMode.Orc;
 	if (opts.osTarget !== "") graphPreludeCtx.osTarget = opts.osTarget;
 }
 
@@ -295,9 +296,16 @@ function initCBuildState(opts: CliOptions): CBuildState {
 	}
 	// --os=bare/solana: force-include manual.h before all .c files (runtime .c files need the defines)
 	if ((opts.osTarget === "bare" || opts.osTarget === "solana") && compilerRoot !== "") {
-		let defines = "-DMS_BARE";
-		if (opts.osTarget === "solana") defines = "-DMS_SOLANA -DMS_BARE";
+		let defines = "-DMSOS_BARE";
+		if (opts.osTarget === "solana") defines = "-DMSOS_SOLANA -DMSOS_BARE";
 		allFlags = appendFlag(allFlags, `${defines} -include ${compilerRoot}/runtime/manual.h`);
+	}
+	// --os=wasm/emcc: define MSOS_WASM/MSOS_EMCC for runtime @compile files (disables threading)
+	if (opts.osTarget === "wasm") {
+		allFlags = appendFlag(allFlags, "-DMSOS_WASM");
+	}
+	if (opts.osTarget === "emcc") {
+		allFlags = appendFlag(allFlags, "-DMSOS_EMCC");
 	}
 	return { allFlags, includePaths };
 }
@@ -544,7 +552,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 	// Solana: resolve BPF toolchain, force --gc=manual, force release mode
 	if (opts.osTarget === "solana") {
-		if (opts.gcMode === "" || opts.gcMode === "drc") opts.gcMode = "manual";
+		if (opts.gcMode === "" || opts.gcMode === "drc" || opts.gcMode === "orc") opts.gcMode = "manual";
 		if (opts.mode === 0) opts.mode = 1;
 		if (opts.ccBinary === "") {
 			const bpfClang = resolveBpfClang();
@@ -563,11 +571,24 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		}
 	}
 
+	// WASM: force release mode, use zig cc with wasm32-wasi target
+	if (opts.osTarget === "wasm") {
+		if (opts.mode === 0) opts.mode = 1;  // Release (smaller .wasm)
+		setTargetSizes(4, 4);  // WASM32: 32-bit pointers and ints
+	}
+
+	// Emscripten (browser WASM): use emcc, 32-bit pointers
+	if (opts.osTarget === "emcc") {
+		if (opts.mode === 0) opts.mode = 1;  // Release (smaller .wasm)
+		setTargetSizes(4, 4);  // WASM32: 32-bit pointers and ints
+		opts.ccBinary = "emcc";  // emcc for compile + link
+	}
+
 	// Cross-compile: resolve compiler binary.
 	// Default: "zig cc" (modern cross-compiler, bundled sysroots, no external deps).
 	// Fallback: platform-specific cross-gcc (e.g. x86_64-w64-mingw32-gcc).
 	// Override: --cc=<binary>
-	if (opts.osTarget !== "" && opts.osTarget !== "bare" && opts.osTarget !== "solana" && opts.ccBinary === "") {
+	if (opts.osTarget !== "" && opts.osTarget !== "bare" && opts.osTarget !== "solana" && opts.osTarget !== "emcc" && opts.ccBinary === "") {
 		if (exec("which zig > /dev/null 2>&1") === 0) {
 			opts.ccBinary = "zig cc";
 		} else {
@@ -587,6 +608,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		// Cross-compile: use target OS suffix, not host
 		if (opts.osTarget === "windows") suffix = opts.isHcr ? ".dll" : ".exe";
 		if (opts.osTarget === "solana") suffix = ".so";
+		if (opts.osTarget === "wasm") suffix = ".wasm";
+		if (opts.osTarget === "emcc") suffix = ".js";  // emcc outputs .js + .wasm pair
 		outBinary = outDir + "/" + replaceExt(baseName(entryPath), "") + suffix;
 	}
 
@@ -682,6 +705,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
 		if (opts.gcMode === "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode === "manual") ctx.gcMode = GcMode.Manual;
+			else if (opts.gcMode === "orc") ctx.gcMode = GcMode.Orc;
 		if (opts.osTarget !== "") ctx.osTarget = opts.osTarget;
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
@@ -735,6 +759,29 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	if (graphPreludeCtx !== null && graphPreludeCtx.compileDirectives !== "") {
 		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.osTarget);
 		oFiles = appendFlag(oFiles, preludeObjs);
+	}
+
+	// Platform-specific runtime: dispatch + selectors + pool.
+	// The compiler picks only the files needed for the target OS.
+	if (opts.osTarget !== "bare" && opts.osTarget !== "solana") {
+		let rtFiles = "";
+		if (opts.osTarget === "emcc") {
+			rtFiles = "runtime/promise/dispatchEmcc.c";
+		} else if (opts.osTarget === "wasm") {
+			rtFiles = "runtime/promise/dispatchWasm.c";
+		} else {
+			// Desktop: full dispatcher + thread pool + selectors
+			rtFiles = "runtime/promise/dispatchFull.c";
+			rtFiles = rtFiles + "\n" + "runtime/promise/pool.c";
+			rtFiles = rtFiles + "\n" + "runtime/promise/awaitGroup.c";
+			rtFiles = rtFiles + "\n" + "runtime/promise/selectorKqueue.c";
+			rtFiles = rtFiles + "\n" + "runtime/promise/selectorEpoll.c";
+			rtFiles = rtFiles + "\n" + "runtime/promise/selectorPoll.c";
+		}
+		if (rtFiles !== "") {
+			const rtObjs = processCompileDirectives(rtFiles, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.osTarget);
+			oFiles = appendFlag(oFiles, rtObjs);
+		}
 	}
 
 	// Phase C: Codegen + compile each module
@@ -843,7 +890,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	let allLink = cliLinkFlags(allFlags, opts);
 	for (const obj of globalLinkObjects()) { allLink = appendFlag(allLink, obj); }
 	for (const flag of globalLinkFlags()) { allLink = appendFlag(allLink, flag); }
-	const linkFlags = allLink;
+	let linkFlags = allLink;
 
 	// Link cache: skip re-link if all modules hit .c cache and link flags unchanged
 	if (modulesRecompiled === 0 && isLinkCached(oFiles, linkFlags, outBinary)) {
@@ -863,6 +910,19 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		console.log(`    codegen: ${codegenTime}ms  clang: ${clangTime}ms`);
 	}
 	const tD = clockMs();
+
+	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module alive)
+	if (opts.osTarget === "emcc" && aliveSet.entries.length > 0) {
+		let hasAsync = false;
+		for (const mp of aliveModules) {
+			if (mp.endsWith("promise/index.cms")) { hasAsync = true; }
+		}
+		if (hasAsync) {
+			linkFlags = appendFlag(linkFlags, "-sASYNCIFY");
+			if (opts.verbose) verboseLog("  async detected → enabling Asyncify");
+		}
+	}
+
 	if (opts.verbose) verboseLog("linking → " + outBinary);
 	if (opts.osTarget === "solana") {
 		const linkCode = linkSolana(oFiles, outBinary);
@@ -945,6 +1005,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
 		if (opts.gcMode === "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode === "manual") ctx.gcMode = GcMode.Manual;
+			else if (opts.gcMode === "orc") ctx.gcMode = GcMode.Orc;
 		if (opts.osTarget !== "") ctx.osTarget = opts.osTarget;
 		// Drain pending instances (same as cmdBuildC)
 		const pendingInsts2 = drainPendingInstances();

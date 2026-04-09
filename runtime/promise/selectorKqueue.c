@@ -1,4 +1,4 @@
-#ifndef MS_BARE
+#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
 /*
  * MetaScript I/O Selector — kqueue backend (macOS, FreeBSD, OpenBSD, NetBSD)
  */
@@ -107,4 +107,4 @@ int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEve
 
 #endif /* __APPLE__ || __FreeBSD__ || __OpenBSD__ || __NetBSD__ */
 
-#endif /* MS_BARE */
+#endif /* !MSOS_BARE && !MSOS_WASM */

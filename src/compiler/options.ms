@@ -77,7 +77,7 @@ export function parseArgs(): CliOptions {
 		isHcr: false,
 		strictDefs: false,
 		strictNullChecks: false,
-		gcMode: "drc",
+		gcMode: "orc",
 	};
 
 	if (argv.length < 2) return opts;
@@ -132,9 +132,9 @@ export function parseArgs(): CliOptions {
 			else { opts.ccBinary = ccVal; }
 		} else if (arg.startsWith("--os=")) {
 			const osVal = arg.slice(5, arg.length);
-			if (osVal !== "bare" && osVal !== "solana" && osVal !== "linux" && osVal !== "macos" && osVal !== "windows" && osVal !== "darwin" && osVal !== "freebsd") {
+			if (osVal !== "bare" && osVal !== "solana" && osVal !== "wasm" && osVal !== "emcc" && osVal !== "linux" && osVal !== "macos" && osVal !== "windows" && osVal !== "darwin" && osVal !== "freebsd") {
 				console.log(`error: unknown --os target: "${osVal}"`);
-				console.log(`  Valid targets: bare, solana, linux, macos, windows`);
+				console.log(`  Valid targets: bare, solana, wasm, emcc, linux, macos, windows`);
 				return opts;
 			}
 			opts.osTarget = osVal;
@@ -168,6 +168,8 @@ export function parseArgs(): CliOptions {
 			opts.gcMode = "manual";
 		} else if (arg === "--gc=drc") {
 			opts.gcMode = "drc";
+		} else if (arg === "--gc=orc") {
+			opts.gcMode = "orc";
 		} else if (arg === "--emit=c") {
 			opts.emitC = true;
 		} else if (arg === "--colors=on") {

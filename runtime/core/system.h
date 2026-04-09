@@ -212,7 +212,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 } while(0)
 #define msArrayRefTrace(arr, cb)       do { \
 	for (int64_t _art_i = 0; _art_i < (arr).len && (arr).p; _art_i++) { \
-		if ((arr).p->data[_art_i]) ((void(*)(void*))(cb))((arr).p->data[_art_i]); \
+		if ((arr).p->data[_art_i]) msOrcTraceRef(&(arr).p->data[_art_i], (cb)); \
 	} \
 } while(0)
 #define msArrayRefWasMoved(arr)        msArrayWasMoved(arr)
@@ -231,8 +231,8 @@ static inline void msStringCopy(msString* dest, msString src) {
 } while(0)
 #define msPtrWasMoved(p)      msWasMoved(p)
 
-/* --- ORC-aware ref lifecycle for cyclic types (Standard reference implementation parity) --- */
-#ifdef MS_ORC
+/* --- ORC-aware ref lifecycle for cyclic types --- */
+#ifdef MSGC_ORC
 #define msIncrefCyclic(p)     do { if ((p) != NULL) msOrcIncRef(p); } while(0)
 #define msDecrefCyclic(p)     do { \
 	if ((p) != NULL && msOrcDecRefIsLast(p)) { \
@@ -251,7 +251,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msClosureCopy(c)      do { if ((c).env != NULL) msIncRef((c).env); } while(0)
 #define msClosureWasMoved(c)  do { (c).fn = NULL; (c).env = NULL; } while(0)
 #define msClosureSink(d, s)   do { msClosureDestroy(d); (d) = (s); } while(0)
-#define msClosureTrace(c, _env) do { if ((c).env != NULL) msOrcTraceRef((c).env, (_env)); } while(0)
+#define msClosureTrace(c, _env) do { if ((c).env != NULL) msOrcTraceRef(&(c).env, (_env)); } while(0)
 
 /* --- Map lifecycle --- */
 /* DRC emits these as fn(varName) — macros handle address-of */

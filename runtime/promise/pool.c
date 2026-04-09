@@ -1,4 +1,4 @@
-#ifndef MS_BARE
+#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
 /*
  * MetaScript Thread Pool — Malebolgia-style fixed worker pool
  *
@@ -389,4 +389,4 @@ void msPoolShutdown(void) {
 	gPool = NULL;
 }
 
-#endif /* MS_BARE */
+#endif /* !MSOS_BARE && !MSOS_WASM */

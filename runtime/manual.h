@@ -3,9 +3,9 @@
  *
  * --gc=manual mode. No reference counting, no DRC injection.
  *
- * Two sub-modes controlled by MS_BARE (set via --os=bare):
- *   Without MS_BARE: malloc-backed allocation (like drc.h minus RC). Desktop use.
- *   With MS_BARE:    static arena, no malloc, no libc dependency. Freestanding.
+ * Two sub-modes controlled by MSOS_BARE (set via --os=bare):
+ *   Without MSOS_BARE: malloc-backed allocation (like drc.h minus RC). Desktop use.
+ *   With MSOS_BARE:    static arena, no malloc, no libc dependency. Freestanding.
  *
  * Uses same SYSTEM_H guard as core.h so prelude @include("runtime/core/system.h")
  * is a no-op when this header is included first.
@@ -14,13 +14,11 @@
 #ifndef SYSTEM_H
 #define SYSTEM_H
 
-/* Mark manual mode so .c files can skip DRC-specific implementations */
-#define MS_MANUAL_MODE
+/* Mark manual mode — no ARC, no ORC */
+#define MSGC_MANUAL
 
-/* Block all DRC/async headers via their guards */
-#define MS_DRC_H
-#define MS_ARC_H
-#define MS_ORC_H
+/* Block DRC/async headers via their guards */
+#define MSGC_DRC_H
 #define MS_FUTURE_H
 #define MS_DISPATCH_H
 #define MS_THREAD_H
@@ -50,7 +48,7 @@ static inline msRefHeader* msHeader(void* p) {
 
 /* ===== Allocation ===== */
 
-#ifdef MS_BARE
+#ifdef MSOS_BARE
 
 /* --- Freestanding: static arena, no malloc --- */
 
@@ -95,7 +93,7 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
     return (void*)(h + 1);
 }
 
-#else /* !MS_BARE */
+#else /* !MSOS_BARE */
 
 /* --- Desktop: malloc-backed, same as drc.h minus RC --- */
 
@@ -119,7 +117,7 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
     return (void*)(h + 1);
 }
 
-#endif /* MS_BARE */
+#endif /* MSOS_BARE */
 
 /* ===== RC Operations (all no-ops in both modes) ===== */
 
@@ -129,7 +127,7 @@ static inline void  msDestroyAndDispose(void* p)  { (void)p; }
 #define msWasMoved(p) ((p) = (void*)0)
 
 /* ===== libc headers for string/array/buffer ===== */
-#ifdef MS_SOLANA
+#ifdef MSOS_SOLANA
 
 /* Solana/BPF: truly freestanding — no libc headers available.
    Use -isystem runtime/freestanding to provide stub headers.
@@ -169,7 +167,7 @@ static inline void* _ms_manual_calloc(size_t n, size_t size) {
 #define realloc(p, s) _ms_manual_realloc((p), (s))
 #define free(p)       ((void)(p))
 
-#elif defined(MS_BARE)
+#elif defined(MSOS_BARE)
 
 /* Freestanding: system headers available but malloc/free redirected to arena */
 #include <stdlib.h>
@@ -255,7 +253,7 @@ static inline void msThrow(msString msg) {
 }
 
 /* ===== I/O ===== */
-#ifdef MS_SOLANA
+#ifdef MSOS_SOLANA
 /* Solana: log via sol_log_ syscall (provided by Solana runtime) */
 extern uint64_t sol_log_(const char* msg, uint64_t len);
 static inline void msPrintln(msString s) {
@@ -367,7 +365,7 @@ static inline uint32_t msCheckRangeU32(double v, int64_t lo, int64_t hi) { int64
 
 /* ===== Boxing ===== */
 static inline void* msBoxString(msString v) {
-#ifdef MS_BARE
+#ifdef MSOS_BARE
     msString* p = (msString*)msArenaAlloc(sizeof(msString));
 #else
     msString* p = (msString*)malloc(sizeof(msString));
@@ -377,13 +375,13 @@ static inline void* msBoxString(msString v) {
 }
 static inline msString msUnboxString(void* p) {
     msString v = *(msString*)p;
-#ifndef MS_BARE
+#ifndef MSOS_BARE
     free(p);
 #endif
     return v;
 }
 static inline void* msBoxStruct(const void* val, size_t size) {
-#ifdef MS_BARE
+#ifdef MSOS_BARE
     void* p = msArenaAlloc(size);
     if (p) __builtin_memcpy(p, val, size);
 #else

@@ -3,6 +3,7 @@
 // Parallel across cores (spawn + SO_REUSEPORT), concurrent within each (selector).
 
 @emit("#define MS_SELECTOR_BRIDGE");
+@include("runtime/os.h");
 @include("runtime/net/socket.h");
 @include("runtime/actor/selector.h");
 @include("runtime/net/eventLoopUring.h");

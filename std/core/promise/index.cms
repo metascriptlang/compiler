@@ -1,11 +1,7 @@
 @passC("-I.");
-@compile("runtime/promise/dispatch.c");
+// Platform-specific @compile (dispatch, pool, selectors) moved to src/compiler/compile.ms
+// — the compiler knows osTarget and picks only the right files.
 @compile("runtime/promise/combinator.c");
-@compile("runtime/promise/pool.c");
-@compile("runtime/promise/awaitGroup.c");
-@compile("runtime/promise/selectorKqueue.c");
-@compile("runtime/promise/selectorEpoll.c");
-@compile("runtime/promise/selectorPoll.c");
 // Engine compiled via std/net/index.cms (only when network I/O is used)
 
 export class Promise<T> {
