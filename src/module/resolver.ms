@@ -53,6 +53,8 @@ export function createDefaultConfig(backend: Backend, stdPath: string): Resolver
 	const ext = backendExtension(backend);
 	const extensions: string[] = [];
 	extensions.push(ext);
+	// WASM is still C backend — fall back to .cms if no .wms override exists
+	if (backend === Backend.Wasm) { extensions.push(".cms"); }
 	extensions.push(".ms");
 	extensions.push(".ts");
 	extensions.push(".js");

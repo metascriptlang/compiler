@@ -377,8 +377,9 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 				}
 			}
 
-			// Root 3: TestDecl nodes (test mode only)
-			if (isTest && stmt.kind === NodeKind.TestDecl) {
+			// Root 3: TestDecl nodes — in test mode (all modules) or entry module (build mode).
+			// Entry module test blocks are wrapped in main() by codegen, so they're always roots.
+			if (stmt.kind === NodeKind.TestDecl && (isTest || modulePath === entryPath)) {
 				walkBody(stmt, modulePath, importMap);
 				continue;
 			}

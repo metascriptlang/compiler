@@ -1496,10 +1496,15 @@ function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string,
 	// Try direct .ms first (e.g., std/core/struct.ms)
 	let src = try readFile(base + ".ms") catch "";
 	let resolvedPath = base + ".ms";
-	// Backend extension (e.g., index.jms for JS, index.cms for C)
+	// Backend extension (e.g., index.jms for JS, index.cms for C, index.wms for WASM)
 	if (src.length === 0) {
 		src = try readFile(base + "/index" + backendExt) catch "";
 		resolvedPath = base + "/index" + backendExt;
+	}
+	// WASM fallback to .cms (WASM is still C backend, .wms overrides .cms)
+	if (src.length === 0 && backendExt === ".wms") {
+		src = try readFile(base + "/index.cms") catch "";
+		resolvedPath = base + "/index.cms";
 	}
 	// Fallback to .ms
 	if (src.length === 0) {

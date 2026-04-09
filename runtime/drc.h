@@ -228,11 +228,8 @@ static inline void msOrcIncRef(void* p) {
 static inline bool msOrcDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	msRefHeader* h = msHeader(p);
-	bool isLast = false;
-	int32_t count = h->rc >> MS_RC_SHIFT;
-	if (count == 0) {
-		isLast = true;
-	} else {
+	bool isLast = (h->rc & ~MS_COLOR_MASK) == 0;
+	if (!isLast) {
 		h->rc -= MS_RC_INCREMENT;
 	}
 	msRememberCycle(isLast, p, h->type);

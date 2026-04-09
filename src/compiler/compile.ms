@@ -50,10 +50,11 @@ import { clockMs } from "std/process";
 // ===== Build Helpers =====
 
 // Build ResolverConfig from CLI target + optional build.ms resolve section.
-export function buildResolverConfig(target: Target, resolve: ResolveSection): ResolverConfig {
+export function buildResolverConfig(target: Target, resolve: ResolveSection, osTarget: string = ""): ResolverConfig {
 	let backend = Backend.C;
 	if (target === Target.JS) { backend = Backend.JS; }
 	if (target === Target.Raiser) { backend = Backend.Raiser; }
+	if (osTarget === "wasm" || osTarget === "emcc") { backend = Backend.Wasm; }
 	// Resolve stdPath from project root (handles both binary and Bun execution).
 	const root = resolveRuntimeDir();
 	const stdPath = root !== "" ? join(root, "std") : "std";
@@ -546,7 +547,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const t0 = clockMs();
-	const config = buildResolverConfig(Target.C, defaultResolveSection());
+	const config = buildResolverConfig(Target.C, defaultResolveSection(), opts.osTarget);
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config);
 	applyGcMode(opts);
 
@@ -766,6 +767,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	if (opts.osTarget !== "bare" && opts.osTarget !== "solana") {
 		let rtFiles = "";
 		if (opts.osTarget === "emcc") {
+			// Single-threaded: Asyncify-based async. spawn/Actor not yet supported.
+			// Future: dispatchEmccThreaded.c for emcc + pthreads (Web Workers).
 			rtFiles = "runtime/promise/dispatchEmcc.c";
 		} else if (opts.osTarget === "wasm") {
 			rtFiles = "runtime/promise/dispatchWasm.c";
