@@ -1,8 +1,9 @@
 // MetaScript Compiler CLI — File I/O and shared error helpers
 
-import { exit, exec, readFile, writeFile, clockMs } from "std/process";
+import { exit, exec, clockMs } from "std/process";
+import { readFile, writeFile } from "std/fs";
 import { CheckerContext } from "../checker/context";
-import { error, red, green, bold, dim, path } from "../utils/color";
+import { error, red, green, bold, dim } from "../utils/color";
 
 
 // -- Shared timing + verbose helpers --
@@ -132,18 +133,18 @@ export function outDirForMode(mode: number): string {
 // -- File I/O --
 
 export function readSource(filePath: string): string {
-	const source = readFile(filePath);
-	if (source.length === 0) {
-		console.log(error("error") + ": could not read file (or file is empty): " + path(filePath));
+	const result = readFile(filePath);
+	if (!result.ok) {
+		console.log(error("error") + ": " + result.error.message);
 		exit(1);
 	}
-	return source;
+	return result.value;
 }
 
 export function writeOutput(filePath: string, content: string): void {
-	const ok = writeFile(filePath, content);
-	if (!ok) {
-		console.log(error("error") + ": could not write file: " + path(filePath));
+	const result = writeFile(filePath, content);
+	if (!result.ok) {
+		console.log(error("error") + ": " + result.error.message);
 		exit(1);
 	}
 }

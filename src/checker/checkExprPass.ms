@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isPromise, isSpawnHandle, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType } from "./types";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isPromise, isSpawnHandle, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, markUsed, markConsumed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult, findExportedSymbol } from "./context";
 import {
@@ -12,7 +12,7 @@ import {
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
-import { monoTypeKey } from "../monomorphize/collect";
+import { mangleMonoName } from "../monomorphize/registry";
 import { findChar, splitTopLevel } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 import { markConsumedName, isConsumedName, symbolConsumeKey } from "./spawnAffinity";
@@ -86,22 +86,19 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 			typeArgCol = typeArgCol + argName.length + 2;  // skip "T, " for next arg
 		}
 	}
-	// Build mangled name from RESOLVED types (not raw strings) for codegen consistency.
-	// Reference parity (SigHash): all naming paths must produce the same name for the same type.
-	let typeArgKey = "";
-	for (let tai = 0; tai < concreteTypes.length; tai += 1) {
-		if (tai > 0) typeArgKey = typeArgKey + "_";
-		typeArgKey = typeArgKey + monoTypeKey(concreteTypes[tai]);
-	}
-	const mangledName = calleeName + "__" + typeArgKey;
-	const instType = instantiateGeneric(baseSym.symbolType, trimmedParamNames, concreteTypes);
-	const instInner = (instType.kind === TypeKind.Ref && instType.typeReturn !== null) ? instType.typeReturn : instType;
-	instInner.typeName = mangledName;
+	// Build GenericInstance — same structure as type annotation path in resolvePass.
+	// Avoids instantiateGeneric which creates shared type references that cause DRC
+	// use-after-free when the original base type is freed (substituteType shallow copies).
+	const isRefBase = baseSym.symbolType.kind === TypeKind.Ref;
+	let baseType = baseSym.symbolType;
+	if (isRefBase && baseType.typeReturn !== null) baseType = baseType.typeReturn;
+	const instType = createGenericInstance(baseType, concreteTypes);
+	instantiateGenericBody(instType, genericParams);
 	// On-demand constructor instantiation: if class has constructor, generate ClassName_new()
 	if (hasFlag(baseSym, SymbolFlag.HasConstructor)) {
 		instantiateClassConstructor(baseSym, trimmedParamNames, concreteTypes, ctx);
 	}
-	return instType;
+	return isRefBase ? createRef(instType) : instType;
 }
 
 // Resolve the defining module info for a type by name.
@@ -1107,7 +1104,13 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 			if (declData.fnDefaults !== null) fnDefaults = declData.fnDefaults;
 		}
 	}
-	fillDefaults(ctx, cd.arguments, fnDefaults, totalParams, defaultOffset, null as unknown as Type[]);
+	// Pass parameter types so default expressions get correct type hints
+	// (e.g., empty array [] for string[] param → msStringArray, not msRefArray).
+	let paramTypes: Type[] = null as unknown as Type[];
+	if (defSym !== null && defSym.symbolType !== null && defSym.symbolType.typeChildren !== null) {
+		paramTypes = defSym.symbolType.typeChildren;
+	}
+	fillDefaults(ctx, cd.arguments, fnDefaults, totalParams, defaultOffset, paramTypes);
 }
 
 // ===== NewExpr =====
@@ -1141,6 +1144,7 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 	if (d.newCallee.kind === NodeKind.Identifier) {
 		const id = d.newCallee.data as IdentifierData;
 		// Interface/value type: new Map() / new Array(32) with type from variable annotation
+		// Also handle Ref<Struct> and Ref<GenericInstance> (interface types are Ref-wrapped)
 		if (expected !== null && (expected.kind === TypeKind.Struct || expected.kind === TypeKind.GenericInstance)) {
 			node.nodeType = expected;
 			checkNewArgs(ctx, d.newArguments);
@@ -1180,6 +1184,18 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 	checkExpr(ctx, d.newCallee, null);
 	const calleeType = d.newCallee.nodeType;
 	const resolvedType = resolveGenericNewExpr(ctx, d.newCallee, calleeType);
+	// Error: generic type without type args and no inferable context
+	if (d.newCallee.kind === NodeKind.Identifier) {
+		const calleeName2 = (d.newCallee.data as IdentifierData).name;
+		const genericParams2 = getGenericDecl(calleeName2);
+		if (genericParams2 !== "") {
+			const ltCol2 = d.newCallee.location.column + calleeName2.length;
+			const typeArgStr2 = getExplicitTypeArg(d.newCallee.location.line, ltCol2);
+			if (typeArgStr2 === "") {
+				addError(ctx, `'new ${calleeName2}()' requires explicit type arguments: new ${calleeName2}<...>()`, node.location.line, node.location.column);
+			}
+		}
+	}
 	// Resolve inner struct type for field type propagation
 	const innerType = (resolvedType !== null && resolvedType.kind === TypeKind.Ref && resolvedType.typeReturn !== null)
 		? resolvedType.typeReturn : resolvedType;
@@ -1199,7 +1215,17 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 	// Fill default args for constructor calls — unified with fillDefaults (same as functions).
 	if (hasCtor) {
 		// Path 1: monomorphized generic constructors (Set__string_new) via _ctorRegistry
-		const mangledName = innerType !== null ? innerType.typeName : "";
+		// For GenericInstance types, compute mangled name from structure (typeName + type args).
+		// The GenericInstance keeps bare typeName ("Map") for type matching/unification;
+		// the mangled name ("Map__string_int64") is computed on-demand here.
+		let mangledName = "";
+		if (innerType !== null) {
+			if (innerType.kind === TypeKind.GenericInstance && innerType.typeChildren.length > 0) {
+				mangledName = mangleMonoName(innerType.typeName, innerType.typeChildren);
+			} else {
+				mangledName = innerType.typeName;
+			}
+		}
 		const ctorFnName = mangledName + "_new";
 		const ctorEntry = mangledName !== "" ? lookupCtorDefaults(ctorFnName) : null;
 		if (ctorEntry !== null && ctorEntry.fnType !== null && ctorEntry.fnType.typeChildren !== null) {

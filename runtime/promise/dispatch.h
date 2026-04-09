@@ -76,6 +76,7 @@ void msProcessCallbacks(msDispatcher* d, bool* didWork);
 int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs);
 
 bool msRunOnce(int timeoutMs);
+int32_t msGetWakePipeFd(void);
 void msPoll(int timeoutMs);
 void* msWaitFor(void* fut);
 void msWaitForReady(void* fut);

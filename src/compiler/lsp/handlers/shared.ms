@@ -4,8 +4,9 @@
 // publishing, cursor extraction, source text access, and import resolution.
 
 import { TransAmDb, dbSetFileText, getFileText, getFileId } from "../../transam/index";
-import { readFile, clockMs } from "std/process";
-import { translateCHeader } from "../../../module/cparse";
+import { readFile } from "std/fs";
+import { clockMs } from "std/process";
+import { translateCHeader } from "../../../module/cimport/emit";
 import { writeStderr } from "std/io";
 import {
 	lspGetField, lspGetNumberField, lspGetObjectField,
@@ -99,8 +100,9 @@ export function dbGetSource(db: TransAmDb, path: string): string {
 export function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) < 0) {
 		const t0 = clockMs();
-		let source = readFile(filePath);
-		if (source.byteLength > 0) {
+		const readResult = readFile(filePath);
+		if (readResult.ok) {
+			let source = readResult.value;
 			if (filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) === ".h") {
 				source = translateCHeader(source, []);
 			}

@@ -474,8 +474,9 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 	addLine(procs, proto + " {");
 	// Ensure typeInfo is declared in this translation unit
 	ensureTypeInfoDef(g, className);
-	// Allocate with RTTI: msAllocTyped(sizeof(Type), &TypeTypeInfo)
-	addLine(procs, `  ${className}* this = (${className}*)msAllocTyped(sizeof(${className}), &${className}TypeInfo);`);
+	// Allocate with RTTI (DRC) or NULL (manual gc — TypeInfo not emitted)
+	const typeInfoArg = (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) ? "NULL" : `&${className}TypeInfo`;
+	addLine(procs, `  ${className}* this = (${className}*)msAllocTyped(sizeof(${className}), ${typeInfoArg});`);
 
 	if (d.ctorBody !== null) {
 		const p = createProc(ctorName, null);
@@ -572,6 +573,8 @@ function genGlobalVar(g: CGen, node: Node): void {
 	// Detect TypeInfo vars from destructorLifting (ORC runtime RTTI)
 	const nameLen = d.declName.length;
 	if (nameLen > 8 && d.declName.slice(nameLen - 8, nameLen) === "TypeInfo") {
+		// TypeInfo is DRC metadata — skip under --gc=manual (write-only, never read)
+		if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) return;
 		genTypeInfoVar(g, d, varName);
 		return;
 	}
@@ -654,7 +657,7 @@ function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
 // ===== Tests =====
 
 import { createCGen, assembleOutput, scopeMangledParam } from "./context";
-import { CheckerContext } from "../../checker/context";
+import { CheckerContext, GcMode } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 

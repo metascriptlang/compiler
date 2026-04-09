@@ -13,7 +13,8 @@
 //   writeJsonBuildInstructions   → writeProjectCache
 //   BuildCache                   → project cache file (key=value format)
 
-import { fileExists, writeFile, exec } from "std/process";
+import { exec } from "std/process";
+import { exists, readFile, writeFile } from "std/fs";
 import { readFile } from "std/fs";
 import { ensureDir } from "./io";
 import { getCompilerName, modeFlags } from "./cc";
@@ -28,7 +29,7 @@ export function hashContent(s: string): string {
 
 // Hash a file's content. Returns "hash:byteLength" string.
 function hashFile(path: string): string {
-	const src = readFile(path);
+	const src = try readFile(path) catch "";
 	return `${hashContent(src)}:${src.byteLength}`;
 }
 
@@ -85,7 +86,7 @@ export function fullCompileCmd(ccOption: number, mode: number, extraFlags: strin
 }
 
 function computeFingerprint(srcPath: string, compileCmd: string): string {
-	const src = readFile(srcPath);
+	const src = try readFile(srcPath) catch "";
 	return `${hashContent(src)}:${src.byteLength}:${compileCmd}`;
 }
 
@@ -93,7 +94,7 @@ let _lastFingerprint = "";
 
 // Remove a file if it exists (reference-aligned: tryRemoveFile).
 function tryRemoveFile(path: string): void {
-	if (fileExists(path)) {
+	if (exists(path)) {
 		exec(`rm -f "${path}"`);
 	}
 }
@@ -107,8 +108,8 @@ export function isCompileCached(srcPath: string, oFile: string, compileCmd: stri
 		return false;
 	}
 	const fpFile = oFile + ".fp";
-	if (!fileExists(oFile) || !fileExists(fpFile)) return false;
-	const stored = readFile(fpFile);
+	if (!exists(oFile) || !exists(fpFile)) return false;
+	const stored = try readFile(fpFile) catch "";
 	if (stored === _lastFingerprint) return true;
 	tryRemoveFile(oFile);
 	return false;
@@ -147,7 +148,7 @@ function getCompilerHash(ccOption: number): string {
 	const name = getCompilerName(ccOption, "");
 	const tmpFile = getCacheDir() + "/_cc_version";
 	exec(name + " --version > " + tmpFile + " 2>&1");
-	const version = readFile(tmpFile);
+	const version = try readFile(tmpFile) catch "";
 	if (version.length > 0) {
 		_compilerHash = hashContent(version);
 	} else {
@@ -210,10 +211,11 @@ export function projectCacheChanged(
 	if (_forceRebuild) return true;
 
 	const cacheFile = projectCacheFile();
-	if (!fileExists(cacheFile) || !fileExists(outputFile)) return true;
+	if (!exists(cacheFile) || !exists(outputFile)) return true;
 
-	const stored = readFile(cacheFile);
-	const lines = splitLines(stored);
+	const cacheResult = readFile(cacheFile);
+	if (!cacheResult.ok) return true;
+	const lines = splitLines(cacheResult.value);
 
 	// Parse header fields
 	let storedVersion = "";
@@ -311,9 +313,9 @@ export function isCCodeCached(modPath: string, cCode: string, compileCmd: string
 		tryRemoveFile(oFile);
 		return false;
 	}
-	if (!fileExists(oFile) || !fileExists(fpFile)) return false;
-	const stored = readFile(fpFile);
-	if (stored === fp) return true;
+	if (!exists(oFile) || !exists(fpFile)) return false;
+	const storedFp = try readFile(fpFile) catch "";
+	if (storedFp === fp) return true;
 	tryRemoveFile(oFile);
 	return false;
 }
@@ -341,10 +343,11 @@ function linkCacheFile(): string {
 export function isLinkCached(oFileList: string, linkFlags: string, outputFile: string): boolean {
 	if (_forceRebuild) return false;
 	const cFile = linkCacheFile();
-	if (!fileExists(cFile) || !fileExists(outputFile)) return false;
+	if (!exists(cFile) || !exists(outputFile)) return false;
 
-	const stored = readFile(cFile);
-	const lines = splitLines(stored);
+	const linkResult = readFile(cFile);
+	if (!linkResult.ok) return false;
+	const lines = splitLines(linkResult.value);
 
 	let storedCmd = "";
 	let storedOFiles = "";

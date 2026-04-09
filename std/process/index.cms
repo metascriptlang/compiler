@@ -52,22 +52,6 @@ export function cwd(): string {
 }
 
 // =============================================================================
-// File I/O
-// =============================================================================
-
-export function readFile(path: string): string {
-	return msProcessReadFile(path);
-}
-
-export function writeFile(path: string, content: string): boolean {
-	return msProcessWriteFile(path, content) === 1;
-}
-
-export function fileExists(path: string): boolean {
-	return msProcessFileExists(path) === 1;
-}
-
-// =============================================================================
 // Shell execution
 // =============================================================================
 

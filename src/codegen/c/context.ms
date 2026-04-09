@@ -527,6 +527,17 @@ export function aliveSetHas(aliveSet: AliveSet, modulePath: string, name: string
 	return aliveSet._set.has(key);
 }
 
+// Check if any alive symbol belongs to a given module.
+// Used for module-level DCE: skip entire modules with zero reachable symbols.
+export function aliveSetHasModule(aliveSet: AliveSet, modulePath: string): boolean {
+	if (aliveSet.entries.length === 0) return true;  // DCE disabled
+	const prefix = modulePath + ":";
+	for (const key of aliveSet.entries) {
+		if (key.startsWith(prefix)) return true;
+	}
+	return false;
+}
+
 // ===== CGen — module-level state (Standard reference parity) =====
 
 export class CGen {

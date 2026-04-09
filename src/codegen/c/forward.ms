@@ -47,21 +47,9 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 	const isSeqHook = typeName.endsWith("Array");
 
 	const proto = match (suffix) {
-		"Destroy" => {
-			if (isSeqHook) {
-				return `void ${callee}(${typeName} self)`;
-			} else {
-				return `void ${callee}(${typeName}* self)`;
-			}
-		},
+		"Destroy" => `void ${callee}(${typeName}* self)`,
 		"WasMoved" => `void ${callee}(${typeName}* self)`,
-		"Copy" | "Sink" => {
-			if (isSeqHook) {
-				return `void ${callee}(${typeName}* dest, ${typeName} src)`;
-			} else {
-				return `void ${callee}(${typeName}* dest, ${typeName}* src)`;
-			}
-		},
+		"Copy" | "Sink" => `void ${callee}(${typeName}* dest, ${typeName}* src)`,
 		"Dup" => `${typeName} ${callee}(${typeName}* src)`,
 		"Eq" => `MS_BOOL ${callee}(${typeName} a, ${typeName} b)`,
 		"Trace" => `void ${callee}(${typeName}* self, void* callback)`,

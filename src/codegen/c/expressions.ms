@@ -20,6 +20,16 @@ import { formatCNumber, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByte
 import { findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto } from "./forward";
 import { useHeader } from "./context";
+import { GcMode } from "../../checker/context";
+
+// Heap allocation expression: msAllocTyped with TypeInfo (DRC) or NULL (manual gc).
+// Under --gc=manual, TypeInfo is not emitted, so we pass NULL.
+function genAllocTyped(g: CGen, cType: string): string {
+	if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) {
+		return `(${cType}*)msAllocTyped(sizeof(${cType}), NULL)`;
+	}
+	return `(${cType}*)msAllocTyped(sizeof(${cType}), &${cType}TypeInfo)`;
+}
 
 // ===== Reference: argument passing for introduced pointers =====
 // Wraps arg for pointer introduction params at call sites.
@@ -742,17 +752,17 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 					g.labels += 1;
 					const tmp0 = `_new${g.labels}_`;
 					emitProcLocalsLine(p, `${cType}* ${tmp0};`);
-					emitStmtsLine(p, `${tmp0} = (${cType}*)msAllocTyped(sizeof(${cType}), &${cType}TypeInfo);`);
+					emitStmtsLine(p, `${tmp0} = ${genAllocTyped(g, cType)};`);
 					emitInstanceFieldDefaults(g, p, tmp0, node.nodeType, 0);
 					ctx.results.push(tmp0);
 				} else {
-					ctx.results.push(`(${cType}*)msAllocTyped(sizeof(${cType}), &${cType}TypeInfo)`);
+					ctx.results.push(`${genAllocTyped(g, cType)}`);
 				}
 			} else {
 				g.labels += 1;
 				const tmp = `_new${g.labels}_`;
 				emitProcLocalsLine(p, `${cType}* ${tmp};`);
-				emitStmtsLine(p, `${tmp} = (${cType}*)msAllocTyped(sizeof(${cType}), &${cType}TypeInfo);`);
+				emitStmtsLine(p, `${tmp} = ${genAllocTyped(g, cType)};`);
 				const fieldNames = (innerType.typeNames !== null) ? innerType.typeNames : null as unknown as string[];
 				let fi = 0;
 				while (fi < d.newArguments.length) {
@@ -793,13 +803,13 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		// Constructor check already handled at top of NewExpr handler
 		if (d.newArguments.length === 0) {
 			// No-arg new without constructor: allocate with zero-init
-			ctx.results.push(`(${calleeName}*)msAllocTyped(sizeof(${calleeName}), &${calleeName}TypeInfo)`);
+			ctx.results.push(`${genAllocTyped(g, calleeName)}`);
 		} else {
 			// Positional args → field-by-field assignment using type info
 			g.labels += 1;
 			const tmp = `_new${g.labels}_`;
 			emitProcLocalsLine(p, `${calleeName}* ${tmp};`);
-			emitStmtsLine(p, `${tmp} = (${calleeName}*)msAllocTyped(sizeof(${calleeName}), &${calleeName}TypeInfo);`);
+			emitStmtsLine(p, `${tmp} = ${genAllocTyped(g, calleeName)};`);
 			// Get field names from the class type (Ref → unwrap to Struct → typeNames)
 			const classType = node.nodeType;
 			const innerType = (classType !== null && (classType.kind === TypeKind.Ref || classType.kind === TypeKind.Ptr)) ? classType.typeReturn : classType;
@@ -1397,7 +1407,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					// Class: heap-allocate (Reference parity: managed object construction)
 					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
 					ensureTypeInfoDef(g, cType);
-					emitStmtsLine(p, `${tmpName} = (${cType}*)msAllocTyped(sizeof(${cType}), &${cType}TypeInfo);`);
+					emitStmtsLine(p, `${tmpName} = ${genAllocTyped(g, cType)};`);
 					emitStmtsLine(p, `memset(${tmpName}, 0, sizeof(${cType}));`);
 				} else {
 					// Value type: stack-allocate

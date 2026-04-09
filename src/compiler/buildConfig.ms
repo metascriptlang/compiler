@@ -1,8 +1,7 @@
 // MetaScript Compiler CLI — build.ms config loader
 // Uses AST parsing to extract config from build.ms (no Raiser VM needed).
 
-import { fileExists } from "std/process";
-import { readFile } from "std/fs";
+import { exists, readFile } from "std/fs";
 import { registerCoreParsers } from "../parser/statements/core";
 import { parseSource } from "../parser/statements/validation";
 import { resolveImportWithConfig, createDefaultConfig, Backend } from "../module/resolver";
@@ -295,9 +294,9 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const defCc = defaultCcSection();
 	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, cc: defCc, valid: false };
 
-	if (!fileExists(filePath)) return defCfg;
+	if (!exists(filePath)) return defCfg;
 
-	const source = readFile(filePath);
+	const source = try readFile(filePath) catch "";
 	if (source.length === 0) return defCfg;
 
 	if (!_parsersRegistered) {
@@ -351,7 +350,7 @@ export function validateBuildConfig(dir: string, source: string): BuildWarning[]
 			const candidates = resolveImportWithConfig(entry, buildFile, createDefaultConfig(Backend.C, dir));
 			let found = false;
 			for (const c of candidates) {
-				if (fileExists(c)) { found = true; break; }
+				if (exists(c)) { found = true; break; }
 			}
 			if (!found) {
 				warnings.push({ message: `Entry '${entry}' not found — build/run may fail unless entry is provided via command args`, line: entryNode.location.line });
@@ -365,9 +364,10 @@ export function validateBuildConfig(dir: string, source: string): BuildWarning[]
 // Returns default if build.ms not found or has no fmt section.
 export function loadFmtSection(dir: string): FmtSection {
 	const buildPath = dir + "/build.ms";
-	if (!fileExists(buildPath)) return defaultFmtSection();
-	const source = readFile(buildPath);
-	const configObj = parseBuildSource(source);
+	if (!exists(buildPath)) return defaultFmtSection();
+	const fmtSource = try readFile(buildPath) catch "";
+	if (fmtSource.length === 0) return defaultFmtSection();
+	const configObj = parseBuildSource(fmtSource);
 	if (configObj === null) return defaultFmtSection();
 	return extractFmt(findObjField(configObj, "fmt"));
 }

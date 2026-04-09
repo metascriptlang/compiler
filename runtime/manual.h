@@ -129,13 +129,49 @@ static inline void  msDestroyAndDispose(void* p)  { (void)p; }
 #define msWasMoved(p) ((p) = (void*)0)
 
 /* ===== libc headers for string/array/buffer ===== */
-#ifndef MS_BARE
-#include <string.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <math.h>
-#else
-/* Freestanding: system headers needed but malloc/free redirected to arena */
+#ifdef MS_SOLANA
+
+/* Solana/BPF: truly freestanding — no libc headers available.
+   Use -isystem runtime/freestanding to provide stub headers.
+   Provide minimal libc functions inline. */
+static inline void* memcpy(void* dst, const void* src, size_t n) {
+    char* d = (char*)dst;
+    const char* s = (const char*)src;
+    while (n--) *d++ = *s++;
+    return dst;
+}
+static inline void* memset(void* dst, int c, size_t n) {
+    char* d = (char*)dst;
+    while (n--) *d++ = (char)c;
+    return dst;
+}
+static inline size_t strlen(const char* s) {
+    size_t n = 0;
+    while (s[n]) n++;
+    return n;
+}
+static inline int memcmp(const void* a, const void* b, size_t n) {
+    const unsigned char *pa = (const unsigned char*)a, *pb = (const unsigned char*)b;
+    while (n--) { if (*pa != *pb) return *pa - *pb; pa++; pb++; }
+    return 0;
+}
+
+/* Redirect libc allocator to arena */
+static inline void* _ms_manual_realloc(void* old, size_t new_size) {
+    if (!old) return msArenaAlloc(new_size);
+    return msArenaRealloc(old, new_size, new_size);
+}
+static inline void* _ms_manual_calloc(size_t n, size_t size) {
+    return msArenaAlloc(n * size);
+}
+#define malloc(s)     msArenaAlloc(s)
+#define calloc(n, s)  _ms_manual_calloc((n), (s))
+#define realloc(p, s) _ms_manual_realloc((p), (s))
+#define free(p)       ((void)(p))
+
+#elif defined(MS_BARE)
+
+/* Freestanding: system headers available but malloc/free redirected to arena */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -156,7 +192,16 @@ static inline void* _ms_manual_calloc(size_t n, size_t size) {
 #define calloc(n, s)  _ms_manual_calloc((n), (s))
 #define realloc(p, s) _ms_manual_realloc((p), (s))
 #define free(p)       ((void)(p))
-#endif /* MS_BARE */
+
+#else
+
+/* Desktop: standard libc */
+#include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <math.h>
+
+#endif
 
 /* ===== String runtime ===== */
 #include "runtime/core/string.h"
@@ -210,12 +255,22 @@ static inline void msThrow(msString msg) {
 }
 
 /* ===== I/O ===== */
+#ifdef MS_SOLANA
+/* Solana: log via sol_log_ syscall (provided by Solana runtime) */
+extern uint64_t sol_log_(const char* msg, uint64_t len);
+static inline void msPrintln(msString s) {
+    if (s.p != (void*)0 && s.len > 0) {
+        sol_log_(s.p->data, (uint64_t)s.len);
+    }
+}
+#else
 static inline void msPrintln(msString s) {
     if (s.p != NULL && s.len > 0) {
         fwrite(s.p->data, 1, (size_t)s.len, stdout);
     }
     fputc('\n', stdout);
 }
+#endif
 
 /* ===== DRC Lifecycle Macros (all no-ops) ===== */
 

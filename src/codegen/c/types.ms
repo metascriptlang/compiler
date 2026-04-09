@@ -6,6 +6,7 @@
 
 import { isStructType, getTypeSize, skipModifier, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType, substituteType, createStruct, needsRC } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
+import { monoTypeKey } from "../../monomorphize/registry";
 import { Node, CallExprData, Type, TypeKind, SymbolKind } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
@@ -461,6 +462,8 @@ export function ensureForwardDecl(g: CGen, typeName: string): void {
 // The owning module emits `msTypeInfo FooTypeInfo;` via destructorLifting (non-static linkage).
 // Consuming modules need `extern msTypeInfo FooTypeInfo;` to reference it.
 export function ensureTypeInfo(g: CGen, className: string): void {
+	// TypeInfo is DRC metadata — unused under --gc=manual (write-only in manual.h).
+	if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) return;
 	const key = "typeInfo:" + className;
 	if (typeCacheHas(g.forwTypeCache, key)) return;
 	typeCacheSet(g.forwTypeCache, key, className);
@@ -472,6 +475,8 @@ export function ensureTypeInfo(g: CGen, className: string): void {
 // The owning module (has InterfaceDecl/ClassDecl → in declaredThings) emits the definition.
 // Consuming modules emit extern. Compiler-generated types ($Env_*) are always local.
 export function ensureTypeInfoDef(g: CGen, className: string): void {
+	// TypeInfo is DRC metadata — unused under --gc=manual (write-only in manual.h).
+	if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) return;
 	const defKey = "typeInfoDef:" + className;
 	if (typeCacheHas(g.forwTypeCache, defKey)) return;
 	typeCacheSet(g.forwTypeCache, defKey, className);
@@ -569,10 +574,11 @@ export function getTypeDesc(g: CGen, t: Type): string {
 	if (k === TypeKind.GenericParam) return "void*";
 	// GenericInstance: resolve to monomorphized C struct name
 	if (k === TypeKind.GenericInstance) {
-		// Build mangled name from base type name + type arg keys
+		// Build mangled name using monoTypeKey (single source of truth for C-safe type keys).
+		// Must match the checker's naming in resolvePass.ms and checkExprPass.ms.
 		let instName = t.typeName;
 		for (let gi = 0; gi < t.typeChildren.length; gi += 1) {
-			instName = `${instName}${gi === 0 ? "__" : "_"}${typeKey(t.typeChildren[gi])}`;
+			instName = `${instName}${gi === 0 ? "__" : "_"}${monoTypeKey(t.typeChildren[gi])}`;
 		}
 		const cacheKey = `object:${instName}`;
 		const cached = typeCacheGet(g.typeCache, cacheKey);
@@ -1171,7 +1177,7 @@ function genTupleType(g: CGen, t: Type): string {
 
 import { createPrimitive, createStruct, createArray, createEnum, createRef, createTuple } from "../../checker/types";
 import { createCGen } from "./context";
-import { CheckerContext } from "../../checker/context";
+import { CheckerContext, GcMode } from "../../checker/context";
 test "primitive keys" {
 	assert typeKey(createPrimitive(TypeKind.Number)) === "number";
 	assert typeKey(createPrimitive(TypeKind.String)) === "string";

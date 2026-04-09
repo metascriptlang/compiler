@@ -131,7 +131,13 @@ export function parseArgs(): CliOptions {
 			else if (ccVal === "gcc") { opts.ccCompiler = 2; }
 			else { opts.ccBinary = ccVal; }
 		} else if (arg.startsWith("--os=")) {
-			opts.osTarget = arg.slice(5, arg.length);
+			const osVal = arg.slice(5, arg.length);
+			if (osVal !== "bare" && osVal !== "solana" && osVal !== "linux" && osVal !== "macos" && osVal !== "windows" && osVal !== "darwin" && osVal !== "freebsd") {
+				console.log(`error: unknown --os target: "${osVal}"`);
+				console.log(`  Valid targets: bare, solana, linux, macos, windows`);
+				return opts;
+			}
+			opts.osTarget = osVal;
 		} else if (arg.startsWith("--cpu=")) {
 			opts.cpuTarget = arg.slice(6, arg.length);
 		} else if (arg === "--gendeps") {

@@ -28,6 +28,15 @@
 extern "C" {
 #endif
 
+/* ===== Last errno capture ===== */
+/* Captured after each fallible operation so .cms wrappers can build IoError. */
+
+static int _msFsLastErrno = 0;
+
+static inline int32_t msFsLastErrno(void) {
+	return (int32_t)_msFsLastErrno;
+}
+
 /* ===== Read ===== */
 
 /**
@@ -36,8 +45,9 @@ extern "C" {
  * Cap: 64 MiB (guard against accidental huge reads).
  */
 static inline msString msFsReadFile(msString path) {
+	_msFsLastErrno = 0;
 	FILE* f = fopen(msStringToCString(path), "rb");
-	if (!f) return MS_EMPTY_STRING;
+	if (!f) { _msFsLastErrno = errno; return MS_EMPTY_STRING; }
 	fseek(f, 0, SEEK_END);
 	long sz = ftell(f);
 	fseek(f, 0, SEEK_SET);
@@ -59,8 +69,9 @@ static inline msString msFsReadFile(msString path) {
  * Returns 1.0 on success, 0.0 on failure.
  */
 static inline double msFsWriteFileMode(msString path, msString content, msString mode) {
+	_msFsLastErrno = 0;
 	FILE* f = fopen(msStringToCString(path), msStringToCString(mode));
-	if (!f) return 0.0;
+	if (!f) { _msFsLastErrno = errno; return 0.0; }
 	size_t written = fwrite(msStringToCString(content), 1, content.len, f);
 	fclose(f);
 	return (written == (size_t)content.len) ? 1.0 : 0.0;
@@ -100,8 +111,10 @@ static inline double msFsFileSize(msString path) {
  * Create directory (0755). Returns 1.0 on success or EEXIST, 0.0 on failure.
  */
 static inline double msFsMkdir(msString path) {
+	_msFsLastErrno = 0;
 	int r = mkdir(msStringToCString(path), 0755);
 	if (r == 0 || errno == EEXIST) return 1.0;
+	_msFsLastErrno = errno;
 	return 0.0;
 }
 
@@ -109,7 +122,10 @@ static inline double msFsMkdir(msString path) {
  * Remove empty directory. Returns 1.0 on success, 0.0 on failure.
  */
 static inline double msFsRmdir(msString path) {
-	return (rmdir(msStringToCString(path)) == 0) ? 1.0 : 0.0;
+	_msFsLastErrno = 0;
+	if (rmdir(msStringToCString(path)) == 0) return 1.0;
+	_msFsLastErrno = errno;
+	return 0.0;
 }
 
 /* ===== Remove / Rename ===== */
@@ -118,14 +134,20 @@ static inline double msFsRmdir(msString path) {
  * Remove a file. Returns 1.0 on success, 0.0 on failure.
  */
 static inline double msFsRemove(msString path) {
-	return (unlink(msStringToCString(path)) == 0) ? 1.0 : 0.0;
+	_msFsLastErrno = 0;
+	if (unlink(msStringToCString(path)) == 0) return 1.0;
+	_msFsLastErrno = errno;
+	return 0.0;
 }
 
 /**
  * Rename/move a file or directory. Returns 1.0 on success, 0.0 on failure.
  */
 static inline double msFsRename(msString oldPath, msString newPath) {
-	return (rename(msStringToCString(oldPath), msStringToCString(newPath)) == 0) ? 1.0 : 0.0;
+	_msFsLastErrno = 0;
+	if (rename(msStringToCString(oldPath), msStringToCString(newPath)) == 0) return 1.0;
+	_msFsLastErrno = errno;
+	return 0.0;
 }
 
 #ifdef __cplusplus

@@ -132,20 +132,33 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 		const id = node.data as IdentifierData;
 		const sym = node.resolvedSym;
 		if (sym !== null) {
-			// Check if this identifier refers to an imported symbol
-			const importIdx = findImport(importMap, id.name);
-			if (importIdx >= 0) {
-				// Cross-module reference — mark in source module and walk its body
-				const srcPath = importMap.sourcePaths[importIdx];
-				markAndWalk(srcPath, id.name);
+			// Use the symbol's home module + original declared name.
+			// originalName handles aliases: import { printNode as printAstNode }
+			// → sym.name="printAstNode", sym.originalName="printNode"
+			// We need "printNode" to find the declaration in the source module.
+			const targetName = (sym.originalName !== "" && sym.originalName !== null) ? sym.originalName : sym.name;
+			if (sym.modulePath !== "" && sym.modulePath !== modulePath) {
+				markAndWalk(sym.modulePath, targetName);
 			} else {
-				// Local reference
-				markAndWalk(modulePath, sym.name);
+				markAndWalk(modulePath, targetName);
 			}
 		} else if (id.name.length > 0) {
-			// Transform-generated Identifiers (lambda lifting, builtinLower) lack resolvedSym.
-			// Trace by name within current module to ensure callees of lifted functions are alive.
+			// No resolvedSym: transform-generated or generic-instantiated identifiers.
+			// Try current module first, then search all modules (cross-module callees
+			// inside generic instantiations have resolvedSym cleared during deep clone).
 			markAndWalk(modulePath, id.name);
+			const prog = findProgram(_modIdx, modulePath);
+			if (prog !== null && findDecl(prog, id.name) === null) {
+				// Not found locally — search all modules
+				for (let si = 0; si < _modIdx.paths.length; si += 1) {
+					if (_modIdx.paths[si] === modulePath) continue;
+					const decl = findDecl(_modIdx.programs[si], id.name);
+					if (decl !== null) {
+						markAndWalk(_modIdx.paths[si], id.name);
+						break;
+					}
+				}
+			}
 		}
 		return;
 	}
@@ -165,7 +178,23 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 		const md = node.data as MemberExprData;
 		walkBody(md.object, modulePath, importMap);
 		if (node.resolvedSym !== null) {
-			markAndWalk(modulePath, node.resolvedSym.name);
+			const sym2 = node.resolvedSym;
+			const targetName2 = (sym2.originalName !== "" && sym2.originalName !== null) ? sym2.originalName : sym2.name;
+			if (sym2.modulePath !== "" && sym2.modulePath !== modulePath) {
+				markAndWalk(sym2.modulePath, targetName2);
+			} else {
+				markAndWalk(modulePath, targetName2);
+			}
+		} else if (md.property !== "") {
+			// No resolvedSym (generic instantiation clears it).
+			// Search all modules for the method — extension methods may be cross-module.
+			for (let si = 0; si < _modIdx.paths.length; si += 1) {
+				const decl = findDecl(_modIdx.programs[si], md.property);
+				if (decl !== null) {
+					markAndWalk(_modIdx.paths[si], md.property);
+					break;
+				}
+			}
 		}
 		return;
 	}
@@ -184,24 +213,29 @@ function walkChildrenGeneric(node: Node, modulePath: string, importMap: ImportMa
 }
 
 // Mark a symbol alive and walk its body if not already visited.
+// Walks ALL overloads with the same name (not just the first).
 function markAndWalk(modulePath: string, name: string): void {
 	const key = modulePath + ":" + name;
 	if (visitedHas(key)) return;
 	visitedAdd(key);
 	aliveSetAdd(_aliveSet, modulePath, name);
 
-	// Find the declaration in the module's AST and walk its body
+	// Find ALL declarations with this name (handles overloaded functions)
 	const program = findProgram(_modIdx, modulePath);
 	if (program === null) return;
-	const decl = findDecl(program, name);
-	if (decl === null) return;
-
-	// Use cached import map for cross-module tracing
 	const importMap = getImportMap(program, modulePath);
-	walkBody(decl, modulePath, importMap);
+	const d = program.data as ProgramData;
+	for (const stmt of d.programStmts) {
+		if (stmt === null) continue;
+		const found = matchDeclName(stmt, name);
+		if (found !== null) {
+			walkBody(found, modulePath, importMap);
+		}
+	}
 }
 
-// Find a top-level declaration by name in a program AST.
+// Find a top-level declaration by name in a program AST (first match only).
+// Used by the no-resolvedSym fallback search — markAndWalk uses inline loop for all overloads.
 function findDecl(program: Node, name: string): Node {
 	const d = program.data as ProgramData;
 	for (const stmt of d.programStmts) {
@@ -320,11 +354,24 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 				}
 			}
 
-			// Root 2: Compiler-generated functions ($lifted_*, $fn_*, $Env_*) — always alive.
-			// Walk their bodies so callees (e.g., self-recursive functions) are traced.
+			// Root 2: Compiler-generated functions — always alive.
+			// Must match isDeclAlive exemptions in codegen/c/declarations.ms exactly:
+			// $prefix (lambda lifting), =prefix (operators), __prefix (builtinLower),
+			// DRC lifecycle suffixes, generic instantiations (__ in middle of name).
 			if (stmt.kind === NodeKind.FunctionDecl) {
 				const fd2 = stmt.data as FunctionDeclData;
-				if (fd2.fnName.length > 0 && fd2.fnName.slice(0, 1) === "$") {
+				const fn = fd2.fnName;
+				if (fn.length > 0 && (fn.slice(0, 1) === "$" || fn.slice(0, 1) === "=")) {
+					walkBody(stmt, modulePath, importMap);
+					continue;
+				}
+				if (fn.length > 1 && fn.slice(0, 2) === "__") {
+					walkBody(stmt, modulePath, importMap);
+					continue;
+				}
+				// Generic instantiations: name contains __ after position 0 (e.g., hash__number)
+				if (fn.indexOf("__", 0) > 0) {
+					markAndWalk(modulePath, fn);
 					walkBody(stmt, modulePath, importMap);
 					continue;
 				}
@@ -342,8 +389,10 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 				continue;
 			}
 
-			// Root 5: Exported declarations (reachable from outside)
-			if (isExportedDecl(stmt)) {
+			// Root 5: Exported declarations in ENTRY MODULE only.
+			// Dependency module exports are NOT roots (reference parity: only sfExportc/sfCompilerProc).
+			// They become alive through transitive tracing from main() or top-level statements.
+			if (modulePath === entryPath && isExportedDecl(stmt)) {
 				const name = getDeclName(stmt);
 				if (name !== "") {
 					markAndWalk(modulePath, name);

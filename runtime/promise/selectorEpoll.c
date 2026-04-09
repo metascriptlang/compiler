@@ -1,3 +1,4 @@
+#ifndef MS_BARE
 /*
  * MetaScript I/O Selector — epoll backend (Linux)
  *
@@ -106,3 +107,5 @@ int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEve
 }
 
 #endif /* __linux__ */
+
+#endif /* MS_BARE */

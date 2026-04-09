@@ -11,6 +11,7 @@ import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, stripGenFlag } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
+import { mangleMonoName } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { getIdentId } from "./idents";
 
@@ -137,14 +138,6 @@ function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
 	}
 }
 
-// Build mangled name: "set" + ["string","string"] → "set__string_string"
-function buildMangledName(baseName: string, types: Type[]): string {
-	let result = baseName;
-	for (let i = 0; i < types.length; i += 1) {
-		result = result + (i === 0 ? "__" : "_") + monoConcreteTypeName(types[i]);
-	}
-	return result;
-}
 
 // Unwrap ExportDecl/DecoratedDecl to get the inner FunctionDecl
 function unwrapToFunctionDecl(node: Node): Node {
@@ -301,7 +294,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	ctx.genericInstDepth = ctx.genericInstDepth + 1;
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
-	const mangledName = buildMangledName(sym.name, dedup.types);
+	const mangledName = mangleMonoName(sym.name, dedup.types);
 
 	// Cache check — skip if already instantiated.
 	// Reference parity (genericCacheGet + findPendingModule): return cached symbol only.
@@ -395,7 +388,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	}
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
-	const mangledClass = buildMangledName(classSym.name, dedup.types);
+	const mangledClass = mangleMonoName(classSym.name, dedup.types);
 	const ctorFnName = mangledClass + "_new";
 
 	// Cache check — already instantiated?

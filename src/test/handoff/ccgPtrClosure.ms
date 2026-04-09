@@ -3,7 +3,7 @@
 // expects Node* but the caller passes Node value — needs &.
 
 import { compileToC } from "../helpers";
-import { writeFile } from "std/process";
+import { writeFile } from "std/fs";
 
 test "closure call with large struct arg uses address" {
 	const src = `

@@ -2,7 +2,7 @@
 //
 // Invokes clang to compile generated C source into native binaries.
 
-import { exec } from "std/process";
+import { exec, getEnv } from "std/process";
 import { join, dirname } from "std/fs/path";
 import { CliOptions } from "./options";
 import { resolveRuntimeDir } from "../utils/path";
@@ -41,6 +41,85 @@ function checkZigCC(): boolean {
 		hasZigCC = exec("which zig > /dev/null 2>&1") === 0;
 	}
 	return hasZigCC;
+}
+
+// -- Solana BPF toolchain detection --
+
+let _bpfClang = "";
+let _bpfClangChecked = false;
+
+function testBpfClang(binary: string): boolean {
+	// Check if clang supports BPF target (Apple clang doesn't)
+	return exec(`"${binary}" --print-targets 2>/dev/null | grep -q bpf`) === 0;
+}
+
+export function resolveBpfClang(): string {
+	if (_bpfClangChecked) return _bpfClang;
+	_bpfClangChecked = true;
+	const candidates = [
+		"/opt/homebrew/opt/llvm/bin/clang",  // macOS Apple Silicon
+		"/usr/local/opt/llvm/bin/clang",     // macOS Intel
+		"clang",                              // System clang (Linux)
+	];
+	for (const c of candidates) {
+		if (testBpfClang(c)) {
+			_bpfClang = c;
+			return _bpfClang;
+		}
+	}
+	return "";
+}
+
+let _sbpfLinker = "";
+let _sbpfLinkerChecked = false;
+
+export function resolveSbpfLinker(): string {
+	if (_sbpfLinkerChecked) return _sbpfLinker;
+	_sbpfLinkerChecked = true;
+	if (exec("which sbpf-linker > /dev/null 2>&1") === 0) {
+		_sbpfLinker = "sbpf-linker";
+	} else {
+		// Try cargo default install location
+		const home = getEnv("HOME");
+		if (home !== "") {
+			const cargoPath = `${home}/.cargo/bin/sbpf-linker`;
+			if (exec(`test -x "${cargoPath}"`) === 0) {
+				_sbpfLinker = cargoPath;
+			}
+		}
+	}
+	return _sbpfLinker;
+}
+
+// Validate a .bc file is BPF-compatible (no floats, no aggregate returns).
+// Returns true if valid, false if llc rejects it.
+export function validateBpfBitcode(bcFile: string): boolean {
+	const llc = _bpfClang.length > 5 ? `"${_bpfClang.slice(0, _bpfClang.length - 5)}llc"` : "llc";
+	return exec(`${llc} -march=bpfel -filetype=null "${bcFile}" 2>/dev/null`) === 0;
+}
+
+export function linkSolana(oFileList: string, outBinary: string): number {
+	// Derive llvm-link path from BPF clang binary
+	const llvmDir = _bpfClang.length > 5 ? _bpfClang.slice(0, _bpfClang.length - 5) : "";
+	const llvmLink = llvmDir !== "" ? `"${llvmDir}llvm-link"` : "llvm-link";
+	// Step 1: filter to only BPF-valid .bc files (reject float ops, aggregate returns)
+	let validFiles = "";
+	const parts = oFileList.split(" ");
+	for (const f of parts) {
+		if (f !== "" && validateBpfBitcode(f)) {
+			if (validFiles !== "") validFiles = `${validFiles} `;
+			validFiles = `${validFiles}${f}`;
+		}
+	}
+	if (validFiles === "") return 1;
+	// Step 2: merge valid .bc files into one
+	const combined = `${outBinary}.bc`;
+	const linkCode = exec(`${llvmLink} ${validFiles} -o "${combined}" 2>/dev/null`);
+	if (linkCode !== 0) return linkCode;
+	// Step 3: sbpf-linker converts bitcode to Solana-compatible ELF (DYN type)
+	const linker = resolveSbpfLinker();
+	if (linker === "") return 1;
+	return exec(`${linker} "${combined}" --export entrypoint -o "${outBinary}" 2>/dev/null`);
 }
 
 export function getCompilerName(ccOption: number, ccBinary: string): string {
@@ -149,10 +228,20 @@ function isCrossZig(opts: CliOptions): boolean {
 
 export function cliCompileFlags(opts: CliOptions): string {
 	let flags = "";
+	// Solana/BPF: completely different flag set, skip everything else
+	if (opts.osTarget === "solana") {
+		flags = appendFlag(flags, "-target bpfel");
+		flags = appendFlag(flags, "-fno-builtin");
+		flags = appendFlag(flags, "-emit-llvm");
+		const rtDir = resolveRuntimeDir();
+		if (rtDir !== "") flags = appendFlag(flags, `-isystem ${rtDir}/runtime/freestanding`);
+		if (opts.passC !== "") flags = appendFlag(flags, opts.passC);
+		return flags;
+	}
 	// Cross-compilation target triple
 	// zig cc: -target cpu-os-abi (bundled sysroot, no --target= prefix)
 	// clang/gcc: --target=cpu-vendor-os-abi
-	if ((opts.osTarget !== "" && opts.osTarget !== "bare") || opts.cpuTarget !== "") {
+	if ((opts.osTarget !== "" && opts.osTarget !== "bare" && opts.osTarget !== "solana") || opts.cpuTarget !== "") {
 		const useZig = opts.ccBinary === "zig cc";
 		const ct = crossTargetFlag(opts.osTarget, opts.cpuTarget, useZig);
 		if (ct !== "") flags = appendFlag(flags, ct);
@@ -175,6 +264,8 @@ export function cliCompileFlags(opts: CliOptions): string {
 
 // Build link-phase flags (adds passL + strip on top of compile flags).
 export function cliLinkFlags(base: string, opts: CliOptions): string {
+	// Solana: sbpf-linker handles everything, no extra link flags
+	if (opts.osTarget === "solana") return appendFlag(base, opts.passL);
 	let flags = base;
 	flags = appendFlag(flags, opts.passL);
 	if (opts.strip) flags = appendFlag(flags, "-s");

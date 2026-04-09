@@ -347,6 +347,22 @@ static inline int32_t msNetRecvInto(int32_t fd, msString* dest, int32_t maxBytes
 }
 
 /**
+ * Recv all available data into buffer until EAGAIN. Zero-alloc after warmup.
+ * Returns total bytes read, 0 on pure EAGAIN, -1 on close/error.
+ * Composes msNetRecvInto in a drain loop — replaces the MetaScript recv+append pattern.
+ */
+static inline int32_t msNetRecvAll(msString* dest, int32_t fd) {
+	int total = 0;
+	while (1) {
+		int32_t n = msNetRecvInto(fd, dest, 4096);
+		if (n < 0) return total > 0 ? total : -1;  /* closed or error */
+		if (n == 0) return total > 0 ? total : 0;   /* EAGAIN */
+		total += n;
+		if (n < 4096) return total;  /* short read = no more data ready */
+	}
+}
+
+/**
  * Non-blocking send with offset. Returns bytes sent, 0 on EAGAIN, -1 on error.
  * Allows incremental sending from a sendQueue.
  */
@@ -442,6 +458,43 @@ static inline msString msFastParsePath(msString data) {
 	while (pathEnd < len && d[pathEnd] != ' ') pathEnd++;
 	if (pathEnd >= len) return MS_EMPTY_STRING;
 	return msStringNew(d + pathStart, (int64_t)(pathEnd - pathStart));
+}
+
+/* Fast path extract into existing buffer — zero-alloc after warmup.
+ * Same logic as msFastParsePath but writes into dest instead of allocating. */
+static inline void msFastParsePathInto(msString* dest, msString data) {
+	extern void msStringPrepareAdd(msString* s, int64_t addLen);
+	if (data.len < 14 || !data.p) { dest->len = 0; return; }
+	const char* d = data.p->data;
+	int32_t len = (int32_t)data.len;
+	int32_t i = 0;
+	while (i < len && d[i] != ' ') i++;
+	if (i >= len) { dest->len = 0; return; }
+	int32_t pathStart = i + 1;
+	int32_t pathEnd = pathStart;
+	while (pathEnd < len && d[pathEnd] != ' ') pathEnd++;
+	if (pathEnd >= len) { dest->len = 0; return; }
+	int32_t pathLen = pathEnd - pathStart;
+	dest->len = 0;
+	msStringPrepareAdd(dest, (int64_t)pathLen);
+	memcpy(dest->p->data, d + pathStart, pathLen);
+	dest->len = pathLen;
+	dest->p->data[pathLen] = '\0';
+}
+
+/* Shift string left by offset (memmove in-place, zero alloc).
+ * Used for HTTP pipelining: discard processed request, keep remainder. */
+static inline void msStringShiftLeft(msString* s, int32_t offset) {
+	if (offset <= 0) return;
+	if (offset >= (int32_t)s->len) {
+		s->len = 0;
+		if (s->p) s->p->data[0] = '\0';
+		return;
+	}
+	int32_t remaining = (int32_t)s->len - offset;
+	memmove(s->p->data, s->p->data + offset, remaining);
+	s->len = remaining;
+	s->p->data[remaining] = '\0';
 }
 
 /* Thread-local cached Date header (httpbeast pattern).

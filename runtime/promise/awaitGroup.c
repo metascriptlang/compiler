@@ -1,3 +1,4 @@
+#ifndef MS_BARE
 /*
  * MetaScript AwaitGroup implementation — see awaitGroup.h for design.
  *
@@ -312,14 +313,21 @@ void msAwaitSlotRelease(void* sp) {
 	msAwaitSlot* s = (msAwaitSlot*)sp;
 	/* Check if pointer is within the TLS pool or heap-allocated */
 	if (s >= &msSlotPool[0] && s < &msSlotPool[MS_SLOT_POOL_SIZE]) {
-		/* Pool slot — decrement index. With help-first work stealing,
-		 * release order may not be strict LIFO (stolen tasks can create
-		 * and release slots interleaved with the parent's slots). The
-		 * pool is still safe: slots are independent (no aliasing), and
-		 * the worst case is a small gap that gets reused on next create. */
-		if (msSlotPoolIdx > 0) msSlotPoolIdx--;
+		/* Pool slot — only reclaim if this is the top-of-stack (strict LIFO).
+		 * Help-first work stealing causes non-LIFO release order: the outer
+		 * frame releases slot 0 before slot 3 (sequential await order).
+		 * A blind idx-- would drop below still-active slots, and the next
+		 * create would alias an in-use slot — corrupting results.
+		 * Fix: only reclaim the topmost. Lower slots stay allocated until
+		 * the stack unwinds. Pool has 64 entries (1.5KB), heap fallback
+		 * handles overflow from very deep recursion. */
+		if (msSlotPoolIdx > 0 && s == &msSlotPool[msSlotPoolIdx - 1]) {
+			msSlotPoolIdx--;
+		}
 	} else {
 		/* Heap fallback — free */
 		free(s);
 	}
 }
+
+#endif /* MS_BARE */

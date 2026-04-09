@@ -2,66 +2,111 @@
 
 import {
 	msFsReadFile, msFsWriteFileMode, msFsExists, msFsIsFile, msFsIsDir,
-	msFsFileSize, msFsMkdir, msFsRmdir, msFsRemove, msFsRename,
+	msFsMkdir, msFsRmdir, msFsRemove, msFsRename, msFsLastErrno,
 } from "runtime/fs.h";
+import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
 
 // Path utilities (pure MetaScript)
 export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";
 
-// Direct C bindings
-export extern function readFile(path: string): string from "msFsReadFile";
-export extern function fileSize(path: string): number from "msFsFileSize";
+// ===== Result-returning API (primary) =====
 
-// Boolean wrappers (C returns 1.0/0.0)
-export function writeFile(path: string, content: string): boolean {
-	return msFsWriteFileMode(path, content, "wb") === 1;
+export function readFile(path: string): Result<string, IoError> {
+	const raw = msFsReadFile(path);
+	const err = msFsLastErrno();
+	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.ok(raw);
 }
 
-export function appendFile(path: string, content: string): boolean {
-	return msFsWriteFileMode(path, content, "ab") === 1;
+export function writeFile(path: string, content: string): Result<void, IoError> {
+	const ok = msFsWriteFileMode(path, content, "wb");
+	if (ok !== 1) {
+		const err = msFsLastErrno();
+		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "write failed"));
+	}
+	return Result.ok(null as unknown as void);
 }
+
+export function appendFile(path: string, content: string): Result<void, IoError> {
+	const ok = msFsWriteFileMode(path, content, "ab");
+	if (ok !== 1) {
+		const err = msFsLastErrno();
+		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "append failed"));
+	}
+	return Result.ok(null as unknown as void);
+}
+
+export function mkdir(path: string): Result<void, IoError> {
+	if (msFsMkdir(path) === 1) return Result.ok(null as unknown as void);
+	const err = msFsLastErrno();
+	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "mkdir failed"));
+}
+
+export function rmdir(path: string): Result<void, IoError> {
+	if (msFsRmdir(path) === 1) return Result.ok(null as unknown as void);
+	const err = msFsLastErrno();
+	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "rmdir failed"));
+}
+
+export function remove(path: string): Result<void, IoError> {
+	if (msFsRemove(path) === 1) return Result.ok(null as unknown as void);
+	const err = msFsLastErrno();
+	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "remove failed"));
+}
+
+export function rename(oldPath: string, newPath: string): Result<void, IoError> {
+	if (msFsRename(oldPath, newPath) === 1) return Result.ok(null as unknown as void);
+	const err = msFsLastErrno();
+	if (err !== 0) return Result.err(ioErrorFromErrno(err, oldPath));
+	return Result.err(writeFailed(oldPath, "rename failed"));
+}
+
+// ===== Predicates (stay as boolean — not fallible) =====
 
 export function exists(path: string): boolean { return msFsExists(path) === 1; }
 export function isFile(path: string): boolean { return msFsIsFile(path) === 1; }
 export function isDir(path: string): boolean { return msFsIsDir(path) === 1; }
-export function mkdir(path: string): boolean { return msFsMkdir(path) === 1; }
-export function rmdir(path: string): boolean { return msFsRmdir(path) === 1; }
-export function remove(path: string): boolean { return msFsRemove(path) === 1; }
-export function rename(oldPath: string, newPath: string): boolean { return msFsRename(oldPath, newPath) === 1; }
+export extern function fileSize(path: string): number from "msFsFileSize";
 
-// Pure MetaScript utilities
-export function readLines(path: string): string[] {
-	const content = msFsReadFile(path);
-	if (content.length === 0) return [];
-	return content.split("\n");
+// ===== Composed utilities =====
+
+export function readLines(path: string): Result<string[], IoError> {
+	const content = try readFile(path);
+	if (content.length === 0) return Result.ok([]);
+	return Result.ok(content.split("\n"));
 }
 
-export function writeLines(path: string, lines: string[]): boolean {
-	return msFsWriteFileMode(path, lines.join("\n"), "wb") === 1;
+export function writeLines(path: string, lines: string[]): Result<void, IoError> {
+	return writeFile(path, lines.join("\n"));
 }
 
-export function copyFile(src: string, dst: string): boolean {
-	const content = msFsReadFile(src);
-	if (content.length === 0) return false;
-	return msFsWriteFileMode(dst, content, "wb") === 1;
+export function copyFile(src: string, dst: string): Result<void, IoError> {
+	const content = try readFile(src);
+	return writeFile(dst, content);
 }
 
-export function ensureDir(path: string): boolean {
-	if (msFsExists(path) === 1) return true;
+export function ensureDir(path: string): Result<void, IoError> {
+	if (msFsExists(path) === 1) return Result.ok(null as unknown as void);
 	let i = 0;
 	while (i < path.length) {
 		if (path.charCodeAt(i) === "/".code) {
 			if (i > 0) {
 				const prefix = path.slice(0, i);
 				if (msFsExists(prefix) !== 1) {
-					if (msFsMkdir(prefix) !== 1) return false;
+					const mkResult = mkdir(prefix);
+					if (!mkResult.ok) return mkResult;
 				}
 			}
 		}
 		i = i + 1;
 	}
 	if (msFsExists(path) !== 1) {
-		return msFsMkdir(path) === 1;
+		return mkdir(path);
 	}
-	return true;
+	return Result.ok(null as unknown as void);
 }

@@ -57,7 +57,7 @@ import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
 import { createModule, createModuleGraph, addModule, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { lspResolveImportCandidates } from "../lsp/protocol";
-import { translateCHeader } from "../../module/cparse";
+import { translateCHeader } from "../../module/cimport/emit";
 
 // ===== Stdlib Detection =====
 
@@ -87,7 +87,7 @@ export function dbEnsurePrelude(db: TransAmDb): void {
 
 // Parse a single file and register its exports into the registry.
 function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string): void {
-	const source = readStdFile(filePath);
+	const source = try readStdFile(filePath) catch "";
 	if (source.length === 0) return;
 	const pr = parseSourceLenient(source);
 	if (!pr.ok) return;
@@ -238,7 +238,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 // so the rest of the pipeline (parse → collect → resolve → register) works generically.
 function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) >= 0) return;
-	const raw = readStdFile(filePath);
+	const raw = try readStdFile(filePath) catch "";
 	if (raw.byteLength === 0) return;
 	let source = raw;
 	if (filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) === ".h") {

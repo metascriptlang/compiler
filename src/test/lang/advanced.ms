@@ -1,6 +1,7 @@
 // Language tests: advanced patterns — closures, Result chains, match blocks, pipelines
 
-import { exec, readFile, writeFile } from "std/process";
+import { exec } from "std/process";
+import { readFile, writeFile } from "std/fs";
 import { dirname, join } from "std/fs/path";
 
 type NumFn = (n: number) => number;
@@ -228,8 +229,11 @@ function buildLargeString(lines: number): string {
 test "large file I/O" {
 	const content = buildLargeString(100);
 	const path = "/tmp/ms_large_test.txt";
-	writeFile(path, content);
-	const back = readFile(path);
+	const wr = writeFile(path, content);
+	assert wr.ok;
+	const rr = readFile(path);
+	assert rr.ok;
+	const back = rr.value;
 	assert back === content;
 	assert back.length > 400;
 	exec("rm -f " + path);

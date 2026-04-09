@@ -1,7 +1,10 @@
 // std/fs — File System (Node.js Backend)
 // Mirrors the C backend API (std/fs/index.cms) using Node.js built-ins.
+// Returns Result<T, IoError> for fallible operations.
 
 @import("node:fs", { readFileSync, writeFileSync, existsSync, statSync, mkdirSync, rmdirSync, unlinkSync, renameSync });
+
+import { IoError, IoErrorKind, ioError, notFound, permissionDenied, writeFailed } from "../io/errors";
 
 extern function readFileSync(path: string, encoding: string): string;
 extern function writeFileSync(path: string, data: string): void;
@@ -14,33 +17,67 @@ extern function renameSync(oldPath: string, newPath: string): void;
 // Path utilities (pure MetaScript — shared across backends)
 export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";
 
-export function readFile(path: string): string {
-	return readFileSync(path, "utf-8");
+// ===== Result-returning API =====
+
+export function readFile(path: string): Result<string, IoError> {
+	const content = readFileSync(path, "utf-8");
+	return Result.ok(content);
 }
 
-export function writeFile(path: string, content: string): boolean {
+export function writeFile(path: string, content: string): Result<void, IoError> {
 	writeFileSync(path, content);
-	return true;
+	return Result.ok(null as unknown as void);
 }
 
-export function appendFile(path: string, content: string): boolean {
+export function appendFile(path: string, content: string): Result<void, IoError> {
 	writeFileSync(path, content);
-	return true;
+	return Result.ok(null as unknown as void);
 }
+
+export function mkdir(path: string): Result<void, IoError> {
+	mkdirSync(path);
+	return Result.ok(null as unknown as void);
+}
+
+export function rmdir(path: string): Result<void, IoError> {
+	rmdirSync(path);
+	return Result.ok(null as unknown as void);
+}
+
+export function remove(path: string): Result<void, IoError> {
+	unlinkSync(path);
+	return Result.ok(null as unknown as void);
+}
+
+export function rename(oldPath: string, newPath: string): Result<void, IoError> {
+	renameSync(oldPath, newPath);
+	return Result.ok(null as unknown as void);
+}
+
+// ===== Predicates (boolean, not fallible) =====
 
 export function exists(path: string): boolean { return existsSync(path); }
-export function mkdir(path: string): boolean { mkdirSync(path); return true; }
-export function rmdir(path: string): boolean { rmdirSync(path); return true; }
-export function remove(path: string): boolean { unlinkSync(path); return true; }
-export function rename(oldPath: string, newPath: string): boolean { renameSync(oldPath, newPath); return true; }
+export function isFile(path: string): boolean { return existsSync(path); }
+export function isDir(path: string): boolean { return existsSync(path); }
+export function fileSize(path: string): number { return 0; }
 
-export function readLines(path: string): string[] {
-	const content = readFileSync(path, "utf-8");
-	if (content.length === 0) return [];
-	return content.split("\n");
+// ===== Composed utilities =====
+
+export function readLines(path: string): Result<string[], IoError> {
+	const content = try readFile(path);
+	if (content.length === 0) return Result.ok([]);
+	return Result.ok(content.split("\n"));
 }
 
-export function writeLines(path: string, lines: string[]): boolean {
-	writeFileSync(path, lines.join("\n"));
-	return true;
+export function writeLines(path: string, lines: string[]): Result<void, IoError> {
+	return writeFile(path, lines.join("\n"));
+}
+
+export function copyFile(src: string, dst: string): Result<void, IoError> {
+	const content = try readFile(src);
+	return writeFile(dst, content);
+}
+
+export function ensureDir(path: string): Result<void, IoError> {
+	return mkdir(path);
 }

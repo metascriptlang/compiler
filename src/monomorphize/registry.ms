@@ -35,10 +35,7 @@ export function createMonoRegistry(): MonoRegistry {
 	return { entries };
 }
 
-// ===== Type Key Generation =====
-
-// Produce a C-safe identifier fragment for a concrete type.
-// Used for name mangling: identity<number> → "identity__number"
+// C-safe type key for name mangling and dedup.
 export function monoTypeKey(t: Type): string {
 	if (t === null) return "null";
 	return match (t.kind) {
@@ -57,32 +54,28 @@ export function monoTypeKey(t: Type): string {
 		TypeKind.Uint64 => "uint64",
 		TypeKind.Float32 => "float32",
 		TypeKind.Float64 => "float64",
-		TypeKind.Array => `arr_${monoTypeKey(t.typeReturn)}`,
-		TypeKind.Ref => `ref_${monoTypeKey(t.typeReturn)}`,
-		TypeKind.Ptr => `ptr_${monoTypeKey(t.typeReturn)}`,
+		TypeKind.Char => "char",
+		TypeKind.CString => "cstring",
+		TypeKind.Array => "arr_" + monoTypeKey(t.typeReturn),
+		TypeKind.Ref => "ref_" + monoTypeKey(t.typeReturn),
+		TypeKind.Ptr => "ptr_" + monoTypeKey(t.typeReturn),
 		TypeKind.Struct | TypeKind.Enum => t.typeName,
 		TypeKind.GenericInstance => {
 			let key = t.typeName;
-			for (const child of t.typeChildren) {
-				key = `${key}_${monoTypeKey(child)}`;
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				key = key + "_" + monoTypeKey(t.typeChildren[i]);
+				i = i + 1;
 			}
 			return key;
 		},
-		TypeKind.Distinct => `distinct_${monoTypeKey(t.typeReturn)}`,
-		TypeKind.Function => {
-			let key = "fn";
-			for (const child of t.typeChildren) {
-				key = `${key}_${monoTypeKey(child)}`;
-			}
-			return `${key}_ret_${monoTypeKey(t.typeReturn)}`;
-		},
-		TypeKind.Union => {
-			let key = "union";
-			for (const child of t.typeChildren) {
-				key = `${key}_${monoTypeKey(child)}`;
-			}
-			return key;
-		},
+		TypeKind.SizedArray => "sizedArr_" + t.typeFlags.toString() + "_" + monoTypeKey(t.typeReturn),
+		TypeKind.Span => "span_" + monoTypeKey(t.typeReturn),
+		TypeKind.Var => "var_" + monoTypeKey(t.typeReturn),
+		TypeKind.Borrow => "borrow_" + monoTypeKey(t.typeReturn),
+		TypeKind.Distinct => "distinct_" + monoTypeKey(t.typeReturn),
+		TypeKind.Function => "function",
+		TypeKind.Union => t.typeName !== "" ? t.typeName : "union",
 		_ => "unknown",
 	};
 }

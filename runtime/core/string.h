@@ -72,9 +72,10 @@ static inline bool msStringIsAscii(msString s) {
 
 /*
  * Static string literal constructor.
- * Codegen emits a static payload struct, then uses this to make msString.
+ * Codegen emits a const payload struct (.rodata), then uses this to make msString.
+ * Literals are COW: MS_STRLIT_FLAG tells the runtime to copy before any mutation.
  * Usage:
- *   static struct { int64_t cap; char data[6]; } _str_1 = { MS_STRLIT_FLAG | 5, "hello" };
+ *   static const struct { int64_t cap; char data[6]; } _str_1 = { MS_STRLIT_FLAG | 5, "hello" };
  *   msString s = MS_STRING_LIT(&_str_1, 5);
  */
 #define MS_STRING_LIT(payload, slen) ((msString){ .len = (slen), .p = (msStrPayload*)(payload) })

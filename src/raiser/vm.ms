@@ -1,7 +1,7 @@
 // Raiser VM — Bytecode executor
 // If/else dispatch loop. C backend has optional computed-goto fast path (vm_dispatch.c).
 
-import { readFile as hostReadFile, writeFile as hostWriteFile } from "std/process";
+import { readFile as hostReadFile, writeFile as hostWriteFile } from "std/fs";
 import {
 	RaiserOpcode, RaiserInstruction,
 	raiserABC, raiserABx, raiserAx,
@@ -711,9 +711,10 @@ function vmHandleBuiltin(vm: RaiserVM, inst: RaiserInstruction): void {
 
 	match (builtinId) {
 		0 => {
-			// readFile(path: string): string
+			// readFile(path: string): Result<string, IoError>
 			const pathVal = getReg(vm, base + inst.a + 1);
-			const content = hostReadFile(pathVal.strVal);
+			const result = hostReadFile(pathVal.strVal);
+			const content = result.ok ? result.value : "";
 			const dst = getReg(vm, base + inst.a);
 			dst.kind = RaiserValueKind.String;
 			dst.intVal = 0;
@@ -721,10 +722,11 @@ function vmHandleBuiltin(vm: RaiserVM, inst: RaiserInstruction): void {
 			dst.strVal = content;
 		},
 		1 => {
-			// writeFile(path: string, content: string): boolean
+			// writeFile(path: string, content: string): Result<void, IoError>
 			const pathVal = getReg(vm, base + inst.a + 1);
 			const contentVal = getReg(vm, base + inst.a + 2);
-			const ok = hostWriteFile(pathVal.strVal, contentVal.strVal);
+			const result = hostWriteFile(pathVal.strVal, contentVal.strVal);
+			const ok = result.ok;
 			const dst = getReg(vm, base + inst.a);
 			dst.kind = RaiserValueKind.Bool;
 			let rv = 0;

@@ -152,7 +152,7 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 			// is managed by the await transform (create → wait → explicit destroy).
 			// DRC scope cleanup races with worker-thread completion, corrupting values.
 			// Malebolgia parity: spawn results are caller-owned, no GC involvement.
-			// Nim FlowVar parity: handle is managed but cross-thread data is unmanaged.
+			// FlowVar parity: handle is managed but cross-thread data is unmanaged.
 			if (isPromise(t)) return noRcInfo();
 			return makeRcInfo(RcKind.Named, "", "", "", "", "", false);
 		},

@@ -11,8 +11,9 @@ import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextW
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
-import { readFile } from "std/process";
-import { translateCHeader } from "../module/cparse";
+import { readFile } from "std/fs";
+import { translateCHeader } from "../module/cimport/emit";
+import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
 import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, ensureShaped } from "./resolvePass";
@@ -1493,19 +1494,22 @@ function defineBuiltinConstants(ctx: CheckerContext): void {
 function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string, backendExt: string): void {
 	const base = stdPath.length > 0 ? stdPath + "/" + specifier.slice(4, specifier.length) : specifier;
 	// Try direct .ms first (e.g., std/core/struct.ms)
-	let src = readFile(base + ".ms");
+	let src = try readFile(base + ".ms") catch "";
 	let resolvedPath = base + ".ms";
 	// Backend extension (e.g., index.jms for JS, index.cms for C)
 	if (src.length === 0) {
-		src = readFile(base + "/index" + backendExt);
+		src = try readFile(base + "/index" + backendExt) catch "";
 		resolvedPath = base + "/index" + backendExt;
 	}
 	// Fallback to .ms
 	if (src.length === 0) {
-		src = readFile(base + "/index.ms");
+		src = try readFile(base + "/index.ms") catch "";
 		resolvedPath = base + "/index.ms";
 	}
 	if (src.length > 0) {
+		// Inline .h imports (e.g., import from "runtime/fs.h") before parsing
+		const fsProvider = createFileSystemProvider();
+		src = inlineHeaderImports(src, resolvedPath, fsProvider);
 		const pr = parseSource(src);
 		if (pr.ok) {
 			// Set modulePath BEFORE sub-module loading so path resolution is consistent
@@ -1557,21 +1561,23 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 			importRel = importRel.slice(2, importRel.length);
 		}
 		const subPath = dir + "/" + importRel;
-		let subSrc = readFile(subPath + ".ms");
+		let subSrc = try readFile(subPath + ".ms") catch "";
 		let subResolved = subPath + ".ms";
 		if (subSrc.length === 0) {
-			subSrc = readFile(subPath + ".cms");
+			subSrc = try readFile(subPath + ".cms") catch "";
 			subResolved = subPath + ".cms";
 		}
 		// .h fallback: translate C header to MetaScript extern declarations
 		if (subSrc.length === 0 && subPath.endsWith(".h")) {
-			subSrc = readFile(subPath);
-			if (subSrc.length > 0) {
-				subSrc = translateCHeader(subSrc, []);
+			const hSrc = try readFile(subPath) catch "";
+			if (hSrc.length > 0) {
+				subSrc = translateCHeader(hSrc, []);
 				subResolved = subPath;
 			}
 		}
 		if (subSrc.length === 0) continue;
+		// Inline .h imports in sub-module source before parsing
+		subSrc = inlineHeaderImports(subSrc, subResolved, createFileSystemProvider());
 		const subPr = parseSource(subSrc);
 		if (!subPr.ok) continue;
 
@@ -1681,8 +1687,8 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 		ctx.includeDirectives = ctx.includeDirectives + preludeCtx.includeDirectives;
 	}
 	// NOTE: compileDirectives are NOT merged per-module. They are processed once
-	// from the prelude context in cmdBuildC. Merging would cause each of N modules
-	// to re-compile the same native.c files, producing N×M duplicate symbols.
+	// from the prelude context in cmdBuildC. Module-level DCE filters dead modules'
+	// @compile objects at the compile.ms level.
 	if (preludeCtx.compilerFlags !== "") {
 		ctx.compilerFlags = appendFlag(ctx.compilerFlags, preludeCtx.compilerFlags);
 	}

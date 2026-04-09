@@ -154,6 +154,7 @@ export function monoSubstAnnotation(annotation: string, paramName: string, concr
 
 // Type-to-string for annotation substitution (human-readable MetaScript type names).
 // Used by substituteAnnotations to replace generic params in type annotations.
+// NOT for C name mangling — use registry.ms:monoTypeKey for that.
 export function monoConcreteTypeName(t: Type): string {
 	if (t === null) return "unknown";
 	if (isResult(t)) return `Result<${monoConcreteTypeName(getResultOkType(t))}, ${monoConcreteTypeName(getResultErrType(t))}>`;

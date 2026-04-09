@@ -1,3 +1,4 @@
+#ifndef MS_BARE
 /*
  * MetaScript I/O Selector — poll() fallback (POSIX, Windows via WSAPoll)
  *
@@ -136,3 +137,5 @@ int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEve
 #endif
 
 #endif /* fallback guard */
+
+#endif /* MS_BARE */

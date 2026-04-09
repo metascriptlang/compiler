@@ -831,8 +831,7 @@ function preprocessTokens(tok: Token, ctx: PPContext): Token {
 
 // Try to read a file. Returns "" if the file doesn't exist or can't be read.
 function tryReadFile(path: string): string {
-	const content = readFile(path);
-	return content;
+	return try readFile(path) catch "";
 }
 
 function searchIncludePaths(filename: string, ctx: PPContext): string {
@@ -881,7 +880,7 @@ function includeFile(filename: string, tok: Token, ctx: PPContext): Token {
 
 	if (ctx.pragmaOnce.has(resolved)) return tok;
 
-	const source = readFile(resolved);
+	const source = try readFile(resolved) catch "";
 	const tokenized = tokenizeFile(source, resolved);
 	for (const d of tokenized.diagnostics) ctx.diags.push(d);
 

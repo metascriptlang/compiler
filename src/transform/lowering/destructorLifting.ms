@@ -983,7 +983,9 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 
 // Generate hooks for a type directly (no symbol table lookup needed).
 // Used for anonymous struct types that have no InterfaceDecl/ClassDecl.
-function ensureTypeHooksForType(objType: Type, lctx: LiftCtx, loc: SourceLocation): void {
+// refType: non-null when the struct is the inner type of a Ref (class/interface).
+// Reference parity: all hooks take var T — classType enables HiddenDeref.
+function ensureTypeHooksForType(objType: Type, refType: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const typeName = objType.typeName;
 	if (typeName === "") return;
 	if (nameSetContains(lctx.generated, typeName)) return;
@@ -994,11 +996,11 @@ function ensureTypeHooksForType(objType: Type, lctx: LiftCtx, loc: SourceLocatio
 	if (objType.kind !== TypeKind.Struct) return;
 	if (!typeNeedsHooks(objType, lctx, loc)) return;
 
-	// Anonymous structs are always value types (no classType)
-	generateHook("destroy", typeName, objType, null, lctx, loc);
-	generateHook("copy", typeName, objType, null, lctx, loc);
-	generateHook("sink", typeName, objType, null, lctx, loc);
-	generateHook("wasMoved", typeName, objType, null, lctx, loc);
+	const classType = refType;
+	generateHook("destroy", typeName, objType, classType, lctx, loc);
+	generateHook("copy", typeName, objType, classType, lctx, loc);
+	generateHook("sink", typeName, objType, classType, lctx, loc);
+	generateHook("wasMoved", typeName, objType, classType, lctx, loc);
 
 	setAttachedOp(objType, AttachedOp.AttachedDestructor, typeName + "Destroy");
 	setAttachedOp(objType, AttachedOp.AttachedAsgn, typeName + "Copy");
@@ -1408,13 +1410,17 @@ function scanBlockForArrayTypes(block: Node, lctx: LiftCtx): void {
 function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocation): void {
 	// Walk entire AST; ensure lifecycle hooks for ANY named struct that needs them.
 	// Covers anonymous structs (__anon*), programmatically-created structs
-	// (e.g. IteratorResult from createIterator), and any other struct without
-	// a StructDecl AST node. ensureTypeHooksForType guards against duplicates,
-	// non-structs, and types that don't need hooks.
+	// (e.g. IteratorResult from createIterator), monomorphized class types
+	// (Map<K,V>, Set<K>), and any other type without a declared AST node.
 	walkNode(program, (node: Node): Node => {
-		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Struct
-			&& node.nodeType.typeName !== "") {
-			ensureTypeHooksForType(node.nodeType, lctx, node.location);
+		if (node.nodeType !== null) {
+			if (node.nodeType.kind === TypeKind.Struct && node.nodeType.typeName !== "") {
+				ensureTypeHooksForType(node.nodeType, null as unknown as Type, lctx, node.location);
+			} else if (node.nodeType.kind === TypeKind.Ref && node.nodeType.typeReturn !== null
+				&& node.nodeType.typeReturn.kind === TypeKind.Struct && node.nodeType.typeReturn.typeName !== "") {
+				// Monomorphized class/interface: unwrap Ref, pass Ref as classType for HiddenDeref
+				ensureTypeHooksForType(node.nodeType.typeReturn, node.nodeType, lctx, node.location);
+			}
 		}
 		return node;
 	});

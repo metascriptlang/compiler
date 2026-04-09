@@ -231,6 +231,14 @@ void msEnsureWakePipe(void) {
     }
 }
 
+/* Get the read end of the wake pipe fd.
+ * Used by HTTP async event loops to register with their own selector,
+ * so spawn completions can wake the HTTP selector (not just the dispatcher's). */
+int32_t msGetWakePipeFd(void) {
+    msEnsureWakePipe();
+    return gWakePipe[0];
+}
+
 /* Wake event loop from another thread (Pony-style: unpark scheduler).
  * Used by actor subsystem when scheduling work on the main thread.
  * Always writes (no amortization) — same rationale as msCompletionQueuePush. */

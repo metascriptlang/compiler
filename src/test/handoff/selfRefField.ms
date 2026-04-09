@@ -2,7 +2,7 @@
 // Traces the C code generated for passing self-ref fields to functions
 
 import { compileToC } from "../helpers";
-import { writeFile } from "std/process";
+import { writeFile } from "std/fs";
 
 test "self-ref field passed to ccgIntroducedPtr function" {
 	const src = `

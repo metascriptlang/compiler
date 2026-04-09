@@ -29,6 +29,7 @@ extern function msSelectorEventFd(index: int32): int32;
 extern function msSelectorEventFlags(index: int32): int32;
 extern function msSelectorClose(sel: int64): void;
 extern function msRunOnce(timeoutMs: int32): boolean;
+extern function msGetWakePipeFd(): int32;
 
 // io_uring native event loop (Linux only — falls back to selector on macOS)
 extern function msHasUringEventLoop(): int32;
@@ -48,12 +49,19 @@ extern function msFastParsePath(data: string): string;
 extern function msNetSetTcpNoDelay(fd: int32): void;
 extern function msNetSetNoSigpipe(fd: int32): void;
 
+// Zero-alloc hot path externs (Phase 1-4)
+extern function recvAll(this dest: string, fd: int32): int32 from "&msNetRecvAll";
+extern function buildResponseReuse(this dest: string, status: int32, st: string, ct: string, body: string): void from "&msBuildResponseReuse";
+extern function parsePathInto(this dest: string, data: string): void from "&msFastParsePathInto";
+extern function shiftLeft(this s: string, offset: int32): void from "&msStringShiftLeft";
+extern function msStringNewCap(cap: int64): string;
+
 import {
-	HttpMethod, HttpRequest, HttpHeaders, ServerResponse, RequestHandler,
+	HttpMethod, HttpRequest, HttpHeaders, ServerResponse, RequestHandler, AsyncRequestHandler,
 	statusText,
 } from "./types";
 import { HttpError, socketError } from "./errors";
-import { cpus } from "std/os";
+extern function msOsCpuCount(): int32;
 
 // ===== Server =====
 
@@ -108,7 +116,7 @@ export function stop(server: HttpServer): void {
 extern function msBuildResponse(status: int32, statusText: string, contentType: string, body: string): string;
 
 function sendBody(res: ServerResponse, contentType: string, body: string): void {
-	res._responseData = msBuildResponse(res.status, statusText(res.status), contentType, body);
+	res._responseData.buildResponseReuse(res.status, statusText(res.status), contentType, body);
 	res.headersSent = true;
 	res._finished = true;
 }
@@ -151,6 +159,7 @@ interface ClientState {
 	sendQueue: string;
 	bytesSent: int32;
 	headersEndPos: int32;
+	asyncPending: boolean;
 	// Pre-allocated per-connection — reused across requests (zero alloc after first request)
 	request: HttpRequest;
 	response: ServerResponse;
@@ -158,9 +167,9 @@ interface ClientState {
 
 function initClient(fd: int32): ClientState {
 	return {
-		data: "", sendQueue: "", bytesSent: 0, headersEndPos: -1,
+		data: msStringNewCap(4096), sendQueue: "", bytesSent: 0, headersEndPos: -1, asyncPending: false,
 		request: {
-			method: HttpMethod.GET, path: "", version: "1.1",
+			method: HttpMethod.GET, path: msStringNewCap(256), version: "1.1",
 			headers: null as unknown as HttpHeaders, body: "", clientFd: fd,
 		},
 		response: {
@@ -168,14 +177,30 @@ function initClient(fd: int32): ClientState {
 			headers: null as unknown as HttpHeaders,
 			_chunks: null as unknown as string[],
 			headersSent: false, _finished: false, _chunked: false,
-			_responseData: "",
+			_responseData: msStringNewCap(4096),
 		},
 	};
 }
 
-function resetRequest(client: ClientState, fd: int32, method: int32, path: string): void {
+function resetClient(client: ClientState, fd: int32): void {
+	client.data.setLength(0);
+	client.bytesSent = 0;
+	client.headersEndPos = -1;
+	client.asyncPending = false;
+	client.request.method = HttpMethod.GET;
+	client.request.clientFd = fd;
+	client.request.body = "";
+	client.response.fd = fd;
+	client.response.status = 200;
+	client.response.headersSent = false;
+	client.response._finished = false;
+	client.response._chunked = false;
+	client.response._responseData.setLength(0);
+}
+
+function resetRequest(client: ClientState, fd: int32, method: int32): void {
 	client.request.method = method as unknown as HttpMethod;
-	client.request.path = path;
+	// path is set by parsePathInto (zero-alloc) — not reset here
 	client.request.clientFd = fd;
 	client.request.body = "";
 }
@@ -186,7 +211,7 @@ function resetResponse(client: ClientState, fd: int32): void {
 	client.response.headersSent = false;
 	client.response._finished = false;
 	client.response._chunked = false;
-	client.response._responseData = "";
+	client.response._responseData.setLength(0);  // preserves buffer (= "" would free it)
 }
 
 // Fast headers check: O(1) last-4-bytes, then slow linear fallback (httpbeast pattern)
@@ -200,7 +225,7 @@ function findHeaderEnd(data: string): int32 {
 }
 
 export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
-	const n = threads > 0 ? threads : cpus().length;
+	const n = threads > 0 ? threads : msOsCpuCount();
 	server.running = true;
 	if (server.fd >= 0) { msNetClose(server.fd); server.fd = -1; }
 
@@ -273,26 +298,21 @@ function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler)
 					const cfd = msNetAcceptNonBlock(listenFd);
 					if (cfd < 0) break;
 					if (cfd >= maxFds) { msNetClose(cfd); continue; }
+					msNetSetTcpNoDelay(cfd);
 					msNetSetNonBlocking(cfd);
 					msNetSetNoSigpipe(cfd);
 					msSelectorAdd(sel, cfd, 1);
-					clients[cfd] = initClient(cfd);
+					resetClient(clients[cfd], cfd);
 				}
 			} else if (fd >= maxFds) {
 				// fd out of range — shouldn't happen, but don't crash
 				msSelectorRemove(sel, fd);
 				msNetClose(fd);
 			} else if ((flags & 1) !== 0) {
-				// Read until EAGAIN — in-place append (no new string allocation per recv)
+				// Zero-alloc recv: drain all available data into pre-allocated buffer
 				const client = clients[fd];
-				let closed = false;
-				while (true) {
-					const chunk = msNetRecvNonBlock(fd, 4096);
-					if (chunk.length === 0) { closed = true; break; }
-					client.data.append(chunk);
-					if (chunk.length < 4096) break;
-				}
-				if (closed) {
+				const n = client.data.recvAll(fd);
+				if (n < 0) {
 					msSelectorRemove(sel, fd);
 					msNetClose(fd);
 				} else {
@@ -303,17 +323,17 @@ function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler)
 					}
 				}
 			} else if ((flags & 2) !== 0) {
-				// Drain sendQueue
+				// Send directly from _responseData (zero-copy, no sendQueue intermediary)
 				const client = clients[fd];
-				if (client.sendQueue.length > 0) {
-					const sent = msNetSendNonBlock(fd, client.sendQueue, client.bytesSent);
+				const resp = client.response._responseData;
+				if (resp.length > 0) {
+					const sent = msNetSendNonBlock(fd, resp, client.bytesSent);
 					if (sent < 0) {
 						msSelectorRemove(sel, fd);
 						msNetClose(fd);
 					} else {
 						client.bytesSent = client.bytesSent + sent;
-						if (client.bytesSent >= client.sendQueue.length) {
-							client.sendQueue = "";
+						if (client.bytesSent >= resp.length) {
 							client.bytesSent = 0;
 							resetOrPipeline(client, fd, sel, handler);
 						}
@@ -336,24 +356,26 @@ function dispatch(client: ClientState, fd: int32, sel: int64, handler: RequestHa
 	const endPos = client.headersEndPos;
 
 	const methodInt = msFastParseMethod(data);
-	if (methodInt < 0) { client.data = ""; return; }
-	const path = msFastParsePath(data);
-	if (path.length === 0) { client.data = ""; return; }
+	if (methodInt < 0) { client.data.setLength(0); return; }
+
+	// Zero-alloc path parse: writes into pre-allocated request.path buffer
+	client.request.path.parsePathInto(data);
+	if (client.request.path.length === 0) { client.data.setLength(0); return; }
 
 	// Reuse pre-allocated request/response (zero heap alloc)
-	resetRequest(client, fd, methodInt, path);
+	resetRequest(client, fd, methodInt);
 	resetResponse(client, fd);
 	handler(client.request, client.response);
 
-	// Preserve pipelined data
+	// Preserve pipelined data — zero-alloc memmove instead of slice
 	if (endPos < data.length) {
-		client.data = data.slice(endPos, data.length);
+		client.data.shiftLeft(endPos);
 	} else {
-		client.data = "";
+		client.data.setLength(0);
 	}
 
+	// Send directly from _responseData (no sendQueue copy)
 	if (client.response._finished && client.response._responseData.length > 0) {
-		client.sendQueue = client.response._responseData;
 		client.bytesSent = 0;
 		msSelectorModify(sel, fd, 3);
 	} else {
@@ -397,10 +419,10 @@ function handleBlocking(server: HttpServer, fd: int32): void {
 
 		const methodInt = msFastParseMethod(data);
 		if (methodInt < 0) return;
-		const path = msFastParsePath(data);
-		if (path.length === 0) return;
+		client.request.path.parsePathInto(data);
+		if (client.request.path.length === 0) return;
 
-		resetRequest(client, fd, methodInt, path);
+		resetRequest(client, fd, methodInt);
 		resetResponse(client, fd);
 		server.handler(client.request, client.response);
 		if (client.response._responseData.length > 0) msNetSend(fd, client.response._responseData);
@@ -466,14 +488,13 @@ function eventLoopUring(server: HttpServer, listenFd: int32, handler: RequestHan
 						const data = msUringRecvData(evFd, res);
 						const methodInt = msFastParseMethod(data);
 						if (methodInt >= 0) {
-							const path = msFastParsePath(data);
 							const client = clients[evFd];
-							resetRequest(client, evFd, methodInt, path);
+							client.request.path.parsePathInto(data);
+							resetRequest(client, evFd, methodInt);
 							resetResponse(client, evFd);
 							handler(client.request, client.response);
 							if (client.response._finished && client.response._responseData.length > 0) {
-								client.sendQueue = client.response._responseData;
-								msUringSubmitSend(evFd, client.sendQueue, client.sendQueue.length);
+								msUringSubmitSend(evFd, client.response._responseData, client.response._responseData.length);
 							} else {
 								msUringSubmitRecv(evFd, "", 4096);
 							}
@@ -493,5 +514,204 @@ function eventLoopUring(server: HttpServer, listenFd: int32, handler: RequestHan
 		}
 		msRunOnce(0);
 	}
+}
+
+// ===== Async Handler Support =====
+// Enables handlers that use await (e.g., await spawn(() => heavyWork())).
+// The event loop continues processing other connections while a handler is suspended.
+// Completion callbacks fire via msRunOnce(0) on the same event loop thread.
+
+export function createServerAsync(handler: AsyncRequestHandler): HttpServer {
+	return {
+		fd: -1, handler: null as unknown as RequestHandler, running: false,
+		address: "0.0.0.0", port: 0,
+		keepAlive: true, keepAliveTimeout: 5000,
+		maxRequestsPerConnection: 0, maxHeaderSize: 8192, maxBodySize: 1048576,
+	};
+}
+
+// Async dispatch — the stepper state machine IS the callback mechanism.
+// State 0: parse + call handler → yields handler's Promise → suspends.
+// State 1: handler completed → arm fd for WRITE → done.
+// msAsyncCb resumes state 1 inside msProcessCallbacks (same event loop thread).
+async function dispatchAsync(client: ClientState, fd: int32, sel: int64, handler: AsyncRequestHandler, inflight: int32[]): Promise<void> {
+	const data = client.data;
+	const endPos = client.headersEndPos;
+
+	const methodInt = msFastParseMethod(data);
+	if (methodInt < 0) { client.data.setLength(0); client.asyncPending = false; inflight[0] = inflight[0] - 1; return; }
+
+	client.request.path.parsePathInto(data);
+	if (client.request.path.length === 0) { client.data.setLength(0); client.asyncPending = false; inflight[0] = inflight[0] - 1; return; }
+
+	resetRequest(client, fd, methodInt);
+	resetResponse(client, fd);
+
+	await handler(client.request, client.response);
+
+	// Stepper resumes here after handler completes (via msRunOnce → msProcessCallbacks)
+	client.asyncPending = false;
+	inflight[0] = inflight[0] - 1;
+
+	// Preserve pipelined data — zero-alloc memmove
+	if (endPos < data.length) {
+		client.data.shiftLeft(endPos);
+	} else {
+		client.data.setLength(0);
+	}
+
+	// Arm WRITE if response is ready
+	if (client.response._finished && client.response._responseData.length > 0) {
+		client.bytesSent = 0;
+		msSelectorModify(sel, fd, 3);
+	} else {
+		client.headersEndPos = -1;
+	}
+}
+
+// After async send completes: check for pipelined data or reset to READ.
+function resetOrPipelineAsync(client: ClientState, fd: int32, sel: int64, handler: AsyncRequestHandler, inflight: int32[]): void {
+	if (client.data.length > 0) {
+		const nextEnd = findHeaderEnd(client.data);
+		if (nextEnd >= 0) {
+			client.headersEndPos = nextEnd;
+			client.asyncPending = true;
+			inflight[0] = inflight[0] + 1;
+			dispatchAsync(client, fd, sel, handler, inflight);
+			return;
+		}
+	}
+	client.headersEndPos = -1;
+	msSelectorModify(sel, fd, 1);
+}
+
+function eventLoopAsync(server: HttpServer, listenFd: int32, handler: AsyncRequestHandler): void {
+	const sel = msSelectorOpen();
+	msSelectorAdd(sel, listenFd, 1);
+
+	// Track in-flight async handlers to switch between blocking and polling.
+	// When asyncInFlight > 0, poll with 1ms timeout so msRunOnce(0) picks up spawn completions.
+	// When asyncInFlight == 0, block indefinitely (same as sync event loop — zero overhead).
+	//
+	// Why NOT register the wake pipe with the HTTP selector:
+	// serveConcurrentAsync spawns N event loops. The wake pipe is global (single MPSC queue).
+	// If all N selectors register the wake pipe, a spawn completion wakes ALL N threads, and
+	// all N call msCompletionQueueDrain concurrently — but the MPSC queue is single-consumer.
+	// Timeout-based polling avoids this race entirely.
+	const inflight: int32[] = [0];
+
+	const maxFds = 1024;
+	const clients: ClientState[] = new Array(maxFds);
+	let ci = 0;
+	while (ci < maxFds) {
+		clients[ci] = initClient(ci);
+		ci = ci + 1;
+	}
+
+	while (server.running) {
+		const timeout = inflight[0] > 0 ? 1 : -1;
+		const count = msSelectorWait(sel, timeout);
+		if (count < 0) {
+			// Timeout or error — still drain completions below
+			if (inflight[0] > 0) {
+				msRunOnce(0);
+			}
+			continue;
+		}
+		let i = 0;
+		while (i < count) {
+			const fd = msSelectorEventFd(i);
+			const flags = msSelectorEventFlags(i);
+
+			if (fd === listenFd) {
+				while (true) {
+					const cfd = msNetAcceptNonBlock(listenFd);
+					if (cfd < 0) break;
+					if (cfd >= maxFds) { msNetClose(cfd); continue; }
+					msNetSetTcpNoDelay(cfd);
+					msNetSetNonBlocking(cfd);
+					msNetSetNoSigpipe(cfd);
+					msSelectorAdd(sel, cfd, 1);
+					resetClient(clients[cfd], cfd);
+				}
+			} else if (fd >= maxFds) {
+				msSelectorRemove(sel, fd);
+				msNetClose(fd);
+			} else if ((flags & 1) !== 0) {
+				const client = clients[fd];
+				// Skip recv+dispatch while async handler is in-flight for this connection.
+				// Data buffers in kernel until handler completes.
+				if (!client.asyncPending) {
+					const n = client.data.recvAll(fd);
+					if (n < 0) {
+						msSelectorRemove(sel, fd);
+						msNetClose(fd);
+					} else {
+						const endPos = findHeaderEnd(client.data);
+						if (endPos >= 0) {
+							client.headersEndPos = endPos;
+							client.asyncPending = true;
+							inflight[0] = inflight[0] + 1;
+							dispatchAsync(client, fd, sel, handler, inflight);
+						}
+					}
+				}
+			} else if ((flags & 2) !== 0) {
+				const client = clients[fd];
+				const resp = client.response._responseData;
+				if (resp.length > 0) {
+					const sent = msNetSendNonBlock(fd, resp, client.bytesSent);
+					if (sent < 0) {
+						msSelectorRemove(sel, fd);
+						msNetClose(fd);
+					} else {
+						client.bytesSent = client.bytesSent + sent;
+						if (client.bytesSent >= resp.length) {
+							client.bytesSent = 0;
+							resetOrPipelineAsync(client, fd, sel, handler, inflight);
+						}
+					}
+				}
+			} else if ((flags & 4) !== 0) {
+				msSelectorRemove(sel, fd);
+				msNetClose(fd);
+			}
+			i = i + 1;
+		}
+		// Fires async handler completion callbacks (stepper resumption).
+		// Drains MPSC completion queue + processes callbacks = async steppers resume here.
+		msRunOnce(0);
+	}
+	msSelectorClose(sel);
+}
+
+export function serveConcurrentAsync(server: HttpServer, handler: AsyncRequestHandler, threads: int32 = 0): void {
+	const n = threads > 0 ? threads : msOsCpuCount();
+	server.running = true;
+	if (server.fd >= 0) { msNetClose(server.fd); server.fd = -1; }
+
+	const addr = server.address;
+	const port = server.port;
+
+	for (let i = 0; i < n - 1; i += 1) {
+		spawn(() => {
+			const fd = msNetSocket();
+			if (fd < 0) return null;
+			if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return null; }
+			if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return null; }
+			msNetSetNonBlocking(fd);
+			eventLoopAsync(server, fd, handler);
+			msNetClose(fd);
+			return null;
+		});
+	}
+
+	const fd = msNetSocket();
+	if (fd < 0) return;
+	if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return; }
+	if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return; }
+	msNetSetNonBlocking(fd);
+	eventLoopAsync(server, fd, handler);
+	msNetClose(fd);
 }
 

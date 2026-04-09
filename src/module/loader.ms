@@ -25,8 +25,9 @@ import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../ast/node";
-import { readFile } from "std/process";
-import { translateCHeader } from "./cparse";
+import { readFile } from "std/fs";
+import { translateCHeader } from "./cimport/emit";
+import { resolveRuntimeDir } from "../utils/path";
 // (utils/string imports removed — using native .slice)
 
 // ===== Source Provider =====
@@ -54,7 +55,7 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 		if (e.entryPath === path) return Result.ok(e.entrySource);
 	}
 	if (provider.useFileSystem) {
-		const content = readFile(path);
+		const content = try readFile(path) catch "";
 		if (content.length > 0) {
 			const cached: MapEntry = { entryPath: path, entrySource: content };
 			provider.entries.push(cached);
@@ -69,7 +70,7 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 // Inline .h imports: scan source for `import { ... } from "*.h"` lines,
 // replace each with @include + extern declarations generated from the C header.
 // reference parity: importc declarations live inline in the consuming module.
-function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider): string {
+export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider): string {
 	let result = source;
 	let searchPos = 0;
 	while (searchPos < result.length) {
@@ -137,8 +138,15 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 			importedNames.push(spec.origName);
 		}
 
-		// Generate extern declarations from C header (pure MetaScript string parser)
-		let translated = translateCHeader(headerSource.value, importedNames, false);
+		// Generate extern declarations from C header
+		// Include paths: builtin C headers (stdint.h etc.) + header's own directory
+		const headerDir = headerPath.slice(0, headerPath.lastIndexOf("/"));
+		const compilerRoot = resolveRuntimeDir();
+		const builtinInclude = compilerRoot !== "" ? compilerRoot + "/src/module/cparse/include" : "src/module/cparse/include";
+		const includePaths = compilerRoot !== ""
+			? [builtinInclude, compilerRoot, headerDir]
+			: [builtinInclude, headerDir];
+		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths);
 
 		// Auto-compile companion .c file if it exists (e.g., native.h → native.c)
 		const companionC = headerPath.slice(0, headerPath.length - 2) + ".c";

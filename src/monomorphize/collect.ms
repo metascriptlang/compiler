@@ -9,7 +9,7 @@ import { CheckerContext, extractGenericNames, stripGenFlag } from "../checker/co
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "../checker/symbol";
 import { replaceTypeVars } from "../checker/instantiate";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "./clone";
-import { MonoRegistry, MonoEntry, monoRegister, monoFindEntry, buildTypeArgKeys, createMonoRegistry } from "./registry";
+import { MonoRegistry, MonoEntry, monoRegister, monoFindEntry, buildTypeArgKeys, createMonoRegistry, monoTypeKey } from "./registry";
 import { splitTopLevel, findChar } from "../utils/string";
 import {
 	getExplicitTypeArg,
@@ -675,47 +675,6 @@ function monoRewriteCallExpr(
 }
 
 
-// Type-to-string for C naming. MUST match codegen typeKey format (types.ms:179-268)
-// so constructor type names and codegen type names are identical.
-export function monoTypeKey(t: Type): string {
-	if (t === null) return "unknown";
-	return match (t.kind) {
-		TypeKind.Number => "number",
-		TypeKind.String => "string",
-		TypeKind.Boolean => "boolean",
-		TypeKind.Void => "void",
-		TypeKind.Null => "null",
-		TypeKind.Ref => "ref:" + monoTypeKey(t.typeReturn),
-		TypeKind.Ptr => "ptr:" + monoTypeKey(t.typeReturn),
-		TypeKind.Array => "array:" + monoTypeKey(t.typeReturn),
-		TypeKind.Struct => "object:" + t.typeName,
-		TypeKind.Enum => "enum:" + t.typeName,
-		TypeKind.GenericInstance => {
-			let name = "ginst:" + t.typeName;
-			let i = 0;
-			while (i < t.typeChildren.length) {
-				name = name + ":" + monoTypeKey(t.typeChildren[i]);
-				i = i + 1;
-			}
-			return name;
-		},
-		TypeKind.Union => t.typeName !== "" ? "union:" + t.typeName : "union",
-		TypeKind.Function => "function",
-		TypeKind.Int8 => "int8",
-		TypeKind.Int16 => "int16",
-		TypeKind.Int32 => "int32",
-		TypeKind.Int64 => "int64",
-		TypeKind.Uint8 => "uint8",
-		TypeKind.Uint16 => "uint16",
-		TypeKind.Uint32 => "uint32",
-		TypeKind.Uint64 => "uint64",
-		TypeKind.Float32 => "float32",
-		TypeKind.Float64 => "float64",
-		TypeKind.Char => "char",
-		TypeKind.CString => "cstring",
-		_ => "unknown",
-	};
-}
 
 function monoFindFnDeclByName(program: Node, fnName: string): Node {
 	if (program === null) return null as unknown as Node;

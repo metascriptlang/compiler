@@ -1,32 +1,23 @@
 /**
  * Process — JavaScript/Node.js Backend
  *
- * Provides command-line arguments, process exit, working directory,
- * file I/O, shell execution, environment variables, and monotonic clock.
  * Mirrors the C backend API (std/process/index.cms) using Node.js built-ins.
+ * readFile/writeFile re-exported from std/fs for backward compatibility.
  */
 
 @import("node:process", { argv, exit, cwd });
 @import("node:child_process", { execSync });
-@import("node:fs", { readFileSync, writeFileSync, existsSync, readdirSync });
+@import("node:fs", { existsSync, readdirSync });
 
 export extern const argv: string[];
 export extern function exit(code: number): void;
 export extern function cwd(): string;
 extern function execSync(cmd: string): string;
-extern function readFileSync(path: string, encoding: string): string;
-extern function writeFileSync(path: string, data: string): void;
 extern function existsSync(path: string): boolean;
 extern function readdirSync(path: string): string[];
 
-export function readFile(path: string): string {
-	return readFileSync(path, "utf-8");
-}
-
-export function writeFile(path: string, content: string): boolean {
-	writeFileSync(path, content);
-	return true;
-}
+// Re-export from fs (Result-returning)
+export { readFile, writeFile } from "../fs/index";
 
 export function fileExists(path: string): boolean {
 	return existsSync(path);
@@ -38,12 +29,10 @@ export function exec(command: string): number {
 }
 
 export function getEnv(name: string): string {
-	// TODO: needs process.env[name] access — requires @import for process object or inline JS
 	return "";
 }
 
 export function clockMs(): number {
-	// TODO: needs Date.now() — requires declaring Date as extern global
 	return 0;
 }
 

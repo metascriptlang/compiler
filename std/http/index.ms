@@ -2,7 +2,7 @@
 
 // Types
 export {
-	HttpMethod, HttpRequest, HttpResponse, ServerResponse, RequestHandler, RequestOptions, ParsedUrl,
+	HttpMethod, HttpRequest, HttpResponse, ServerResponse, RequestHandler, AsyncRequestHandler, RequestOptions, ParsedUrl,
 	HttpHeaders, statusText, methodToString, parseMethod,
 	isSuccess, isRedirect, isClientError, isServerError,
 } from "./types";
@@ -32,7 +32,7 @@ export {
 
 // Server
 export {
-	HttpServer, createServer, serverListen, serve, serveConcurrent, serveN, stop,
+	HttpServer, createServer, createServerAsync, serverListen, serve, serveConcurrent, serveConcurrentAsync, serveN, stop,
 	sendText, sendJson, sendHtml, sendError, sendRaw, getClientFd,
 } from "./server";
 

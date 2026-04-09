@@ -294,7 +294,7 @@ function processArrayAccess(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const ad = node.data as ArrayAccessData;
 	ad.array = processNode(ad.array, dctx, DrcMode.Normal);
 	ad.index = processNode(ad.index, dctx, DrcMode.Normal);
-	// Nim parity (injectdestructors:1191-1208): array element access is a borrow.
+	// Reference parity: array element access is a borrow.
 	// In SinkArg or Consumed mode, must copy (incref) because the element belongs
 	// to the array — we don't own it. Without this, returning arr[i] or storing it
 	// in a field transfers a "reference" that was never incref'd, causing the
@@ -527,8 +527,12 @@ function isBinaryCopy(rcInfo: RcInfo): boolean {
 	return rcInfo.rcKind === RcKind.Named || rcInfo.rcKind === RcKind.String;
 }
 
+// Reference parity: generated hooks take var T (pointer) for all params.
+// Runtime macros (empty typeName) and strings still use value params.
 function isCopySrcByValue(rcInfo: RcInfo): boolean {
-	return rcInfo.seqLike || rcInfo.rcKind === RcKind.String;
+	if (rcInfo.rcKind === RcKind.String) return true;
+	if (rcInfo.seqLike && rcInfo.typeName === "") return true;
+	return false;
 }
 
 // Whether dest needs HiddenAddr for wasMoved/copy/sink.
@@ -544,12 +548,12 @@ function makeRcCallStmt(fnName: string, varName: string, sym: Symbol, loc: Sourc
 		makeCall(makeIdent(fnName, loc), [makeVarRef(varName, sym, loc)], loc), loc);
 }
 
-// Destroy: seqLike types (both runtime macros AND generated hooks) take dest by value.
-// This differs from copy/sink/wasMoved where generated hooks take dest by pointer.
+// Reference parity: all hooks take var T (pointer).
+// Runtime macros (empty typeName) still take by value — they're C macros, not generated hooks.
 function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, sym: Symbol): Node {
 	if (rcInfo.destroyFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named) {
-		if (rcInfo.seqLike) {
+		if (!needsDestAddr(rcInfo)) {
 			return makeRcCallStmt(rcInfo.destroyFn, varName, sym, loc);
 		}
 		return makeExprStmt(

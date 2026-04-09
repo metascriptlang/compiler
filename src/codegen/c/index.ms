@@ -34,11 +34,25 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	// Standard C headers (Standard reference implementation pattern)
 	addLine(sec(g, CSection.Headers), "#include <stdint.h>");
 	addLine(sec(g, CSection.Headers), "#include <stdbool.h>");
-	addLine(sec(g, CSection.Headers), "#include <string.h>");
-	addLine(sec(g, CSection.Headers), "#include <math.h>");
+	addLine(sec(g, CSection.Headers), "#include <stddef.h>");
+	if (ctx === null || ctx.osTarget !== "solana") {
+		// Solana/BPF has no libc — manual.h provides memcpy/memset/strlen
+		addLine(sec(g, CSection.Headers), "#include <string.h>");
+		addLine(sec(g, CSection.Headers), "#include <math.h>");
+	}
 	if (ctx !== null && ctx.gcMode === GcMode.Manual) {
 		// manual.h uses the same SYSTEM_H include guard as core.h,
 		// so any subsequent @include("runtime/core/system.h") from prelude is a C-level no-op.
+		match (ctx.osTarget) {
+			"solana" => {
+				addLine(sec(g, CSection.Headers), "#define MS_SOLANA");
+				addLine(sec(g, CSection.Headers), "#define MS_BARE");
+			},
+			"bare" => {
+				addLine(sec(g, CSection.Headers), "#define MS_BARE");
+			},
+			_ => {},
+		};
 		addLine(sec(g, CSection.Headers), "#include \"runtime/manual.h\"");
 		nameSetAdd(g.declaredThings, "inc:runtime/manual.h");
 		nameSetAdd(g.declaredThings, "inc:runtime/core/system.h");
@@ -96,12 +110,19 @@ function genModuleInitFns(g: CGen): void {
 	const hdrs = sec(g, CSection.ProcHeaders);
 	const procs = sec(g, CSection.Procs);
 
+	// Contract targets (solana, bare): single entry point, init called once in sequence.
+	// Skip mutable static guard variables — no re-entry possible.
+	const ost = g.checkerCtx !== null ? g.checkerCtx.osTarget : "";
+	const skipGuard = ost === "solana" || ost === "bare";
+
 	// DatInit000: data/type initialization (non-static for cross-module visibility)
 	addLine(hdrs, `void ${datInitName}(void);`);
 	addLine(procs, `void ${datInitName}(void) {`);
-	addLine(procs, `  static MS_BOOL ${datInitName}_guard_ = 0;`);
-	addLine(procs, `  if (${datInitName}_guard_) return;`);
-	addLine(procs, `  ${datInitName}_guard_ = 1;`);
+	if (!skipGuard) {
+		addLine(procs, `  static MS_BOOL ${datInitName}_guard_ = 0;`);
+		addLine(procs, `  if (${datInitName}_guard_) return;`);
+		addLine(procs, `  ${datInitName}_guard_ = 1;`);
+	}
 	if (datContent.length > 0) {
 		add(procs, datContent);
 	}
@@ -111,9 +132,11 @@ function genModuleInitFns(g: CGen): void {
 	// Init000: user top-level code (non-static for cross-module visibility)
 	addLine(hdrs, `void ${initName}(void);`);
 	addLine(procs, `void ${initName}(void) {`);
-	addLine(procs, `  static MS_BOOL ${initName}_guard_ = 0;`);
-	addLine(procs, `  if (${initName}_guard_) return;`);
-	addLine(procs, `  ${initName}_guard_ = 1;`);
+	if (!skipGuard) {
+		addLine(procs, `  static MS_BOOL ${initName}_guard_ = 0;`);
+		addLine(procs, `  if (${initName}_guard_) return;`);
+		addLine(procs, `  ${initName}_guard_ = 1;`);
+	}
 	if (initContent.length > 0) {
 		add(procs, initContent);
 	}
@@ -196,25 +219,30 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	addLine(b, "}");
 	addNewline(b);
 
-	if (osTarget === "bare") {
-		// Bare: minimal main, no argc/argv/env (doesn't exist on bare metal).
-		// Works for desktop testing. For cross-compile, user does --emit=c + own entry.
-		addLine(b, "int main(void) {");
-		addLine(b, "  MsMain();");
-		addLine(b, "  return msProgramResult;");
-		addLine(b, "}");
-	} else if (osTarget === "solana") {
-		// Solana: no main at all — user provides entrypoint()
-	} else {
-		// POSIX: standard entry point with argc/argv/env
-		addLine(b, "int main(int argc, char** argv, char** env) {");
-		addLine(b, "  cmdLine = argv;");
-		addLine(b, "  cmdCount = argc;");
-		addLine(b, "  gEnv = env;");
-		addLine(b, "  MsMain();");
-		addLine(b, "  return msProgramResult;");
-		addLine(b, "}");
-	}
+	match (osTarget) {
+		"bare" => {
+			addLine(b, "int main(void) {");
+			addLine(b, "  MsMain();");
+			addLine(b, "  return msProgramResult;");
+			addLine(b, "}");
+		},
+		"solana" => {
+			addLine(b, "uint64_t entrypoint(const uint8_t* input) {");
+			addLine(b, "  (void)input;");
+			addLine(b, "  MsMain();");
+			addLine(b, "  return (uint64_t)msProgramResult;");
+			addLine(b, "}");
+		},
+		_ => {
+			addLine(b, "int main(int argc, char** argv, char** env) {");
+			addLine(b, "  cmdLine = argv;");
+			addLine(b, "  cmdCount = argc;");
+			addLine(b, "  gEnv = env;");
+			addLine(b, "  MsMain();");
+			addLine(b, "  return msProgramResult;");
+			addLine(b, "}");
+		},
+	};
 
 	return extract(b);
 }

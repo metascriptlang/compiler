@@ -78,12 +78,19 @@ export function removeFromNameIndex(registry: ExportRegistry, exports: ExportedS
 		if (sym.name.length === 0) continue;
 		if (!registry.nameIndex.has(sym.name)) continue;
 		const arr = registry.nameIndex.get(sym.name);
-		let wi = 0;
+		// Build new array instead of in-place compaction.
+		// Map.get() returns a value copy of the array struct — in-place mutation
+		// through the copy leaves stale duplicate pointers in the Map's stored array,
+		// causing double-decref and heap corruption when the entry is later freed.
+		const kept: ExportedSymInfo[] = [];
 		for (let ri = 0; ri < arr.length; ri += 1) {
-			if (arr[ri] !== sym) { arr[wi] = arr[ri]; wi = wi + 1; }
+			if (arr[ri] !== sym) kept.push(arr[ri]);
 		}
-		arr.length = wi;
-		if (wi === 0) registry.nameIndex.delete(sym.name);
+		if (kept.length === 0) {
+			registry.nameIndex.delete(sym.name);
+		} else {
+			registry.nameIndex.set(sym.name, kept);
+		}
 	}
 }
 
@@ -697,6 +704,7 @@ export class CheckerContext {
 	table: SymbolTable;
 	errors: CheckerError[];
 	gcMode: GcMode;                // Drc (default: RC + ORC), None (malloc, no free), Manual (freestanding, arena)
+	osTarget: string;              // "" (auto), "bare", "solana", "linux", "macos", "windows"
 	currentFunction: Symbol;   // innermost function (for return type validation)
 	currentActorName: string;  // non-empty when inside an actor body (isolation checking)
 	inLoop: boolean;           // break/continue validation
@@ -734,6 +742,7 @@ export function createContext(): CheckerContext {
 		table,
 		errors: [],
 		gcMode: GcMode.Drc,
+		osTarget: "",
 		currentFunction: null as unknown as Symbol,
 		currentActorName: "",
 		inLoop: false,

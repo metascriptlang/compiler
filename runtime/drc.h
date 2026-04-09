@@ -135,11 +135,10 @@ static inline void msAtomicIncRef(void* p) {
 static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	msRefHeader* h = msHeader(p);
-	/* Nim parity (arc.nim:234-240): check count BEFORE decrementing.
+	/* Reference parity: check count BEFORE decrementing.
 	 * rc starts at 0 from msAlloc. rc=0 means "sole owner".
 	 * If rc == 0: last reference — return true for destruction (do NOT decrement).
-	 * If rc > 0: other references exist — decrement and return false.
-	 * This matches Nim's non-atomic path exactly. */
+	 * If rc > 0: other references exist — decrement and return false. */
 	if (h->rc == 0) {
 		return true;
 	}

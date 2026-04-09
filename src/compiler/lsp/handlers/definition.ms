@@ -1,7 +1,7 @@
 // LSP Handlers — Go to Definition, source navigation helpers.
 
 import { TransAmDb, dbParse, dbTypeCheck } from "../../transam/index";
-import { readFile } from "std/process";
+import { readFile } from "std/fs";
 import { writeStderr } from "std/io";
 import {
 	lspUriToPath, lspPathToUri, lspDirname,
@@ -193,8 +193,9 @@ function lspSearchHeaderForName(nativeName: string, headerRelPath: string, modul
 	if (hPath.length > 0 && hPath.charCodeAt(0) !== "/".code) {
 		hPath = lspDirname(modulePath) + "/" + hPath;
 	}
-	const hSrc = readFile(hPath);
-	if (hSrc === "") return "";
+	const hResult = readFile(hPath);
+	if (!hResult.ok) return "";
+	const hSrc = hResult.value;
 	let lineNum = 0;
 	let lineStart = 0;
 	let i = 0;
