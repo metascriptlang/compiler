@@ -20,6 +20,8 @@ export enum TypeKind {
 	Distinct,
 	Error,
 	StringLiteral,
+	EnumLiteral,
+	Conditional,
 }
 
 // ===== Calling Convention =====
@@ -81,6 +83,7 @@ export enum SymbolKind {
 	Struct,
 	Module,
 	Actor,
+	Macro,
 }
 
 // ===== Symbol State (Lifecycle) =====
@@ -281,7 +284,7 @@ export type NodeData =
 	// Declaration variants
 	| { importNames: string[], importAliases: string[], importSource: string, nameLocations: SourceLocation[] }  // ImportDecl
 	| { exportedDecl: Node }                                       // ExportDecl
-	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation } // TypeAliasDecl
+	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation } // TypeAliasDecl
 	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[] } // EnumDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation } // InterfaceDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation } // StructDecl
@@ -310,7 +313,7 @@ export type NodeData =
 	| { typExprElement: Node, typExprSize: number }                // TypeArray (-1 = unsized)
 	| { typExprMembers: Node[] }                                   // TypeUnion
 	| { typExprParams: Node[], typExprReturn: Node, typExprParamNames: string[] } // TypeFunction
-	| { typExprFieldNames: string[], typExprFieldTypes: Node[] }   // TypeObject
+	| { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node }   // TypeObject
 	// Program root
 	| { programStmts: Node[] }                                     // Program
 	// Actor (appended after Program to preserve union discriminant ordering)
@@ -399,7 +402,7 @@ export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };
 // Declarations
 export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string, nameLocations: SourceLocation[] };
 export type ExportDeclData = { exportedDecl: Node };
-export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation };
+export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation };
 export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[] };
 export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation };
 export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation };
@@ -428,7 +431,10 @@ export type TypeGenericData = { typExprBase: Node, typExprArgs: Node[] };
 export type TypeArrayData = { typExprElement: Node, typExprSize: number };
 export type TypeUnionData = { typExprMembers: Node[] };
 export type TypeFunctionData = { typExprParams: Node[], typExprReturn: Node, typExprParamNames: string[] };
-export type TypeObjectData = { typExprFieldNames: string[], typExprFieldTypes: Node[] };
+// typExprIndexKey / typExprIndexValue are non-null ONLY when the type is an index signature
+// like { [key: K]: V }. After checker normalization this becomes Map<K, V>. Mixed (named fields
+// + index signature in the same type) is rejected by the parser. See docs and plan for details.
+export type TypeObjectData = { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node };
 
 // ===== Constructors =====
 

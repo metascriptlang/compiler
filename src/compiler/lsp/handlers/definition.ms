@@ -1,7 +1,8 @@
 // LSP Handlers — Go to Definition, source navigation helpers.
 
 import { TransAmDb, dbParse, dbTypeCheck } from "../../transam/index";
-import { readFile } from "std/fs";
+import { readFile, exists } from "std/fs";
+import { resolveRuntimeDir } from "../../../utils/path";
 import { writeStderr } from "std/io";
 import {
 	lspUriToPath, lspPathToUri, lspDirname,
@@ -188,11 +189,26 @@ function lspFindNativeDefinition(nativeName: string, headerPath: string, moduleP
 	return "";
 }
 
-function lspSearchHeaderForName(nativeName: string, headerRelPath: string, modulePath: string): string {
-	let hPath = headerRelPath;
-	if (hPath.length > 0 && hPath.charCodeAt(0) !== "/".code) {
-		hPath = lspDirname(modulePath) + "/" + hPath;
+// Resolve a header path from an extern symbol's headerPath/@include directive.
+// Absolute paths are used as-is. Relative paths are tried against the module's
+// own directory first (for ./local.h style imports), then against the compiler
+// root (for workspace-rooted imports like runtime/os.h).
+function lspResolveHeaderPath(headerRelPath: string, modulePath: string): string {
+	if (headerRelPath.length > 0 && headerRelPath.charCodeAt(0) === "/".code) {
+		return headerRelPath;
 	}
+	const moduleRel = lspDirname(modulePath) + "/" + headerRelPath;
+	if (exists(moduleRel)) return moduleRel;
+	const root = resolveRuntimeDir();
+	if (root !== "") {
+		const rootRel = root + "/" + headerRelPath;
+		if (exists(rootRel)) return rootRel;
+	}
+	return moduleRel;
+}
+
+function lspSearchHeaderForName(nativeName: string, headerRelPath: string, modulePath: string): string {
+	const hPath = lspResolveHeaderPath(headerRelPath, modulePath);
 	const hResult = readFile(hPath);
 	if (!hResult.ok) return "";
 	const hSrc = hResult.value;
@@ -246,11 +262,16 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 		writeStderr("[LSP-DEF] id=" + id + " null: no sgQuery at " + pos.line + ":" + pos.col1 + " in " + path + "\n");
 	}
 	if (suggest !== null) {
-		// Extern function -> navigate to C definition in module's .h file
+		// Extern symbol -> navigate to C definition in the .h file
+		// The .h file is treated as a module: inlineHeaderImports synthesizes @include
+		// directives during preprocessing, stampHeaderPaths stamps the path on symbols,
+		// and we search the raw C source for the native name (since translated MetaScript
+		// positions don't map to original C positions).
 		if (suggest.sym !== null && hasFlag(suggest.sym, SymbolFlag.ImportC)
 			&& suggest.sym.nativeName !== "") {
 			const externModPath = suggest.sym.modulePath !== null && suggest.sym.modulePath !== "" ? suggest.sym.modulePath : path;
-			// Module's own .h imports from AST first (most specific), then @include headerPath fallback
+			// Prefer module's own .h imports (most specific), fall back to sym.headerPath
+			// which includes all @include directives (module + prelude).
 			const externProgram = dbParse(db, externModPath);
 			const moduleHdrs = lspCollectHeaderImports(externProgram);
 			const hdrPath = moduleHdrs !== "" ? moduleHdrs : suggest.sym.headerPath;

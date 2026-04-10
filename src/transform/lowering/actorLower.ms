@@ -78,6 +78,29 @@ function msgCompleteName(mk: string): string {
 	};
 }
 
+// Map a Promise<T> inner type to the matching msFutureChain_<T> variant.
+// Async _impl returns msFuture_<T>* — we must read .value with the right
+// type to preserve msString (16B) and primitive widths.
+// Fallback to generic msFutureChain for struct/array (truncates but matches
+// current behavior until spawn/async allocation is unified).
+function futureChainFnForReturn(retType: Type): string {
+	if (retType === null) return "msFutureChain";
+	// retType is Promise<T> — peel to T
+	const inner = retType.typeReturn !== null ? retType.typeReturn : retType;
+	if (inner === null) return "msFutureChain";
+	return match (inner.kind) {
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureChain_double",
+		TypeKind.Int32 | TypeKind.Int16 | TypeKind.Int8
+			| TypeKind.Uint32 | TypeKind.Uint16 | TypeKind.Uint8
+			| TypeKind.Enum => "msFutureChain_int32",
+		TypeKind.Int64 | TypeKind.Uint64 => "msFutureChain_int64",
+		TypeKind.Boolean => "msFutureChain_bool",
+		TypeKind.String => "msFutureChain_msString",
+		TypeKind.Ref | TypeKind.Ptr | TypeKind.Function => "msFutureChain_ptr",
+		_ => "msFutureChain",
+	};
+}
+
 // Slot width: strings and arrays use 2 slots (16 bytes), everything else 1 slot (8 bytes).
 function paramSlotWidth(paramTypes: Type[], idx: number): number {
 	const mk = paramMsgKind(paramTypes, idx);
@@ -130,11 +153,22 @@ function buildSendProxy(kind: number, params: string[], paramTypes: Type[], ctx:
 
 // ===== Build proxy body for a T-returning method (call semantics) =====
 
-function buildCallProxy(kind: number, params: string[], paramTypes: Type[], ctx: TransformContext, loc: SourceLocation): Node {
+function buildCallProxy(kind: number, params: string[], paramTypes: Type[], retType: Type, ctx: TransformContext, loc: SourceLocation): Node {
 	const futSym = freshTempSym(ctx, "afut", voidType());
 	const msgSym = freshTempSym(ctx, "amsg", voidType());
-	const futCreate = makeCall(makeIdent("msFutureCreate", loc), [], loc);
-	futCreate.nodeType = voidType();
+	// Allocate reply future with correct size: struct-like types (including string)
+	// need typed-sized allocation so msFutureChain_<T> can write sizeof(T) bytes.
+	const isLargeValue = retType !== null && (retType.kind === TypeKind.Struct
+		|| retType.kind === TypeKind.GenericInstance || retType.kind === TypeKind.Tuple
+		|| retType.kind === TypeKind.String);
+	let futCreate: Node;
+	if (isLargeValue) {
+		futCreate = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
+		futCreate.nodeType = retType;
+	} else {
+		futCreate = makeCall(makeIdent("msFutureCreate", loc), [], loc);
+		futCreate.nodeType = voidType();
+	}
 	const futDecl = makeVarDecl(futSym.name, futCreate, DeclKind.Const, loc);
 	futDecl.resolvedSym = futSym;
 	futDecl.nodeType = voidType();
@@ -230,13 +264,16 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 			bodyStmts.push(implFutDecl);
 			let replyFutArg: Node = makeNull(loc);
 			if (!isVoid) {
-				// CALL: store reply future, chain _impl's future → reply future
+				// CALL: store reply future, chain _impl's future → reply future.
+				// Select typed chain variant based on method's declared return type
+				// so msString (16B) and other typed values are copied correctly.
+				const chainFn = futureChainFnForReturn(m.nodeType);
 				const futAccessCall = makeCall(makeIdent("msMsgReplyFuture", loc), [makeIdent("_dmsg", loc)], loc);
 				const replyDecl = makeVarDecl("_replyFut", futAccessCall, DeclKind.Const, loc);
 				replyDecl.nodeType = VOID_PTR;
 				bodyStmts.push(replyDecl);
 				bodyStmts.push(makeExprStmt(
-					makeCall(makeIdent("msFutureChain", loc), [makeIdent("_implFut", loc), makeIdent("_replyFut", loc)], loc), loc));
+					makeCall(makeIdent(chainFn, loc), [makeIdent("_implFut", loc), makeIdent("_replyFut", loc)], loc), loc));
 				replyFutArg = makeIdent("_replyFut", loc);
 			}
 			// Derive msActor* from _self.pid, pass reply future for R1 stop
@@ -401,9 +438,10 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 
 			// Proxy: enqueues message (what extensionMethodLower resolves to)
 			const methodParamTypes = m.nodeType !== null ? m.nodeType.typeChildren : [];
+			const methodRetType = m.nodeType !== null && m.nodeType.typeReturn !== null ? m.nodeType.typeReturn : null;
 			const proxyBody = isVoid
 				? buildSendProxy(msgKind, md.methodParams, methodParamTypes, ctx, loc)
-				: buildCallProxy(msgKind, md.methodParams, methodParamTypes, ctx, loc);
+				: buildCallProxy(msgKind, md.methodParams, methodParamTypes, methodRetType, ctx, loc);
 			const proxyParamTypes = m.nodeType !== null ? m.nodeType.typeChildren : [];
 			const proxyRetType = isVoid ? voidType() : unknownType();
 			const proxyFnType = createFunction(proxyParamTypes, md.methodParams, proxyRetType);

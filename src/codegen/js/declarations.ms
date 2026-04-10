@@ -41,6 +41,8 @@ export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
 	// The actual implementation comes from @import (e.g., node:process).
 	const d = node.data as FunctionDeclData;
 	if (isExternFlag(d.fnFlags)) return;
+	// Tier 1: body-less overload signatures are typecheck-only, skip emission
+	if (d.fnFlags.indexOf("overload", 0) >= 0) return;
 	emitIndent(gen);
 	emitFunctionDeclInner(gen, node);
 }
@@ -173,6 +175,10 @@ export function emitConstructorDecl(gen: JSGenerator, node: Node): void {
 
 export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as ImportDeclData;
+	// .h imports have no JavaScript counterpart — their extern decls are
+	// inlined alongside the ImportDecl by inlineHeaderImports, and the JS
+	// backend doesn't consume C headers. Skip emission entirely.
+	if (d.importSource.length >= 2 && d.importSource.slice(d.importSource.length - 2, d.importSource.length) === ".h") return;
 	if (gen.bundleMode) {
 		// All modules in global scope — skip all MetaScript imports (symbols already in scope)
 		return;

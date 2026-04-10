@@ -85,6 +85,20 @@ function promiseTypeFor(inner: Type): Type {
 	return inner !== null ? createPromise(inner) : createPromise(voidType());
 }
 
+import { isStructLikeType } from "../native/builtinLower";
+
+// Build the right allocation call for an async function's $retFut:
+// - struct/tuple/generic-instance → msFutureCreateInline (typed-sized)
+// - primitives and pointers → msFutureCreate (generic 16-byte slot)
+function makeRetFutAlloc(innerType: Type, loc: SourceLocation): Node {
+	if (isStructLikeType(innerType)) {
+		const call = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
+		call.nodeType = innerType;  // codegen reads nodeType to emit sizeof(msFuture_<T>)
+		return call;
+	}
+	return makeCall(makeIdent("msFutureCreate", loc), [], loc);
+}
+
 // Zero value for a type — used as fallback in msFutureReadT(f, zeroval) when future failed
 function zeroValueForType(t: Type, loc: SourceLocation): Node {
 	if (t === null) return makeNull(loc);
@@ -301,16 +315,22 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 			if (readFn !== "") {
 				readExpr = makeCall(makeIdent(readFn, loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
 			} else {
-				// Fallback for array/struct/string: msFutureRead returns void*.
-				// The void* is a heap-allocated box (from msSinkBoxStruct or msFutureComplete).
-				// msUnboxStruct: codegen expands to *(T*)ptr + free(ptr) — correct for boxed values.
-				const rawRead = makeCall(makeIdent("msFutureRead", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
-				if (varType !== null && (varType.kind === TypeKind.Array || varType.kind === TypeKind.Struct
-						|| varType.kind === TypeKind.Tuple || varType.kind === TypeKind.GenericInstance)) {
-					readExpr = makeCall(makeIdent("msUnboxStruct", loc), [rawRead], loc);
+				// Session 3b: struct/tuple/generic-instance types spawned via
+				// msSpawnInto have their result stored inline (memcpy'd by worker,
+				// box freed). Use msWaitForStruct for typed inline read — same path
+				// as the WaitFor builtin. Array types still go through the boxed path
+				// (msFutureRead + msUnboxStruct) since they're pointers.
+				if (isStructLikeType(varType)) {
+					readExpr = makeCall(makeIdent("msWaitForStruct", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
 					readExpr.nodeType = varType;
 				} else {
-					readExpr = rawRead;
+					const rawRead = makeCall(makeIdent("msFutureRead", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
+					if (varType !== null && varType.kind === TypeKind.Array) {
+						readExpr = makeCall(makeIdent("msUnboxStruct", loc), [rawRead], loc);
+						readExpr.nodeType = varType;
+					} else {
+						readExpr = rawRead;
+					}
 				}
 			}
 			stateStmts.push(makeExprStmt(
@@ -506,9 +526,11 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type): Node {
 	// 9. Build outer function body
 	const outerStmts: Node[] = [];
 
-	// const $retFut = msFutureCreate();  (typed: msFuture_double*, msFuture_void*, etc.)
-	const retFutInit = makeCall(makeIdent("msFutureCreate", loc), [], loc);
-	retFutInit.nodeType = retFutType;
+	// const $retFut = msFutureCreate[Inline]();
+	// Primitives use the generic 16-byte slot. Struct/tuple/generic-instance types
+	// larger than 16 bytes need typed-sized allocation via msFutureCreateInline.
+	const retFutInit = makeRetFutAlloc(fnReturnInner, loc);
+	if (!isStructLikeType(fnReturnInner)) retFutInit.nodeType = retFutType;
 	const retFutDecl = makeVarDecl("$retFut", retFutInit, DeclKind.Const, loc);
 	retFutDecl.nodeType = retFutType;
 	outerStmts.push(retFutDecl);
@@ -624,9 +646,9 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type): Node {
 	const retFutType = promiseTypeFor(fnReturnInner);
 	const promiseVoidType = createPromise(voidType());
 
-	// const $retFut = msFutureCreate();
-	const retFutInit = makeCall(makeIdent("msFutureCreate", loc), [], loc);
-	retFutInit.nodeType = retFutType;
+	// const $retFut = msFutureCreate[Inline]();  (see makeRetFutAlloc)
+	const retFutInit = makeRetFutAlloc(fnReturnInner, loc);
+	if (!isStructLikeType(fnReturnInner)) retFutInit.nodeType = retFutType;
 	const retFutDecl = makeVarDecl("$retFut", retFutInit, DeclKind.Const, loc);
 	retFutDecl.nodeType = retFutType;
 

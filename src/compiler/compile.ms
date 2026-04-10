@@ -6,13 +6,13 @@ import { parseSource } from "../parser/statements/validation";
 import { Node, ProgramData } from "../ast/node";
 import { CheckerContext, GcMode, hasErrors, hasFatalErrors, errorCount, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
-import { checkModuleGraph, getPreludeContext } from "../checker/index";
+import { checkModuleGraph, getPreludeContext } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
-import { generateJS, generateJSBundleModule } from "../codegen/js/index";
+import { generateJS, generateJSBundleModule } from "../codegen/js/jsgen";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
@@ -33,10 +33,13 @@ import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
 import { findModule, hasModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
 import { createFileSystemProvider, loadModuleGraphWithConfig, loadModule, provideSource, SourceProvider } from "../module/loader";
 import { ResolverConfig, createDefaultConfig, Backend, resolveImportWithConfig } from "../module/resolver";
+import { readLockfile, entryName } from "./package/lockfile";
+import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { globalImports } from "../checker/prelude";
 import { drainPendingInstances } from "../checker/instantiate";
-import { ResolveSection, defaultResolveSection, defaultCcSection, resolveCcForTarget } from "./buildConfig";
-import { evaluateComptimeBlocks } from "./comptime";
+import { ResolveSection, defaultResolveSection, defaultCcSection, resolveCcForTarget, loadBuildConfig } from "./buildConfig";
+import { evaluateComptimeBlocks } from "./meta/comptime";
+import { expandMacros } from "./meta/expand";
 import { CliOptions, Target } from "./options";
 import { writeOutput, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileCFile, linkObjects, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker } from "./cc";
@@ -50,7 +53,7 @@ import { clockMs } from "std/process";
 // ===== Build Helpers =====
 
 // Build ResolverConfig from CLI target + optional build.ms resolve section.
-export function buildResolverConfig(target: Target, resolve: ResolveSection, osTarget: string = ""): ResolverConfig {
+export function buildResolverConfig(target: Target, resolve: ResolveSection, osTarget: string = "", projectRoot: string = ""): ResolverConfig {
 	let backend = Backend.C;
 	if (target === Target.JS) { backend = Backend.JS; }
 	if (target === Target.Raiser) { backend = Backend.Raiser; }
@@ -69,6 +72,61 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection, osT
 	if (resolve.aliasKeys.length > 0) {
 		config.aliasKeys = resolve.aliasKeys;
 		config.aliasValues = resolve.aliasValues;
+	}
+	// Package manager: if msc.lock exists in the project root, push cache paths
+	// as aliases so bare imports resolve to cached packages.
+	// projectRoot is found by walking up from CWD for build.ms (Go/Rust convention)
+	// and passed in from the CLI entry point.
+	// file: deps — resolve directly from build.ms without lockfile.
+	// These are local folder references: "my-lib": "file:../my-lib"
+	// Resolved relative to projectRoot. No cache, no download.
+	if (projectRoot !== "") {
+		const cfg = loadBuildConfig(join(projectRoot, "build.ms"), false);
+		if (cfg.valid) {
+			let di = 0;
+			while (di < cfg.deps.keys.length) {
+				const depName = cfg.deps.keys[di];
+				const depVer = cfg.deps.values[di];
+				if (depVer.length > 5 && depVer.slice(0, 5) === "file:") {
+					const relPath = depVer.slice(5, depVer.length);
+					const absPath = relPath.charAt(0) === "/" ? relPath : join(projectRoot, relPath);
+					config.aliasKeys.push(depName);
+					config.aliasValues.push(absPath);
+				}
+				di = di + 1;
+			}
+			let ddi = 0;
+			while (ddi < cfg.devDeps.keys.length) {
+				const depName = cfg.devDeps.keys[ddi];
+				const depVer = cfg.devDeps.values[ddi];
+				if (depVer.length > 5 && depVer.slice(0, 5) === "file:") {
+					const relPath = depVer.slice(5, depVer.length);
+					const absPath = relPath.charAt(0) === "/" ? relPath : join(projectRoot, relPath);
+					config.aliasKeys.push(depName);
+					config.aliasValues.push(absPath);
+				}
+				ddi = ddi + 1;
+			}
+		}
+	}
+
+	// Registry/git deps — resolve via lockfile → cache paths.
+	const lockPath = projectRoot !== "" ? join(projectRoot, "msc.lock") : "msc.lock";
+	const lock = readLockfile(lockPath);
+	if (lock.valid) {
+		for (const entry of lock.entries) {
+			const name = entryName(entry.key);
+			let srcPath = "";
+			if (entry.source === "git" && entry.url !== "" && entry.commit !== "") {
+				srcPath = gitSrcPath(entry.url, entry.commit);
+			} else if (entry.version !== "") {
+				srcPath = registrySrcPath(name, entry.version);
+			}
+			if (srcPath !== "") {
+				config.aliasKeys.push(name);
+				config.aliasValues.push(srcPath);
+			}
+		}
 	}
 	return config;
 }
@@ -484,7 +542,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 			}
 		}
 
-		const comptimeResolved = evaluateComptimeBlocks(program);
+		const macroExpanded = expandMacros(program, ctx);
+		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const transformed = transformProgram(comptimeResolved, ctx, true);
 
 		// Build per-module import specifier → module ID mapping
@@ -547,7 +606,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const t0 = clockMs();
-	const config = buildResolverConfig(Target.C, defaultResolveSection(), opts.osTarget);
+	const config = buildResolverConfig(Target.C, defaultResolveSection(), opts.osTarget, opts.projectRoot);
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config);
 	applyGcMode(opts);
 
@@ -698,7 +757,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			ctx.errors = [];
 		}
 
-		const comptimeResolved = evaluateComptimeBlocks(monoed);
+		const macroExpanded = expandMacros(monoed, ctx);
+		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const transformed = transformProgram(comptimeResolved, ctx, false);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
@@ -1000,7 +1060,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		validateTypedAST(ctx, monoed);
 		ctx.errors = [];
 
-		const comptimeResolved = evaluateComptimeBlocks(monoed);
+		const macroExpanded = expandMacros(monoed, ctx);
+		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const transformed = transformProgram(comptimeResolved, ctx, false);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
@@ -1134,7 +1195,8 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 
-		const comptimeResolved = evaluateComptimeBlocks(program);
+		const macroExpanded = expandMacros(program, ctx);
+		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const transformed = transformProgram(comptimeResolved, ctx, true);
 		const jsCode = generateJS(transformed, ctx.jsImportRegistry);
 

@@ -244,12 +244,27 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	const fnReturnType = captureOptionalType(state);
 	const fnReturnTypeExpr = getLastTypeExpr();
 
+	// Overload signature (TypeScript parity): body-less declaration terminated by semicolon.
+	//   function f(k: K.A): void;
+	//   function f(k: K.B): void;
+	//   function f(k: K): void { ... }   // implementation comes last
+	let fnBody: Node;
+	let fnFlagsFinal: string;
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
+		advance(state); // consume ;
+		fnBody = createNode(NodeKind.BlockStmt, { statements: [] }, fnToken);
+		fnFlagsFinal = flags === "" ? "overload" : (flags + " overload");
+	} else {
+		fnBody = try callBlockParser(state);
+		fnFlagsFinal = flags;
+	}
+
 	const fnNode = createNode(NodeKind.FunctionDecl, {
 		fnName: nameToken.value,
 		params: isStatic ? stripFirstParam(params) : params,
 		fnParamTypes: isStatic ? stripFirstParam(fnParamTypes) : fnParamTypes,
-		fnBody: try callBlockParser(state),
-		fnFlags: flags,
+		fnBody,
+		fnFlags: fnFlagsFinal,
 		fnReturnType,
 		fnDefaults: isStatic ? stripFirstDefault(fnDefaults) : fnDefaults,
 		nameLocation: makeLocFromToken(nameToken),
@@ -479,6 +494,13 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 		return Result.err(`Expected identifier after 'type' at line ${nameToken.line}`);
 	}
 	advance(state);
+
+	// Tier 3: capture optional generic params: type Box<T> = ...
+	const genericNames = captureGenericParams(state);
+	if (genericNames !== "") {
+		addGenericDecl(nameToken.value, genericNames);
+	}
+
 	if (current(state).kind !== TokenKind.Assign) {
 		return Result.err(`Expected '=' in type alias at line ${current(state).line}`);
 	}
@@ -505,6 +527,7 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 		aliasName: nameToken.value,
 		aliasType,
 		aliasIsDistinct: false,
+		aliasGenericParams: genericNames,
 		discriminantName: "",
 		discriminantType: "",
 		variantKeys: [] as string[],
@@ -611,6 +634,7 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, type
 		aliasName,
 		aliasType,
 		aliasIsDistinct: false,
+		aliasGenericParams: "",
 		discriminantName: discNameToken.value,
 		discriminantType,
 		variantKeys,
@@ -687,7 +711,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 // syntax: 'interface' ID ('<' params '>')? ('extends' type)? '{' members '}'
 
 // Parse interface body: { field: Type; ... } — shared by parseInterfaceDecl and extern interface.
-function parseInterfaceBody(state: ParserState, name: string, token: Token, genericNames: string, nodeKind: NodeKind): NodeResult {
+function parseInterfaceBody(state: ParserState, name: string, token: Token, genericNames: string, nodeKind: NodeKind, nameLoc: SourceLocation = null as unknown as SourceLocation): NodeResult {
 	const keyword = nodeKind === NodeKind.StructDecl ? "struct" : "interface";
 	let ifaceIsGeneric = genericNames !== "";
 	if (ifaceIsGeneric) {
@@ -710,6 +734,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	const fields: string[] = [];
 	const fieldTypes: string[] = [];
 	const fieldTypeExprs: Node[] = [];
+	const fieldLocations: SourceLocation[] = [];
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const field = current(state);
 		if (!isPropertyName(field)) {
@@ -717,6 +742,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		}
 
 		fields.push(field.value);
+		fieldLocations.push(makeLocFromToken(field));
 		advance(state);
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
 			advance(state);
@@ -751,9 +777,13 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		interfaceName: name,
 		interfaceFields: fields,
 		interfaceFieldTypes: fieldTypes,
-		nameLocation: makeLocFromToken(token),
+		// nameLoc (from nameToken) is preferred; fall back to keyword token for legacy callers.
+		nameLocation: nameLoc !== null ? nameLoc : makeLocFromToken(token),
 	}, token);
 	ifaceNode.typeExprs = fieldTypeExprs;
+	// Repurpose paramLocations for per-field name source locations (used by resolvePass
+	// to emit correct symRecords for LSP documentHighlight/goto-def).
+	ifaceNode.paramLocations = fieldLocations;
 	return Result.ok(ifaceNode);
 }
 
@@ -764,6 +794,7 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 	if (!isIdentLike(nameToken)) {
 		return Result.err(`Expected identifier after '${keyword}' at line ${nameToken.line}`);
 	}
+	const nameLoc = makeLocFromToken(nameToken);
 	advance(state);
 
 	let genericNames = "";
@@ -771,7 +802,7 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 		genericNames = captureGenericParams(state);
 	}
 
-	return parseInterfaceBody(state, nameToken.value, token, genericNames, nodeKind);
+	return parseInterfaceBody(state, nameToken.value, token, genericNames, nodeKind, nameLoc);
 }
 
 export function parseInterfaceDecl(state: ParserState): NodeResult {
@@ -1066,7 +1097,8 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 	const accToken = current(state);
 	const accKind = current(state).value;
 	advance(state);
-	const accName = current(state).value;
+	const accNameToken = current(state);
+	const accName = accNameToken.value;
 	advance(state);
 	const raw = parseParamList(state, `${accKind}_${accName}`);
 	const accParamTypeExprs = getLastParamTypeExprs();
@@ -1082,7 +1114,7 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 		methodParamTypes,
 		methodBody: body,
 		methodIsStatic: isStatic,
-		nameLocation: makeLocFromToken(accToken),
+		nameLocation: makeLocFromToken(accNameToken),
 		methodFlags: flags,
 		methodReturnType,
 	}, accToken);
@@ -1498,7 +1530,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		state.position = savedPos; // rewind
 
 		if (hasFieldBody) {
-			const ifaceResult = parseInterfaceBody(state, nameToken.value, externToken, genericNames, bodyNodeKind);
+			const ifaceResult = parseInterfaceBody(state, nameToken.value, externToken, genericNames, bodyNodeKind, makeLocFromToken(nameToken));
 			if (ifaceResult.ok) {
 				ifaceResult.value.flags = ifaceResult.value.flags | NodeFlag.ExternC;
 				return ifaceResult;
@@ -1622,6 +1654,7 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 		aliasName: nameToken.value,
 		aliasType: distinctAliasType,
 		aliasIsDistinct: true,
+		aliasGenericParams: "",
 		discriminantName: "",
 		discriminantType: "",
 		variantKeys: [] as string[],

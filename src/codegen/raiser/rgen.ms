@@ -7,7 +7,7 @@ import {
 	ExportDeclData, DecoratedDeclData, EnumDeclData,
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
-import { parseSource } from "../../parser/index";
+import { parseSource } from "../../parser/statements/validation";
 import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
 import {
 	RaiserValue, RaiserValueKind, raiserNil, raiserString,

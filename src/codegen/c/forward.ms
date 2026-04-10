@@ -7,6 +7,7 @@
 import { Type, TypeKind, Symbol } from "../../ast/node";
 import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, } from "./context";
 import { getTypeDesc, isNrvoReturnType, shouldIndirectParam, shouldConstParam } from "./types";
+import { findExportedSymbol } from "../../checker/context";
 
 // ===== DRC forward prototypes =====
 
@@ -63,6 +64,21 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 // On-demand cross-module function prototype emission.
 // Called from genCallExpr when a cross-module function is referenced.
 export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type, sym: Symbol): void {
+	// Recovery path: re-exported symbols imported via a hub module (e.g.,
+	// `export { X } from "./source"`) can end up with Unknown symbolType in the
+	// caller's scope when the hub's collectExport runs before the source module's
+	// Phase 2 resolve completes. Look up the canonical type from the source
+	// module's registry entry — by this point (codegen), all modules have been
+	// type-checked and the registry holds resolved types.
+	if ((fnType === null || fnType.kind !== TypeKind.Function)
+			&& sym !== null && sym.modulePath !== ""
+			&& g.checkerCtx !== null && g.checkerCtx.exportRegistry !== null) {
+		const lookupName = sym.originalName !== "" ? sym.originalName : sym.name;
+		const info = findExportedSymbol(g.checkerCtx.exportRegistry, sym.modulePath, lookupName);
+		if (info !== null && info.symType !== null && info.symType.kind === TypeKind.Function) {
+			fnType = info.symType;
+		}
+	}
 	if (fnType === null || fnType.kind !== TypeKind.Function) return;
 	// DRC hooks: use ensureDrcProto instead (correct fixed-convention signatures)
 	if (isDrcLifecycleName(calleeName)) {

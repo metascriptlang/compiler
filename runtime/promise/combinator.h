@@ -147,4 +147,131 @@ msFuture* msFutureCatch(msFuture* input, msClosure onRejected);
 msFuture* msFutureCatchTyped(msFuture* input, msClosure onRejected, int typeTag);
 msFuture* msFutureFinally(msFuture* input, msClosure onSettled);
 
+/* ===== Typed .then / .catch / .finally (per-T, reads input as inline typed field) =====
+ * Correct when input future was populated via msFutureCompleteT (inline typed storage).
+ * Each variant reads ((msFuture_<T>*)input)->value to preserve sizeof(T) on pass-through
+ * — the generic msFuture_ptr.value read would truncate msString (16B) and structs > 8B.
+ *
+ * The output future is still msFuture_ptr* for now; .then callbacks don't currently
+ * return values through the chain, so output storage type is irrelevant. */
+
+/* Typed .then: read input as T, pass to callback, complete output with NULL.
+ *
+ *   name      — generated function name (e.g., msFutureThen_double)
+ *   fut_type  — typed future struct (e.g., msFuture_double)
+ *   T         — value type read from the input (e.g., double)
+ *   arg_type  — callback parameter type (usually == T; separate in case of
+ *               ABI differences between storage and argument passing)
+ *
+ * Preconditions: input->value was written via msFutureCompleteT on the same fut_type.
+ * Passing a boxed-storage input (spawn legacy path) reinterprets the heap pointer
+ * as T — undefined behavior. A Session-3 assert will catch this at runtime. */
+#define MS_DEFINE_FUTURE_THEN(name, fut_type, T, arg_type) \
+static inline void name##_cb(void* raw) { \
+    msFutureThenEnv* e = (msFutureThenEnv*)raw; \
+    if (e->input->base.failed || e->input->base.cancelled) { \
+        msFutureFail(e->output, e->input->base.error); \
+        free(e); \
+        return; \
+    } \
+    T val = ((fut_type*)e->input)->value; \
+    void* fn = (void*)e->onFulfilled.fn; \
+    void* env = e->onFulfilled.env; \
+    if (env) ((void(*)(arg_type, void*))fn)(val, env); \
+    else ((void(*)(arg_type))fn)(val); \
+    if (msErr) { \
+        msFutureFail(e->output, (void*)msCurrException); \
+        msErr = false; msCurrException = NULL; \
+    } else { \
+        msFutureComplete(e->output, NULL); \
+    } \
+    free(e); \
+} \
+static inline msFuture* name(msFuture* input, msClosure onFulfilled) { \
+    msFuture* output = (msFuture*)msFutureCreate(); \
+    msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv)); \
+    env->output = output; env->input = input; env->onFulfilled = onFulfilled; env->typeTag = 0; \
+    msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
+    return output; \
+}
+
+/* Typed .finally: invoke handler, then propagate input (value or error) to output
+ * via typed msFutureCompleteT. Error propagation goes through msFutureFail
+ * (not type-specific). */
+#define MS_DEFINE_FUTURE_FINALLY(name, fut_type) \
+static inline void name##_cb(void* raw) { \
+    msFutureFinallyEnv* e = (msFutureFinallyEnv*)raw; \
+    if (e->onSettled.env != NULL) { \
+        ((void(*)(void*))e->onSettled.fn)(e->onSettled.env); \
+    } else { \
+        ((void(*)(void))e->onSettled.fn)(); \
+    } \
+    if (e->input->base.failed || e->input->base.cancelled) { \
+        msFutureFail(e->output, e->input->base.error); \
+    } else { \
+        fut_type* srcT = (fut_type*)e->input; \
+        fut_type* dstT = (fut_type*)e->output; \
+        msFutureCompleteT(dstT, srcT->value); \
+    } \
+    free(e); \
+} \
+static inline msFuture* name(msFuture* input, msClosure onSettled) { \
+    msFuture* output = (msFuture*)msAlloc(sizeof(fut_type)); \
+    msFutureFinallyEnv* env = (msFutureFinallyEnv*)malloc(sizeof(msFutureFinallyEnv)); \
+    env->output = output; env->input = input; env->onSettled = onSettled; \
+    msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
+    return output; \
+}
+
+/* Typed .catch: on success, propagate input value to output via typed complete.
+ * On error, invoke handler (error is always msString in MetaScript), complete output
+ * with NULL on handler success or propagate handler's rethrow. */
+#define MS_DEFINE_FUTURE_CATCH(name, fut_type) \
+static inline void name##_cb(void* raw) { \
+    msFutureCatchEnv* e = (msFutureCatchEnv*)raw; \
+    if (e->input->base.failed || e->input->base.cancelled) { \
+        void* err = e->input->base.error; \
+        e->input->base.error = NULL; \
+        void* fn = (void*)e->onRejected.fn; \
+        void* env = e->onRejected.env; \
+        msString sval = err ? *(msString*)err : MS_EMPTY_STRING; \
+        if (env) ((void(*)(msString, void*))fn)(sval, env); \
+        else ((void(*)(msString))fn)(sval); \
+        if (msErr) { \
+            msFutureFail(e->output, (void*)msCurrException); \
+            msErr = false; msCurrException = NULL; \
+        } else { \
+            msFutureComplete(e->output, NULL); \
+        } \
+    } else { \
+        fut_type* srcT = (fut_type*)e->input; \
+        fut_type* dstT = (fut_type*)e->output; \
+        msFutureCompleteT(dstT, srcT->value); \
+    } \
+    free(e); \
+} \
+static inline msFuture* name(msFuture* input, msClosure onRejected) { \
+    msFuture* output = (msFuture*)msAlloc(sizeof(fut_type)); \
+    msFutureCatchEnv* env = (msFutureCatchEnv*)malloc(sizeof(msFutureCatchEnv)); \
+    env->output = output; env->input = input; env->onRejected = onRejected; env->typeTag = 3; \
+    msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
+    return output; \
+}
+
+MS_DEFINE_FUTURE_THEN(msFutureThen_double, msFuture_double, double, double)
+MS_DEFINE_FUTURE_THEN(msFutureThen_int32,  msFuture_int32,  int32_t, int32_t)
+MS_DEFINE_FUTURE_THEN(msFutureThen_int64,  msFuture_int64,  int64_t, int64_t)
+MS_DEFINE_FUTURE_THEN(msFutureThen_bool,   msFuture_bool,   bool,    bool)
+MS_DEFINE_FUTURE_THEN(msFutureThen_ptr,    msFuture_ptr,    void*,   void*)
+
+MS_DEFINE_FUTURE_FINALLY(msFutureFinally_double, msFuture_double)
+MS_DEFINE_FUTURE_FINALLY(msFutureFinally_int32,  msFuture_int32)
+MS_DEFINE_FUTURE_FINALLY(msFutureFinally_int64,  msFuture_int64)
+MS_DEFINE_FUTURE_FINALLY(msFutureFinally_bool,   msFuture_bool)
+MS_DEFINE_FUTURE_FINALLY(msFutureFinally_ptr,    msFuture_ptr)
+
+/* msFutureCatch_msString / msFutureFinally_msString / msFutureThen_msString
+ * are defined in system.h where msString is available. msFutureCatch_<primitive>
+ * variants are also defined there (msString is needed for the error handler). */
+
 #endif /* MS_COMBINATOR_H */

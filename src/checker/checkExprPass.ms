@@ -3,8 +3,8 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isPromise, isSpawnHandle, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, markUsed, markConsumed } from "./symbol";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isPromise, isSpawnHandle, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, createEnumLiteral } from "./types";
+import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult, findExportedSymbol } from "./context";
 import {
 	isAssignable, needsStdConv, findFirstMismatch,
@@ -13,6 +13,7 @@ import {
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
+import { expandMacroInvocation } from "../compiler/meta/expand";
 import { findChar, splitTopLevel } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 import { markConsumedName, isConsumedName, symbolConsumeKey } from "./spawnAffinity";
@@ -55,11 +56,17 @@ function factReferencesVar(fact: Node, name: string): boolean {
 // Resolves `new Box<number>(42)` — captures type args from side-channel,
 // records instantiation, and builds concrete Ref<Struct> type.
 // Parity: standard reference object construction → type node captures type args.
-function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Type): Type {
+function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Type, astTypeArg: string): Type {
 	if (callee.kind !== NodeKind.Identifier) return calleeType;
 	const calleeName = (callee.data as IdentifierData).name;
 	const ltCol = callee.location.column + calleeName.length;
-	const typeArgStr = getExplicitTypeArg(callee.location.line, ltCol);
+	// Prefer the AST-resident typeArg (survives clone + substitution) over the
+	// location-keyed side channel (stale for cloned generic bodies because the
+	// cloned source location still points at the original "K, V" strings).
+	let typeArgStr = astTypeArg;
+	if (typeArgStr === "") {
+		typeArgStr = getExplicitTypeArg(callee.location.line, ltCol);
+	}
 	if (typeArgStr === "") return calleeType;
 	const genericParams = getGenericDecl(calleeName);
 	if (genericParams === "") return calleeType;
@@ -308,6 +315,40 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			if (d.operator === "=" && leftType !== null) {
 				d.right = fitNode(ctx, d.right, leftType, rightType);
 			}
+			// Map<K,V> subscript write: `m[k] = v` → `m.set(k, v)`. Mutate the
+			// whole BinaryExpr into a method call so the existing extension
+			// resolution + lowering path handles it. Counterpart of the read-case
+			// mutation in the ArrayAccess arm above.
+			if (d.operator === "=" && d.left.kind === NodeKind.ArrayAccess) {
+				const ad = d.left.data as ArrayAccessData;
+				let setObjType = ad.array.nodeType;
+				if (setObjType !== null && setObjType.kind === TypeKind.Ref && setObjType.typeReturn !== null) {
+					setObjType = setObjType.typeReturn;
+				}
+				if (setObjType !== null && setObjType.kind === TypeKind.GenericInstance && setObjType.typeName === "Map") {
+					const wloc = node.location;
+					const wtok = createToken(TokenKind.Ident, "", wloc.line);
+					const wmember: MemberExprData = { object: ad.array, property: "set", isOptional: false };
+					const wmemberNode = createNode(NodeKind.MemberExpr, wmember, wtok);
+					const wargs: Node[] = [];
+					wargs.push(ad.index);
+					wargs.push(d.right);
+					// Mutate in place. Assign literal directly to node.data: NodeData (the
+					// union type) — a typed intermediate like `const x: CallExprData = ...`
+					// confuses C codegen into typing the local as the variant struct, which
+					// then fails the union assignment.
+					node.kind = NodeKind.CallExpr;
+					node.data = {
+						callee: wmemberNode,
+						arguments: wargs,
+						isDirectCall: true,
+						resolvedOverloadIdx: -1,
+					};
+					node.flags = node.flags & ~NodeFlag.Sem;
+					node.nodeType = null;
+					return checkCallExpr(ctx, node, null);
+				}
+			}
 			// Ref parity: initVar on assignment LHS (sempass2 line 1284)
 			if (isAsgn && d.left.kind === NodeKind.Identifier) {
 				const lhsId = d.left.data as IdentifierData;
@@ -385,12 +426,49 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			return int32Type();
 		},
 		NodeKind.CallExpr => checkCallExpr(ctx, node, expectedType),
-		NodeKind.MemberExpr => checkMemberExpr(ctx, node),
+		NodeKind.MemberExpr => checkMemberExpr(ctx, node, expectedType),
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
 			checkExpr(ctx, d.array, null);
 			const arrType = d.array.nodeType;
 			checkExpr(ctx, d.index, null);
+			// Map<K,V> subscript: mutate `m[k]` into the method-call form `m.get(k)`
+			// so the existing extension resolution (checkMemberExpr → checkCallExpr)
+			// sets up NodeFlag.ExtCall + resolvedSym, and extensionMethodLower later
+			// rewrites it to the flat UFCS form. This makes `{ [key: K]: V }` and
+			// Map<K,V> subscripts work transparently at runtime.
+			//
+			// Only handles READ here. Write case (`m[k] = v`) is handled in the
+			// BinaryExpr assignment check — see below — because we need to know if
+			// the ArrayAccess is on the LHS of an assignment to emit `.set` instead
+			// of `.get`. The leftPartOfAsgn counter tells us that.
+			let mapObjType = arrType;
+			if (mapObjType !== null && mapObjType.kind === TypeKind.Ref && mapObjType.typeReturn !== null) {
+				mapObjType = mapObjType.typeReturn;
+			}
+			if (mapObjType !== null && mapObjType.kind === TypeKind.GenericInstance
+				&& mapObjType.typeName === "Map"
+				&& ctx.initTracker.leftPartOfAsgn === 0) {
+				const loc = node.location;
+				const memberTok = createToken(TokenKind.Ident, "", loc.line);
+				const memberData: MemberExprData = { object: d.array, property: "get", isOptional: false };
+				const memberNode = createNode(NodeKind.MemberExpr, memberData, memberTok);
+				const callArgs: Node[] = [];
+				callArgs.push(d.index);
+				// Mutate in place — same node identity, different kind.
+				// Assign literal directly to node.data: NodeData (union) — typed
+				// intermediate confuses codegen variant handling.
+				node.kind = NodeKind.CallExpr;
+				node.data = {
+					callee: memberNode,
+					arguments: callArgs,
+					isDirectCall: true,
+					resolvedOverloadIdx: -1,
+				};
+				node.flags = node.flags & ~NodeFlag.Sem;
+				node.nodeType = null;
+				return checkCallExpr(ctx, node, null);
+			}
 			const idxType = d.index.nodeType;
 			// Implicit number → int64 cast for array index (C requires integer subscript)
 			if (idxType !== null && idxType.kind === TypeKind.Number && d.index.kind !== NodeKind.BinaryExpr) {
@@ -425,9 +503,84 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			if (objExpected !== null && objExpected.kind === TypeKind.Ref && objExpected.typeReturn !== null) {
 				objExpected = objExpected.typeReturn;
 			}
-			// Unwrap GenericInstance (e.g., Result<T, E>) to inner Struct via typeExtra (base type)
-			if (objExpected !== null && objExpected.kind === TypeKind.GenericInstance && objExpected.typeExtra !== null && objExpected.typeExtra.kind === TypeKind.Struct) {
-				objExpected = objExpected.typeExtra;
+			// Map<K,V> literal: `{ "foo": 1 }` assigned to a Map target is rewritten
+			// in-place to `mapFromPairs<K,V>([keys], [values])` — a call to a std
+			// helper that constructs a populated Map. The rewrite happens DURING
+			// checking so monomorphization (which runs after checking) sees the
+			// call with typed arguments and properly specializes it.
+			//
+			// This covers both `Map<K,V>` and `{ [key: K]: V }` — the index
+			// signature is normalized to Map<K,V> during resolveAnnotation.
+			if (objExpected !== null && objExpected.kind === TypeKind.GenericInstance
+				&& objExpected.typeName === "Map"
+				&& objExpected.typeChildren !== null && objExpected.typeChildren.length === 2) {
+				const mapKeyType = objExpected.typeChildren[0];
+				const mapValType = objExpected.typeChildren[1];
+				// 1. Validate every value against V and emit errors on mismatch.
+				let mli = 0;
+				while (mli < d.properties.length) {
+					checkExpr(ctx, d.properties[mli], mapValType);
+					const vt = d.properties[mli].nodeType;
+					if (vt !== null && mapValType !== null && !isAssignable(vt, mapValType)) {
+						const keyName = mli < d.keys.length ? d.keys[mli] : "";
+						addError(ctx, "Map value for key '" + keyName + "' has type that is not assignable to V", node.location.line, node.location.column);
+					}
+					mli = mli + 1;
+				}
+				// 2. Build keys array — StringLiterals stamped with K.
+				const mtok = createToken(TokenKind.Ident, "", node.location.line);
+				const keyNodes: Node[] = [];
+				let ki = 0;
+				while (ki < d.keys.length) {
+					const kNode = createNode(NodeKind.StringLiteral, { value: d.keys[ki] }, mtok);
+					kNode.nodeType = mapKeyType;
+					kNode.flags = kNode.flags | NodeFlag.Sem;
+					keyNodes.push(kNode);
+					ki = ki + 1;
+				}
+				const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, mtok);
+				keysArr.nodeType = createArray(mapKeyType);
+				keysArr.flags = keysArr.flags | NodeFlag.Sem;
+				// 3. Build values array — reuse the already-checked property nodes.
+				const valNodes: Node[] = [];
+				let vi = 0;
+				while (vi < d.properties.length) {
+					valNodes.push(d.properties[vi]);
+					vi = vi + 1;
+				}
+				const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, mtok);
+				valsArr.nodeType = createArray(mapValType);
+				valsArr.flags = valsArr.flags | NodeFlag.Sem;
+				// 4. Build the mapFromPairs callee + mutate this node into the call.
+				const calleeIdent = createNode(NodeKind.Identifier, { name: "mapFromPairs" }, mtok);
+				const mCallArgs: Node[] = [];
+				mCallArgs.push(keysArr);
+				mCallArgs.push(valsArr);
+				// Assign literal directly to node.data: NodeData (union) — typed
+				// intermediate confuses codegen variant handling.
+				node.kind = NodeKind.CallExpr;
+				node.data = {
+					callee: calleeIdent,
+					arguments: mCallArgs,
+					isDirectCall: true,
+					resolvedOverloadIdx: -1,
+				};
+				node.flags = node.flags & ~NodeFlag.Sem;
+				node.nodeType = null;
+				// 5. Re-check as a call. Generic inference on mapFromPairs<K,V>
+				// binds K and V from the typed array arguments, and the #29 fix
+				// ensures the internal m.set(...) calls get monomorphized.
+				return checkCallExpr(ctx, node, objExpected);
+			}
+			// Unwrap GenericInstance (e.g., Result<T, E>) to inner Struct.
+			// Prefer typeReturn (eagerly instantiated body with concrete field types)
+			// over typeExtra (unsubstituted base type with GenericParam fields).
+			if (objExpected !== null && objExpected.kind === TypeKind.GenericInstance) {
+				if (objExpected.typeReturn !== null && objExpected.typeReturn.kind === TypeKind.Struct) {
+					objExpected = objExpected.typeReturn;
+				} else if (objExpected.typeExtra !== null && objExpected.typeExtra.kind === TypeKind.Struct) {
+					objExpected = objExpected.typeExtra;
+				}
 			}
 			if (objExpected !== null && objExpected.kind === TypeKind.Struct
 				&& objExpected.typeChildren !== null) {
@@ -461,6 +614,27 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 						fieldExpected = objExpected.typeChildren[fi];
 					}
 					checkExpr(ctx, d.properties[fi], fieldExpected);
+					// Validate field type assignability against expected struct field type.
+					// checkExpr propagates expectedType for inference but doesn't enforce assignability.
+					const propActual = d.properties[fi].nodeType;
+					if (fieldExpected !== null && propActual !== null
+							&& fieldExpected.kind !== TypeKind.Unknown
+							&& propActual.kind !== TypeKind.Unknown
+							&& propActual.kind !== TypeKind.Error
+							// Nominal shortcut: if typeNameOf matches, types are logically identical.
+							// Handles cross-module type identity (Ref vs Ptr wrappers, different Type objects)
+							// where isAssignable fails due to structural comparison of unresolved inner types.
+							&& !(typeNameOf(propActual) !== "" && typeNameOf(propActual) === typeNameOf(fieldExpected))
+							&& !isAssignable(propActual, fieldExpected)) {
+						const propTypeName = typeNameOf(d.properties[fi].nodeType);
+						const expectedTypeName = typeNameOf(fieldExpected);
+						if (d.keyLocations !== null && fi < d.keyLocations.length) {
+							const kl = d.keyLocations[fi];
+							addErrorRange(ctx, `Type '${propTypeName}' is not assignable to type '${expectedTypeName}' for field '${keyName}'`, kl.line, kl.column, kl.column + keyName.length);
+						} else {
+							addError(ctx, `Type '${propTypeName}' is not assignable to type '${expectedTypeName}' for field '${keyName}'`, node.location.line, node.location.column);
+						}
+					}
 					// Record property key as reference to struct field
 					if (fi < d.keys.length && d.keyLocations !== null && fi < d.keyLocations.length && fieldExpected !== null) {
 						const keyLoc = d.keyLocations[fi];
@@ -521,35 +695,75 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 				// Reference parity: sem resolves fields then calls fitNode(field.typ, value)
 				// once per field. One pass, known types.
 				node.nodeType = objExpected;
-				// Try name-only matching first (unique for most variants)
-				let varIdx = (d.keys.length > 0)
-					? findUnionVariant(objExpected, d.keys, [])
-					: -1;
-				// Ambiguous? (e.g. { value: X } matches both NumberLiteral and StringLiteral)
-				// Check properties without expectedType to get actual types, then disambiguate.
-				if (varIdx >= 0 && d.keys.length > 0 && isAmbiguousVariant(objExpected, varIdx, d.keys)) {
-					const propTypes: Type[] = [];
-					let pi = 0;
-					while (pi < d.properties.length) {
-						checkExpr(ctx, d.properties[pi], null); propTypes.push(d.properties[pi].nodeType);
-						pi = pi + 1;
+
+				// Tier 2: string-literal discriminant narrowing.
+				// When every variant is a struct with a shared field whose type is StringLiteral
+				// (the TypeScript pattern: type Shape = {kind:"a",...} | {kind:"b",...}),
+				// find the shared field, read the literal value from the object literal, and
+				// pick the variant that way. This catches wrong-field-in-variant bugs that
+				// pure name-based findUnionVariant misses.
+				let varIdx = -1;
+				const stringDiscName = findSharedStringDiscriminant(objExpected);
+				if (stringDiscName !== "") {
+					// Look for the discriminant field in the literal
+					let litDiscIdx = -1;
+					for (let ki = 0; ki < d.keys.length; ki += 1) {
+						if (d.keys[ki] === stringDiscName) { litDiscIdx = ki; break; }
 					}
-					const refined = findUnionVariant(objExpected, d.keys, propTypes);
-					if (refined >= 0) varIdx = refined;
+					if (litDiscIdx >= 0 && litDiscIdx < d.properties.length) {
+						const discProp = d.properties[litDiscIdx];
+						if (discProp.kind === NodeKind.StringLiteral) {
+							const sd = discProp.data as StringLiteralData;
+							varIdx = findVariantByStringDiscriminant(objExpected, stringDiscName, sd.value);
+							if (varIdx < 0) {
+								addError(ctx, `No variant of union has ${stringDiscName} = "${sd.value}"`,
+									node.location.line, node.location.column);
+							}
+						}
+					} else {
+						addError(ctx, `Object literal missing discriminant field '${stringDiscName}' for union`,
+							node.location.line, node.location.column);
+					}
+				}
+				// Fallback: name-only matching (legacy path for non-string-discriminant unions)
+				if (varIdx < 0 && stringDiscName === "") {
+					varIdx = (d.keys.length > 0)
+						? findUnionVariant(objExpected, d.keys, [])
+						: -1;
+					// Ambiguous? (e.g. { value: X } matches both NumberLiteral and StringLiteral)
+					// Check properties without expectedType to get actual types, then disambiguate.
+					if (varIdx >= 0 && d.keys.length > 0 && isAmbiguousVariant(objExpected, varIdx, d.keys)) {
+						const propTypes: Type[] = [];
+						let pi = 0;
+						while (pi < d.properties.length) {
+							checkExpr(ctx, d.properties[pi], null); propTypes.push(d.properties[pi].nodeType);
+							pi = pi + 1;
+						}
+						const refined = findUnionVariant(objExpected, d.keys, propTypes);
+						if (refined >= 0) varIdx = refined;
+					}
 				}
 				// Single pass: check properties WITH variant field types as expectedType
-				// (reference: fitNode(field.typ, value) — proper literal coercion)
+				// (reference: fitNode(field.typ, value) — proper literal coercion).
+				// Under Tier 2 string-discriminant mode, also report fields missing from the
+				// chosen variant as errors (caller asked for a specific variant, extra fields
+				// are wrong).
 				const variant = (varIdx >= 0 && objExpected.typeChildren !== null
 					&& varIdx < objExpected.typeChildren.length)
 					? objExpected.typeChildren[varIdx]
 					: null;
-				let fi = 0;
-				while (fi < d.properties.length) {
-					const fieldExpected = (variant !== null && fi < d.keys.length)
-						? findFieldInVariant(variant, d.keys[fi])
+				for (let fi = 0; fi < d.properties.length; fi += 1) {
+					const key = fi < d.keys.length ? d.keys[fi] : "";
+					const fieldExpected = (variant !== null && key !== "")
+						? findFieldInVariant(variant, key)
 						: null;
 					checkExpr(ctx, d.properties[fi], fieldExpected);
-					fi = fi + 1;
+					if (stringDiscName !== "" && variant !== null && key !== "" && key !== stringDiscName && fieldExpected === null) {
+						// Resolved to a specific variant via string discriminant, but this field
+						// doesn't belong to it — report.
+						addError(ctx, `Field '${key}' does not exist on the ${stringDiscName}-matched variant`,
+							node.location.line, node.location.column);
+					}
 				}
 				// Stamp variant index in high 16 bits of flags.
 				// +1 offset so 0 means "not set" (variant 0 becomes 1).
@@ -1183,7 +1397,9 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 	}
 	checkExpr(ctx, d.newCallee, null);
 	const calleeType = d.newCallee.nodeType;
-	const resolvedType = resolveGenericNewExpr(ctx, d.newCallee, calleeType);
+	// Pass the NewExpr's AST-resident typeArg so resolveGenericNewExpr can prefer
+	// it over the stale location-keyed side channel (important for cloned bodies).
+	const resolvedType = resolveGenericNewExpr(ctx, d.newCallee, calleeType, node.typeArg);
 	// Error: generic type without type args and no inferable context
 	if (d.newCallee.kind === NodeKind.Identifier) {
 		const calleeName2 = (d.newCallee.data as IdentifierData).name;
@@ -1285,6 +1501,54 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 	if (d.callee.kind === NodeKind.Identifier) {
 		const calleeName = (d.callee.data as IdentifierData).name;
 		const sym = lookupSymbol(ctx.table, calleeName);
+		// Phase B+ eager: Bare-call macro invocation with inline expansion.
+		//
+		// When the callee resolves to a Macro symbol, run the macro RIGHT NOW
+		// (semMacroExpr → semAfterMacroCall model) and replace this node
+		// with the expansion result. This is essential for type inference:
+		// without it, `const x = answer()` would have x typed as `unknown`
+		// (because macro return types can't be predicted), and C codegen would
+		// emit `void* x = 42` instead of `double x = 42`.
+		//
+		// The depth counter prevents infinite recursion when a macro returns
+		// a call to another macro that returns another, etc.
+		if (sym !== null && sym.symbolKind === SymbolKind.Macro) {
+			if (ctx.macroExpansionDepth >= 16) {
+				addError(ctx, "macro expansion depth limit (16) exceeded for '" + calleeName + "' — possible recursive macro",
+					node.location.line, node.location.column);
+				node.nodeType = unknownType();
+				return unknownType();
+			}
+			// Type-check args first (errors inside them are reported)
+			const macroArgsRef = d.arguments;
+			let mai = 0;
+			while (mai < macroArgsRef.length) {
+				checkExpr(ctx, macroArgsRef[mai], null);
+				mai = mai + 1;
+			}
+			// Mutate node to MacroInvocation form so expandMacroInvocation can read it
+			node.kind = NodeKind.MacroInvocation;
+			node.data = { macroName: calleeName, macroArgs: macroArgsRef };
+			// Eagerly expand right now via the Raiser VM. Track depth across the
+			// re-check below so recursive macros hit the limit cleanly.
+			ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
+			const expanded = expandMacroInvocation(node, ctx, 0);
+			// Replace current node contents with the expanded result.
+			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
+			node.kind = expanded.kind;
+			node.data = expanded.data;
+			if (expanded.location !== null) node.location = expanded.location;
+			node.nodeType = null as unknown as Type;
+			node.resolvedSym = null as unknown as Symbol;
+			node.flags = 0;
+			// Re-check the mutated node so its nodeType is set. This drives correct
+			// type inference for the parent (e.g., the VariableDecl declaring `x`).
+			// If the expanded result is itself a macro call, this recurses through
+			// checkCallExpr → eager expand again, bounded by macroExpansionDepth.
+			checkExpr(ctx, node, expectedType);
+			ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
+			return node.nodeType;
+		}
 		if (sym !== null) {
 			// Demand-driven: ensure callee signature is ready
 			ensureShaped(sym, ctx);
@@ -1404,7 +1668,21 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			paramExpected = calleeType.typeChildren[ai];
 		}
 		checkExpr(ctx, d.arguments[ai], paramExpected);
-		const argType = d.arguments[ai].nodeType;
+		let argType = d.arguments[ai].nodeType;
+		// Tier 1: narrow direct enum member access to its EnumLiteral form for call checking.
+		// The member access was rewritten to an Identifier earlier (checkMemberExpr); we stored
+		// the literal type on resolvedSym.symbolType while keeping nodeType as the wider Enum.
+		// Using the literal type here lets both overload scoring (Exact match vs Subtype) and
+		// single-function arg checking (EnumLiteral → EnumLiteral assignable) succeed.
+		if (argType !== null && argType.kind === TypeKind.Enum) {
+			const argNode = d.arguments[ai];
+			if (argNode.resolvedSym !== null
+					&& argNode.resolvedSym.symbolKind === SymbolKind.EnumMember
+					&& argNode.resolvedSym.symbolType !== null
+					&& argNode.resolvedSym.symbolType.kind === TypeKind.EnumLiteral) {
+				argType = argNode.resolvedSym.symbolType;
+			}
+		}
 		argTypes.push(argType);
 		// PARALOCK Phase 1: passing a SpawnHandle identifier as a function argument
 		// counts as consumption — the handle flows out of the caller's scope via
@@ -1706,22 +1984,81 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 	return returnType;
 }
 
-function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, argTypes: Type[], callNode: Node): Type {
-	// Build candidate array: primary at [0], overloads at [1..n]
-	const candidates: Type[] = [];
-	candidates.push(sym.symbolType);
-	let oi = 0;
-	while (oi < sym.overloads.length) {
-		candidates.push(sym.overloads[oi].symbolType);
-		oi = oi + 1;
+// Tier 1: locate the implementation symbol in an overload set.
+// The implementation is the unique member without the OverloadSig flag.
+// Returns null if no implementation exists (all candidates are sigs).
+function findOverloadImpl(sym: Symbol): Symbol {
+	if (!hasFlag(sym, SymbolFlag.OverloadSig)) return sym;
+	for (const o of sym.overloads) {
+		if (!hasFlag(o, SymbolFlag.OverloadSig)) return o;
 	}
+	return null as unknown as Symbol;
+}
+
+function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, argTypes: Type[], callNode: Node): Type {
+	// Tier 1: locate the implementation in the overload set. Reused below for the
+	// no-impl check, the same-return-type check, and the OverloadSig redirect.
+	const impl = findOverloadImpl(sym);
+	if (impl === null) {
+		addError(ctx, `Overloaded function '${sym.name}' has no implementation — at least one definition must have a body`,
+			callNode.location.line, callNode.location.column);
+		return getReturnType(sym.symbolType);
+	}
+	// Tier 1: validate each overload sig against the implementation.
+	// Rules (stricter than TypeScript — we don't insert HiddenStdConv at call sites yet):
+	//   1. sig arity must equal impl arity
+	//   2. each sig param type must be assignable to the corresponding impl param type
+	//   3. sig return type must be assignable to impl return type
+	// One-shot per overload set: marked on the impl symbol after first validation.
+	if (!hasFlag(impl, SymbolFlag.OverloadValidated)) {
+		setFlag(impl, SymbolFlag.OverloadValidated);
+		const implFnType = impl.symbolType;
+		if (implFnType !== null && implFnType.kind === TypeKind.Function) {
+			const implRet = implFnType.typeReturn;
+			const implParams = implFnType.typeChildren;
+			const implFallback = implRet !== null ? implRet : unknownType();
+			const allSyms: Symbol[] = [sym];
+			for (const o of sym.overloads) allSyms.push(o);
+			for (const s of allSyms) {
+				if (s === impl) continue;
+				if (!hasFlag(s, SymbolFlag.OverloadSig)) continue;
+				const sigType = s.symbolType;
+				if (sigType === null || sigType.kind !== TypeKind.Function) continue;
+				// 1. arity
+				if (sigType.typeChildren.length !== implParams.length) {
+					addError(ctx, `Overload signature for '${sym.name}' has ${sigType.typeChildren.length} parameter(s) but implementation has ${implParams.length}`,
+						callNode.location.line, callNode.location.column);
+					return implFallback;
+				}
+				// 2. per-param assignability (sig → impl)
+				let paramMismatch = -1;
+				for (let pi = 0; pi < sigType.typeChildren.length; pi += 1) {
+					if (!isAssignable(sigType.typeChildren[pi], implParams[pi])) {
+						paramMismatch = pi;
+						break;
+					}
+				}
+				if (paramMismatch >= 0) {
+					addError(ctx, `Overload signature for '${sym.name}' param ${paramMismatch + 1} type '${typeNameOf(sigType.typeChildren[paramMismatch])}' not assignable to implementation param type '${typeNameOf(implParams[paramMismatch])}'`,
+						callNode.location.line, callNode.location.column);
+					return implFallback;
+				}
+				// 3. return type assignability
+				const sRet = sigType.typeReturn;
+				if (sRet !== null && implRet !== null && !isAssignable(sRet, implRet)) {
+					addError(ctx, `Overload signature for '${sym.name}' has return type '${typeNameOf(sRet)}' incompatible with implementation return type '${typeNameOf(implRet)}'`,
+						callNode.location.line, callNode.location.column);
+					return implRet;
+				}
+			}
+		}
+	}
+	// Build candidate array: primary at [0], overloads at [1..n]
+	const candidates: Type[] = [sym.symbolType];
+	for (const o of sym.overloads) candidates.push(o.symbolType);
 	// All same scope for now (cross-module scope = Phase 6)
 	const scopeDepths: number[] = [];
-	let di = 0;
-	while (di < candidates.length) {
-		scopeDepths.push(0);
-		di = di + 1;
-	}
+	for (const _c of candidates) scopeDepths.push(0);
 	const idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths);
 	if (idx === -2) {
 		// Ambiguous call — find the two matching candidates for error
@@ -1750,10 +2087,34 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, argTypes: Type[],
 	// Success — store resolved index + symbol on AST node, fill default args, infer return
 	const cd = callNode.data as CallExprData;
 	cd.resolvedOverloadIdx = idx;
+	let pickedSym: Symbol = sym;
 	if (idx === 0) {
-		callNode.resolvedSym = sym;
+		pickedSym = sym;
 	} else if (idx > 0 && idx - 1 < sym.overloads.length) {
-		callNode.resolvedSym = sym.overloads[idx - 1];
+		pickedSym = sym.overloads[idx - 1];
+	}
+	// Tier 1: if the selected winner is a body-less overload signature, redirect to the
+	// implementation (the unique non-OverloadSig member of the overload set). Codegen only
+	// emits the implementation; overload sigs exist solely for type checking.
+	if (hasFlag(pickedSym, SymbolFlag.OverloadSig)) {
+		// `impl` was already located at the top of resolveOverloadCall.
+		pickedSym = impl;
+		if (impl === sym) {
+			cd.resolvedOverloadIdx = 0;
+		} else {
+			for (let ok = 0; ok < sym.overloads.length; ok += 1) {
+				if (sym.overloads[ok] === impl) { cd.resolvedOverloadIdx = ok + 1; break; }
+			}
+		}
+	}
+	callNode.resolvedSym = pickedSym;
+	// Tier 1: also rewrite the callee Identifier's resolvedSym so the direct-call codegen
+	// path (which reads d.callee.resolvedSym.overloadIdx for mangling) emits the correct
+	// function name when the winner is not at slot 0. This fixes both the overload-sig
+	// redirect case and the general case where a non-primary overload wins.
+	if (cd.callee !== null && cd.callee.kind === NodeKind.Identifier && pickedSym !== null) {
+		cd.callee.resolvedSym = pickedSym;
+		if (pickedSym.symbolType !== null) cd.callee.nodeType = pickedSym.symbolType;
 	}
 	const winner = candidates[idx];
 	if (winner.kind === TypeKind.Function && argTypes.length < winner.typeChildren.length) {
@@ -2095,7 +2456,7 @@ function hasThisParam(sym: Symbol): boolean {
 		&& sym.symbolType.typeNames.length > 0 && sym.symbolType.typeNames[0] === "this";
 }
 
-function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
+function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type): Type {
 	const d = node.data as MemberExprData;
 	checkExpr(ctx, d.object, null);
 	const objType = d.object.nodeType;
@@ -2119,21 +2480,40 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		const enumSym0 = lookupSymbol(ctx.table, enumName);
 		const isExternEnum = enumSym0 !== null && hasFlag(enumSym0, SymbolFlag.ImportC);
 		const mangledName = isExternEnum ? propName : enumName + "_" + propName;
+		let memberExists = false;
+		for (const m of objType.typeNames) {
+			if (m === propName) { memberExists = true; break; }
+		}
+		// Tier 1: narrow to EnumLiteral when the context directly expects the literal form
+		// (return type, variable annotation, etc). Union<EnumLiteral...> narrowing is deferred
+		// to Tier 2 (discriminated union narrowing at call sites). The literal type is also
+		// stored on resolvedSym.symbolType so call-argument narrowing can pick it up even
+		// when no expectedType flows down.
+		const wantsLiteral = expectedType !== null
+			&& expectedType.kind === TypeKind.EnumLiteral
+			&& expectedType.typeName === enumName
+			&& expectedType.typeNames.length > 0
+			&& expectedType.typeNames[0] === propName;
+		const litType = (memberExists) ? createEnumLiteral(objType, propName) : objType;
+		const reportedType = wantsLiteral ? litType : objType;
 		// Create synthetic symbol for the enum member (no scope lookup needed).
 		// Enum member mangled names are NOT in scope — resolved here at use site.
 		const enumSym = lookupSymbol(ctx.table, enumName);
-		const memberSym = makeSymbolState(propName, SymbolKind.EnumMember, objType, false, SymbolState.Shaped);
+		const memberSym = makeSymbolState(propName, SymbolKind.EnumMember, reportedType, false, SymbolState.Shaped);
 		if (enumSym !== null && enumSym.location !== null) {
 			memberSym.location = enumSym.location;
 			memberSym.modulePath = enumSym.modulePath;
 		}
-		sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + propName.length, memberSym, objType, SymbolKind.EnumMember, propName, enumName, false);
-		// Rewrite entire node to Identifier
+		sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + propName.length, memberSym, reportedType, SymbolKind.EnumMember, propName, enumName, false);
+		// Rewrite entire node to Identifier (keeps codegen path identical to pre-Tier-1 behavior)
 		node.kind = NodeKind.Identifier;
 		node.data = { name: mangledName };
 		node.resolvedSym = memberSym;
-		node.nodeType = objType;
-		return objType;
+		// Always store the LITERAL type on resolvedSym so call-argument narrowing can read it
+		// even when no expectedType flowed through. (See checkCallExpr arg loop.)
+		if (memberExists) memberSym.symbolType = litType;
+		node.nodeType = reportedType;
+		return reportedType;
 	}
 	// Module namespace access: ns.X where ns is import * as ns
 	// Resolve directly from the module's export table — never from local scope.
@@ -2243,6 +2623,30 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 					sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, fieldSym, propType, SymbolKind.Property, d.property, resolvedObjType.typeName, false);
 				}
 			}
+		}
+	}
+	// Tier 2: discriminant-narrowed Union field validation.
+	// When `if (s.kind === "a")` narrows `s` to variant 0, accessing `s.y` (variant 1 only)
+	// should error. getProperty finds the field across ALL variants — we restrict here.
+	if (propType.kind !== TypeKind.Unknown && resolvedObjType.kind === TypeKind.Union
+			&& d.object.kind === NodeKind.Identifier && ctx.narrowedDiscriminants.length > 0) {
+		const objVarName = (d.object.data as IdentifierData).name;
+		for (const nd of ctx.narrowedDiscriminants) {
+			if (nd.varName !== objVarName) continue;
+			if (nd.variantIdx >= 0 && nd.variantIdx < resolvedObjType.typeChildren.length) {
+				const narrowedVariant = resolvedObjType.typeChildren[nd.variantIdx];
+				const fieldInVariant = findFieldInVariant(narrowedVariant, d.property);
+				if (fieldInVariant === null) {
+					// Field exists on some variant but NOT on the narrowed one — error
+					addError(ctx, `Property '${d.property}' does not exist on type '${typeNameOf(narrowedVariant)}'. Available: ${narrowedVariant.typeNames.join(", ")}`,
+						node.location.line, node.location.column);
+					return propType; // still return found type to prevent cascading errors
+				}
+				// If the field IS on the narrowed variant, use that variant's specific type
+				// (may differ from the ambiguous getProperty result across all variants)
+				propType = fieldInVariant;
+			}
+			break;
 		}
 	}
 	if (propType.kind !== TypeKind.Unknown) {
@@ -2503,17 +2907,23 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 	const coveredMembers: string[] = [];
 
 	// Detect discriminated union narrowing: match (base.discriminantField)
-	// Use symbol lookup (not node.nodeType which may not be set by checkExpr's return path)
+	// Handles both enum-based DUs (isDiscriminatedUnion) and string-literal DUs (Tier 2).
 	let narrowBase: Symbol = null;
 	let narrowUnion: Type = null;
+	let narrowIsStringDU = false;
+	let narrowDiscField = "";
 	if (d.matchDisc.kind === NodeKind.MemberExpr) {
 		const discMd = d.matchDisc.data as MemberExprData;
 		if (discMd.object !== null && discMd.object.kind === NodeKind.Identifier) {
-			const baseName = (discMd.object.data as IdentifierData).name;
-			const baseSym = lookupSymbol(ctx.table, baseName);
-			if (baseSym !== null && baseSym.symbolType !== null && isDiscriminatedUnion(baseSym.symbolType) && getDiscriminantName(baseSym.symbolType) === discMd.property) {
-				narrowBase = baseSym;
-				narrowUnion = baseSym.symbolType;
+			const baseSym = lookupSymbol(ctx.table, (discMd.object.data as IdentifierData).name);
+			if (baseSym !== null && baseSym.symbolType !== null) {
+				const di = detectUnionDiscriminant(baseSym.symbolType, discMd.property);
+				if (di.discField !== "") {
+					narrowBase = baseSym;
+					narrowUnion = baseSym.symbolType;
+					narrowIsStringDU = di.isStringDU;
+					narrowDiscField = di.discField;
+				}
 			}
 		}
 	}
@@ -2538,24 +2948,40 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 					const pmd = p.data as MemberExprData;
 					coveredMembers.push(pmd.property);
 				}
+				// Tier 2: collect string literal patterns for exhaustiveness
+				if (p.kind === NodeKind.StringLiteral && !hasGuard) {
+					const sd = p.data as StringLiteralData;
+					coveredMembers.push(sd.value);
+				}
 				checkExpr(ctx, p, discType);
 			}
 		}
-		// Variant narrowing: temporarily narrow base symbol to the matched variant
-		let savedNarrowType: Type = null;
+		// Variant narrowing: fact-based approach (no symbolType mutation) — C codegen needs
+		// the full Union type for .vN.field accessor paths.
+		const discSnap = ctx.narrowedDiscriminants.length;
 		if (narrowBase !== null && cd.casePatterns.length === 1) {
 			const pat = cd.casePatterns[0];
-			let patEnumName = "";
-			if (pat.kind === NodeKind.MemberExpr) {
-				patEnumName = (pat.data as MemberExprData).property;
-			} else if (pat.kind === NodeKind.Identifier && pat.resolvedSym !== null) {
-				patEnumName = pat.resolvedSym.name;
-			}
-			if (patEnumName !== "") {
-				const variantIdx = findVariantByDiscriminant(narrowUnion, patEnumName);
-				if (variantIdx >= 0 && narrowUnion.typeChildren !== null && variantIdx < narrowUnion.typeChildren.length) {
-					savedNarrowType = narrowBase.symbolType;
-					narrowBase.symbolType = narrowUnion.typeChildren[variantIdx];
+			let variantIdx = -1;
+			if (narrowIsStringDU) {
+				if (pat.kind === NodeKind.StringLiteral) {
+					const sd = pat.data as StringLiteralData;
+					variantIdx = findVariantByStringDiscriminant(narrowUnion, narrowDiscField, sd.value);
+				}
+				if (variantIdx >= 0) {
+					ctx.narrowedDiscriminants.push({ varName: narrowBase.name, variantIdx });
+				}
+			} else {
+				let patEnumName = "";
+				if (pat.kind === NodeKind.MemberExpr) {
+					patEnumName = (pat.data as MemberExprData).property;
+				} else if (pat.kind === NodeKind.Identifier && pat.resolvedSym !== null) {
+					patEnumName = pat.resolvedSym.name;
+				}
+				if (patEnumName !== "") {
+					variantIdx = findVariantByDiscriminant(narrowUnion, patEnumName);
+				}
+				if (variantIdx >= 0) {
+					ctx.narrowedDiscriminants.push({ varName: narrowBase.name, variantIdx });
 				}
 			}
 		}
@@ -2583,10 +3009,8 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 			checkExpr(ctx, cd.caseBody, null); bodyType = cd.caseBody.nodeType;
 		}
 
-		// Restore narrowed type
-		if (savedNarrowType !== null) {
-			narrowBase.symbolType = savedNarrowType;
-		}
+		// Restore narrowed discriminants
+		ctx.narrowedDiscriminants.length = discSnap;
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchBreaks.push(breaksBlock(cd.caseBody));
 		if (returnType.kind === TypeKind.Unknown && bodyType.kind !== TypeKind.Unknown) {
@@ -2595,7 +3019,7 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 	}
 	checkDuplicatePatterns(ctx, d.matchCases);
 
-	// Match is exhaustive if has wildcard (_) or covers all enum members
+	// Match is exhaustive if has wildcard (_) or covers all enum members / string DU variants
 	let isExhaustive = hasWildcard;
 	if (!isExhaustive && discType.kind === TypeKind.Enum) {
 		let allCovered = true;
@@ -2608,11 +3032,39 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 		}
 		if (allCovered && discType.typeNames.length > 0) isExhaustive = true;
 	}
+	// Tier 2: string-literal DU exhaustiveness
+	if (!isExhaustive && narrowIsStringDU && narrowUnion !== null) {
+		const variantValues = collectStringDiscriminantValues(narrowUnion, narrowDiscField);
+		if (variantValues.length > 0) {
+			let allCovered = true;
+			for (const v of variantValues) {
+				let found = false;
+				for (const c of coveredMembers) {
+					if (c === v) { found = true; break; }
+				}
+				if (!found) { allCovered = false; break; }
+			}
+			if (allCovered) isExhaustive = true;
+		}
+	}
 	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, isExhaustive);
 	if (discType.kind === TypeKind.Enum && !hasWildcard) {
-		// Range covers `match (disc)` — from match keyword to closing paren
-		const discEnd = estimateExprEndCol(d.matchDisc) + 1; // +1 for ")"
+		const discEnd = estimateExprEndCol(d.matchDisc) + 1;
 		checkEnumExhaustiveness(ctx, discType, coveredMembers, node.location.line, node.location.column, discEnd);
+	}
+	// Tier 2: report missing string DU variants
+	if (narrowIsStringDU && narrowUnion !== null && !hasWildcard) {
+		const variantValues = collectStringDiscriminantValues(narrowUnion, narrowDiscField);
+		for (const v of variantValues) {
+			let found = false;
+			for (const c of coveredMembers) {
+				if (c === v) { found = true; break; }
+			}
+			if (!found) {
+				addError(ctx, `Non-exhaustive match: missing variant '${v}'`,
+					node.location.line, node.location.column);
+			}
+		}
 	}
 	return returnType;
 }

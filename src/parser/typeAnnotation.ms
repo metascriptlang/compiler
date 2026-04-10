@@ -9,7 +9,7 @@
 // Every node carries .location from the token it was parsed from, enabling LSP symbol recording.
 
 import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, createNode, createNodeAt, TypeAnnotationData, IdentifierData, TypeGenericData } from "../ast/node";
+import { Node, NodeKind, createNode, createNodeAt, TypeAnnotationData, IdentifierData, TypeGenericData, TypeObjectData } from "../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, skipBalanced, skipGenericParams, collectTokenText } from "./context";
 import { lex } from "../lexer/lexer";
 
@@ -24,6 +24,23 @@ export function skipTypeAnnotation(state: ParserState): void {
 		advance(state);
 	}
 	skipTypeAtom(state);
+
+	// Tier 3: Conditional type: T extends U ? A : B
+	// Must be checked BEFORE union pipe so `T extends U ? A : B` isn't split as `T extends U ? A` | `B`
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
+		advance(state); // consume 'extends'
+		// Skip constraint type WITHOUT consuming '?' (which skipTypeAtom would eat as optional marker)
+		skipTypeAtomNoOptional(state);
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+			advance(state); // consume '?'
+			skipTypeAnnotation(state); // skip true branch (recursive — handles nested conditionals)
+			if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+				advance(state); // consume ':'
+				skipTypeAnnotation(state); // skip false branch
+			}
+		}
+		return;
+	}
 
 	// Union types: T | U | V
 	while (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
@@ -98,6 +115,17 @@ function parseTypeAtom(state: ParserState): Node {
 
 	advance(state);
 	let result = createNode(NodeKind.Identifier, { name: token.value }, token);
+
+	// Enum literal type: K.A — consume "." Ident chain and produce a MemberExpr-shaped node
+	// in type position. The checker's resolveAnnotation handles the string path ("K.A") via
+	// splitting on ".", and resolveTypeExpr can walk the MemberExpr for LSP recording.
+	while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+		advance(state); // consume .
+		if (isAtEnd(state) || !isTypeIdent(current(state))) break;
+		const memberToken = current(state);
+		advance(state);
+		result = createNode(NodeKind.MemberExpr, { object: result, property: memberToken.value, isOptional: false }, token);
+	}
 
 	// Generic type args: Type<A, B>
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
@@ -228,9 +256,56 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 
 	const fieldNames: string[] = [];
 	const fieldTypes: Node[] = [];
+	let indexKey: Node = null as unknown as Node;
+	let indexValue: Node = null as unknown as Node;
+
+	let hasIndexSig = false;
 
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
-		if (isTypeIdent(current(state))) {
+		// Index signature: [name: K]: V
+		// This is syntactic sugar for Map<K, V> — the checker normalizes both to the
+		// same internal Type. See docs/PACKAGE.md (open design) and the impl plan.
+		if (current(state).kind === TokenKind.LBracket) {
+			if (hasIndexSig) {
+				// Second index signature in the same object type — skip silently.
+				// Only the first is kept. This is invalid TypeScript but we don't
+				// crash; we just ignore the duplicate.
+				advance(state);
+				continue;
+			}
+			if (fieldNames.length > 0) {
+				// Mixed named fields + index signature is not supported in v1.
+				// Skip the index signature and keep the named fields.
+				advance(state);
+				continue;
+			}
+			advance(state); // consume [
+			// Consume the binding name (we only care about the key TYPE, not the name)
+			if (!isAtEnd(state) && isTypeIdent(current(state))) {
+				advance(state); // consume key binding name
+			}
+			if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+				advance(state); // consume :
+			}
+			const keyType = parseTypeExpr(state);
+			if (!isAtEnd(state) && current(state).kind === TokenKind.RBracket) {
+				advance(state); // consume ]
+			}
+			if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+				advance(state); // consume :
+			}
+			const valueType = parseTypeExpr(state);
+			indexKey = keyType;
+			indexValue = valueType;
+			hasIndexSig = true;
+			// Consume optional separator
+			if (!isAtEnd(state) && (current(state).kind === TokenKind.Semicolon || current(state).kind === TokenKind.Comma)) {
+				advance(state);
+			}
+			continue;
+		}
+
+		if (isTypeIdent(current(state)) && !hasIndexSig) {
 			fieldNames.push(current(state).value);
 			advance(state); // consume field name
 			// Optional ? marker
@@ -258,11 +333,59 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 	return createNode(NodeKind.TypeObject, {
 		typExprFieldNames: fieldNames,
 		typExprFieldTypes: fieldTypes,
+		typExprIndexKey: indexKey,
+		typExprIndexValue: indexValue,
 	}, braceToken);
+}
+
+// Tier 3: skip a type atom WITHOUT consuming the trailing '?' (needed for conditional types
+// where '?' is the ternary operator, not the optional marker).
+function skipTypeAtomNoOptional(state: ParserState): void {
+	const token = current(state);
+	// Tier 3: infer X — consume keyword + identifier name
+	if (token.kind === TokenKind.Infer) {
+		advance(state); // consume 'infer'
+		if (!isAtEnd(state) && isTypeIdent(current(state))) {
+			advance(state); // consume the inferred type name
+		}
+		return;
+	}
+	if (token.kind === TokenKind.LParen) {
+		skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Arrow) {
+			advance(state);
+			skipTypeAtomNoOptional(state);
+		}
+		return;
+	}
+	if (token.kind === TokenKind.LBrace) {
+		skipBalanced(state, TokenKind.LBrace, TokenKind.RBrace);
+		return;
+	}
+	advance(state);
+	while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+		advance(state);
+		if (isAtEnd(state) || !isTypeIdent(current(state))) break;
+		advance(state);
+	}
+	skipGenericParams(state);
+	while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
+		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+	}
+	// No '?' consumption — that's the whole point
 }
 
 function skipTypeAtom(state: ParserState): void {
 	const token = current(state);
+
+	// Tier 3: infer X — consume keyword + identifier name
+	if (token.kind === TokenKind.Infer) {
+		advance(state);
+		if (!isAtEnd(state) && isTypeIdent(current(state))) {
+			advance(state);
+		}
+		return;
+	}
 
 	// Parenthesized type or function type: (a: T) => R
 	if (token.kind === TokenKind.LParen) {
@@ -283,6 +406,12 @@ function skipTypeAtom(state: ParserState): void {
 
 	// Named type (identifier or keyword type)
 	advance(state);
+	// Qualified/enum-literal type: K.A — consume .Ident chain greedily
+	while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+		advance(state); // consume .
+		if (isAtEnd(state) || !isTypeIdent(current(state))) break;
+		advance(state); // consume member name
+	}
 	// Generic type arguments: Type<A, B> — handles >> and >>> for nested generics
 	skipGenericParams(state);
 
@@ -468,4 +597,64 @@ test "typeExpr generic has positioned base" {
 	assert d.typExprArgs.length === 2;
 	assert (d.typExprArgs[0].data as IdentifierData).name === "Node";
 	assert (d.typExprArgs[1].data as IdentifierData).name === "string";
+}
+
+// ===== Index Signature Tests =====
+// `{ [key: K]: V }` is syntactic sugar for `Map<K, V>`. The parser captures
+// the key/value types on the TypeObject node; the checker normalizes to Map<K,V>.
+
+test "index signature basic" {
+	assert skipsType("{ [key: string]: number }");
+}
+
+test "index signature with number key" {
+	assert skipsType("{ [k: number]: string }");
+}
+
+test "index signature with complex value" {
+	assert skipsType("{ [key: string]: number[] }");
+}
+
+test "index signature nested" {
+	assert skipsType("{ [key: string]: { [k: string]: number } }");
+}
+
+test "index signature with trailing semicolon" {
+	assert skipsType("{ [key: string]: number; }");
+}
+
+test "index signature in generic arg" {
+	assert skipsType("Result<{ [key: string]: string }, string>");
+}
+
+// Parse tests — verify the AST carries the index signature fields
+function parseIndexSig(typeStr: string): Node {
+	const lr = lex(typeStr + " = x");
+	if (!lr.ok) return null as unknown as Node;
+	const state = createState(lr.value);
+	return parseTypeExpr(state);
+}
+
+test "index signature produces TypeObject" {
+	const node = parseIndexSig("{ [key: string]: number }");
+	assert node !== null;
+	assert node.kind === NodeKind.TypeObject;
+}
+
+test "index signature has index fields" {
+	const node = parseIndexSig("{ [key: string]: number }");
+	const d = node.data as TypeObjectData;
+	assert d.typExprFieldNames.length === 0;
+	assert d.typExprIndexKey !== null;
+	assert d.typExprIndexValue !== null;
+	assert (d.typExprIndexKey.data as IdentifierData).name === "string";
+	assert (d.typExprIndexValue.data as IdentifierData).name === "number";
+}
+
+test "non-index-sig object type has null index fields" {
+	const node = parseIndexSig("{ x: number, y: string }");
+	const d = node.data as TypeObjectData;
+	assert d.typExprFieldNames.length === 2;
+	assert d.typExprIndexKey === null;
+	assert d.typExprIndexValue === null;
 }

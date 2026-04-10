@@ -99,6 +99,46 @@ msString msCryptoHmacFinalBuffer(msCryptoHmacCtx* ctx);
 /* Free an HMAC context without finalizing */
 void msCryptoHmacFree(msCryptoHmacCtx* ctx);
 
+/* ===== Handle Wrappers (int64 ↔ pointer for MetaScript) ===== */
+/* Lost during runtime relocation (std/crypto/native.h → runtime/crypto/hash.h) */
+
+#define HASH_CTX_TO_HANDLE(p)   ((int64_t)(uintptr_t)(p))
+#define HASH_CTX_FROM_HANDLE(h) ((msCryptoHashCtx*)(uintptr_t)(h))
+#define HMAC_CTX_TO_HANDLE(p)   ((int64_t)(uintptr_t)(p))
+#define HMAC_CTX_FROM_HANDLE(h) ((msCryptoHmacCtx*)(uintptr_t)(h))
+
+static inline int64_t msCryptoHashInitHandle(msString algorithm) {
+    return HASH_CTX_TO_HANDLE(msCryptoHashInit(algorithm));
+}
+static inline void msCryptoHashUpdateHandle(int64_t ctx, msString data) {
+    msCryptoHashUpdate(HASH_CTX_FROM_HANDLE(ctx), data);
+}
+static inline msString msCryptoHashFinalHandle(int64_t ctx, msString encoding) {
+    return msCryptoHashFinal(HASH_CTX_FROM_HANDLE(ctx), encoding);
+}
+static inline msString msCryptoHashFinalBufferHandle(int64_t ctx) {
+    return msCryptoHashFinalBuffer(HASH_CTX_FROM_HANDLE(ctx));
+}
+static inline void msCryptoHashFreeHandle(int64_t ctx) {
+    msCryptoHashFree(HASH_CTX_FROM_HANDLE(ctx));
+}
+
+static inline int64_t msCryptoHmacInitHandle(msString algorithm, msString key) {
+    return HMAC_CTX_TO_HANDLE(msCryptoHmacInit(algorithm, key));
+}
+static inline void msCryptoHmacUpdateHandle(int64_t ctx, msString data) {
+    msCryptoHmacUpdate(HMAC_CTX_FROM_HANDLE(ctx), data);
+}
+static inline msString msCryptoHmacFinalHandle(int64_t ctx, msString encoding) {
+    return msCryptoHmacFinal(HMAC_CTX_FROM_HANDLE(ctx), encoding);
+}
+static inline msString msCryptoHmacFinalBufferHandle(int64_t ctx) {
+    return msCryptoHmacFinalBuffer(HMAC_CTX_FROM_HANDLE(ctx));
+}
+static inline void msCryptoHmacFreeHandle(int64_t ctx) {
+    msCryptoHmacFree(HMAC_CTX_FROM_HANDLE(ctx));
+}
+
 /* ===== Utility ===== */
 
 /* Check if a hash algorithm is supported. Returns 1/0. */

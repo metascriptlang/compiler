@@ -29,7 +29,7 @@ import {
 } from "./declarations";
 
 import { parseSource } from "../../parser/statements/validation";
-import { checkProgram } from "../../checker/index";
+import { checkProgram } from "../../checker/checkPass";
 import { transformProgram } from "../../transform/index";
 import { JsImportEntry } from "../../checker/context";
 

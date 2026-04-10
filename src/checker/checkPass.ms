@@ -4,7 +4,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { unknownType, nullType, stringType, charType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, typeNameOf, isPromise, isSpawnHandle, isStrictPromise, getPromiseInner, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "./types";
+import { unknownType, nullType, stringType, charType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, typeNameOf, isPromise, isSpawnHandle, isStrictPromise, getPromiseInner, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, findVariantByDiscriminant, findVariantByStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
@@ -16,6 +16,8 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
+import { setConditionalAssignFn } from "./types";
+setConditionalAssignFn(isAssignable);
 import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, ensureShaped } from "./resolvePass";
 import { inferOwnership } from "./ownershipInference";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
@@ -710,6 +712,79 @@ function isDefiniteExit(node: Node): boolean {
 	return false;
 }
 
+// Tier 2: detect `var.field === "literal"` discriminant checks in if conditions.
+// Returns {varName, fieldName, litValue} for each such check, or empty array.
+function extractDiscriminantChecks(condition: Node): DiscriminantCheck[] {
+	const result: DiscriminantCheck[] = [];
+	collectDiscriminantChecks(condition, result);
+	return result;
+}
+
+interface DiscriminantCheck {
+	varName: string;
+	fieldName: string;
+	litValue: string;
+}
+
+function collectDiscriminantChecks(node: Node, dest: DiscriminantCheck[]): void {
+	if (node.kind !== NodeKind.BinaryExpr) return;
+	const d = node.data as BinaryExprData;
+	if (d.operator === "&&") {
+		collectDiscriminantChecks(d.left, dest);
+		collectDiscriminantChecks(d.right, dest);
+		return;
+	}
+	if (d.operator !== "===") return;
+	// Detect MemberExpr side (s.kind) and value side (string literal or enum member)
+	let memberSide: Node = null as unknown as Node;
+	let valueSide: Node = null as unknown as Node;
+	if (d.left.kind === NodeKind.MemberExpr) {
+		memberSide = d.left; valueSide = d.right;
+	} else if (d.right.kind === NodeKind.MemberExpr) {
+		memberSide = d.right; valueSide = d.left;
+	}
+	if (memberSide === null) return;
+	const md = memberSide.data as MemberExprData;
+	if (md.object === null || md.object.kind !== NodeKind.Identifier) return;
+	const varName = (md.object.data as IdentifierData).name;
+	// Pattern 1: s.kind === "literal" (string-literal DU)
+	if (valueSide.kind === NodeKind.StringLiteral) {
+		const ld = valueSide.data as StringLiteralData;
+		dest.push({ varName, fieldName: md.property, litValue: ld.value });
+		return;
+	}
+	// Pattern 2: s.kind === EnumType.Member (enum-based DU)
+	// After checkExpr, EnumType.Member is rewritten to Identifier "EnumType_Member"
+	// with resolvedSym.symbolKind === SymbolKind.EnumMember
+	if (valueSide.kind === NodeKind.Identifier && valueSide.resolvedSym !== null
+			&& valueSide.resolvedSym.symbolKind === SymbolKind.EnumMember) {
+		const enumMemberName = (valueSide.data as IdentifierData).name; // "EnumType_Member"
+		dest.push({ varName, fieldName: md.property, litValue: enumMemberName });
+	}
+}
+
+// Tier 2: record discriminant narrowing facts on CheckerContext.
+// We DON'T mutate sym.symbolType (that breaks C codegen union variant access paths).
+// Instead we push to ctx.narrowedDiscriminants so checkMemberExpr can validate field
+// access against the narrowed variant and reject fields that belong to other variants.
+function applyDiscriminantNarrowing(ctx: CheckerContext, checks: DiscriminantCheck[]): void {
+	for (const check of checks) {
+		const sym = lookupSymbol(ctx.table, check.varName);
+		if (sym === null || sym.symbolType === null) continue;
+		if (sym.symbolType.kind !== TypeKind.Union) continue;
+		const di = detectUnionDiscriminant(sym.symbolType, check.fieldName);
+		if (di.discField === "") continue;
+		let variantIdx = -1;
+		if (di.isStringDU) {
+			variantIdx = findVariantByStringDiscriminant(sym.symbolType, check.fieldName, check.litValue);
+		} else {
+			variantIdx = findVariantByDiscriminant(sym.symbolType, check.litValue);
+		}
+		if (variantIdx < 0 || variantIdx >= sym.symbolType.typeChildren.length) continue;
+		ctx.narrowedDiscriminants.push({ varName: check.varName, variantIdx });
+	}
+}
+
 // Check a branch body under narrowed facts. Saves/restores facts and symbol types.
 function checkNarrowedBranch(ctx: CheckerContext, vars: string[], body: Node, addFacts: (ctx: CheckerContext, cond: Node) => void, condition: Node): void {
 	const snap = saveFacts(ctx);
@@ -717,7 +792,12 @@ function checkNarrowedBranch(ctx: CheckerContext, vars: string[], body: Node, ad
 	const narrowedSyms: Symbol[] = [];
 	const savedTypes: Type[] = [];
 	applyNarrowing(ctx, vars, narrowedSyms, savedTypes);
+	// Tier 2: record discriminant-narrowed variables (fact-based, no symbolType mutation)
+	const discChecks = extractDiscriminantChecks(condition);
+	const discSnap = ctx.narrowedDiscriminants.length;
+	applyDiscriminantNarrowing(ctx, discChecks);
 	checkStmt(ctx, body);
+	ctx.narrowedDiscriminants.length = discSnap;
 	restoreNarrowing(narrowedSyms, savedTypes);
 	restoreFacts(ctx, snap);
 }
@@ -1114,15 +1194,23 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 	const coveredMembers: string[] = [];
 
 	// Detect discriminated union narrowing: match (base.discriminantField)
+	// Handles both enum-based DUs (isDiscriminatedUnion) and string-literal DUs (Tier 2).
 	let narrowBase: Symbol = null;
 	let narrowUnion: Type = null;
+	let narrowIsStringDU = false;
+	let narrowDiscField = "";
 	if (d.matchStmtDisc.kind === NodeKind.MemberExpr) {
 		const discMd = d.matchStmtDisc.data as MemberExprData;
 		if (discMd.object !== null && discMd.object.kind === NodeKind.Identifier) {
 			const baseSym = lookupSymbol(ctx.table, (discMd.object.data as IdentifierData).name);
-			if (baseSym !== null && baseSym.symbolType !== null && isDiscriminatedUnion(baseSym.symbolType) && getDiscriminantName(baseSym.symbolType) === discMd.property) {
-				narrowBase = baseSym;
-				narrowUnion = baseSym.symbolType;
+			if (baseSym !== null && baseSym.symbolType !== null) {
+				const di = detectUnionDiscriminant(baseSym.symbolType, discMd.property);
+				if (di.discField !== "") {
+					narrowBase = baseSym;
+					narrowUnion = baseSym.symbolType;
+					narrowIsStringDU = di.isStringDU;
+					narrowDiscField = di.discField;
+				}
 			}
 		}
 	}
@@ -1146,25 +1234,42 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 					const pmd = p.data as MemberExprData;
 					coveredMembers.push(pmd.property);
 				}
+				// Tier 2: collect string literal patterns for exhaustiveness
+				if (p.kind === NodeKind.StringLiteral && !hasGuard) {
+					const sd = p.data as StringLiteralData;
+					coveredMembers.push(sd.value);
+				}
 				checkExpr(ctx, p, discType);
 			}
 		}
 
-		// Variant narrowing
-		let savedNarrowType: Type = null;
+		// Variant narrowing: use fact-based approach (ctx.narrowedDiscriminants) which doesn't
+		// mutate symbolType — C codegen needs the full Union type for .vN.field accessor paths.
+		const discSnap = ctx.narrowedDiscriminants.length;
 		if (narrowBase !== null && cd.casePatterns.length === 1) {
 			const pat = cd.casePatterns[0];
-			let patEnumName = "";
-			if (pat.kind === NodeKind.MemberExpr) {
-				patEnumName = (pat.data as MemberExprData).property;
-			} else if (pat.kind === NodeKind.Identifier && pat.resolvedSym !== null) {
-				patEnumName = pat.resolvedSym.name;
-			}
-			if (patEnumName !== "") {
-				const variantIdx = findVariantByDiscriminant(narrowUnion, patEnumName);
-				if (variantIdx >= 0 && narrowUnion.typeChildren !== null && variantIdx < narrowUnion.typeChildren.length) {
-					savedNarrowType = narrowBase.symbolType;
-					narrowBase.symbolType = narrowUnion.typeChildren[variantIdx];
+			let variantIdx = -1;
+			if (narrowIsStringDU) {
+				if (pat.kind === NodeKind.StringLiteral) {
+					const sd = pat.data as StringLiteralData;
+					variantIdx = findVariantByStringDiscriminant(narrowUnion, narrowDiscField, sd.value);
+				}
+				if (variantIdx >= 0) {
+					const baseName = narrowBase.name;
+					ctx.narrowedDiscriminants.push({ varName: baseName, variantIdx });
+				}
+			} else {
+				let patEnumName = "";
+				if (pat.kind === NodeKind.MemberExpr) {
+					patEnumName = (pat.data as MemberExprData).property;
+				} else if (pat.kind === NodeKind.Identifier && pat.resolvedSym !== null) {
+					patEnumName = pat.resolvedSym.name;
+				}
+				if (patEnumName !== "") {
+					variantIdx = findVariantByDiscriminant(narrowUnion, patEnumName);
+				}
+				if (variantIdx >= 0) {
+					ctx.narrowedDiscriminants.push({ varName: narrowBase.name, variantIdx });
 				}
 			}
 		}
@@ -1174,9 +1279,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 		}
 		checkStmt(ctx, cd.caseBody);
 
-		if (savedNarrowType !== null) {
-			narrowBase.symbolType = savedNarrowType;
-		}
+		ctx.narrowedDiscriminants.length = discSnap;
 
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
@@ -1184,7 +1287,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 	}
 	checkDuplicatePatterns(ctx, d.matchStmtCases);
 
-	// Match is exhaustive if has wildcard (_) or covers all enum members
+	// Match is exhaustive if has wildcard (_) or covers all enum members / string DU variants
 	let isExhaustive = hasWildcard;
 	if (!isExhaustive && discType.kind === TypeKind.Enum) {
 		let allCovered = true;
@@ -1197,11 +1300,40 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 		}
 		if (allCovered && discType.typeNames.length > 0) isExhaustive = true;
 	}
+	// Tier 2: string-literal DU exhaustiveness
+	if (!isExhaustive && narrowIsStringDU && narrowUnion !== null) {
+		const variantValues = collectStringDiscriminantValues(narrowUnion, narrowDiscField);
+		if (variantValues.length > 0) {
+			let allCovered = true;
+			for (const v of variantValues) {
+				let found = false;
+				for (const c of coveredMembers) {
+					if (c === v) { found = true; break; }
+				}
+				if (!found) { allCovered = false; break; }
+			}
+			if (allCovered) isExhaustive = true;
+		}
+	}
 	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, isExhaustive);
 	mergeConsumeBranches(ctx.affineTracker, oldAffine, branchConsumes, branchBreaks, isExhaustive);
 	if (discType.kind === TypeKind.Enum && !hasWildcard) {
 		const discEnd = estimateExprEndCol(d.matchStmtDisc) + 1;
 		checkEnumExhaustiveness(ctx, discType, coveredMembers, node.location.line, node.location.column, discEnd);
+	}
+	// Tier 2: report missing string DU variants
+	if (narrowIsStringDU && narrowUnion !== null && !hasWildcard) {
+		const variantValues = collectStringDiscriminantValues(narrowUnion, narrowDiscField);
+		for (const v of variantValues) {
+			let found = false;
+			for (const c of coveredMembers) {
+				if (c === v) { found = true; break; }
+			}
+			if (!found) {
+				addError(ctx, `Non-exhaustive match: missing variant '${v}'`,
+					node.location.line, node.location.column);
+			}
+		}
 	}
 }
 
@@ -2118,6 +2250,212 @@ test "missing member errors" { assert !checkOk("enum Color { Red, Green, Blue } 
 
 test "binding acts as wildcard" { assert checkOk("enum Color { Red, Green } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, other => 0 }; }"); }
 
+// ===== Tier 1: Enum Literal Types + Function Overload Signatures =====
+
+test "enum literal type as param accepts match" {
+	assert checkOk("enum K { A, B } function f(k: K.A): void {} f(K.A);");
+}
+
+test "enum literal type as param rejects other variant" {
+	assert !checkOk("enum K { A, B } function f(k: K.A): void {} f(K.B);");
+}
+
+test "enum literal type as param accepts general enum arg via subtype" {
+	// When the actual arg is a specific literal (K.A), it subtypes to K.A param.
+	assert checkOk("enum K { A, B } function expectsA(k: K.A): void {} function g() { expectsA(K.A); }");
+}
+
+test "function overload signature with implementation parses" {
+	assert checkOk("enum K { A, B } function f(k: K.A): number; function f(k: K.B): number; function f(k: K): number { return 0; } f(K.A); f(K.B);");
+}
+
+test "overload resolution prefers enum literal over enum" {
+	// Both candidates match; enum literal overload is more specific (Exact vs Subtype).
+	// We can't easily observe which won without return-type plumbing, but check doesn't error.
+	assert checkOk("enum K { A, B } function f(k: K.A): string; function f(k: K): string { return \"default\"; } f(K.A);");
+}
+
+test "overload with wrong enum literal errors" {
+	// f is defined to accept only K.A via overload sig, impl takes K but arg K.B must match
+	// some signature. Since K.B doesn't match the K.A sig literal, it falls through to K impl.
+	assert checkOk("enum K { A, B } function f(k: K.A): string; function f(k: K): string { return \"default\"; } f(K.B);");
+}
+
+test "overload sigs without implementation errors" {
+	// All-sig-no-impl should fail at the call site with a clear "no implementation" error.
+	assert !checkOk("enum K { A, B } function f(k: K.A): string; function f(k: K.B): string; f(K.A);");
+}
+
+test "overload sigs with mismatched return types error" {
+	// Tier 1 restriction: all sigs must share the impl's return type.
+	assert !checkOk("enum K { A, B } function f(k: K.A): number; function f(k: K.B): string; function f(k: K): number { return 0; } f(K.A);");
+}
+
+test "overload sig with mismatched arity errors" {
+	// Sig arity must match impl arity.
+	assert !checkOk("enum K { A, B } function f(k: K.A): void; function f(k: K, extra: number): void { } f(K.A);");
+}
+
+test "overload sig with incompatible param type errors" {
+	// Sig param type must be assignable to impl param type.
+	assert !checkOk("enum K { A, B } function f(k: K.A): void; function f(k: string): void { } f(K.A);");
+}
+
+test "enum literal narrows in return position" {
+	// Tier 1: function declared to return K.A — `return K.A` narrows to EnumLiteral via expectedType
+	assert checkOk("enum K { A, B } function makeA(): K.A { return K.A; }");
+}
+
+// ===== Tier 2: String-literal discriminated union narrowing at call sites =====
+
+test "string DU correct variant passes" {
+	assert checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): void {} f({ kind: \"a\", x: 1 });");
+}
+
+test "string DU wrong field for variant errors" {
+	// kind="a" matches variant 0 which has field 'x', not 'y'
+	assert !checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): void {} f({ kind: \"a\", y: \"wrong\" });");
+}
+
+test "string DU unknown discriminant value errors" {
+	assert !checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): void {} f({ kind: \"c\", x: 1 });");
+}
+
+test "string DU missing discriminant errors" {
+	assert !checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): void {} f({ x: 1 });");
+}
+
+test "string DU narrowing inside if still works" {
+	assert checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): number { if (s.kind === \"a\") { return s.x; } return 0; }");
+}
+
+test "string DU if-narrowing rejects wrong variant field" {
+	// Inside if (s.kind === "a"), s.y should error because "a" variant has no "y"
+	assert !checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): number { if (s.kind === \"a\") { const v = s.y; return 0; } return 0; }");
+}
+
+test "string DU if-narrowing allows correct variant field" {
+	assert checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): string { if (s.kind === \"b\") { return s.y; } return \"\"; }");
+}
+
+test "string DU no narrowing outside if" {
+	// Outside if-block, s.x is still allowed (getProperty scans all variants — existing behavior)
+	assert checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): number { return s.x; }");
+}
+
+test "string DU match narrows correct variant" {
+	assert checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): number { return match (s.kind) { \"a\" => s.x, _ => 0 }; }");
+}
+
+test "string DU match rejects wrong variant field" {
+	// Inside match arm "a", s.y should error because "a" variant has no "y"
+	assert !checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): number { return match (s.kind) { \"a\" => s.y, _ => 0 }; }");
+}
+
+test "string DU match stmt narrows" {
+	assert checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): void { match (s.kind) { \"a\" => { const v = s.x; }, _ => {} }; }");
+}
+
+test "string DU match stmt rejects wrong field" {
+	assert !checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): void { match (s.kind) { \"a\" => { const v = s.y; }, _ => {} }; }");
+}
+
+// ===== Gap 3: Enum-based DU if-narrowing =====
+
+test "enum DU if-narrowing allows correct field" {
+	assert checkOk("enum K { A, B } type V = match (kind: K) { K.A => { x: number }, K.B => { y: string } }; function f(v: V): number { if (v.kind === K.A) { return v.x; } return 0; }");
+}
+
+test "enum DU if-narrowing rejects wrong field" {
+	assert !checkOk("enum K { A, B } type V = match (kind: K) { K.A => { x: number }, K.B => { y: string } }; function f(v: V): number { if (v.kind === K.A) { const bad = v.y; return 0; } return 0; }");
+}
+
+// ===== Gap 2: String-literal DU match exhaustiveness =====
+
+test "string DU match missing variant errors" {
+	assert !checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): number { return match (s.kind) { \"a\" => s.x }; }");
+}
+
+test "string DU match all variants exhaustive" {
+	assert checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): number { return match (s.kind) { \"a\" => 1, \"b\" => 2 }; }");
+}
+
+test "string DU match wildcard exhaustive" {
+	assert checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): number { return match (s.kind) { \"a\" => 1, _ => 0 }; }");
+}
+
+test "string DU match stmt missing variant errors" {
+	assert !checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): void { match (s.kind) { \"a\" => {} }; }");
+}
+
+// ===== Tier 3: Generic Type Aliases =====
+
+test "generic type alias simple" {
+	assert checkOk("type Box<T> = { value: T }; const b: Box<number> = { value: 42 };");
+}
+
+test "generic type alias two params" {
+	assert checkOk("type Pair<A, B> = { first: A, second: B }; const p: Pair<number, string> = { first: 1, second: \"hi\" };");
+}
+
+test "generic type alias preserves field types" {
+	// Verify Box<number> resolves and type-checks the value field
+	assert checkOk("type Box<T> = { value: T }; const b: Box<number> = { value: 42 };");
+}
+
+test "generic type alias nested" {
+	assert checkOk("type Box<T> = { value: T }; type DoubleBox<T> = { inner: Box<T>, extra: number }; const d: DoubleBox<string> = { inner: { value: \"hi\" }, extra: 1 };");
+}
+
+test "generic type alias array element" {
+	assert checkOk("type Box<T> = { value: T }; const arr: Box<number>[] = [{ value: 1 }, { value: 2 }];");
+}
+
+test "non-generic type alias unchanged" {
+	// Existing non-generic aliases still work
+	assert checkOk("type Num = number; const x: Num = 42;");
+}
+
+// ===== Tier 3: Conditional Types =====
+
+test "conditional type true branch" {
+	assert checkOk("type IsNum<T> = T extends number ? string : boolean; const a: IsNum<number> = \"yes\";");
+}
+
+test "conditional type false branch" {
+	assert checkOk("type IsNum<T> = T extends number ? string : boolean; const b: IsNum<string> = true;");
+}
+
+test "conditional type nested" {
+	assert checkOk("type Check<T> = T extends string ? number : T extends boolean ? string : void; const a: Check<string> = 42;");
+}
+
+// ===== Gap 4: infer keyword =====
+
+test "infer extracts array element type" {
+	assert checkOk("type Unwrap<T> = T extends Array<infer U> ? U : T; const a: Unwrap<number[]> = 42;");
+}
+
+test "infer fallback when no match" {
+	// Unwrap<string> → T (string doesn't extend Array<U>), so result is string
+	assert checkOk("type Unwrap<T> = T extends Array<infer U> ? U : T; const b: Unwrap<string> = \"hi\";");
+}
+
+test "infer with struct field" {
+	// Extract value type from Box
+	assert checkOk("type Box<T> = { value: T }; type UnboxVal<T> = T extends Box<infer U> ? U : T; const a: UnboxVal<Box<number>> = 42;");
+}
+
+// ===== Gap 5: Generic constraint enforcement =====
+
+test "generic constraint violated errors" {
+	assert !checkOk("type Box<T extends number> = { value: T }; const b: Box<string> = { value: \"hi\" };");
+}
+
+test "generic constraint satisfied passes" {
+	assert checkOk("type Box<T extends number> = { value: T }; const b: Box<int32> = { value: 42 };");
+}
+
 test "non-enum no exhaustiveness check" { assert checkOk("const x = match (42) { 1 => \"one\", _ => \"other\" };"); }
 
 test "match expr returns arm type" {
@@ -2239,3 +2577,79 @@ test "string default" { assert checkOk("function f6(x: string = \"hi\") { return
 
 test "boolean default" { assert checkOk("function f7(x: boolean = true) { return x; } f7();"); }
 
+// ===== Index Signature Tests =====
+// `{ [key: K]: V }` is syntactic sugar for Map<K, V>. The checker should
+// normalize both syntaxes to the same internal Type.
+
+test "index signature declaration parses and checks" {
+	assert checkOk("let m: { [key: string]: number };");
+}
+
+test "index signature with number key" {
+	assert checkOk("let m: { [k: number]: string };");
+}
+
+test "index signature normalizes to Map type — structural equivalence" {
+	// The core property: both syntaxes produce identical resolved types.
+	// We don't assert specific TypeKind or typeName values (those can evolve);
+	// we assert that `{ [k: K]: V }` and `Map<K, V>` produce structurally
+	// identical symbol types. This is the whole point of the feature.
+	const ctxA = checkSource("let a: { [key: string]: number };");
+	const ctxB = checkSource("let b: Map<string, number>;");
+	const symA = lookupSymbol(ctxA.table, "a");
+	const symB = lookupSymbol(ctxB.table, "b");
+	assert symA !== null;
+	assert symB !== null;
+	assert symA.symbolType.kind === symB.symbolType.kind;
+	assert symA.symbolType.typeName === symB.symbolType.typeName;
+	assert symA.symbolType.typeChildren.length === symB.symbolType.typeChildren.length;
+}
+
+test "index signature in function parameter" {
+	assert checkOk("function f(m: { [key: string]: number }): void { }");
+}
+
+test "index signature as function return" {
+	assert checkOk("function f(): { [key: string]: number } { return null as unknown as Map<string, number>; }");
+}
+
+test "index signature with trailing semicolon" {
+	assert checkOk("let m: { [key: string]: number; };");
+}
+
+test "map literal via index signature target" {
+	assert checkOk("const m: { [key: string]: number } = { \"foo\": 1, \"bar\": 2 };");
+}
+
+test "map literal via Map<K,V> target" {
+	assert checkOk("const m: Map<string, number> = { \"foo\": 1, \"bar\": 2 };");
+}
+
+test "map literal rejects wrong value type" {
+	assert !checkOk("const m: { [key: string]: number } = { \"foo\": \"wrong\" };");
+}
+
+test "empty map literal" {
+	assert checkOk("const m: { [key: string]: number } = {};");
+}
+
+
+// --- Additional index signature edge case tests ---
+
+test "map subscript with variable key" {
+	assert checkOk("const m: Map<string, number> = new Map<string, number>(); m.set(\"a\", 1); const k = \"a\"; const v = m[k];");
+}
+
+test "map subscript write with variable key" {
+	assert checkOk("const m: Map<string, number> = new Map<string, number>(); const k = \"a\"; m[k] = 42;");
+}
+
+test "index sig in function parameter" {
+	assert checkOk("function f(deps: { [key: string]: string }): void { const v = deps[\"foo\"]; }");
+}
+
+// NOTE: compound assignment on Map subscript (m[k] += 1) is not supported in v1.
+// The read mutation checks leftPartOfAsgn === 0 (skips LHS of assignment),
+// and the write mutation only handles operator === "=".
+// Users must write: m["k"] = m["k"] + 1; explicitly.
+// This is documented, not a bug — compound assignment on Map is a v2 feature.

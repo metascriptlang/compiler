@@ -5,6 +5,7 @@ import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, 
 import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
+import { isCHeaderPath } from "../module/loader";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { getGenericDecl } from "../parser/context";
 
@@ -206,6 +207,10 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 	// Define symbol first — needed so extension can link to it
 	const sym = makeSymbol(d.fnName, SymbolKind.Function, unknownType(), false);
 	sym.symbolType.sym = sym;
+	// Tier 1: overload signature (body-less) — typecheck-only, codegen skips emission
+	if (d.fnFlags.indexOf("overload", 0) >= 0) {
+		setFlag(sym, SymbolFlag.OverloadSig);
+	}
 	// Extern functions: mark as C import (export requires explicit `export` keyword)
 	if (d.fnFlags === "extern" || d.fnFlags.indexOf("extern", 0) >= 0) {
 		setFlag(sym, SymbolFlag.ImportC);
@@ -472,9 +477,14 @@ function collectExtern(ctx: CheckerContext, node: Node): void {
 
 function collectMacro(ctx: CheckerContext, node: Node): void {
 	const d = node.data as MacroDeclData;
-	const sym = makeSymbol(d.macroDeclName, SymbolKind.Function, unknownType(), false);
+	// Phase B+: Use SymbolKind.Macro so checkCallExpr can detect macro calls
+	// and rewrite them to MacroInvocation (enables bare-call invocation: foo(args)
+	// instead of @foo(args)).
+	const sym = makeSymbol(d.macroDeclName, SymbolKind.Macro, unknownType(), false);
 	sym.symbolType.sym = sym;
 	defineOrError(ctx, sym, node);
+	ctx.macroBodyRegistry.set(d.macroDeclName, d.macroDeclBody);
+	ctx.macroParamsRegistry.set(d.macroDeclName, d.macroDeclParams);
 }
 
 // Look up resolved source path for an import specifier from the module's import entries
@@ -551,6 +561,11 @@ export function importSymFromRegistry(
 
 function collectImport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ImportDeclData;
+
+	// .h imports: skip registry lookup and symbol creation. The extern decls
+	// synthesized by inlineHeaderImports define the symbols locally. The
+	// ImportDecl survives as metadata so Phase B can flag unused imports.
+	if (isCHeaderPath(d.importSource)) return;
 
 	// std/core is the prelude — symbols already in Global scope via injectPrelude.
 	// But explicit imports promote them to Module scope (e.g., making extension methods
@@ -713,6 +728,11 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 	// as reference compilers using idempotent set-add for import deduplication).
 	if (d.exportedDecl.kind === NodeKind.ImportDecl) {
 		const imp = d.exportedDecl.data as ImportDeclData;
+
+		// .h re-exports: inlineHeaderImports emitted extern decls with the
+		// re-export aliasing already baked in (buildReexportReplacement). Skip
+		// the registry path; let the synthesized extern decls define the symbols.
+		if (isCHeaderPath(imp.importSource)) return;
 
 		if (!isGlobalImport(imp.importSource)) {
 			// Star re-export: export * from "path" — re-export all symbols from source

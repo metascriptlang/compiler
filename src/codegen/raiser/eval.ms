@@ -3,8 +3,8 @@
 
 
 import { Node } from "../../ast/node";
-import { parseSource } from "../../parser/index";
-import { checkProgram } from "../../checker/index";
+import { parseSource } from "../../parser/statements/validation";
+import { checkProgram } from "../../checker/checkPass";
 import { CheckerContext } from "../../checker/context";
 import { RaiserValueKind, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
@@ -29,6 +29,9 @@ export function evalASTFull(program: Node): RaiserContext {
 	execute(ctx);
 	return ctx;
 }
+
+import { registerMacroEvaluator } from "../../compiler/meta/callbacks";
+registerMacroEvaluator(evalASTFull);
 
 // --- Test helper ---
 

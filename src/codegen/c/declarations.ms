@@ -132,6 +132,10 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	const d = node.data as FunctionDeclData;
 	const sym = node.resolvedSym;
 
+	// Tier 1: body-less overload signature — typecheck-only, skip codegen emission entirely.
+	// The implementation (same name, no 'overload' flag) emits the actual C function.
+	if (sym !== null && hasFlag(sym, SymbolFlag.OverloadSig)) return;
+
 	// Module-qualified name (Standard reference implementation parity)
 	const isMain = d.fnName === "main";
 	const isExternFn = sym !== null && hasFlag(sym, SymbolFlag.ImportC);
@@ -337,9 +341,11 @@ function genClassDecl(g: CGen, node: Node): void {
 	// Check if struct type already declared (by genObjectType for generic instances)
 	const classKey = "object:" + d.className;
 	const typeAlreadyDeclared = nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, classKey);
-	if (!typeAlreadyDeclared) {
-		nameSetAdd(g.declaredThings, name);
-	}
+	// Always record ownership — declaredThings is the module's declaration claim,
+	// used by ensureTypeInfoDef to decide which module emits msTypeInfo definitions.
+	// The struct body emission below is separately guarded by typeAlreadyDeclared
+	// to avoid re-emitting the forward decl / struct body.
+	nameSetAdd(g.declaredThings, name);
 
 	// Emit struct type definition (skip if already declared by genObjectType for generic instances)
 	if (!typeAlreadyDeclared) {

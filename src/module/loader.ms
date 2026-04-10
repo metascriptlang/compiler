@@ -37,20 +37,37 @@ export interface MapEntry {
 	entrySource: string;
 }
 
+// Custom read function for Trans-Am integration. When set, bypasses entries/useFileSystem
+// and uses the callback (which can record deps in the caller's query frame).
+type TaReadFn = (path: string) => string;
+
 export class SourceProvider {
 	entries: MapEntry[];
 	useFileSystem: boolean;
+	taReadFn: TaReadFn;  // null for map/filesystem providers; non-null for Trans-Am-backed
 }
 
 export function createMapProvider(entries: MapEntry[]): SourceProvider {
-	return { entries, useFileSystem: false };
+	return { entries, useFileSystem: false, taReadFn: null as unknown as TaReadFn };
 }
 
 export function createFileSystemProvider(): SourceProvider {
-	return { entries: [], useFileSystem: true };
+	return { entries: [], useFileSystem: true, taReadFn: null as unknown as TaReadFn };
+}
+
+// Trans-Am-backed provider. The callback MUST load the file into Trans-Am, record a
+// FileText dependency on the current query frame, and return the raw source string.
+// Constructed by transam/index.ms:createTaSourceProvider.
+export function createTaReadProvider(readFn: TaReadFn): SourceProvider {
+	return { entries: [], useFileSystem: false, taReadFn: readFn };
 }
 
 export function provideSource(provider: SourceProvider, path: string): Result<string, string> {
+	if (provider.taReadFn !== null) {
+		const content = provider.taReadFn(path);
+		if (content.length > 0) return Result.ok(content);
+		return Result.err(`File not found: ${path}`);
+	}
 	for (const e of provider.entries) {
 		if (e.entryPath === path) return Result.ok(e.entrySource);
 	}
@@ -68,9 +85,15 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 // ===== C Header Detection =====
 
 // Inline .h imports: scan source for `import { ... } from "*.h"` lines,
-// replace each with @include + extern declarations generated from the C header.
-// reference parity: importc declarations live inline in the consuming module.
-export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider): string {
+// and inject `@include` + extern declarations generated from the C header
+// immediately AFTER the import statement. The original import statement is
+// preserved so Phase B unused-import detection (which walks ImportDecl nodes)
+// sees .h imports uniformly with .cms/.ms imports.
+//
+// collectImport treats .h sources as a special case: it skips ExportRegistry
+// lookup and symbol creation because the inlined extern decls below define
+// the symbols locally in the current module's scope.
+export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean = false): string {
 	let result = source;
 	let searchPos = 0;
 	while (searchPos < result.length) {
@@ -161,14 +184,28 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 			replacement = `@include("${headerPath}");\n${compileDirective}${translated}`;
 		}
 
-		// Replace the statement with the inlined declarations
-		const replaceStart = importIdx;
-		const replaceEnd = stmtEnd + 1;
-		// Skip trailing newline after semicolon if present
-		const afterSemi = replaceEnd < result.length && result.charCodeAt(replaceEnd) === "\n".code ? replaceEnd + 1 : replaceEnd;
-		result = result.slice(0, replaceStart) + replacement + result.slice(afterSemi, result.length);
+		// Line-preserving mode: compact the replacement to one line AND keep the original
+		// trailing newline so subsequent line numbers stay aligned with the user's source.
+		// All decls are terminated by `;` or `}`, so collapsing newlines to spaces is safe.
+		// Without this, multi-line replacements shift downstream line numbers, breaking
+		// LSP hover/goto positions.
+		if (compactReplacement) {
+			replacement = replacement.split("\n").join(" ");
+		}
 
-		searchPos = replaceStart + replacement.length;
+		// Insert the inlined declarations immediately AFTER the import statement.
+		// The original `import { ... } from "*.h";` is PRESERVED so:
+		//   - Phase B unused-import detection (checker/checkPass.ms:reportUnusedImports)
+		//     walks its ImportDecl node uniformly with .cms/.ms imports
+		//   - LSP hover/goto positions on the import clause are natural (real tokens)
+		//   - collectImport short-circuits on .h sources; the extern decls inlined
+		//     below actually define the symbols in the current module's scope.
+		// In compact mode the replacement is collapsed to one line so downstream
+		// line numbers stay aligned with the user's original source.
+		const insertPos = stmtEnd + 1;  // just past the ';' of the import
+		const sep = compactReplacement ? " " : "\n";
+		result = result.slice(0, insertPos) + sep + replacement + result.slice(insertPos, result.length);
+		searchPos = insertPos + sep.length + replacement.length;
 	}
 	return result;
 }
@@ -232,7 +269,7 @@ function buildReexportReplacement(translated: string, specs: SpecItem[], headerP
 	return `@include("${headerPath}");\n${compileDirective}${exportTranslated}${reexportDecls}`;
 }
 
-function isCHeaderPath(path: string): boolean {
+export function isCHeaderPath(path: string): boolean {
 	if (path.length < 3) return false;
 	return path.slice(path.length - 2, path.length) === ".h";
 }
@@ -299,11 +336,18 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind === NodeKind.ImportDecl) {
+			const d = stmt.data as ImportDeclData;
+			// .h imports are fully handled by inlineHeaderImports above (which inlined
+			// extern decls alongside this ImportDecl). The ImportDecl is kept purely for
+			// checker unused-import detection; don't try to resolve it as a module.
+			if (isCHeaderPath(d.importSource)) continue;
 			processImportDecl(graph, mod, stmt, provider, config, useConfig);
 		} else if (stmt.kind === NodeKind.ExportDecl) {
 			// Re-export: export { ... } from "./module" wraps ImportDecl in ExportDecl
 			const ed = stmt.data as ExportDeclData;
 			if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.ImportDecl) {
+				const id = ed.exportedDecl.data as ImportDeclData;
+				if (isCHeaderPath(id.importSource)) continue;
 				processImportDecl(graph, mod, ed.exportedDecl, provider, config, useConfig);
 			}
 		}

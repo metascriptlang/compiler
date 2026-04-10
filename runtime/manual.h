@@ -412,11 +412,11 @@ static inline void msOrcTraceRef(void* child, void* env) { (void)child; (void)en
 #endif
 
 #define MS_FUTURE_STRUCT(name, valtype) \
-    typedef struct { bool finished; bool failed; bool cancelled; bool isBoxed; void* error; valtype value; } name
+    typedef struct { bool finished; bool failed; bool cancelled; void* error; valtype value; } name
 
-typedef struct { bool finished; bool failed; bool cancelled; bool isBoxed; void* error; } msFutureBase;
+typedef struct { bool finished; bool failed; bool cancelled; void* error; } msFutureBase;
 typedef msFutureBase msFuture_void;
-typedef struct { bool finished; bool failed; bool cancelled; bool isBoxed; void* error; void* value; } msFuture_ptr;
+typedef struct { bool finished; bool failed; bool cancelled; void* error; void* value; } msFuture_ptr;
 MS_FUTURE_STRUCT(msFuture_double, double);
 MS_FUTURE_STRUCT(msFuture_int32, int32_t);
 MS_FUTURE_STRUCT(msFuture_int64, int64_t);

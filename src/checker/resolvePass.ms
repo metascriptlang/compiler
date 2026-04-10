@@ -6,16 +6,40 @@
 //   A. Parsing type annotation strings into Type objects
 //   B. Building proper Function/Object types for collected declarations
 
-import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGeneric, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateHasAsgn } from "./types";
+import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateHasAsgn, createConditionalType, evaluateConditionalType, typeNameOf } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
-import { mangleMonoName } from "../monomorphize/registry";
 import { getDeclName } from "./collectPass";
+import { isAssignable as isAssignableCheck } from "./compat";
 
 // ===== A. Resolve Annotation Strings =====
+
+// Tier 3: find a keyword string at top level (not inside brackets/parens/braces/angles).
+function findTopLevelKeyword(text: string, keyword: string): number {
+	let depth = 0;
+	for (let i = 0; i <= text.length - keyword.length; i += 1) {
+		const c = text.charAt(i);
+		if (c === "(" || c === "[" || c === "{" || c === "<") depth += 1;
+		if (c === ")" || c === "]" || c === "}" || c === ">") depth -= 1;
+		if (depth === 0 && text.slice(i, i + keyword.length) === keyword) return i;
+	}
+	return -1;
+}
+
+// Tier 3: find a single character at top level (not inside brackets/parens/braces/angles).
+function findTopLevelChar(text: string, ch: string): number {
+	let depth = 0;
+	for (let i = 0; i < text.length; i += 1) {
+		const c = text.charAt(i);
+		if (c === "(" || c === "[" || c === "{" || c === "<") depth += 1;
+		if (c === ")" || c === "]" || c === "}" || c === ">") depth -= 1;
+		if (depth === 0 && c === ch) return i;
+	}
+	return -1;
+}
 
 // Parse function type string to resolved Function type
 function resolveFunctionType(text: string, ctx: CheckerContext, line: number, col: number): Type {
@@ -62,6 +86,12 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 	const trimmed = text.trim();
 	if (trimmed === "") return unknownType();
 
+	// Tier 3: infer X — produce a GenericParam placeholder for conditional type unification
+	if (trimmed.length > 6 && trimmed.slice(0, 6) === "infer ") {
+		const inferName = trimmed.slice(6, trimmed.length).trim();
+		if (inferName !== "") return createGenericParam(inferName);
+	}
+
 	// Function type: (params) => returnType
 	if (trimmed.length > 0 && trimmed.charAt(0) === "(") {
 		let fnDepth = 0;
@@ -78,6 +108,32 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 			const afterClose = trimmed.slice(fnCloseIdx + 1, trimmed.length).trim();
 			if (afterClose.length >= 2 && afterClose.charAt(0) === "=" && afterClose.charAt(1) === ">") {
 				return resolveFunctionType(trimmed, ctx, line, col);
+			}
+		}
+	}
+
+	// Tier 3: Conditional type: T extends U ? A : B
+	// Detect " extends " at top level (not inside brackets/parens).
+	const extendsIdx = findTopLevelKeyword(trimmed, " extends ");
+	if (extendsIdx >= 0) {
+		const checkPart = trimmed.slice(0, extendsIdx).trim();
+		const afterExtends = trimmed.slice(extendsIdx + 9, trimmed.length).trim();
+		// Find top-level '?' in the remainder
+		const qIdx = findTopLevelChar(afterExtends, "?");
+		if (qIdx >= 0) {
+			const constraintPart = afterExtends.slice(0, qIdx).trim();
+			const afterQ = afterExtends.slice(qIdx + 1, afterExtends.length).trim();
+			// Find top-level ':' in the remainder (after '?')
+			const colonIdx = findTopLevelChar(afterQ, ":");
+			if (colonIdx >= 0) {
+				const truePart = afterQ.slice(0, colonIdx).trim();
+				const falsePart = afterQ.slice(colonIdx + 1, afterQ.length).trim();
+				const checkType = resolveAnnotation(checkPart, ctx, line, col);
+				const extendsType = resolveAnnotation(constraintPart, ctx, line, col);
+				const trueType = resolveAnnotation(truePart, ctx, line, col);
+				const falseType = resolveAnnotation(falsePart, ctx, line, col);
+				const cond = createConditionalType(checkType, extendsType, trueType, falseType);
+				return evaluateConditionalType(cond);
 			}
 		}
 	}
@@ -119,9 +175,53 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 	}
 
 	// Object literal type: { field: Type; ... } or { field: Type, ... }
+	// Also handles index signature: { [key: K]: V } → normalized to Map<K, V>
 	if (trimmed.charAt(0) === "{" && trimmed.endsWith("}")) {
 		const inner = trimmed.slice(1, trimmed.length - 1).trim();
 		if (inner === "") return createStruct("", [], [], true);
+
+		// Index signature: { [name: K]: V } is syntactic sugar for Map<K, V>.
+		// After normalization, both syntaxes produce identical Type structs.
+		// See docs/PACKAGE.md and the index signature impl plan.
+		if (inner.charAt(0) === "[") {
+			// Find the BALANCED closing `]` — the key type may contain its own
+			// brackets (e.g. `{ [key: number[]]: V }`), so a naive findChar("]")
+			// would stop at the wrong bracket.
+			let bracketDepth = 0;
+			let closeBracket = -1;
+			let bi = 0;
+			while (bi < inner.length) {
+				const c = inner.charAt(bi);
+				if (c === "[") { bracketDepth = bracketDepth + 1; }
+				else if (c === "]") {
+					bracketDepth = bracketDepth - 1;
+					if (bracketDepth === 0) { closeBracket = bi; bi = inner.length; }
+				}
+				bi = bi + 1;
+			}
+			if (closeBracket > 0) {
+				// Find the FIRST colon (inside [...], between name and key type)
+				const nameColon = findChar(inner, ":");
+				if (nameColon > 0 && nameColon < closeBracket) {
+					const keyType = inner.slice(nameColon + 1, closeBracket).trim();
+					// Everything after `]` should be `: V` (with optional trailing ;)
+					let afterBracket = inner.slice(closeBracket + 1, inner.length).trim();
+					// Strip trailing semicolon(s)
+					while (afterBracket.length > 0 && afterBracket.charAt(afterBracket.length - 1) === ";") {
+						afterBracket = afterBracket.slice(0, afterBracket.length - 1).trim();
+					}
+					if (afterBracket.length > 0 && afterBracket.charAt(0) === ":") {
+						const valueType = afterBracket.slice(1, afterBracket.length).trim();
+						if (keyType !== "" && valueType !== "") {
+							// Rewrite to Map<K, V> and recurse — reuses all generic resolution.
+							const mapAnnotation = "Map<" + keyType + ", " + valueType + ">";
+							return resolveAnnotation(mapAnnotation, ctx, line, col);
+						}
+					}
+				}
+			}
+		}
+
 		// TypeScript uses semicolons in type position, commas in value position — support both
 		const hasSemicolon = inner.indexOf(";") >= 0;
 		const fields = splitTopLevel(inner, hasSemicolon ? ";" : ",");
@@ -244,6 +344,25 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 				for (const a of args) {
 					resolvedArgs.push(resolveAnnotation(a.trim(), ctx, line, col));
 				}
+				// Gap 5: validate generic constraints at instantiation.
+				// genericParams = "T:Comparable,U" — params with optional :Constraint suffix.
+				const paramList = splitTopLevel(genericParams, ",");
+				for (let ci = 0; ci < paramList.length; ci += 1) {
+					if (ci >= resolvedArgs.length) break;
+					const paramStr = paramList[ci].trim();
+					const colonPos = findChar(paramStr, ":");
+					if (colonPos > 0) {
+						const constraintName = paramStr.slice(colonPos + 1, paramStr.length).trim();
+						const constraintType = resolveAnnotation(constraintName, ctx, line, col);
+						if (constraintType.kind !== TypeKind.Unknown
+								&& resolvedArgs[ci].kind !== TypeKind.Unknown
+								&& resolvedArgs[ci].kind !== TypeKind.GenericParam
+								&& !isAssignableCheck(resolvedArgs[ci], constraintType)) {
+							const paramName = paramStr.slice(0, colonPos).trim();
+							addError(ctx, `Type '${typeNameOf(resolvedArgs[ci])}' does not satisfy constraint '${constraintName}' for type parameter '${paramName}' in '${baseName}'`, line, col);
+						}
+					}
+				}
 				const gi2 = createGenericInstance(baseType2, resolvedArgs);
 				instantiateGenericBody(gi2, genericParams);
 				return isRefBase2 ? createRef(gi2) : gi2;
@@ -262,6 +381,43 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 			return baseSym.symbolType;
 		}
 		return emitUnresolvedTypeRef(ctx, baseName, line, col, "");
+	}
+
+	// Enum literal type: K.A — qualified name referring to a specific enum member.
+	// Split on the LAST `.` so nested module paths resolve correctly.
+	// Skip if the annotation contains compound-type tokens — those shapes are handled
+	// by earlier branches (generics, arrays, objects, function types).
+	const hasCompoundToken = trimmed.indexOf("(") >= 0
+		|| trimmed.indexOf("<") >= 0
+		|| trimmed.indexOf("[") >= 0
+		|| trimmed.indexOf("{") >= 0;
+	if (!hasCompoundToken && trimmed.indexOf(".") >= 0) {
+		let lastDot = -1;
+		for (let i = 0; i < trimmed.length; i += 1) {
+			if (trimmed.charAt(i) === ".") lastDot = i;
+		}
+		if (lastDot > 0 && lastDot < trimmed.length - 1) {
+			const enumName = trimmed.slice(0, lastDot).trim();
+			const memberName = trimmed.slice(lastDot + 1, trimmed.length).trim();
+			if (enumName !== "" && memberName !== "") {
+				const enumSym = lookupSymbol(ctx.table, enumName);
+				if (enumSym !== null && enumSym.symbolType !== null && enumSym.symbolType.kind === TypeKind.Enum) {
+					markUsed(enumSym);
+					ensureShaped(enumSym, ctx);
+					const enumType = enumSym.symbolType;
+					// Verify member exists
+					let found = false;
+					for (const m of enumType.typeNames) {
+						if (m === memberName) { found = true; break; }
+					}
+					if (found) return createEnumLiteral(enumType, memberName);
+					if (line > 0) {
+						addWarning(ctx, `Enum '${enumName}' has no member '${memberName}'`, line, col);
+					}
+					return unknownType();
+				}
+			}
+		}
 	}
 
 	// Primitive types, symbol lookup, or forward reference
@@ -373,6 +529,29 @@ export function resolveTypeExpr(node: Node, ctx: CheckerContext): void {
 			const d = node.data as TypeObjectData;
 			for (const ft of d.typExprFieldTypes) {
 				resolveTypeExpr(ft, ctx);
+			}
+			// Index signature (for LSP symbol recording): walk key and value types too
+			if (d.typExprIndexKey !== null) { resolveTypeExpr(d.typExprIndexKey, ctx); }
+			if (d.typExprIndexValue !== null) { resolveTypeExpr(d.typExprIndexValue, ctx); }
+		},
+		NodeKind.MemberExpr => {
+			// Tier 1: enum literal type position — `K.A` produces a MemberExpr.
+			// Walk the object (the enum name) and record the member position so LSP
+			// can offer hover/goto-def for both the enum and its specific member.
+			const md = node.data as MemberExprData;
+			resolveTypeExpr(md.object, ctx);
+			if (md.object !== null && md.object.kind === NodeKind.Identifier) {
+				const enumName = (md.object.data as IdentifierData).name;
+				const enumSym = lookupSymbol(ctx.table, enumName);
+				if (enumSym !== null && enumSym.symbolType !== null && enumSym.symbolType.kind === TypeKind.Enum) {
+					// Record the member position. The dot is 1 column wide.
+					const memberCol = md.object.location.column + enumName.length + 1;
+					const memberSym = makeSymbol(md.property, SymbolKind.EnumMember, enumSym.symbolType, false);
+					memberSym.modulePath = enumSym.modulePath;
+					memberSym.location = enumSym.location;
+					sgRecordSym(ctx, node.location.line, memberCol, memberCol + md.property.length,
+						memberSym, enumSym.symbolType, SymbolKind.EnumMember, md.property, enumName, false);
+				}
 			}
 		},
 		// This function is ONLY called on nodes from the typeExpr side channel,
@@ -779,12 +958,20 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.typeFlags = TypeFlag.IsStruct as int32;
 	for (const pt of fieldTypes) { propagateHasAsgn(target, pt); }
 	node.nodeType = sym.symbolType;
-	// Record each interface field DEF for symbol graph
-	// (no per-field location available; use interface node location as fallback)
+	// Record each interface field DEF for symbol graph.
+	// Parser stores per-field source locations in node.paramLocations (repurposed field).
+	// Falls back to node.location if paramLocations is missing (e.g., macro-generated nodes).
 	for (let ri = 0; ri < d.interfaceFields.length; ri += 1) {
 		const fieldSym = makeSymbol(d.interfaceFields[ri], SymbolKind.Property, fieldTypes[ri], false);
 		fieldSym.state = SymbolState.Shaped;
-		sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.interfaceFields[ri].length, fieldSym, fieldTypes[ri], SymbolKind.Property, d.interfaceFields[ri], d.interfaceName, true);
+		let fieldLine = node.location.line;
+		let fieldCol = node.location.column;
+		if (node.paramLocations !== null && ri < node.paramLocations.length) {
+			const fl = node.paramLocations[ri];
+			fieldLine = fl.line;
+			fieldCol = fl.column;
+		}
+		sgRecordSym(ctx, fieldLine, fieldCol, fieldCol + d.interfaceFields[ri].length, fieldSym, fieldTypes[ri], SymbolKind.Property, d.interfaceFields[ri], d.interfaceName, true);
 	}
 }
 
@@ -809,10 +996,30 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		return;
 	}
 
+	// Tier 3: generic type alias — define generic param symbols in a nested scope
+	// so the body can reference them (e.g. type Box<T> = { value: T }).
+	const hasGenericAlias = d.aliasGenericParams !== null && d.aliasGenericParams !== "";
+	if (hasGenericAlias) {
+		openScope(ctx.table, ScopeKind.Block);
+		const paramList = splitTopLevel(d.aliasGenericParams, ",");
+		for (const p of paramList) {
+			defineGenericParam(ctx, p.trim());
+		}
+	}
+
 	const resolved = resolveAnnotation(d.aliasType, ctx, node.location.line, node.location.column);
 	resolveTypeExpr(node.typeExpr, ctx);
+
+	if (hasGenericAlias) {
+		closeScope(ctx.table);
+	}
+
 	// Propagate alias name to Union types (Reference gap: string-based annotations don't carry names)
 	if (resolved.kind === TypeKind.Union && resolved.typeName === "") {
+		resolved.typeName = d.aliasName;
+	}
+	// Tier 3: for generic aliases, stamp the typeName so instantiation can reference the alias
+	if (hasGenericAlias && resolved.typeName === "") {
 		resolved.typeName = d.aliasName;
 	}
 	if (d.aliasIsDistinct) {

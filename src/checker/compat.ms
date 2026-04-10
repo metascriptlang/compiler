@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, getMinArity, isSpawnHandle, isPromise } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isSpawnHandle, isPromise } from "./types";
 
 
 // ===== Assignability =====
@@ -25,10 +25,22 @@ function isAssignableInner(source: Type, target: Type): boolean {
 	if (source.kind === target.kind) {
 		return match (source.kind) {
 			TypeKind.SizedArray => source.typeFlags === target.typeFlags && isAssignable(source.typeReturn, target.typeReturn),
-			TypeKind.Array | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => isAssignable(source.typeReturn, target.typeReturn),
+			TypeKind.Array | TypeKind.Span | TypeKind.Ptr => isAssignable(source.typeReturn, target.typeReturn),
+			TypeKind.Ref => {
+				// Nominal shortcut: Ref types with same-named inner struct are assignable
+				// (handles cross-module interface identity where Type objects differ but names match)
+				if (source.typeReturn !== null && target.typeReturn !== null
+					&& source.typeReturn.typeName !== "" && source.typeReturn.typeName === target.typeReturn.typeName) {
+					return true;
+				}
+				return isAssignable(source.typeReturn, target.typeReturn);
+			},
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
 			TypeKind.Enum | TypeKind.Distinct => source.typeName === target.typeName,
+			TypeKind.EnumLiteral => source.typeName === target.typeName
+				&& source.typeNames.length > 0 && target.typeNames.length > 0
+				&& source.typeNames[0] === target.typeNames[0],
 			TypeKind.GenericInstance => {
 				// Structural compatibility: compare type args pairwise
 				const limit = source.typeChildren.length < target.typeChildren.length ? source.typeChildren.length : target.typeChildren.length;
@@ -103,6 +115,14 @@ function isAssignableInner(source: Type, target: Type): boolean {
 		return true;
 	}
 
+	// Ref<T> ↔ Ptr<T>: both are pointer types, interchangeable when inner types match.
+	// Must check BEFORE Ref→T auto-deref to prevent Ref being unwrapped then compared against Ptr.
+	if ((source.kind === TypeKind.Ref && target.kind === TypeKind.Ptr)
+		|| (source.kind === TypeKind.Ptr && target.kind === TypeKind.Ref)) {
+		if (source.typeReturn !== null && target.typeReturn !== null) {
+			return isAssignable(source.typeReturn, target.typeReturn);
+		}
+	}
 	// Ref<T> → T auto-deref: self-referential fields are promoted to Ref<T>,
 	// but passing them to functions expecting T should work transparently
 	if (source.kind === TypeKind.Ref && source.typeReturn !== null) {
@@ -126,6 +146,20 @@ function isAssignableInner(source: Type, target: Type): boolean {
 
 	// StringLiteral → CString (string literal can be passed as cstring)
 	if (source.kind === TypeKind.StringLiteral && target.kind === TypeKind.CString) {
+		return true;
+	}
+
+	// EnumLiteral → Enum (subtype: NodeKind.BinaryExpr assignable to NodeKind)
+	if (source.kind === TypeKind.EnumLiteral && target.kind === TypeKind.Enum) {
+		return source.typeName === target.typeName;
+	}
+	// Integer → Enum (enums are int32 at runtime; allows { kind: 0 } for enum-typed fields)
+	if (isIntegerType(source) && target.kind === TypeKind.Enum) {
+		return true;
+	}
+	// Enum → EnumLiteral is NOT allowed (would lose specificity) — fall through to false
+	// EnumLiteral → Number/Int32 (enums are ints at runtime)
+	if (source.kind === TypeKind.EnumLiteral && (target.kind === TypeKind.Int32 || target.kind === TypeKind.Number)) {
 		return true;
 	}
 
@@ -192,8 +226,12 @@ function isFunctionAssignable(source: Type, target: Type): boolean {
 
 // Object assignability: nominal first, then structural (source has all target properties)
 function isObjectAssignable(source: Type, target: Type): boolean {
+	// Identity: same object → trivially assignable
+	if (source === target) return true;
 	// Nominal: same typeName means same type (handles self-referencing types like Type, Scope)
 	if (source.typeName !== "" && source.typeName === target.typeName) return true;
+	// Cross-module nominal: types linked via sym identity (both point to same Symbol)
+	if (source.sym !== null && source.sym === target.sym) return true;
 	let targetIdx = 0;
 	for (const targetProp of target.typeNames) {
 		// Look for matching prop in source
@@ -248,6 +286,12 @@ function typeRelationInner(formal: Type, actual: Type): TypeRelation {
 			},
 			TypeKind.Enum | TypeKind.Distinct => {
 				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
+				return TypeRelation.None;
+			},
+			TypeKind.EnumLiteral => {
+				if (formal.typeName !== actual.typeName) return TypeRelation.None;
+				if (formal.typeNames.length === 0 || actual.typeNames.length === 0) return TypeRelation.None;
+				if (formal.typeNames[0] === actual.typeNames[0]) return TypeRelation.Exact;
 				return TypeRelation.None;
 			},
 			TypeKind.SizedArray => {
@@ -327,6 +371,20 @@ function typeRelationInner(formal: Type, actual: Type): TypeRelation {
 			formal.kind === TypeKind.Function || formal.kind === TypeKind.Ref || formal.kind === TypeKind.Ptr) {
 			return TypeRelation.Subtype;
 		}
+	}
+	// EnumLiteral cross-kind rules:
+	// formal=Enum(K), actual=EnumLiteral(K,A) → Subtype (literal narrows general enum)
+	if (formal.kind === TypeKind.Enum && actual.kind === TypeKind.EnumLiteral) {
+		if (formal.typeName === actual.typeName) return TypeRelation.Subtype;
+		return TypeRelation.None;
+	}
+	// formal=EnumLiteral(K,A), actual=Enum(K) → None (would lose specificity)
+	if (formal.kind === TypeKind.EnumLiteral && actual.kind === TypeKind.Enum) {
+		return TypeRelation.None;
+	}
+	// EnumLiteral → numeric (enums are ints at runtime)
+	if (actual.kind === TypeKind.EnumLiteral && isNumeric(formal)) {
+		return TypeRelation.IntConv;
 	}
 	// Union target: best match
 	if (formal.kind === TypeKind.Union) {
@@ -817,6 +875,46 @@ test "enum mismatch" {
 	const e1 = createEnum("Color", ["Red"], null as unknown as number[]);
 	const e2 = createEnum("Shape", ["Circle"], null as unknown as number[]);
 	assert typeRelation(e1, e2) === TypeRelation.None;
+}
+
+test "enum literal same member exact" {
+	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const a1 = createEnumLiteral(e, "A");
+	const a2 = createEnumLiteral(e, "A");
+	assert typeRelation(a1, a2) === TypeRelation.Exact;
+}
+
+test "enum literal different members none" {
+	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const a = createEnumLiteral(e, "A");
+	const b = createEnumLiteral(e, "B");
+	assert typeRelation(a, b) === TypeRelation.None;
+}
+
+test "enum literal subtype of enum" {
+	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const a = createEnumLiteral(e, "A");
+	assert typeRelation(e, a) === TypeRelation.Subtype;
+}
+
+test "enum not assignable to enum literal" {
+	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const a = createEnumLiteral(e, "A");
+	assert typeRelation(a, e) === TypeRelation.None;
+}
+
+test "enum literal isAssignable to enum" {
+	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const a = createEnumLiteral(e, "A");
+	assert isAssignable(a, e);
+}
+
+test "enum literal cross-enum none" {
+	const k = createEnum("K", ["A"], null as unknown as number[]);
+	const m = createEnum("M", ["A"], null as unknown as number[]);
+	const ka = createEnumLiteral(k, "A");
+	const ma = createEnumLiteral(m, "A");
+	assert typeRelation(ka, ma) === TypeRelation.None;
 }
 
 test "result exact" {

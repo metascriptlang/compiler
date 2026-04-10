@@ -397,7 +397,7 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 		"sink" => { buf.items.push(makeExprStmt(makeAssign(xf, yf, loc), loc)); },
 		"wasMoved" => { genCall("msPtrWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
-			// Nim parity: pass &field (slot address) so ORC can null it during collection
+			// Reference parity: pass &field (slot address) so ORC can null it during collection
 			buf.items.push(makeExprStmt(makeCall(makeIdent("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
 		},
 		_ => {},

@@ -199,6 +199,7 @@ export function typeKey(t: Type): string {
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
 		TypeKind.Enum => { return "enum:" + t.typeName; },
+		TypeKind.EnumLiteral => { return "enum:" + t.typeName; },
 		TypeKind.Struct => {
 			// Anonymous/structural types: use structural key to distinguish
 			if (isAnonTypeName(t.typeName)) {
@@ -529,6 +530,11 @@ export function getTypeDesc(g: CGen, t: Type): string {
 	// destroying local strings before they can be used as return values.
 	const k = t.kind;
 	if (k === TypeKind.Enum) return genEnumType(g, t);
+	// EnumLiteral: treated as its underlying enum for C codegen (ints at runtime)
+	if (k === TypeKind.EnumLiteral) {
+		if (t.typeReturn !== null && t.typeReturn.kind === TypeKind.Enum) return genEnumType(g, t.typeReturn);
+		return "int32_t";
+	}
 	if (k === TypeKind.Struct) return genObjectType(g, t);
 	if (k === TypeKind.Array) return genArrayType(g, t);
 	if (k === TypeKind.SizedArray) return genSizedArrayType(g, t);

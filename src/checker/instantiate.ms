@@ -252,6 +252,13 @@ function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[])
 			}
 		}
 	}
+	// Substitute explicit type args on the node (e.g. "K, V" in new Map<K, V>()).
+	// Without this, the checker's NewExpr/CallExpr generic resolution falls back
+	// to a location-keyed side channel that still holds the original (unsubstituted)
+	// strings, producing Map<Unknown, Unknown> during re-check of cloned bodies.
+	if (node.typeArg !== null && node.typeArg !== "") {
+		node.typeArg = substAnnotationAll(node.typeArg, paramNames, concreteTypes);
+	}
 	if (node.kind === NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
 		d.declType = substAnnotationAll(d.declType, paramNames, concreteTypes);

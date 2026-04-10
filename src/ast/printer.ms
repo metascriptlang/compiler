@@ -641,6 +641,12 @@ export function printNode(node: Node, level: number): void {
 				console.log(`${indent(level + 1)}${data.typExprFieldNames[i]}:`);
 				if (i < data.typExprFieldTypes.length) { printNode(data.typExprFieldTypes[i], level + 2); }
 			}
+			if (data.typExprIndexKey !== null) {
+				console.log(`${indent(level + 1)}[indexKey]:`);
+				printNode(data.typExprIndexKey, level + 2);
+				console.log(`${indent(level + 1)}[indexValue]:`);
+				printNode(data.typExprIndexValue, level + 2);
+			}
 		},
 	}
 }

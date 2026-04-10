@@ -1,5 +1,0 @@
-// Codegen — Hub
-// Re-exports from all backend codegen modules.
-export { generateJS } from "./js/index";
-export { generateRaiser } from "./raiser/index";
-export { generateCModule, genProjectDispatcher } from "./c/index";

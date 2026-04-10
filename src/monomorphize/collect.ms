@@ -9,7 +9,7 @@ import { CheckerContext, extractGenericNames, stripGenFlag } from "../checker/co
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "../checker/symbol";
 import { replaceTypeVars } from "../checker/instantiate";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "./clone";
-import { MonoRegistry, MonoEntry, monoRegister, monoFindEntry, buildTypeArgKeys, createMonoRegistry, monoTypeKey } from "./registry";
+import { MonoRegistry, MonoEntry, monoRegister, monoFindEntry, buildTypeArgKeys, createMonoRegistry } from "./registry";
 import { splitTopLevel, findChar } from "../utils/string";
 import {
 	getExplicitTypeArg,

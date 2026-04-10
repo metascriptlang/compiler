@@ -21,6 +21,13 @@ export interface JsImportEntry {
 	names: string[];       // e.g. ["readFileSync", "existsSync"]
 }
 
+// Tier 2: discriminant narrowing entry — records that within the current scope,
+// variable `varName` is known to be variant `variantIdx` of its Union type.
+export interface DiscriminantNarrow {
+	varName: string;
+	variantIdx: number;
+}
+
 export interface ExportedSymInfo {
 	name: string;
 	kind: SymbolKind;
@@ -715,6 +722,9 @@ export class CheckerContext {
 	currentModule: Module;
 	exportRegistry: ExportRegistry;
 	extensionRegistry: ExtensionRegistry;
+	macroBodyRegistry: Map<string, Node>;       // Phase B: macroName → macroDeclBody
+	macroParamsRegistry: Map<string, string[]>; // Phase B: macroName → param names
+	macroExpansionDepth: int32;                  // Phase B+ eager: recursion limit for macros that produce macros
 	inferredReturn: Type;  // tracks inferred return type during function body checking
 	includeDirectives: string; // accumulated @include args, newline-separated
 	jsImportRegistry: JsImportEntry[]; // accumulated @import entries for JS backend
@@ -724,6 +734,7 @@ export class CheckerContext {
 	cancelVersion: number;       // version at check start
 	modulePath: string;          // Implementation parity: source path for name mangling
 	narrowFacts: Node[];         // fact-based null narrowing knowledge base (standard reference equivalent)
+	narrowedDiscriminants: DiscriminantNarrow[];  // Tier 2: active discriminant narrowings {varName, variantIdx}
 	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (reference suggest parity)
 	matchExprDepth: number;      // >0 when inside match expression block arm (return targets match, not function)
 	initTracker: InitTracker;    // ref parity: TEffects.init — definite assignment tracking
@@ -753,6 +764,9 @@ export function createContext(): CheckerContext {
 		currentModule: null as unknown as Module,
 		exportRegistry: createExportRegistry(),
 		extensionRegistry: createExtensionRegistry(),
+		macroBodyRegistry: new Map<string, Node>(),
+		macroParamsRegistry: new Map<string, string[]>(),
+		macroExpansionDepth: 0,
 		inferredReturn: unknownType(),
 		includeDirectives: "",
 		jsImportRegistry: [],
@@ -762,6 +776,7 @@ export function createContext(): CheckerContext {
 		cancelVersion: 0,
 		modulePath: "",
 		narrowFacts: [],
+		narrowedDiscriminants: [],
 		symRecords: [],
 		matchExprDepth: 0,
 		initTracker: createInitTracker(),

@@ -16,7 +16,7 @@ import { isLastReadInBlock } from "./lastRead";
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, skipConvDfa, getRootSym } from "./alias";
 
 import { parseSource } from "../parser/statements/validation";
-import { checkProgram } from "../checker/index";
+import { checkProgram } from "../checker/checkPass";
 import { transformProgram } from "../transform/index";
 
 // ===== Public Entry Point =====

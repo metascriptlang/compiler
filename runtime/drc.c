@@ -115,7 +115,7 @@ static inline void incCount(msRefHeader* h) {
 	h->rc += MS_RC_INCREMENT;
 }
 
-/* ===== Trace Ref (Nim orc.nim:128 parity) ===== */
+/* ===== Trace Ref (reference ORC parity) ===== */
 /* Called by generated trace hooks. Receives ADDRESS of pointer slot, not the value.
  * This enables collectColor to null out slots (entry[] = nil) so destructors
  * don't follow dangling pointers to moribund objects. */
@@ -232,7 +232,7 @@ static void collectColor(msGcEnv* j, void* p, const msTypeInfo* type, int32_t co
 	while (j->traceStack.len > 0) {
 		msCell entry = j->traceStack.data[--j->traceStack.len];
 		void* child = *(void**)entry.ptr;  /* dereference slot address */
-		*(void**)entry.ptr = NULL;          /* Nim parity: null out slot so destructors see nil */
+		*(void**)entry.ptr = NULL;          /* null out slot so destructors see nil */
 		if (child == NULL) continue;
 		msRefHeader* ch = msHeader(child);
 		if (getColor(ch) == col && ch->rootIdx < 0) {
@@ -244,7 +244,7 @@ static void collectColor(msGcEnv* j, void* p, const msTypeInfo* type, int32_t co
 	}
 }
 
-/* ===== Core Collection (Nim collectCyclesBacon parity) ===== */
+/* ===== Core Collection (collectCyclesBacon parity) ===== */
 
 static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 	int32_t last = msRoots.len - 1;
@@ -295,7 +295,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 	msCellSeqFree(&j->toFree);
 }
 
-/* ===== Public API (Nim GC_runOrc / GC_partialCollect parity) ===== */
+/* ===== Public API (GC_runOrc / GC_partialCollect parity) ===== */
 
 void msOrcCollect(void) {
 	if (msRoots.len == 0) return;
@@ -330,7 +330,7 @@ void msOrcCollect(void) {
 			if (msRootsThreshold < 16) msRootsThreshold = 16;
 		} else if (msRootsThreshold < 16384) {
 			if (msRootsThreshold <= 0) msRootsThreshold = 128;
-			msRootsThreshold = msRootsThreshold / 2 + msRootsThreshold;  /* * 3/2, Nim order */
+			msRootsThreshold = msRootsThreshold / 2 + msRootsThreshold;  /* * 3/2 growth */
 		}
 	}
 }

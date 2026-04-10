@@ -138,3 +138,13 @@ test "E2E C: two-param generic compiles" {
 	// C mangler converts "," to "X" and adds trailing "_"
 	assert result.value.indexOf("KV__string") >= 0;
 }
+
+// Regression test for the generic wrapper + Map.set monomorphize bug
+// lives in examples/testGenericWrapper.ms — it exercises the full compile
+// pipeline (msc run) which triggers the on-demand instantiation path that
+// compileToC's test harness doesn't reach. The 3-part fix is in:
+//   src/monomorphize/clone.ms     — copy typeArg in Mono mode
+//   src/checker/instantiate.ms    — substitute typeArg in substNodeLocal
+//   src/checker/checkExprPass.ms  — resolveGenericNewExpr prefers node.typeArg
+// Reverting any of the three causes the smoke test to fail with:
+//   set__...u0(Map__unknown_unknown*, void*, void*)

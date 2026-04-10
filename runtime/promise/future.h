@@ -74,7 +74,6 @@ typedef struct msFutureBase {
 	_Atomic(bool) finished; /* atomic: cross-thread visibility for worker await */
 	bool failed;          /* set by msFutureFail (even when error payload is NULL) */
 	bool cancelled;       /* set by msFutureCancel */
-	bool isBoxed;         /* true = void* boxed value, false = typed value in struct */
 	void* error;          /* error payload (may be NULL even when failed) */
 	void (*valueDestructor)(void*); /* optional: frees value on destroy (combinators) */
 	msFutureCb* callbacks;
@@ -84,6 +83,14 @@ typedef struct msFutureBase {
 /* Verify: finished is the first field. awaitGroup.c uses msFutureBaseMinimal
  * (a 1-field struct) to set finished without including all of future.h. */
 _Static_assert(offsetof(msFutureBase, finished) == 0, "msFutureBase.finished must be at offset 0");
+
+/* Primitive boxing stores value bits IN the void* pointer. Reading those bits
+ * as typed inline fields (msFuture_double.value, msFuture_int32.value) is only
+ * correct on little-endian where the lower bytes of the 8-byte void* contain
+ * the value. arm64 and x86_64 are both little-endian. */
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+#error "future primitive boxing requires little-endian (arm64/x86_64)"
+#endif
 
 /* ===== Monomorphic Future Structs =====
  * Each Future<T> gets a typed struct with base as FIRST field.
@@ -110,21 +117,52 @@ MS_FUTURE_STRUCT(msFuture_ptr, void*);
 /* Backward compat: msFuture = msFuture_ptr (used by combinators, dispatch) */
 typedef msFuture_ptr msFuture;
 
+/* Session 4: value field offset must be consistent across all future types.
+ * msWaitForStruct and msSpawnWorkerRun cast through msFuture_ptr* to reach
+ * the value bytes at the correct offset. */
+_Static_assert(offsetof(msFuture_ptr, value) == offsetof(msFuture_double, value),
+    "future value field offset must be consistent (double)");
+_Static_assert(offsetof(msFuture_ptr, value) == offsetof(msFuture_int32, value),
+    "future value field offset must be consistent (int32)");
+
 /* ===== Base Operations (work on any future via msFutureBase*) ===== */
 
-/* Allocate a typed future. Always allocates at least base + MS_FUTURE_VALUE_MAX_SIZE
- * to prevent buffer overflow when combinators read .value on any future type. */
-#define MS_FUTURE_VALUE_MAX_SIZE 16  /* sizeof(msString) — largest value type */
-#define MS_FUTURE_MIN_ALLOC (sizeof(msFutureBase) + MS_FUTURE_VALUE_MAX_SIZE)
-#define msFutureCreateT(type) ((type*)msAlloc(sizeof(type) > MS_FUTURE_MIN_ALLOC ? sizeof(type) : MS_FUTURE_MIN_ALLOC))
+/* ===== CRITICAL: Future Allocation Sizing Contract =====
+ *
+ * After Session 4 (isBoxed removal), there is NO runtime safety net for
+ * undersized future allocations. Every allocation site MUST match the
+ * value type that will be written via msFutureCompleteT:
+ *
+ *   Value type          Allocator to use
+ *   ──────────────────  ─────────────────────────────────────
+ *   void                msFutureCreate()     [no value field]
+ *   double/int32/bool   msFutureCreate()     [fits in void* slot]
+ *   void* / Ref<T>      msFutureCreate()     [pointer = 8 bytes]
+ *   msString (16 bytes) msFutureCreateInline [codegen-intercepted, sizeof(msFuture_msString)]
+ *   struct / tuple       msFutureCreateInline [codegen-intercepted, sizeof(msFuture_<T>)]
+ *
+ * If you call msFutureCreate() and then write a value larger than
+ * sizeof(void*) via msFutureCompleteT, you WILL overflow the heap
+ * silently — no assert, no crash, just memory corruption.
+ *
+ * The transform pipeline enforces this automatically:
+ *   - asyncBridge.ms:makeRetFutAlloc    selects allocator by return type
+ *   - builtinLower.ms:PromiseSpawn      selects msSpawn vs msSpawnInto
+ *   - actorLower.ms:buildCallProxy      selects allocator for reply futures
+ *   - combinator.h:MS_DEFINE_FUTURE_*   uses msAlloc(sizeof(fut_type))
+ *
+ * When adding a new future allocation site, check isStructLikeType()
+ * (exported from builtinLower.ms) to determine which allocator to use.
+ */
 
-/* Untyped create — returns void* so it can be assigned to any typed future pointer.
- * Allocates enough for the LARGEST value type (msString = 16 bytes) to prevent
- * buffer overflow when msFutureCompleteT writes typed values.
- * Reference parity: newFuture[T]() allocates based on sizeof(T). Our untyped version
- * must be safe for any T, so we use the max. 8 bytes overhead for non-string futures. */
+/* Allocate a typed future by exact size. */
+#define msFutureCreateT(type) ((type*)msAlloc(sizeof(type)))
+
+/* Untyped create — allocates msFuture_ptr (base + void* value = 8 bytes).
+ * ONLY safe for: void, double, int32, bool, pointer types.
+ * NOT safe for: msString (16 bytes), struct, tuple — use msFutureCreateInline. */
 static inline void* msFutureCreate(void) {
-	return msAlloc(MS_FUTURE_MIN_ALLOC);
+	return msAlloc(sizeof(msFuture_ptr));
 }
 
 /* Alias for combinator code clarity */
@@ -239,7 +277,6 @@ static inline void msFutureAddCallback(void* fp, msClosure cb) {
 #define msFutureCompleteT(f, val) do { \
 	if (atomic_load_explicit(&((msFutureBase*)(f))->finished, memory_order_acquire)) break; \
 	(f)->value = (val); \
-	((msFutureBase*)(f))->isBoxed = false; \
 	atomic_store_explicit(&((msFutureBase*)(f))->finished, true, memory_order_release); \
 	msFutureFireCallbacks((msFutureBase*)(f)); \
 } while(0)
@@ -252,12 +289,11 @@ static inline void msFutureCompleteVoid(void* fp) {
 	msFutureFireCallbacks(f);
 }
 
-/* Complete with void* value (boxed path — spawn pipe, combinators) */
+/* Complete with void* value (combinators, legacy paths) */
 static inline void msFutureComplete(void* fp, void* val) {
 	msFuture* f = (msFuture*)fp;
 	if (atomic_load_explicit(&f->base.finished, memory_order_acquire)) return;
 	f->value = val;
-	f->base.isBoxed = true;
 	atomic_store_explicit(&f->base.finished, true, memory_order_release);
 	msFutureFireCallbacks(&f->base);
 }
@@ -266,8 +302,11 @@ static inline void msFutureComplete(void* fp, void* val) {
 
 /* Chain src → dst: when src completes, copy its result into dst and fire dst's callbacks.
  * Used by actor dispatch to pipe async _impl's $retFut into CALL reply future.
- * NOTE: reads msFuture_ptr.value — only correct for boxed/ptr futures (not typed).
- * asyncBridge creates $retFut via msFutureCreate() which IS msFuture_ptr. */
+ *
+ * Generic untyped chain: used by combinators and as a fallback for struct returns.
+ * Reads src as msFuture_ptr.value (8 bytes). Correct for ptr/double/int32/bool
+ * (bit-level equivalent on 64-bit), incorrect for msString/structs > 8 bytes.
+ * For typed chaining (correct for any T), use msFutureChain_<T> variants below. */
 typedef struct { void* src; void* dst; } msFutureChainPair;
 
 static inline void msFutureChainCb(void* raw, ...) {
@@ -292,6 +331,41 @@ static inline void msFutureChain(void* src, void* dst) {
         .env = (void*)pair
     });
 }
+
+/* ===== Typed Future Chain (per-T) =====
+ * Reads src as msFuture_<T>* → T, writes dst as msFuture_<T>* via msFutureCompleteT.
+ * Correct for ANY sizeof(T) up to MS_FUTURE_VALUE_MAX_SIZE (16 bytes).
+ * Selected by actorLower based on the method's declared return type. */
+
+#define MS_DEFINE_FUTURE_CHAIN(name, fut_type) \
+static inline void name##_cb(void* raw, ...) { \
+    msFutureChainPair* pair = (msFutureChainPair*)raw; \
+    msFutureBase* srcBase = (msFutureBase*)pair->src; \
+    if (srcBase->failed) { \
+        msFutureFail(pair->dst, srcBase->error); \
+    } else { \
+        fut_type* srcT = (fut_type*)pair->src; \
+        fut_type* dstT = (fut_type*)pair->dst; \
+        msFutureCompleteT(dstT, srcT->value); \
+    } \
+    free(pair); \
+} \
+static inline void name(void* src, void* dst) { \
+    if (src == NULL || dst == NULL) return; \
+    msFutureChainPair* pair = (msFutureChainPair*)malloc(sizeof(msFutureChainPair)); \
+    pair->src = src; \
+    pair->dst = dst; \
+    msFutureAddCallback(src, (msClosure){ \
+        .fn = (msClosureFn)name##_cb, \
+        .env = (void*)pair \
+    }); \
+}
+
+MS_DEFINE_FUTURE_CHAIN(msFutureChain_double, msFuture_double)
+MS_DEFINE_FUTURE_CHAIN(msFutureChain_int32, msFuture_int32)
+MS_DEFINE_FUTURE_CHAIN(msFutureChain_int64, msFuture_int64)
+MS_DEFINE_FUTURE_CHAIN(msFutureChain_bool, msFuture_bool)
+MS_DEFINE_FUTURE_CHAIN(msFutureChain_ptr, msFuture_ptr)
 
 /* ===== Error Re-raising (Standard reference read parity) ===== */
 
@@ -327,15 +401,16 @@ static inline int32_t msUnboxInt32(void* p) { return (int32_t)(intptr_t)p; }
 static inline void* msBoxBool(bool v) { return (void*)(intptr_t)v; }
 static inline bool msUnboxBool(void* p) { return (bool)(intptr_t)p; }
 
-/* ===== Per-Type Smart Read Functions =====
- * Handle both boxed (spawn) and typed (async) paths via runtime isBoxed flag.
- * Consumer calls msFutureReadDouble($yf) — transparently handles both. */
+/* ===== Per-Type Read Functions =====
+ * All futures now store values inline (typed field). No boxing/unboxing.
+ * Primitive spawns: msBoxDouble stores double bits IN the void*, which are
+ * bit-compatible with the typed field on little-endian (arm64/x86_64).
+ * String/struct spawns: msSpawnInto memcpys from heap box into inline slot. */
 
 static inline double msFutureReadDouble(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
 	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return 0.0; }
-	if (f->isBoxed) return msUnboxDouble(((msFuture_ptr*)fp)->value);
 	return ((msFuture_double*)fp)->value;
 }
 
@@ -343,7 +418,6 @@ static inline int32_t msFutureReadInt32(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
 	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return 0; }
-	if (f->isBoxed) return msUnboxInt32(((msFuture_ptr*)fp)->value);
 	return ((msFuture_int32*)fp)->value;
 }
 
@@ -351,7 +425,6 @@ static inline bool msFutureReadBool(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
 	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return false; }
-	if (f->isBoxed) return msUnboxBool(((msFuture_ptr*)fp)->value);
 	return ((msFuture_bool*)fp)->value;
 }
 

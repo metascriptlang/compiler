@@ -415,6 +415,8 @@ export function mapChildren(node: Node, f: Visitor): void {
 				d.typExprFieldTypes[i] = f(d.typExprFieldTypes[i]);
 				i += 1;
 			}
+			if (d.typExprIndexKey !== null) { d.typExprIndexKey = f(d.typExprIndexKey); }
+			if (d.typExprIndexValue !== null) { d.typExprIndexValue = f(d.typExprIndexValue); }
 		},
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
 		// adding a new NodeKind forces an exhaustiveness error here — keeping

@@ -12,7 +12,9 @@ import {
 } from "./protocol";
 import { TransAmDb, createTransAmDb, dbEnsurePrelude } from "../transam/index";
 import { resetCancel } from "../transam/cancel";
-import { lspDispatch, buildTransitiveDiagnosticsWire, publishPendingDiagnostics, CompletionCache, createCompletionCache } from "./handlers";
+import { CompletionCache, createCompletionCache } from "./handlers/shared";
+import { buildTransitiveDiagnosticsWire } from "./handlers/diagnostics";
+import { lspDispatch, publishPendingDiagnostics } from "./handlers/lifecycle";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { clockMs } from "std/process";
 import { resolveRuntimeDir } from "../../utils/path";

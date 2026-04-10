@@ -53,6 +53,9 @@ typedef struct msSpawnCtx {
 	int32_t slot;         /* group slot index (only meaningful when group != NULL) */
 	_Atomic(bool)* cancelFlag;  /* Phase 3: pointer to group's cancelled flag (NULL if no group) */
 	void* slotGroup;            /* msAwaitSlot* — stack-allocated fast path (Malebolgia parity) */
+	uint32_t inlineCopySize;    /* >0: closure returns boxed struct/string; worker memcpys
+	                               N bytes from *result into fut's inline value slot, frees
+	                               box. Requires typed-sized fut allocation. */
 } msSpawnCtx;
 
 
@@ -102,9 +105,19 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 			msCompletionQueuePush(ctx->fut, true, (void*)msCurrException);
 			msErr = false;
 			msCurrException = NULL;
+		} else if (ctx->inlineCopySize > 0 && result != NULL) {
+			/* Typed-inline path: memcpy boxed struct/string bytes into fut's
+			 * inline value slot, free the heap box shell. */
+			memcpy(&((msFuture_ptr*)ctx->fut)->value, result, ctx->inlineCopySize);
+			free(result);
+			atomic_store_explicit(&((msFutureBase*)ctx->fut)->finished, true, memory_order_release);
+			msNotifyFutureComplete();
+			msCompletionQueuePush(ctx->fut, false, NULL);
 		} else {
+			/* Primitive path: void* result contains value bits directly
+			 * (msBoxDouble/Int32/Bool store in pointer bits, no heap alloc).
+			 * Bit-compatible with typed inline field on little-endian. */
 			((msFuture_ptr*)ctx->fut)->value = result;
-			((msFutureBase*)ctx->fut)->isBoxed = true;
 			atomic_store_explicit(&((msFutureBase*)ctx->fut)->finished, true, memory_order_release);
 			msNotifyFutureComplete();
 			msCompletionQueuePush(ctx->fut, false, NULL);
@@ -136,6 +149,20 @@ static inline void* msSpawn(msClosure fn) {
 		msIncRef(fn.env);
 	}
 	msPoolSubmit(&ctx);  /* copied into queue slot — ctx can go out of scope */
+	return fut;
+}
+
+
+/* Typed-inline spawn: caller pre-allocates a typed future via msFutureCreateInline<T>.
+ * Worker runs the closure (still returns boxed void*), then memcpys inlineCopySize
+ * bytes from the box into the fut's inline value slot and frees the box.
+ * Downstream readers use msWaitForStruct (typed inline read). */
+static inline void* msSpawnInto(void* fut, msClosure fn, uint32_t copySize) {
+	msSpawnCtx ctx = {
+		.fn = (void*)fn.fn, .env = fn.env, .fut = fut, .inlineCopySize = copySize,
+	};
+	if (fn.env != NULL) msIncRef(fn.env);
+	msPoolSubmit(&ctx);
 	return fut;
 }
 

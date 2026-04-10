@@ -10,6 +10,7 @@
 export enum TaQueryKind {
 	FileText,     // input: raw source text
 	FileHash,     // input: content hash
+	Preprocess,   // derived: raw text -> preprocessed source (.h translation, .h import inlining)
 	Parse,        // derived: source -> AST
 	TypeCheck,    // derived: AST -> CheckerContext
 	Transform,    // derived: typed AST -> transformed AST

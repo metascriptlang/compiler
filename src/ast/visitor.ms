@@ -400,6 +400,8 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 				cb(d.typExprFieldTypes[i]);
 				i += 1;
 			}
+			if (d.typExprIndexKey !== null) { cb(d.typExprIndexKey); }
+			if (d.typExprIndexValue !== null) { cb(d.typExprIndexValue); }
 		},
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
 		// adding a new NodeKind forces an exhaustiveness error here, preventing

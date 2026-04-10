@@ -344,6 +344,7 @@ function sgSymbolKindName(kind: SymbolKind): string {
 		SymbolKind.EnumMember => "enum member",
 		SymbolKind.Actor => "actor",
 		SymbolKind.Module => "module",
+		SymbolKind.Macro => "macro",
 	};
 }
 

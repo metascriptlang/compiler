@@ -106,12 +106,43 @@ export function resolveCcForTarget(cc: CcSection, osTarget: string, cpuTarget: s
 	return { entry, compiler, flags, linkFlags };
 }
 
+export interface PackageSection {
+	name: string;
+	version: string;
+	description: string;
+	license: string;
+	repository: string;
+	homepage: string;
+	keywords: string[];
+	author: string;
+	valid: boolean;         // false if no `package` block present
+}
+
+export function defaultPackageSection(): PackageSection {
+	const kw: string[] = [];
+	return { name: "", version: "", description: "", license: "", repository: "", homepage: "", keywords: kw, author: "", valid: false };
+}
+
+export interface DepsSection {
+	keys: string[];         // package names / aliases
+	values: string[];       // version strings ("1.2.3" or "git+github.com/...")
+}
+
+export function defaultDepsSection(): DepsSection {
+	const k: string[] = [];
+	const v: string[] = [];
+	return { keys: k, values: v };
+}
+
 export interface BuildConfig {
 	entry: string;
 	build: BuildSection;
 	resolve: ResolveSection;
 	fmt: FmtSection;
 	cc: CcSection;
+	package: PackageSection;
+	deps: DepsSection;
+	devDeps: DepsSection;
 	valid: boolean;
 }
 
@@ -285,6 +316,49 @@ function extractBuild(buildNode: Node): BuildSection {
 	return bs;
 }
 
+// Extract PackageSection from an ObjectLiteral node (the `package: { ... }` block).
+function extractPackage(pkgNode: Node): PackageSection {
+	const pkg = defaultPackageSection();
+	if (pkgNode === null || pkgNode.kind !== NodeKind.ObjectLiteral) return pkg;
+	const n = nodeString(findObjField(pkgNode, "name"));
+	if (n.length > 0) pkg.name = n;
+	const v = nodeString(findObjField(pkgNode, "version"));
+	if (v.length > 0) pkg.version = v;
+	const desc = nodeString(findObjField(pkgNode, "description"));
+	if (desc.length > 0) pkg.description = desc;
+	const lic = nodeString(findObjField(pkgNode, "license"));
+	if (lic.length > 0) pkg.license = lic;
+	const repo = nodeString(findObjField(pkgNode, "repository"));
+	if (repo.length > 0) pkg.repository = repo;
+	const hp = nodeString(findObjField(pkgNode, "homepage"));
+	if (hp.length > 0) pkg.homepage = hp;
+	const auth = nodeString(findObjField(pkgNode, "author"));
+	if (auth.length > 0) pkg.author = auth;
+	const kwNode = findObjField(pkgNode, "keywords");
+	if (kwNode !== null) pkg.keywords = nodeStringArray(kwNode);
+	pkg.valid = pkg.name.length > 0;
+	return pkg;
+}
+
+// Extract DepsSection from an ObjectLiteral node (the `deps: { ... }` or `devDeps: { ... }` block).
+// Each key/value pair is a package name → version string (registry or git source spec).
+function extractDeps(depsNode: Node): DepsSection {
+	const ds = defaultDepsSection();
+	if (depsNode === null || depsNode.kind !== NodeKind.ObjectLiteral) return ds;
+	const od = depsNode.data as ObjectLiteralData;
+	let i = 0;
+	while (i < od.keys.length) {
+		const key = od.keys[i];
+		const val = i < od.properties.length ? nodeString(od.properties[i]) : "";
+		if (key.length > 0 && val.length > 0) {
+			ds.keys.push(key);
+			ds.values.push(val);
+		}
+		i = i + 1;
+	}
+	return ds;
+}
+
 let _parsersRegistered = false;
 
 export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfig {
@@ -292,7 +366,10 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const defRs = defaultResolveSection();
 	const defFmt = defaultFmtSection();
 	const defCc = defaultCcSection();
-	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, cc: defCc, valid: false };
+	const defPkg = defaultPackageSection();
+	const defDeps = defaultDepsSection();
+	const defDevDeps = defaultDepsSection();
+	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, cc: defCc, package: defPkg, deps: defDeps, devDeps: defDevDeps, valid: false };
 
 	if (!exists(filePath)) return defCfg;
 
@@ -314,8 +391,11 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const rs = extractResolve(findObjField(configObj, "resolve"));
 	const fmt = extractFmt(findObjField(configObj, "fmt"));
 	const cc = extractCc(findObjField(configObj, "cc"));
+	const pkg = extractPackage(findObjField(configObj, "package"));
+	const deps = extractDeps(findObjField(configObj, "deps"));
+	const devDeps = extractDeps(findObjField(configObj, "devDeps"));
 
-	return { entry, build: bs, resolve: rs, fmt, cc, valid: true };
+	return { entry, build: bs, resolve: rs, fmt, cc, package: pkg, deps, devDeps, valid: true };
 }
 
 // Validate build.ms and return LSP-style warnings.
@@ -370,4 +450,108 @@ export function loadFmtSection(dir: string): FmtSection {
 	const configObj = parseBuildSource(fmtSource);
 	if (configObj === null) return defaultFmtSection();
 	return extractFmt(findObjField(configObj, "fmt"));
+}
+
+// ===== Tests — package/deps extraction =====
+
+function testExtractFromSource(source: string): BuildConfig {
+	registerCoreParsers();
+	_parsersRegistered = true;
+	const configObj = parseBuildSource(source);
+	if (configObj === null) {
+		return {
+			entry: "", build: { target: "c", outDir: "out", outFile: "", optimize: "debug" },
+			resolve: defaultResolveSection(), fmt: defaultFmtSection(), cc: defaultCcSection(),
+			package: defaultPackageSection(), deps: defaultDepsSection(), devDeps: defaultDepsSection(), valid: false,
+		};
+	}
+	const entry = nodeString(findObjField(configObj, "entry"));
+	const pkg = extractPackage(findObjField(configObj, "package"));
+	const deps = extractDeps(findObjField(configObj, "deps"));
+	const devDeps = extractDeps(findObjField(configObj, "devDeps"));
+	return {
+		entry, build: extractBuild(findObjField(configObj, "build")),
+		resolve: extractResolve(findObjField(configObj, "resolve")),
+		fmt: extractFmt(findObjField(configObj, "fmt")),
+		cc: extractCc(findObjField(configObj, "cc")),
+		package: pkg, deps, devDeps, valid: true,
+	};
+}
+
+test "extractPackage reads name and version" {
+	const cfg = testExtractFromSource("const config = { package: { name: \"my-app\", version: \"0.1.0\" } }; export default config;");
+	assert cfg.valid;
+	assert cfg.package.valid;
+	assert cfg.package.name === "my-app";
+	assert cfg.package.version === "0.1.0";
+}
+
+test "extractPackage reads all fields" {
+	const src = "const config = { package: { name: \"x\", version: \"1.0.0\", description: \"A lib\", license: \"MIT\", repository: \"https://github.com/a/b\", homepage: \"https://x.dev\", author: \"Me\" } }; export default config;";
+	const cfg = testExtractFromSource(src);
+	assert cfg.package.description === "A lib";
+	assert cfg.package.license === "MIT";
+	assert cfg.package.repository === "https://github.com/a/b";
+	assert cfg.package.homepage === "https://x.dev";
+	assert cfg.package.author === "Me";
+}
+
+test "extractPackage invalid when no name" {
+	const cfg = testExtractFromSource("const config = { package: { version: \"1.0.0\" } }; export default config;");
+	assert !cfg.package.valid;
+}
+
+test "extractDeps reads key-value pairs" {
+	const cfg = testExtractFromSource("const config = { deps: { \"cool-json\": \"1.2.3\", \"http-util\": \"2.0.1\" } }; export default config;");
+	assert cfg.deps.keys.length === 2;
+	assert cfg.deps.keys[0] === "cool-json";
+	assert cfg.deps.values[0] === "1.2.3";
+	assert cfg.deps.keys[1] === "http-util";
+	assert cfg.deps.values[1] === "2.0.1";
+}
+
+test "extractDeps handles git source specs" {
+	const cfg = testExtractFromSource("const config = { deps: { \"my-fork\": \"git+github.com/me/foo@v1.0.0\" } }; export default config;");
+	assert cfg.deps.keys.length === 1;
+	assert cfg.deps.keys[0] === "my-fork";
+	assert cfg.deps.values[0] === "git+github.com/me/foo@v1.0.0";
+}
+
+test "extractDeps empty block" {
+	const cfg = testExtractFromSource("const config = { deps: {} }; export default config;");
+	assert cfg.deps.keys.length === 0;
+}
+
+test "extractDeps no deps block" {
+	const cfg = testExtractFromSource("const config = { entry: \"./src/index\" }; export default config;");
+	assert cfg.deps.keys.length === 0;
+}
+
+test "devDeps separate from deps" {
+	const cfg = testExtractFromSource("const config = { deps: { \"a\": \"1.0.0\" }, devDeps: { \"b\": \"0.1.0\" } }; export default config;");
+	assert cfg.deps.keys.length === 1;
+	assert cfg.deps.keys[0] === "a";
+	assert cfg.devDeps.keys.length === 1;
+	assert cfg.devDeps.keys[0] === "b";
+	assert cfg.devDeps.values[0] === "0.1.0";
+}
+
+test "full manifest with entry + package + deps + devDeps" {
+	const src = "const config = { entry: \"./src/index\", package: { name: \"my-app\", version: \"0.1.0\" }, deps: { \"foo\": \"1.2.3\" }, devDeps: { \"bar\": \"0.3.0\" } }; export default config;";
+	const cfg = testExtractFromSource(src);
+	assert cfg.valid;
+	assert cfg.entry === "./src/index";
+	assert cfg.package.name === "my-app";
+	assert cfg.package.version === "0.1.0";
+	assert cfg.deps.keys.length === 1;
+	assert cfg.deps.values[0] === "1.2.3";
+	assert cfg.devDeps.keys.length === 1;
+	assert cfg.devDeps.values[0] === "0.3.0";
+}
+
+test "extractPackage keywords array" {
+	const cfg = testExtractFromSource("const config = { package: { name: \"x\", version: \"1.0.0\", keywords: [\"json\", \"parser\"] } }; export default config;");
+	assert cfg.package.keywords.length === 2;
+	assert cfg.package.keywords[0] === "json";
+	assert cfg.package.keywords[1] === "parser";
 }

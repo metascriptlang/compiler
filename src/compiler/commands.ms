@@ -1,7 +1,7 @@
 // MetaScript Compiler CLI — Individual commands (check, dump-*, pipeline, run, test, fmt)
 
 import { exit, exec, clockMs } from "std/process";
-import { lex } from "../lexer/index";
+import { lex } from "../lexer/lexer";
 import { formatToken } from "../lexer/token";
 import { parseSource } from "../parser/statements/validation";
 import { registerCoreParsers } from "../parser/statements/core"; // Moved to top

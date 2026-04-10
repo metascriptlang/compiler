@@ -68,5 +68,5 @@ test "construct object" {
 	const v = jsonObject(keys, vals);
 	assert v.kind === JsonKind.Object;
 	assert v.keys.length === 2;
-	assert v.keys[0] === "namnte";
+	assert v.keys[0] === "name";
 }

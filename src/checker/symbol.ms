@@ -37,6 +37,8 @@ export enum SymbolFlag {
 	GeneratedOp = 262144, // generated lifecycle hook (=destroy/=copy/=sink/=wasMoved) — skip DRC injection (reference parity: sfGeneratedOp)
 	Nonisolated = 524288, // @nonisolated — actor field/method readable from outside (Swift parity)
 	Consumed = 1048576, // PARALOCK Phase 1: SpawnHandle binding has been awaited (affine consumption)
+	OverloadSig = 2097152, // Tier 1: body-less overload signature — typecheck-only, codegen skips emission
+	OverloadValidated = 4194304, // Tier 1: overload set already validated (return-type compatibility check)
 }
 
 // Flag helpers

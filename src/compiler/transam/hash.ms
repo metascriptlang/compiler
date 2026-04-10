@@ -455,6 +455,7 @@ export function transAmHashNode(node: Node): number {
 		NodeKind.TypeObject => {
 			const d = node.data as TypeObjectData;
 			h = hStrings(h, d.typExprFieldNames); h = hNodes(h, d.typExprFieldTypes);
+			h = hN(h, d.typExprIndexKey); h = hN(h, d.typExprIndexValue);
 		},
 	};
 

@@ -42,6 +42,8 @@ export interface CliOptions {
 	strictDefs: boolean;       // --strict-defs: warn on all uninit var use
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
 	gcMode: string;            // --gc=drc|none|manual: memory management mode
+	projectRoot: string;       // set by CLI main from findProjectRoot() — dir containing build.ms
+	extraArgs: string[];       // remaining args passed through for package manager commands (add, remove, etc.)
 }
 
 // -- Argument parsing --
@@ -78,6 +80,8 @@ export function parseArgs(): CliOptions {
 		strictDefs: false,
 		strictNullChecks: false,
 		gcMode: "orc",
+		projectRoot: "",
+		extraArgs: [],
 	};
 
 	if (argv.length < 2) return opts;
@@ -183,6 +187,9 @@ export function parseArgs(): CliOptions {
 				opts.inputFile = arg;
 			}
 			positionalIdx += 1;
+		} else if (opts.command === "add" || opts.command === "remove" || opts.command === "install" || opts.command === "update" || opts.command === "publish" || opts.command === "login" || opts.command === "logout") {
+			// Package manager commands: pass unknown flags through
+			opts.extraArgs.push(arg);
 		} else {
 			console.log(error("error") + ": unknown option '" + bold(arg) + "'");
 			exit(1);

@@ -427,6 +427,28 @@ export function getDiscriminantName(t: Type): string {
 	return "";
 }
 
+// Tier 2: detect if a Union type has a discriminant field matching `fieldName`.
+// Returns { isStringDU, discField } — the caller can use these to pick the right
+// variant-finding function (findVariantByDiscriminant vs findVariantByStringDiscriminant).
+// Checks enum-based DUs first, then string-literal DUs.
+export interface DiscriminantInfo {
+	isStringDU: boolean;
+	discField: string;
+}
+
+export function detectUnionDiscriminant(unionType: Type, fieldName: string): DiscriminantInfo {
+	if (isDiscriminatedUnion(unionType) && getDiscriminantName(unionType) === fieldName) {
+		return { isStringDU: false, discField: fieldName };
+	}
+	if (unionType.kind === TypeKind.Union) {
+		const sdf = findSharedStringDiscriminant(unionType);
+		if (sdf !== "" && sdf === fieldName) {
+			return { isStringDU: true, discField: sdf };
+		}
+	}
+	return { isStringDU: false, discField: "" };
+}
+
 // Find variant index by field name. Returns the first variant containing the field.
 // Used for direct field access on discriminated unions (e.g., s.radius → s.v0.radius).
 export function findVariantByFieldName(unionType: Type, fieldName: string): number {
@@ -450,12 +472,101 @@ export function findVariantByFieldName(unionType: Type, fieldName: string): numb
 export function findVariantByDiscriminant(unionType: Type, enumValue: string): number {
 	if (unionType.typeNames === null || unionType.typeNames.length < 2) return -1;
 	const queryBare = bareAfterDelim(enumValue, ".");
+	// Also handle underscore-mangled form: checkMemberExpr rewrites EnumType.Member to EnumType_Member
+	const queryBareUnderscore = bareAfterDelim(enumValue, "_");
 	let i = 1;
 	while (i < unionType.typeNames.length) {
 		const stored = unionType.typeNames[i];
 		if (stored === enumValue) return i - 1;
-		if (bareAfterDelim(stored, ".") === queryBare) return i - 1;
+		const storedBare = bareAfterDelim(stored, ".");
+		if (storedBare === queryBare) return i - 1;
+		if (storedBare === queryBareUnderscore) return i - 1;
 		i = i + 1;
+	}
+	return -1;
+}
+
+// Tier 2: detect a string-literal discriminant field shared by every variant of the union.
+// A discriminant field must:
+//   - be present on every variant
+//   - have a distinct StringLiteral type in each variant (so we can disambiguate)
+// Returns the field name, or "" if no such field exists.
+// Preference order: first matching field encountered in variant 0.
+export function findSharedStringDiscriminant(unionType: Type): string {
+	if (unionType.typeChildren === null || unionType.typeChildren.length < 2) return "";
+	const first = unionType.typeChildren[0];
+	if (first === null || first.typeNames === null) return "";
+	for (let fi = 0; fi < first.typeNames.length; fi += 1) {
+		if (fi >= first.typeChildren.length) continue;
+		const firstFt = first.typeChildren[fi];
+		if (firstFt === null || firstFt.kind !== TypeKind.StringLiteral) continue;
+		const candidateName = first.typeNames[fi];
+		// Check every other variant has this field as a StringLiteral with a *different* value.
+		let sharedOk = true;
+		const seen: string[] = [firstFt.typeName];
+		for (let vi = 1; vi < unionType.typeChildren.length; vi += 1) {
+			const v = unionType.typeChildren[vi];
+			if (v === null || v.typeNames === null) { sharedOk = false; break; }
+			let foundInV = false;
+			for (let vfi = 0; vfi < v.typeNames.length; vfi += 1) {
+				if (v.typeNames[vfi] !== candidateName) continue;
+				if (vfi >= v.typeChildren.length) break;
+				const vft = v.typeChildren[vfi];
+				if (vft === null || vft.kind !== TypeKind.StringLiteral) break;
+				// Reject duplicate values across variants
+				let dup = false;
+				for (const s of seen) { if (s === vft.typeName) { dup = true; break; } }
+				if (dup) { sharedOk = false; break; }
+				seen.push(vft.typeName);
+				foundInV = true;
+				break;
+			}
+			if (!foundInV) { sharedOk = false; break; }
+			if (!sharedOk) break;
+		}
+		if (sharedOk) return candidateName;
+	}
+	return "";
+}
+
+// Tier 2: collect all string-literal discriminant values from a union's variants.
+// Returns ["circle", "square"] for type Shape = {kind:"circle",...} | {kind:"square",...}.
+export function collectStringDiscriminantValues(unionType: Type, discFieldName: string): string[] {
+	const values: string[] = [];
+	if (unionType.typeChildren === null) return values;
+	for (const variant of unionType.typeChildren) {
+		if (variant === null || variant.typeNames === null) continue;
+		for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
+			if (variant.typeNames[fi] !== discFieldName) continue;
+			if (fi >= variant.typeChildren.length) continue;
+			const ft = variant.typeChildren[fi];
+			if (ft !== null && ft.kind === TypeKind.StringLiteral) {
+				values.push(ft.typeName);
+			}
+			break;
+		}
+	}
+	return values;
+}
+
+// Tier 2: find variant index by scanning variant structs directly for a string-literal
+// discriminant field matching `discFieldName` with the given literal value.
+// Used when the union is string-literal based (type Shape = {kind:"a",...} | {kind:"b",...})
+// and there's no enum-backed discriminant metadata on the union itself.
+// Returns -1 if no variant has a StringLiteral field matching the value.
+export function findVariantByStringDiscriminant(unionType: Type, discFieldName: string, litValue: string): number {
+	if (unionType.typeChildren === null) return -1;
+	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
+		const variant = unionType.typeChildren[i];
+		if (variant === null || variant.typeNames === null) continue;
+		for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
+			if (variant.typeNames[fi] !== discFieldName) continue;
+			if (fi >= variant.typeChildren.length) continue;
+			const ft = variant.typeChildren[fi];
+			if (ft !== null && ft.kind === TypeKind.StringLiteral && ft.typeName === litValue) {
+				return i;
+			}
+		}
 	}
 	return -1;
 }
@@ -647,6 +758,74 @@ export function createStringLiteral(value: string): Type {
 
 export function isStringLiteral(t: Type): boolean {
 	return t !== null && t.kind === TypeKind.StringLiteral;
+}
+
+// EnumLiteral: a specific enum member as a type (TypeScript parity).
+// typeName = enum type name (e.g. "NodeKind").
+// typeNames[0] = specific member (e.g. "BinaryExpr").
+// typeReturn = back-reference to the underlying Enum Type for fast subtype checks.
+export function createEnumLiteral(enumType: Type, memberName: string): Type {
+	const t = emptyType();
+	t.kind = TypeKind.EnumLiteral;
+	t.typeName = enumType.typeName;
+	t.typeNames = [memberName];
+	t.typeReturn = enumType;
+	return t;
+}
+
+export function isEnumLiteral(t: Type): boolean {
+	return t !== null && t.kind === TypeKind.EnumLiteral;
+}
+
+// Tier 3: Conditional type — T extends U ? A : B
+// typeChildren[0] = check type (T)
+// typeChildren[1] = extends type (U)
+// typeChildren[2] = true branch (A)
+// typeChildren[3] = false branch (B)
+export function createConditionalType(check: Type, extendsType: Type, trueType: Type, falseType: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Conditional;
+	t.typeChildren = [check, extendsType, trueType, falseType];
+	return t;
+}
+
+// Evaluate a conditional type if its check and extends types are concrete (no GenericParam).
+// Returns the true/false branch, or the original type if unevaluable.
+export function evaluateConditionalType(t: Type): Type {
+	if (t.kind !== TypeKind.Conditional) return t;
+	if (t.typeChildren.length < 4) return t;
+	const check = t.typeChildren[0];
+	const ext = t.typeChildren[1];
+	// Defer if check type still has unresolved generic params (not yet substituted)
+	if (hasGenericParams(check)) return t;
+	// Tier 3: if the extends type has GenericParam (from `infer X`), use unifyType
+	// to extract bindings, then substitute into the true branch.
+	if (hasGenericParams(ext)) {
+		const bindings = createUnifyBindings();
+		unifyType(ext, check, bindings);
+		if (bindings.names.length > 0) {
+			// infer succeeded — substitute bindings into true branch
+			let result = t.typeChildren[2];
+			for (let i = 0; i < bindings.names.length; i += 1) {
+				result = substituteType(result, bindings.names[i], bindings.types[i]);
+			}
+			return result;
+		}
+		// infer failed — no match, return false branch
+		return t.typeChildren[3];
+	}
+	return isAssignableForConditional(check, ext) ? t.typeChildren[2] : t.typeChildren[3];
+}
+
+// Simplified assignability check for conditional type evaluation.
+// Uses the main isAssignable but avoids circular dependency.
+let _condAssignFn: (source: Type, target: Type) => boolean = null as unknown as (source: Type, target: Type) => boolean;
+export function setConditionalAssignFn(fn: (source: Type, target: Type) => boolean): void {
+	_condAssignFn = fn;
+}
+function isAssignableForConditional(source: Type, target: Type): boolean {
+	if (_condAssignFn !== null) return _condAssignFn(source, target);
+	return source.kind === target.kind;
 }
 
 export function isAllStringLiteralUnion(t: Type): boolean {
@@ -874,7 +1053,7 @@ function getTypeSizeInner(t: Type): number {
 		TypeKind.Boolean => 1,
 		TypeKind.String | TypeKind.StringLiteral => targetPtrSize + targetPtrSize, // msString: data ptr + length
 		TypeKind.CString => targetPtrSize,
-		TypeKind.Enum => 4, // C int
+		TypeKind.Enum | TypeKind.EnumLiteral => 4, // C int
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => targetPtrSize,
 		TypeKind.Array => targetPtrSize + targetPtrSize, // msArray: data ptr + length
 		TypeKind.Function => targetPtrSize + targetPtrSize, // msClosure: fn ptr + env ptr
@@ -1024,6 +1203,13 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 				substituteClearFlag(t);
 				return gi;
 			},
+			TypeKind.Conditional => {
+				// Substitute in all 4 children, then try to evaluate
+				const cond = copyTypeForSubst(t);
+				substituteChildrenInPlace(cond, paramName, concrete);
+				substituteClearFlag(t);
+				return evaluateConditionalType(cond);
+			},
 			_ => t,
 		};
 	substituteClearFlag(t);
@@ -1071,6 +1257,15 @@ function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): 
 	if (formal.kind === TypeKind.GenericParam) {
 		bindings.names.push(formal.typeName);
 		bindings.types.push(concrete);
+		return;
+	}
+	// Array/Span/Ref/Ptr: unify element types
+	if (formal.kind === concrete.kind
+		&& (formal.kind === TypeKind.Array || formal.kind === TypeKind.SizedArray
+			|| formal.kind === TypeKind.Span || formal.kind === TypeKind.Ref || formal.kind === TypeKind.Ptr)) {
+		if (formal.typeReturn !== null && concrete.typeReturn !== null) {
+			unifyType(formal.typeReturn, concrete.typeReturn, bindings);
+		}
 		return;
 	}
 	// GenericInstance: structural unification of type arguments
@@ -1230,6 +1425,11 @@ export function getReturnType(t: Type): Type {
 
 export function getElementType(t: Type): Type {
 	if (t.kind === TypeKind.Array || t.kind === TypeKind.SizedArray || t.kind === TypeKind.Span || t.kind === TypeKind.Ptr) return t.typeReturn;
+	// Map<K, V> subscript: `m[k]` returns V. Makes `{ [key: K]: V }` work at
+	// runtime via Map.get() after the lowering in transform/native/nativeLower.ms.
+	if (t.kind === TypeKind.GenericInstance && t.typeName === "Map" && t.typeChildren !== null && t.typeChildren.length === 2) {
+		return t.typeChildren[1];
+	}
 	return unknownType();
 }
 
@@ -1352,6 +1552,7 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind === TypeKind.Float32
 		|| kind === TypeKind.Float64
 		|| kind === TypeKind.Enum
+		|| kind === TypeKind.EnumLiteral
 		|| kind === TypeKind.Never
 		|| kind === TypeKind.Unknown
 		|| kind === TypeKind.Char
@@ -1399,6 +1600,7 @@ export function typeNameOf(t: Type): string {
 		TypeKind.Tuple => "Tuple",
 		TypeKind.CString => "cstring",
 		TypeKind.StringLiteral => "\"" + t.typeName + "\"",
+		TypeKind.EnumLiteral => t.typeName + "." + (t.typeNames.length > 0 ? t.typeNames[0] : ""),
 		// Result and Promise are now GenericInstance — handled above via t.typeName
 		TypeKind.Enum => t.typeName,
 		TypeKind.TypeReference => t.typeName,
@@ -1439,7 +1641,7 @@ export function alignOfType(t: Type): number {
 	return match (t.kind) {
 		TypeKind.Boolean | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
 		TypeKind.Int16 | TypeKind.Uint16 => 2,
-		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum => 4,
+		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum | TypeKind.EnumLiteral => 4,
 		TypeKind.Number | TypeKind.Float64 => ps,
 		TypeKind.Int64 | TypeKind.Uint64 => ps,
 		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Function => ps,
@@ -1474,7 +1676,7 @@ export function sizeOfType(t: Type): number {
 	return match (t.kind) {
 		TypeKind.Boolean | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
 		TypeKind.Int16 | TypeKind.Uint16 => 2,
-		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum => 4,
+		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum | TypeKind.EnumLiteral => 4,
 		TypeKind.Number | TypeKind.Int64 | TypeKind.Uint64 | TypeKind.Float64 => ps,
 		TypeKind.String => ps * 2,
 		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr => ps,

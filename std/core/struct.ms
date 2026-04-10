@@ -217,6 +217,22 @@ export function* toItems<K, V>(this m: Map<K, V>): Iterator<K> {
 	}
 }
 
+// Construct a Map from parallel arrays of keys and values.
+// Used by the index-signature literal lowering — `{ "k": v, ... }` assigned
+// to a Map<K,V> target is rewritten to mapFromPairs([keys], [values]).
+// See docs/PACKAGE.md for the index signature design.
+export function mapFromPairs<K, V>(keys: K[], values: V[]): Map<K, V> {
+	const m = new Map<K, V>();
+	let i: int32 = 0;
+	while (i < keys.length) {
+		if (i < values.length) {
+			m.set(keys[i], values[i]);
+		}
+		i = i + 1;
+	}
+	return m;
+}
+
 // ===== Set<T> =====
 
 export struct SetEntry<T> {

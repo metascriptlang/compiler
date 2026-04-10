@@ -46,9 +46,10 @@ import {
 } from "./intern";
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
-import { checkProgramWithRegistryCancellable, buildPreludeContext } from "../../checker/index";
+import { checkProgramWithRegistryCancellable, buildPreludeContext } from "../../checker/checkPass";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
+import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
 import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
@@ -58,6 +59,8 @@ import { createModule, createModuleGraph, addModule, ImportEntry, createImportEn
 import { getDirectImports } from "./moduleDeps";
 import { lspResolveImportCandidates } from "../lsp/protocol";
 import { translateCHeader } from "../../module/cimport/emit";
+import { inlineHeaderImports, createTaReadProvider, SourceProvider } from "../../module/loader";
+import { cloneNodeForCheck } from "../../monomorphize/clone";
 
 // ===== Stdlib Detection =====
 
@@ -118,6 +121,7 @@ export class TransAmDb {
 	exportRegistry: ExportRegistry;
 	stdPath: string;
 	preludeCtx: CheckerContext;
+	preprocessCache: Map<number, string>;  // fileId → preprocessed source
 }
 
 export function createTransAmDb(cacheCapacity: number): TransAmDb {
@@ -132,6 +136,7 @@ export function createTransAmDb(cacheCapacity: number): TransAmDb {
 		exportRegistry: createExportRegistry(),
 		stdPath: "",
 		preludeCtx: null as unknown as CheckerContext,
+		preprocessCache: new Map<number, string>(),
 	};
 }
 
@@ -144,9 +149,12 @@ function analyzeNodeKey(fileId: number): number { return fileId + 30000; }
 
 // ===== Public API =====
 
-// Set file content. Returns true if content changed.
-export function dbSetFileText(db: TransAmDb, filePath: string, source: string): boolean {
-	const changed = setFileText(db.fileInput, filePath, source);
+// Set file content. Stores the RAW source as-is; preprocessing happens lazily via
+// the Preprocess query (see dbPreprocess). This means .h files are stored as C source,
+// .ms files are stored with unresolved .h imports. The Preprocess query handles both,
+// with dep tracking so .h changes propagate to dependent .ms files automatically.
+export function dbSetFileText(db: TransAmDb, filePath: string, rawSource: string): boolean {
+	const changed = setFileText(db.fileInput, filePath, rawSource);
 	if (!changed) return false;
 	incrementRevision(db.revision);
 	const fileId = getFileId(db.fileInput, filePath);
@@ -197,6 +205,75 @@ export function dbGetFilePathByIndex(db: TransAmDb, index: number): string {
 	return getFilePathByIndex(db.fileInput, index);
 }
 
+// ===== Preprocess Query =====
+//
+// Produces preprocessed source for a file. Handles:
+//   - .h files: translate C declarations to MS extern source (via translateCHeader)
+//   - .ms/.cms/.jms/.wms: inline `import from "*.h"` into extern decls (via inlineHeaderImports)
+//   - other: pass through raw
+//
+// The query runs through Trans-Am's red-green mechanism, so:
+//   - Unchanged files return cached preprocessed text instantly
+//   - .h files imported by a .ms file are tracked as FileText deps
+//   - Editing a .h file invalidates the Preprocess query of every .ms file that imported it
+//     (via lazy tryMarkGreen verification — on next query, deps are re-checked)
+
+// Trans-Am-backed SourceProvider. When inlineHeaderImports reads a .h file through this
+// provider, the read records a FileText dependency on the current query frame, so the
+// containing Preprocess query auto-invalidates when the .h file changes.
+function createTaSourceProvider(db: TransAmDb, currentFileId: number): SourceProvider {
+	return createTaReadProvider((headerPath: string) => {
+		dbEnsureFileLoaded(db, headerPath);
+		const headerId = getFileId(db.fileInput, headerPath);
+		if (headerId < 0) return "";
+		// Record FileText dep so tryMarkGreen catches content changes
+		const ftKey = createQueryKey(TaQueryKind.FileText, headerId);
+		const ftHash = getFileHash(db.fileInput, headerId);
+		recordDependency(db.depStack, ftKey, ftHash);
+		// Also record module edge (eager invalidation — getTransitiveDependents)
+		if (currentFileId >= 0) recordModuleImport(db.moduleDeps, currentFileId, headerId);
+		return getFileText(db.fileInput, headerId);
+	});
+}
+
+export function dbPreprocess(db: TransAmDb, filePath: string): string {
+	const fileId = getFileId(db.fileInput, filePath);
+	if (fileId < 0) return "";
+	const key = createQueryKey(TaQueryKind.Preprocess, fileId);
+
+	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+		return db.preprocessCache.has(fileId) ? db.preprocessCache.get(fileId) : "";
+	}
+
+	pushFrame(db.depStack, key);
+	// Self file_text dep: preprocess output depends on the raw source
+	const selfFtKey = createQueryKey(TaQueryKind.FileText, fileId);
+	const selfHash = getFileHash(db.fileInput, fileId);
+	recordDependency(db.depStack, selfFtKey, selfHash);
+	// G2: propagate durability (std/ stays High)
+	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
+
+	const raw = getFileText(db.fileInput, fileId);
+	let out = raw;
+
+	if (filePath.endsWith(".h")) {
+		// .h → translate C to MS extern decls
+		out = translateCHeader(raw, []);
+	} else if (filePath.endsWith(".ms") || filePath.endsWith(".cms") || filePath.endsWith(".jms") || filePath.endsWith(".wms")) {
+		// .ms-family → inline .h imports with dep-tracking provider.
+		// inlineHeaderImports preserves the original `import { ... } from "*.h";`
+		// statement and inserts the synthesized extern decls after it, so Phase B
+		// unused-import detection walks the ImportDecl naturally.
+		const provider = createTaSourceProvider(db, fileId);
+		out = inlineHeaderImports(raw, filePath, provider, true);
+	}
+
+	db.preprocessCache.set(fileId, out);
+	const outHash = taHashString(out);
+	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, outHash, true);
+	return out;
+}
+
 // Execute parse query for a file. Returns the parsed Node.
 export function dbParse(db: TransAmDb, filePath: string): Node {
 	const fileId = getFileId(db.fileInput, filePath);
@@ -208,17 +285,21 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 		return nodeCacheGet(parseNodeKey(fileId));
 	}
 
-	// Compute
+	// Compute — get preprocessed source via the Preprocess query. This records
+	// deps on the file's own FileText AND any .h files it imports, so parse
+	// invalidates when the source OR any included header changes.
+	const source = dbPreprocess(db, filePath);
+
 	pushFrame(db.depStack, key);
-	// Record file_text dependency
-	const fileTextKey = createQueryKey(TaQueryKind.FileText, fileId);
-	const fileHash = getFileHash(db.fileInput, fileId);
-	recordDependency(db.depStack, fileTextKey, fileHash);
+	// Parse depends on Preprocess (for this file).
+	const preprocessKey = createQueryKey(TaQueryKind.Preprocess, fileId);
+	const preprocessEntry = cacheGet(db.cache, preprocessKey);
+	const preprocessHash = preprocessEntry !== null ? preprocessEntry.outputHash : 0;
+	recordDependency(db.depStack, preprocessKey, preprocessHash);
 	// G2: Propagate durability so std/ parse queries inherit High durability
 	const fileDur = getFileDurability(db.fileInput, fileId);
 	recordDurability(db.depStack, fileDur);
 
-	const source = getFileText(db.fileInput, fileId);
 	// Use lenient parse: LSP needs partial ASTs from incomplete code (e.g. "config.")
 	const parseResult = parseSourceLenient(source);
 	let program = null as unknown as Node;
@@ -234,17 +315,13 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 // ===== Cross-Module Export Registration =====
 
 // Ensure a file is loaded into the db (read from disk if needed).
-// For .h files, translates C declarations to MetaScript extern source at the input boundary,
-// so the rest of the pipeline (parse → collect → resolve → register) works generically.
+// Preprocessing happens lazily via the Preprocess query (dbPreprocess), so this
+// just reads raw and stores as-is. The Preprocess query later resolves .h imports.
 function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) >= 0) return;
 	const raw = try readStdFile(filePath) catch "";
 	if (raw.byteLength === 0) return;
-	let source = raw;
-	if (filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) === ".h") {
-		source = translateCHeader(raw, []);
-	}
-	dbSetFileText(db, filePath, source);
+	dbSetFileText(db, filePath, raw);
 }
 
 // Resolve import specifier to absolute path (relative + std/ imports).
@@ -398,6 +475,9 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 		}
 		if (stmt.kind !== NodeKind.ImportDecl) continue;
 		const imp = stmt.data as ImportDeclData;
+		// .h imports are handled by inlineHeaderImports; their ImportDecl survives
+		// for unused-import detection only — don't create a module import entry.
+		if (imp.importSource.length >= 2 && imp.importSource.slice(imp.importSource.length - 2, imp.importSource.length) === ".h") continue;
 
 		// Find resolved path from dep edges
 		let resolvedPath = "";
@@ -475,18 +555,17 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		return ctxCacheGet(checkCtxKey(fileId));
 	}
 
-	// Ensure parse cache is up-to-date (needed for dependency hash tracking)
-	const _cachedProgram = dbParse(db, filePath);
-	if (_cachedProgram === null) return null as unknown as CheckerContext;
+	// Get the cached parse tree (needed for dependency hash tracking + to source the clone).
+	const cachedProgram = dbParse(db, filePath);
+	if (cachedProgram === null) return null as unknown as CheckerContext;
 
-	// Always parse fresh for type checking — the checker mutates the AST
-	// (e.g., enum MemberExpr → Identifier rewrite in checkMemberExpr).
-	// Reusing the cached parse tree causes stale/missing sgRecords on recheck,
-	// leading to unstable goto-definition on enum members.
-	const freshSource = getFileText(db.fileInput, fileId);
-	const freshParse = parseSourceLenient(freshSource);
-	const program = freshParse.ok ? freshParse.value : null as unknown as Node;
-	if (program === null) return null as unknown as CheckerContext;
+	// Clone the parse tree before type-checking. The checker mutates nodeType/resolvedSym
+	// in-place; cloning keeps dbParse's cached tree immutable so other consumers
+	// (semantic tokens, syntax queries) see a clean AST. CloneMode.Check preserves
+	// typeExpr/typeExprs (resolvePass needs them) and drops nodeType/resolvedSym
+	// so the checker re-populates them fresh.
+	// This replaces the previous double-parse (parseSourceLenient was called twice).
+	const program = cloneNodeForCheck(cachedProgram);
 
 	const startVersion = getCancelVersion(db.cancelCtx);
 
@@ -725,6 +804,39 @@ test "file change invalidates parse" {
 	assert entry.state === TaQueryState.Red;
 }
 
+test "preprocess query passes through non-header files" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "plain.ms", "const x = 1;");
+	const out = dbPreprocess(db, "plain.ms");
+	assert out === "const x = 1;";
+}
+
+test "preprocess query caches result" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "plain.ms", "const x = 1;");
+	const out1 = dbPreprocess(db, "plain.ms");
+	const out2 = dbPreprocess(db, "plain.ms");
+	assert out1 === out2;
+	// Second call should be a cache hit — Preprocess query state is Green
+	const fileId = getFileId(db.fileInput, "plain.ms");
+	const key = createQueryKey(TaQueryKind.Preprocess, fileId);
+	const entry = cacheGet(db.cache, key);
+	assert entry !== null;
+	assert entry.state === TaQueryState.Green;
+}
+
+test "preprocess query invalidates on file change" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "plain.ms", "const a = 1;");
+	dbPreprocess(db, "plain.ms");
+	dbSetFileText(db, "plain.ms", "const b = 2;");
+	const fileId = getFileId(db.fileInput, "plain.ms");
+	const key = createQueryKey(TaQueryKind.Preprocess, fileId);
+	const entry = cacheGet(db.cache, key);
+	assert entry !== null;
+	assert entry.state === TaQueryState.Red;
+}
+
 test "full pipeline produces analyzed AST" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "test.ms", "const x = 1; const y = 2;");
@@ -781,6 +893,38 @@ test "db has string interner" {
 	const id = internString(db.interner, "hello");
 	assert id === 0;
 	assert lookupInterned(db.interner, id) === "hello";
+}
+
+test "unused .h import identifier gets warning via Phase B" {
+	// Verifies the root-cause fix: .h imports now survive preprocessing as
+	// real ImportDecl nodes, so the existing reportUnusedImports pass walks
+	// them uniformly with .cms imports. No side-channel needed.
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "fake/os.h",
+		"typedef struct CpuInfo { int speed; } CpuInfo;\n" +
+		"const char* msOsHostname(void);\n");
+	// Line 3 is the import. msOsHostname should be flagged as unused;
+	// CpuInfo is used in the return type below and must NOT be flagged.
+	dbSetFileText(db, "consumer.cms",
+		"// header comment\n" +
+		"\n" +
+		"import { CpuInfo, msOsHostname } from \"fake/os.h\";\n" +
+		"export function getCpu(): CpuInfo { return null as unknown as CpuInfo; }\n");
+	const ctx = dbTypeCheck(db, "consumer.cms");
+	assert ctx !== null;
+	let foundUnusedHostname = false;
+	let foundUnusedCpuInfo = false;
+	for (const err of ctx.errors) {
+		if (err.message.indexOf("msOsHostname") >= 0 && err.message.indexOf("imported but never used") >= 0) {
+			foundUnusedHostname = true;
+			assert err.line === 3;
+		}
+		if (err.message.indexOf("CpuInfo") >= 0 && err.message.indexOf("imported but never used") >= 0) {
+			foundUnusedCpuInfo = true;
+		}
+	}
+	assert foundUnusedHostname;
+	assert !foundUnusedCpuInfo;
 }
 
 // ===== Salsa Early Cutoff Integration Tests =====

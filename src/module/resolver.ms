@@ -98,7 +98,10 @@ export function resolveImportWithConfig(specifier: string, fromFile: string, con
 	}
 
 	// Classify and resolve
-	if (isRelative(spec)) {
+	if (spec.length > 0 && spec.charAt(0) === "/") {
+		// Absolute path (e.g. from alias rewriting for cached packages)
+		result = addExtensionCandidates(result, spec, config.extensions);
+	} else if (isRelative(spec)) {
 		// Relative: ./foo, ../bar — normalize to collapse ./ and ../ segments
 		const baseDir = dirname(fromFile);
 		const base = normalize(join(baseDir, spec));

@@ -1685,6 +1685,46 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		return;
 	}
 
+	// msFutureCreateInline() → typed-sized future allocation for inline struct storage.
+	// asyncBridge emits this when an async function returns a struct type that would
+	// overflow the generic msFutureCreate() 16-byte value slot. nodeType carries the
+	// inner type T. Emits the MS_FUTURE_STRUCT typedef (idempotent) and an
+	// msAlloc(sizeof(msFuture_<T>)) call.
+	if (callee === "msFutureCreateInline" && node.nodeType !== null) {
+		const innerC = getTypeDesc(g, node.nodeType);
+		const futStructName = "msFuture_" + mangle(innerC);
+		addLine(sec(g, CSection.Types), `#ifndef ${futStructName}_DEFINED`);
+		addLine(sec(g, CSection.Types), `#define ${futStructName}_DEFINED`);
+		addLine(sec(g, CSection.Types), `MS_FUTURE_STRUCT(${futStructName}, ${innerC});`);
+		addLine(sec(g, CSection.Types), `#endif`);
+		ctx.results.push(`(${futStructName}*)msAlloc(sizeof(${futStructName}))`);
+		return;
+	}
+
+	// msSpawnInto(fut, closure, sizeof_T) → codegen reads T from the first arg's
+	// nodeType (set to the inner struct type by builtinLower). The call node's
+	// own nodeType is Promise<T> for downstream type correctness.
+	if (callee === "msSpawnInto" && cd.arguments.length >= 1 && cd.arguments[0].nodeType !== null) {
+		const innerC = getTypeDesc(g, cd.arguments[0].nodeType);
+		ctx.results.push(`msSpawnInto(${argsStr}, sizeof(${innerC}))`);
+		return;
+	}
+
+	// msWaitForStruct(fut) → blocking wait + typed inline read of struct value.
+	// Emitted by WaitFor builtin for struct return types. Assumes the source future
+	// was allocated via msFutureCreateInline (or asyncBridge for struct returns).
+	// Reads bytes directly at the value field offset, not through void* cast.
+	if (callee === "msWaitForStruct" && node.nodeType !== null) {
+		const structType = getTypeDesc(g, node.nodeType);
+		const futTmp = getTemp(p, "void*");
+		const valTmp = getTemp(p, structType);
+		emitStmtsLine(p, `${futTmp.snippet} = ${argsStr};`);
+		emitStmtsLine(p, `msWaitForReady(${futTmp.snippet});`);
+		emitStmtsLine(p, `${valTmp.snippet} = *(${structType}*)(&((msFuture_ptr*)${futTmp.snippet})->value);`);
+		ctx.results.push(valTmp.snippet);
+		return;
+	}
+
 	const calleeStr = callee;
 	// NRVO: call returns void, result via out-param
 	const nrvoRet = getCalleeReturnType(node);

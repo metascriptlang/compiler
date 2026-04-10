@@ -299,15 +299,25 @@ static inline msString msUnboxString(void* p) {
 #ifndef msFuture_msString_DEFINED
 #define msFuture_msString_DEFINED
 MS_FUTURE_STRUCT(msFuture_msString, msString);
+MS_DEFINE_FUTURE_CHAIN(msFutureChain_msString, msFuture_msString)
+MS_DEFINE_FUTURE_THEN(msFutureThen_msString, msFuture_msString, msString, msString)
+MS_DEFINE_FUTURE_FINALLY(msFutureFinally_msString, msFuture_msString)
+
+/* Typed .catch — error handler always receives msString.
+ * Success path propagates typed value via msFutureCompleteT. */
+MS_DEFINE_FUTURE_CATCH(msFutureCatch_double,   msFuture_double)
+MS_DEFINE_FUTURE_CATCH(msFutureCatch_int32,    msFuture_int32)
+MS_DEFINE_FUTURE_CATCH(msFutureCatch_int64,    msFuture_int64)
+MS_DEFINE_FUTURE_CATCH(msFutureCatch_bool,     msFuture_bool)
+MS_DEFINE_FUTURE_CATCH(msFutureCatch_ptr,      msFuture_ptr)
+MS_DEFINE_FUTURE_CATCH(msFutureCatch_msString, msFuture_msString)
 #endif
 
-/* Per-type smart read for msString (needs msUnboxString + msFuture_msString, defined above).
- * Handles both boxed (spawn, isBoxed=true) and typed (async, isBoxed=false). */
+/* Per-type read for msString. All futures now store values inline. */
 static inline msString msFutureReadString(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
 	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return MS_EMPTY_STRING; }
-	if (f->isBoxed) return msUnboxString(((msFuture_ptr*)fp)->value);
 	return ((msFuture_msString*)fp)->value;
 }
 

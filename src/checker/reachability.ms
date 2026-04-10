@@ -384,8 +384,15 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 				continue;
 			}
 
-			// Root 4: Top-level statements (side-effecting init code in Init000)
-			if (isTopLevelStatement(stmt)) {
+			// Root 4: Top-level statements (side-effecting init code in Init000).
+			// Unwrap ExportDecl — `export const argv = buildArgv()` is an ExportDecl
+			// wrapping a VariableDecl. The inner VariableDecl is side-effecting (init code).
+			let initStmt = stmt;
+			if (stmt.kind === NodeKind.ExportDecl) {
+				const ed = stmt.data as ExportDeclData;
+				if (ed.exportedDecl !== null) initStmt = ed.exportedDecl;
+			}
+			if (isTopLevelStatement(initStmt)) {
 				walkBody(stmt, modulePath, importMap);
 				continue;
 			}

@@ -242,7 +242,7 @@ static inline void msMarkMaybeCycle(void* p) {
 	}
 }
 
-/* Nim GC_runOrc / GC_enableOrc / GC_disableOrc parity */
+/* GC_runOrc / GC_enableOrc / GC_disableOrc parity */
 void msOrcCollect(void);
 void msOrcPartialCollect(int32_t lowMark);
 

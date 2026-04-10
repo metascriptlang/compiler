@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
-import { exit, exec } from "std/process";
+import { exit, exec, argv } from "std/process";
 import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
@@ -9,6 +9,14 @@ import { lspRunServer } from "./compiler/lsp/server";
 import { loadBuildConfig, loadFmtSection, resolveCcForTarget } from "./compiler/buildConfig";
 import { verboseLog } from "./compiler/io";
 import { error, bold, green, cyan } from "./utils/color";
+import { findProjectRoot } from "./utils/path";
+import { join } from "std/fs/path";
+// Import the package manager hub for test discovery. Individual commands
+// (msc add, install, publish, ...) are wired up from this module as they land.
+// NOTE: imported for Bun test runner (finds inline tests). The C build path
+// (msc build/run src/index.ms) also compiles these modules; any link errors
+// from OTHER files in the working tree are pre-existing, not caused by this import.
+import { cmdAdd } from "./compiler/package/index";
 
 function requireFile(opts: CliOptions): void {
 	if (opts.inputFile === "") {
@@ -21,6 +29,13 @@ function requireFile(opts: CliOptions): void {
 export function main(): number {
 	const opts = parseArgs();
 	const cmd = opts.command;
+
+	// Find project root by walking up from the entry file (or CWD) looking for
+	// build.ms. Go/Rust convention: the manifest defines the project root.
+	// All manifest operations (build.ms, msc.lock) are relative to this directory.
+	const projectRoot = findProjectRoot(opts.inputFile);
+	const buildMsPath = join(projectRoot, "build.ms");
+	opts.projectRoot = projectRoot;
 
 	match (cmd) {
 		"" | "help" => printUsage(),
@@ -36,7 +51,7 @@ export function main(): number {
 		"run" => {
 			// argv path overrides build.ms root; fallback to build.ms when no argv
 			if (opts.inputFile === "") {
-				const cfg = loadBuildConfig("build.ms", opts.showTime);
+				const cfg = loadBuildConfig(buildMsPath, opts.showTime);
 				if (cfg.valid && cfg.entry.length > 0) { opts.inputFile = cfg.entry; }
 			}
 			requireFile(opts);
@@ -58,7 +73,7 @@ export function main(): number {
 		},
 		"build" => {
 			// Load build.ms for config (target, optimize, outDir, etc.)
-			const cfg = loadBuildConfig("build.ms", opts.showTime);
+			const cfg = loadBuildConfig(buildMsPath, opts.showTime);
 			// argv path overrides build.ms root
 			if (opts.inputFile === "" && cfg.valid && cfg.entry.length > 0) {
 				opts.inputFile = cfg.entry;
@@ -96,6 +111,13 @@ export function main(): number {
 				}
 				cmdBuildC(opts.inputFile, opts);
 			}
+		},
+		"add" => {
+			// inputFile has the package specifier; extraArgs has flags like -D
+			const addArgs: string[] = [];
+			if (opts.inputFile !== "") addArgs.push(opts.inputFile);
+			for (const ea of opts.extraArgs) { addArgs.push(ea); }
+			if (!cmdAdd(projectRoot, addArgs)) exit(1);
 		},
 		_ => {
 			console.log(`${error("error")}: unknown command '${bold(cmd)}'`);

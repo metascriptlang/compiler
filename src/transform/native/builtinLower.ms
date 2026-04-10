@@ -177,6 +177,58 @@ function typeTagFor(t: Type): number {
 	};
 }
 
+// Value type needing typed-sized future allocation (msFutureCreateInline) and
+// typed inline read (msWaitForStruct). Includes msString (16 bytes > sizeof(void*)).
+// Shared across builtinLower + asyncBridge.
+export function isStructLikeType(t: Type): boolean {
+	if (t === null) return false;
+	return t.kind === TypeKind.Struct || t.kind === TypeKind.GenericInstance
+		|| t.kind === TypeKind.Tuple || t.kind === TypeKind.String;
+}
+
+// Map Promise<T> inner type to the typed T suffix used by msFuture*_<T>
+// variants (Chain, Then, Catch, Finally). Returns "" if no typed variant
+// exists (caller must fall back to the untyped/boxed path).
+// Correct for futures with inline typed storage (populated via msFutureCompleteT).
+function futureTypedSuffix(t: Type): string {
+	if (t === null) return "";
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "double",
+		TypeKind.Int32 | TypeKind.Int16 | TypeKind.Int8
+			| TypeKind.Uint32 | TypeKind.Uint16 | TypeKind.Uint8
+			| TypeKind.Enum => "int32",
+		TypeKind.Int64 | TypeKind.Uint64 => "int64",
+		TypeKind.Boolean => "bool",
+		TypeKind.String => "msString",
+		TypeKind.Ref | TypeKind.Ptr | TypeKind.Function => "ptr",
+		_ => "",  // struct, array, void, unknown → fall through to boxed path
+	};
+}
+
+function futureThenFnForInner(t: Type): string {
+	const suffix = futureTypedSuffix(t);
+	return suffix === "" ? "" : "msFutureThen_" + suffix;
+}
+
+function futureCatchFnForInner(t: Type): string {
+	const suffix = futureTypedSuffix(t);
+	return suffix === "" ? "" : "msFutureCatch_" + suffix;
+}
+
+function futureFinallyFnForInner(t: Type): string {
+	const suffix = futureTypedSuffix(t);
+	return suffix === "" ? "" : "msFutureFinally_" + suffix;
+}
+
+// Build a call to `fnName(args...)` and tag it with the requested result type.
+// Small helper that consolidates the "makeCall + nodeType + return" pattern
+// used by builtin replacements.
+function mkTypedCall(fnName: string, args: Node[], nodeType: Type, loc: SourceLocation): Node {
+	const call = makeCall(makeIdent(fnName, loc), args, loc);
+	call.nodeType = nodeType;
+	return call;
+}
+
 // Box a value for void* storage in msFuture (Promise.resolve, spawn return)
 function boxValueForFuture(node: Node, loc: SourceLocation): Node {
 	if (node === null) return makeNull(loc);
@@ -238,32 +290,37 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 		return rewriteResultToLiteral(node, false, ctx);
 	}
 
-	// Promise.then/catch/finally — rewrite to typed C runtime calls
+	// Promise.then/catch/finally — rewrite to typed C runtime calls.
+	// Typed variants (msFutureThen_<T>, msFutureCatch_<T>, msFutureFinally_<T>)
+	// read input.value via the correct typed struct cast, preserving msString
+	// (16B) and primitive widths on pass-through. Struct/array/void/unknown
+	// fall back to the legacy tag-dispatch path.
 	if (builtinKind === "PromiseThen" || builtinKind === "PromiseCatch" || builtinKind === "PromiseFinally") {
 		if (cd.callee.kind === NodeKind.MemberExpr && cd.arguments.length >= 1) {
 			const me = cd.callee.data as MemberExprData;
-			if (builtinKind === "PromiseThen") {
-				// Determine type tag from Promise<T>'s inner type
-				const innerType = getPromiseInner(me.object.nodeType);
-				const tag = typeTagFor(innerType);
-				const args: Node[] = [me.object, cd.arguments[0], makeNumber(tag, loc)];
-				const newCall = makeCall(makeIdent("msFutureThenTyped", loc), args, loc);
-				newCall.nodeType = node.nodeType;
-				return newCall;
-			} else if (builtinKind === "PromiseCatch") {
-				// Error is always string in MetaScript
-				const args: Node[] = [me.object, cd.arguments[0], makeNumber(3, loc)];
-				const newCall = makeCall(makeIdent("msFutureCatchTyped", loc), args, loc);
-				newCall.nodeType = node.nodeType;
-				return newCall;
-			} else {
-				// PromiseFinally — no value, no type tag needed
-				const args: Node[] = [me.object];
-				for (const a of cd.arguments) { args.push(a); }
-				const newCall = makeCall(makeIdent("msFutureFinally", loc), args, loc);
-				newCall.nodeType = node.nodeType;
-				return newCall;
-			}
+			const innerType = getPromiseInner(me.object.nodeType);
+			const cb = cd.arguments[0];
+			return match (builtinKind) {
+				"PromiseThen" => {
+					const typedFn = futureThenFnForInner(innerType);
+					if (typedFn !== "") return mkTypedCall(typedFn, [me.object, cb], node.nodeType, loc);
+					const tag = typeTagFor(innerType);
+					return mkTypedCall("msFutureThenTyped", [me.object, cb, makeNumber(tag, loc)], node.nodeType, loc);
+				},
+				"PromiseCatch" => {
+					// Error handler always receives msString (MetaScript errors are strings).
+					const typedFn = futureCatchFnForInner(innerType);
+					if (typedFn !== "") return mkTypedCall(typedFn, [me.object, cb], node.nodeType, loc);
+					return mkTypedCall("msFutureCatchTyped", [me.object, cb, makeNumber(3, loc)], node.nodeType, loc);
+				},
+				_ => {
+					// PromiseFinally — wildcard is safe: outer guard restricts to these three.
+					const typedFn = futureFinallyFnForInner(innerType);
+					const finallyArgs: Node[] = [me.object];
+					for (const a of cd.arguments) { finallyArgs.push(a); }
+					return mkTypedCall(typedFn !== "" ? typedFn : "msFutureFinally", finallyArgs, node.nodeType, loc);
+				},
+			};
 		}
 		return node;
 	}
@@ -281,28 +338,54 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	}
 
 	if (builtinKind === "PromiseSpawn") {
-		// Rewrite spawn(fn) → msSpawn(fn)
+		// Struct returns: spawn(fn) → msSpawnInto(msFutureCreateInline<T>(), fn)
+		// Worker memcpys the boxed result into the typed-inline fut, frees box.
+		// Downstream waitFor/await reads via msWaitForStruct (typed inline read).
+		// Primitive/void returns: spawn(fn) → msSpawn(fn) (legacy boxed path).
+		const innerType = getPromiseInner(node.nodeType);
+		if (isStructLikeType(innerType)) {
+			const futAlloc = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
+			futAlloc.nodeType = innerType;  // codegen reads arg[0].nodeType for sizeof(T)
+			const spawnInto = makeCall(makeIdent("msSpawnInto", loc), [futAlloc, cd.arguments[0]], loc);
+			spawnInto.nodeType = node.nodeType;  // Promise<T> — downstream typing unchanged
+			return spawnInto;
+		}
 		const spawnCall = makeCall(makeIdent("msSpawn", loc), cd.arguments, loc);
 		spawnCall.nodeType = node.nodeType;
 		return spawnCall;
 	}
 
 	if (builtinKind === "WaitFor") {
-		// waitFor(fut) → msUnboxT(msWaitFor(fut))
-		// msWaitFor blocks + returns void* (boxed). Wrap with unbox for the return type.
-		// Note: builtinLower operates at expression level (single node replacement),
-		// so we can't use the msWaitForReady + msFutureReadT two-statement pattern
-		// here. That pattern is used by awaitLower (statement-level expansion).
-		const waitCall = makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
+		// waitFor(fut) — dispatch based on return type:
+		// - void:      msWaitFor(fut)                            (block, discard result)
+		// - primitive: msUnbox<T>(msWaitFor(fut))                (boxed path — spawn)
+		// - struct:    msWaitForStruct(fut)                      (typed inline read — async)
+		// - array/ref: msUnboxStruct(msWaitFor(fut))             (boxed fallback)
+		//
+		// The split handles crypto.ms-class bugs: async functions returning struct
+		// types (e.g., Result<msString, Error>, ~40 bytes) write the value inline via
+		// msFutureCompleteT. The old code read `((msFuture_ptr*)f)->value` (8 bytes)
+		// and interpreted that as a void* pointer to a heap box — dereferencing the
+		// interpreted pointer crashed. msWaitForStruct reads at the value field
+		// offset directly, preserving full sizeof(T).
 		const retType = node.nodeType;
-		if (retType === null || retType.kind === TypeKind.Void) return waitCall;
+		if (retType === null || retType.kind === TypeKind.Void) {
+			return makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
+		}
 		const unboxFn = unboxFnForType(retType);
 		if (unboxFn !== "") {
+			const waitCall = makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
 			const unboxCall = makeCall(makeIdent(unboxFn, loc), [waitCall], loc);
 			unboxCall.nodeType = retType;
 			return unboxCall;
 		}
-		// Struct types: codegen expands msUnboxStruct(ptr) → copy out + free shell
+		if (isStructLikeType(retType)) {
+			const waitStruct = makeCall(makeIdent("msWaitForStruct", loc), cd.arguments, loc);
+			waitStruct.nodeType = retType;
+			return waitStruct;
+		}
+		// Fallback: array/ref → boxed path (msSinkBoxStruct + msUnboxStruct)
+		const waitCall = makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
 		const unboxCall = makeCall(makeIdent("msUnboxStruct", loc), [waitCall], loc);
 		unboxCall.nodeType = retType;
 		return unboxCall;
