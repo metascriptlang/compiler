@@ -5,11 +5,11 @@
 // Wraps return values in msBoxDouble/msBoxBool/msBoxInt32 so the
 // C runtime can store them as void* in msFuture.value.
 
-import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, Type, TypeKind, createNode } from "../../ast/node";
 import { unknownType, isPromise, getPromiseInner } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall, makeNull, makeObjectLiteral } from "../util";
+import { makeIdent, makeCall, makeNull, makeObjectLiteral, syntheticToken } from "../util";
 
 function needsBoxing(t: Type): boolean {
 	if (t === null) return false;
@@ -119,6 +119,28 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 		}
 
 		if (closureRetType !== null && needsBoxing(closureRetType)) {
+			// Bare function reference (already wrapped as ObjectLiteral closure pair):
+			// can't modify the function body. Wrap in an adapter arrow: () => box(fn())
+			if (closureArg.kind === NodeKind.ObjectLiteral && (closureArg.flags & NodeFlag.Closure) !== 0) {
+				const loc = closureArg.location;
+				const fnIdent = (closureArg.data as ObjectLiteralData).properties[0];
+				const innerCall = makeCall(fnIdent, [], loc);
+				innerCall.nodeType = closureRetType;
+				const boxed = boxForType(innerCall, closureRetType, loc);
+				const wrapper = createNode(NodeKind.ArrowFunction, {
+					arrowParams: [] as string[],
+					arrowParamTypes: [] as string[],
+					arrowBody: boxed,
+					arrowFlags: "",
+					arrowReturnType: "",
+				}, syntheticToken(loc));
+				wrapper.nodeType = closureArg.nodeType;
+				if (wrapper.nodeType !== null && wrapper.nodeType.kind === TypeKind.Function) {
+					wrapper.nodeType.typeReturn = unknownType();
+				}
+				cd.arguments[0] = wrapper;
+				return node;
+			}
 			// Box return values inside the closure body
 			if (closureArg.kind === NodeKind.ArrowFunction) {
 				const ad = closureArg.data as ArrowFunctionData;

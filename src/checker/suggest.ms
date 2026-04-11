@@ -236,6 +236,12 @@ function sgTypeToStringDepth(t: Type, depth: number): string {
 	}
 
 	if (t.kind === TypeKind.Enum) return t.typeName;
+	if (t.kind === TypeKind.EnumLiteral) {
+		if (t.typeNames !== null && t.typeNames.length > 0) {
+			return t.typeName + "." + t.typeNames[0];
+		}
+		return t.typeName;
+	}
 
 	if (t.kind === TypeKind.Union) {
 		let result = "";
@@ -1207,10 +1213,13 @@ function sgGetActiveParamFromNode(callNode: Node, line: number, col: number): nu
 }
 
 // Unified signature context: AST-based with text-based fallback.
+// `callNode` is the CallExpr AST node (null if fallback path) — used to pick
+// the matching overload signature based on already-typed arguments.
 export interface SgSignatureContext {
 	calleeName: string;
 	receiverName: string;
 	activeParam: number;
+	callNode: Node;
 }
 
 export function sgGetSignatureContext(program: Node, source: string, line: number, col: number): SgSignatureContext {
@@ -1221,6 +1230,7 @@ export function sgGetSignatureContext(program: Node, source: string, line: numbe
 			calleeName: sgGetCalleeFromNode(callNode),
 			receiverName: sgGetReceiverFromNode(callNode),
 			activeParam: sgGetActiveParamFromNode(callNode, line, col),
+			callNode,
 		};
 	}
 	// Fallback: text-based (handles incomplete source where parser couldn't produce CallExpr)
@@ -1228,7 +1238,70 @@ export function sgGetSignatureContext(program: Node, source: string, line: numbe
 		calleeName: sgGetCalleeAtCursor(source, line, col),
 		receiverName: sgGetReceiverAtCursor(source, line, col),
 		activeParam: sgCountActiveParam(source, line, col),
+		callNode: null as unknown as Node,
 	};
+}
+
+// Pick the overload signature that best matches the arguments already typed.
+// Walks each typed arg's nodeType, compares against each candidate's param type,
+// scores by number of exact matches. Returns 0 (primary) if no callNode or no
+// args typed yet. Used by the LSP to set `activeSignature` for signature help.
+export function sgPickActiveOverload(callNode: Node, sym: Symbol): number {
+	if (callNode === null || sym === null) return 0;
+	if (sym.overloads === null || sym.overloads.length === 0) return 0;
+	const d = callNode.data as CallExprData;
+	if (d.arguments.length === 0) return 0;
+	// Build candidates: [primary, ...overloads]
+	const candidates: Type[] = [sym.symbolType];
+	for (const o of sym.overloads) candidates.push(o.symbolType);
+	// Score each candidate: count exact matches on already-typed args
+	let bestIdx = 0;
+	let bestScore = -1;
+	for (let ci = 0; ci < candidates.length; ci = ci + 1) {
+		const ct = candidates[ci];
+		if (ct === null || ct.kind !== TypeKind.Function) continue;
+		if (ct.typeChildren === null) continue;
+		let score = 0;
+		let mismatch = false;
+		for (let ai = 0; ai < d.arguments.length; ai = ai + 1) {
+			if (ai >= ct.typeChildren.length) break;
+			const arg = d.arguments[ai];
+			if (arg === null) continue;
+			let argType = arg.nodeType;
+			// Narrow direct enum-member access to its EnumLiteral form — parity
+			// with checkCallExpr's overload scoring (so NodeKind.StringLiteral
+			// at a call site matches the StringLiteral-specific sig).
+			if (argType !== null && argType.kind === TypeKind.Enum
+					&& arg.resolvedSym !== null
+					&& arg.resolvedSym.symbolKind === SymbolKind.EnumMember
+					&& arg.resolvedSym.symbolType !== null
+					&& arg.resolvedSym.symbolType.kind === TypeKind.EnumLiteral) {
+				argType = arg.resolvedSym.symbolType;
+			}
+			if (argType === null || argType.kind === TypeKind.Unknown) continue;
+			const paramType = ct.typeChildren[ai];
+			if (paramType === null) continue;
+			// Exact match on EnumLiteral (both sides same enum + same member)
+			if (paramType.kind === TypeKind.EnumLiteral && argType.kind === TypeKind.EnumLiteral) {
+				if (paramType.typeName === argType.typeName
+						&& paramType.typeNames.length > 0 && argType.typeNames.length > 0
+						&& paramType.typeNames[0] === argType.typeNames[0]) {
+					score = score + 2; // exact enum literal match — strong signal
+				} else {
+					mismatch = true;
+					break;
+				}
+			} else if (paramType.kind === argType.kind) {
+				score = score + 1;
+			}
+		}
+		if (mismatch) continue;
+		if (score > bestScore) {
+			bestScore = score;
+			bestIdx = ci;
+		}
+	}
+	return bestIdx;
 }
 
 // Find the ObjectLiteral nesting path from cursor to root.

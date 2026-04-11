@@ -549,10 +549,18 @@ export function importSymFromRegistry(
 	const origName = resolveOriginalName(exportInfo, importName);
 	if (origName !== alias) sym.originalName = origName;
 	if (exportInfo.nativeName !== "") sym.nativeName = exportInfo.nativeName;
+	if (exportInfo.builtinKind !== "") sym.builtinKind = exportInfo.builtinKind;
 	if (exportInfo.headerPath !== "") sym.headerPath = exportInfo.headerPath;
 	if (exportInfo.hasConstructor) setFlag(sym, SymbolFlag.HasConstructor);
+	if (exportInfo.defaultParams !== null && exportInfo.defaultParams.length > 0) sym.defaultParams = exportInfo.defaultParams;
 	if (exportInfo.location !== null && exportInfo.location.line > 0) {
 		sym.location = exportInfo.location;
+	}
+	// Phase 5: carry the OverloadSig bit across module boundaries so
+	// findOverloadImpl can distinguish body-less sigs from the wide impl
+	// when scoring cross-module overload calls.
+	if ((exportInfo.primaryFlags & SymbolFlag.OverloadSig) !== 0) {
+		setFlag(sym, SymbolFlag.OverloadSig);
 	}
 	defineOrError(ctx, sym, defNode);
 	sgRecordSym(ctx, nameLoc.line, nameLoc.column, nameLoc.column + alias.length, sym, exportInfo.symType, exportInfo.kind, alias, "", false);
@@ -620,11 +628,6 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				// Skip: was defineOrError for Color_Red etc.
 				}
 				const primarySym = lookupLocal(ctx.table, localAlias);
-				// Restore cross-module metadata not handled by importSymFromRegistry
-				if (primarySym !== null) {
-					if (exportInfo.builtinKind !== "") primarySym.builtinKind = exportInfo.builtinKind;
-					if (exportInfo.defaultParams !== null && exportInfo.defaultParams.length > 0) primarySym.defaultParams = exportInfo.defaultParams;
-				}
 				// Propagate -iquote for header search path
 				if (exportInfo.headerPath !== "" && exportInfo.definingModule !== "") {
 					const searchDir = getModuleDir(exportInfo.definingModule);
@@ -635,6 +638,10 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 					let ovIdx = 0;
 					while (ovIdx < exportInfo.overloadTypes.length) {
 						const ovSym = makeSymbol(localAlias, exportInfo.kind, exportInfo.overloadTypes[ovIdx], false);
+						// Preserve source-module overload slot so Identifier-as-value
+						// references mangle to the correct `_u${N}` name. Matches
+						// defineSymbol numbering: primary=0, sym.overloads[k]=k+1.
+						ovSym.overloadIdx = ovIdx + 1;
 						ovSym.modulePath = resolveDefiningModule(exportInfo, sourcePath);
 						const ovOrigName = resolveOriginalName(exportInfo, importName);
 						if (ovOrigName !== localAlias) ovSym.originalName = ovOrigName;
@@ -658,6 +665,11 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 							}
 						}
 						if (exportInfo.headerPath !== "") ovSym.headerPath = exportInfo.headerPath;
+						// Preserve OverloadSig flag so findOverloadImpl works cross-module.
+						if (exportInfo.overloadFlags !== null && ovIdx < exportInfo.overloadFlags.length
+								&& (exportInfo.overloadFlags[ovIdx] & SymbolFlag.OverloadSig) !== 0) {
+							setFlag(ovSym, SymbolFlag.OverloadSig);
+						}
 						primarySym.overloads.push(ovSym);
 						// Register per-overload extension if it has one
 						if (ctx.extensionRegistry !== null && exportInfo.overloadExtReceiverTypes !== null && ovIdx < exportInfo.overloadExtReceiverTypes.length && exportInfo.overloadExtReceiverTypes[ovIdx] !== "") {
@@ -748,6 +760,30 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 							const sym = lookupLocal(ctx.table, expInfo.name);
 							if (sym !== null) {
 								setFlag(sym, SymbolFlag.Exported);
+								// Propagate overloads through star re-export. Required
+								// for createNodeAt's per-kind overloads to flow from
+								// std/meta → src/ast/node → callers (compiler source).
+								if (expInfo.overloadTypes !== null && expInfo.overloadTypes.length > 0) {
+									for (let ovIdx = 0; ovIdx < expInfo.overloadTypes.length; ovIdx += 1) {
+										const ovSym = makeSymbol(expInfo.name, expInfo.kind, expInfo.overloadTypes[ovIdx], false);
+										ovSym.overloadIdx = ovIdx + 1;
+										ovSym.modulePath = resolveDefiningModule(expInfo, sourcePath);
+										if (expInfo.overloadNativeNames !== null && ovIdx < expInfo.overloadNativeNames.length && expInfo.overloadNativeNames[ovIdx] !== "") {
+											ovSym.nativeName = expInfo.overloadNativeNames[ovIdx];
+										}
+										if (expInfo.overloadBuiltinKinds !== null && ovIdx < expInfo.overloadBuiltinKinds.length && expInfo.overloadBuiltinKinds[ovIdx] !== "") {
+											ovSym.builtinKind = expInfo.overloadBuiltinKinds[ovIdx];
+										}
+										if (expInfo.headerPath !== "") ovSym.headerPath = expInfo.headerPath;
+										setFlag(ovSym, SymbolFlag.Exported);
+										// Preserve OverloadSig flag so findOverloadImpl works cross-module.
+										if (expInfo.overloadFlags !== null && ovIdx < expInfo.overloadFlags.length
+												&& (expInfo.overloadFlags[ovIdx] & SymbolFlag.OverloadSig) !== 0) {
+											setFlag(ovSym, SymbolFlag.OverloadSig);
+										}
+										sym.overloads.push(ovSym);
+									}
+								}
 							}
 						}
 					} else {
@@ -1162,6 +1198,7 @@ test "re-export preserves original location and records sgSymRecord" {
 		defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
 		definingModule: "/test/hub/accessors", originalName: "", headerPath: "",
 		location: origLoc, memberLocations: [],
+		primaryFlags: 0, overloadFlags: [],
 	};
 	registerModuleExports(ctx.exportRegistry, "/test/hub/accessors", [fakeExport]);
 

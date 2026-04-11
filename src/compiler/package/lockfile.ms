@@ -9,9 +9,9 @@ import { JsonValue, JsonKind } from "std/core/json";
 // --- Types ---
 
 export interface LockEntry {
-	key: string;          // "name@version" or "alias@git+url@sha"
+	key: string;          // "name@version" or "alias@git:url@sha"
 	source: string;       // "registry" or "git"
-	version: string;      // "v1.2.3" (registry) or "" (git)
+	version: string;      // "1.2.3" (registry) or "" (git)
 	integrity: string;    // "sha256-..." or "" (not yet downloaded)
 	url: string;          // "" (registry) or "github.com/owner/repo" (git)
 	gitRef: string;       // "" (registry) or tag/sha (git)
@@ -199,7 +199,7 @@ export function findEntry(lock: Lockfile, name: string, version: string): LockEn
 
 // Extract the package name from a lock entry key.
 // Registry: "cool-json@v1.2.3" → "cool-json"
-// Git: "my-fork@git+github.com/me/foo@abc123" → "my-fork"
+// Git: "my-fork@git:github.com/me/foo@abc123" → "my-fork"
 export function entryName(key: string): string {
 	let i = 0;
 	while (i < key.length) {
@@ -221,5 +221,5 @@ test "entryName registry" {
 }
 
 test "entryName git" {
-	assert entryName("my-fork@git+github.com/me/foo@abc123") === "my-fork";
+	assert entryName("my-fork@git:github.com/me/foo@abc123") === "my-fork";
 }

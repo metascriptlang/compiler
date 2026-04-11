@@ -528,6 +528,7 @@ export function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: Rais
 			const d = node.data as MacroDeclData;
 			setStr(objHeap, handle, "macroDeclName", d.macroDeclName);
 			setStrs(objHeap, arrHeap, handle, "macroDeclParams", d.macroDeclParams);
+			setStrs(objHeap, arrHeap, handle, "macroDeclParamTypes", d.macroDeclParamTypes);
 			setNode(objHeap, arrHeap, handle, "macroDeclBody", d.macroDeclBody);
 		},
 		NodeKind.DecoratedDecl => {
@@ -1109,8 +1110,9 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.MacroDecl => {
 			const macroDeclName = readStr(objHeap, h, "macroDeclName");
 			const macroDeclParams = readStrs(objHeap, arrHeap, h, "macroDeclParams");
+			const macroDeclParamTypes = readStrs(objHeap, arrHeap, h, "macroDeclParamTypes");
 			const macroDeclBody = readNode(objHeap, arrHeap, h, "macroDeclBody", loc);
-			return createNodeAt(NodeKind.MacroDecl, { macroDeclName, macroDeclParams, macroDeclBody }, loc);
+			return createNodeAt(NodeKind.MacroDecl, { macroDeclName, macroDeclParams, macroDeclParamTypes, macroDeclBody }, loc);
 		},
 		NodeKind.DecoratedDecl => {
 			const decorators = readNodes(objHeap, arrHeap, h, "decorators", loc);

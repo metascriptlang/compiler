@@ -21,13 +21,6 @@ export interface JsImportEntry {
 	names: string[];       // e.g. ["readFileSync", "existsSync"]
 }
 
-// Tier 2: discriminant narrowing entry — records that within the current scope,
-// variable `varName` is known to be variant `variantIdx` of its Union type.
-export interface DiscriminantNarrow {
-	varName: string;
-	variantIdx: number;
-}
-
 export interface ExportedSymInfo {
 	name: string;
 	kind: SymbolKind;
@@ -51,6 +44,11 @@ export interface ExportedSymInfo {
 	hasConstructor: boolean; // class has ConstructorDecl → codegen calls ClassName_new()
 	location: SourceLocation; // Original declaration location (line/col in defining module)
 	memberLocations: SourceLocation[]; // Per-enum-member declaration locations (parallel to symType.typeNames)
+	// Phase 5: preserve sym flags across module boundaries so overload signature
+	// bits (OverloadSig) survive export/import — required for findOverloadImpl
+	// to distinguish body-less sigs from the wide impl.
+	primaryFlags: int32;
+	overloadFlags: int32[];
 }
 
 export interface ModuleExports {
@@ -178,12 +176,14 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	const ovBiKinds: string[] = [];
 	const ovDefParamsFlat: Node[] = [];
 	const ovDefParamsCounts: number[] = [];
+	const ovFlags: int32[] = [];
 
 	let ovi = 0;
 	while (ovi < sym.overloads.length) {
 		ovTypes.push(sym.overloads[ovi].symbolType);
 		ovRtNames.push(sym.overloads[ovi].nativeName);
 		ovBiKinds.push(sym.overloads[ovi].builtinKind);
+		ovFlags.push(sym.overloads[ovi].symFlags);
 
 		if (extensionRegistry !== null) {
 			const ovExt = findExtensionByType(extensionRegistry, sym.name, sym.overloads[ovi].symbolType);
@@ -229,6 +229,8 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		definingModule: sym.modulePath !== "" ? sym.modulePath : modulePath,
 		originalName: sym.originalName,
 		headerPath: sym.headerPath,
+		primaryFlags: sym.symFlags,
+		overloadFlags: ovFlags,
 		jsModulePath: sym.jsModulePath,
 		hasConstructor: hasFlag(sym, SymbolFlag.HasConstructor),
 		location: sym.location !== null ? sym.location : makeLoc(0, 0),
@@ -733,8 +735,6 @@ export class CheckerContext {
 	cancelCtx: CancelCtx;       // null in batch mode, set for LSP
 	cancelVersion: number;       // version at check start
 	modulePath: string;          // Implementation parity: source path for name mangling
-	narrowFacts: Node[];         // fact-based null narrowing knowledge base (standard reference equivalent)
-	narrowedDiscriminants: DiscriminantNarrow[];  // Tier 2: active discriminant narrowings {varName, variantIdx}
 	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (reference suggest parity)
 	matchExprDepth: number;      // >0 when inside match expression block arm (return targets match, not function)
 	initTracker: InitTracker;    // ref parity: TEffects.init — definite assignment tracking
@@ -775,8 +775,6 @@ export function createContext(): CheckerContext {
 		cancelCtx: null as unknown as CancelCtx,
 		cancelVersion: 0,
 		modulePath: "",
-		narrowFacts: [],
-		narrowedDiscriminants: [],
 		symRecords: [],
 		matchExprDepth: 0,
 		initTracker: createInitTracker(),
@@ -1040,7 +1038,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -1058,7 +1056,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");

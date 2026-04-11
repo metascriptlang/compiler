@@ -50,7 +50,7 @@ export interface BuildConfig {
 
 	// Package manager fields — see docs/PACKAGE.md for the full spec.
 	// Registry dep: { "foo": "1.2.3" }  — exact minimum version (no ranges)
-	// Git dep:      { "bar": "git+github.com/owner/repo@v1.0.0" }  — tag or 40-char SHA
+	// Git dep:      { "bar": "git:github.com/owner/repo@v1.0.0" }  — tag or 40-char SHA
 	package?: PackageMeta;                      // project metadata for `msc publish`
 	deps?: { [key: string]: string };           // runtime dependencies
 	devDeps?: { [key: string]: string };        // dev-only dependencies (tests, tooling)

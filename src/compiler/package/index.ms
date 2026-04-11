@@ -54,4 +54,8 @@ export {
 } from "./cache";
 
 export { cmdAdd } from "./add";
+export { cmdRemove } from "./remove";
+export { cmdInstall } from "./install";
+export { cmdLogin, cmdLogout, cmdWhoami } from "./login";
+export { cmdPublish } from "./publish";
 export { addDepToManifest, removeDepFromManifest, readManifest } from "./manifest";

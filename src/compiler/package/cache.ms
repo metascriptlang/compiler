@@ -23,14 +23,14 @@ export function cacheRoot(): string {
 export function registrySrcPath(name: string, version: string): string {
 	const root = cacheRoot();
 	if (root === "") return "";
-	return root + "/src/" + name + "@" + version;
+	return `${root}/src/${name}@${version}`;
 }
 
 // Download tarball path for a registry package.
 export function registryDownloadPath(name: string, version: string): string {
 	const root = cacheRoot();
 	if (root === "") return "";
-	return root + "/download/registry/" + name + "/" + version + ".tar.gz";
+	return `${root}/download/registry/${name}/${version}.tar.gz`;
 }
 
 // --- Git paths ---
@@ -40,14 +40,14 @@ export function registryDownloadPath(name: string, version: string): string {
 export function gitSrcPath(url: string, commit: string): string {
 	const root = cacheRoot();
 	if (root === "") return "";
-	return root + "/src/" + url + "@" + commit;
+	return `${root}/src/${url}@${commit}`;
 }
 
 // Download tarball path for a git package.
 export function gitDownloadPath(url: string, commit: string): string {
 	const root = cacheRoot();
 	if (root === "") return "";
-	return root + "/download/git/" + url + "/" + commit + ".tar.gz";
+	return `${root}/download/git/${url}/${commit}.tar.gz`;
 }
 
 // --- Cache check ---

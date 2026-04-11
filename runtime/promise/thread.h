@@ -56,6 +56,10 @@ typedef struct msSpawnCtx {
 	uint32_t inlineCopySize;    /* >0: closure returns boxed struct/string; worker memcpys
 	                               N bytes from *result into fut's inline value slot, frees
 	                               box. Requires typed-sized fut allocation. */
+	uint32_t inlineValueOffset; /* byte offset of the value field within the typed future struct.
+	                               On 64-bit, always == sizeof(msFutureBase). On 32-bit WASM,
+	                               may differ due to alignment padding (e.g., double needs 8-byte
+	                               alignment but msFutureBase is 20 bytes → 4 bytes padding). */
 } msSpawnCtx;
 
 
@@ -107,8 +111,13 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 			msCurrException = NULL;
 		} else if (ctx->inlineCopySize > 0 && result != NULL) {
 			/* Typed-inline path: memcpy boxed struct/string bytes into fut's
-			 * inline value slot, free the heap box shell. */
-			memcpy(&((msFuture_ptr*)ctx->fut)->value, result, ctx->inlineCopySize);
+			 * inline value slot, free the heap box shell.
+			 * Use sizeof(msFutureBase) as the value offset — NOT msFuture_ptr.value,
+			 * because on 32-bit WASM, void* is 4 bytes but structs with 8-byte
+			 * alignment get padded to a different offset. sizeof(msFutureBase) is
+			 * the first byte after the base, which is where MS_FUTURE_STRUCT puts
+			 * the value field (possible alignment padding is part of the struct). */
+			memcpy((char*)ctx->fut + ctx->inlineValueOffset, result, ctx->inlineCopySize);
 			free(result);
 			atomic_store_explicit(&((msFutureBase*)ctx->fut)->finished, true, memory_order_release);
 			msNotifyFutureComplete();
@@ -157,9 +166,10 @@ static inline void* msSpawn(msClosure fn) {
  * Worker runs the closure (still returns boxed void*), then memcpys inlineCopySize
  * bytes from the box into the fut's inline value slot and frees the box.
  * Downstream readers use msWaitForStruct (typed inline read). */
-static inline void* msSpawnInto(void* fut, msClosure fn, uint32_t copySize) {
+static inline void* msSpawnInto(void* fut, msClosure fn, uint32_t copySize, uint32_t valueOffset) {
 	msSpawnCtx ctx = {
-		.fn = (void*)fn.fn, .env = fn.env, .fut = fut, .inlineCopySize = copySize,
+		.fn = (void*)fn.fn, .env = fn.env, .fut = fut,
+		.inlineCopySize = copySize, .inlineValueOffset = valueOffset,
 	};
 	if (fn.env != NULL) msIncRef(fn.env);
 	msPoolSubmit(&ctx);

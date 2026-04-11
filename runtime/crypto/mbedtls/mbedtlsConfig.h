@@ -56,6 +56,23 @@
 #define MBEDTLS_X509_USE_C
 #define MBEDTLS_X509_CRT_PARSE_C
 #define MBEDTLS_X509_CRL_PARSE_C
+/* DO NOT REMOVE — required for TLS 1.3 handshake with RSA server certs.
+ *
+ * Upstream bug: https://github.com/Mbed-TLS/mbedtls/issues/10641
+ *   "Stop misusing MBEDTLS_X509_RSASSA_PSS_SUPPORT in TLS code" (mpg, 2026-03-16)
+ * Upstream fix: https://github.com/Mbed-TLS/mbedtls/pull/10591 (not in 4.0.x yet)
+ *
+ * mbedTLS 4.0.0's TLS 1.3 code gates `rsa_pss_rsae_sha256/384/512` in
+ * `ssl_tls13_default_sig_algs` behind this macro, even though the macro
+ * nominally controls X.509 cert chain parsing. Without it, the ClientHello
+ * `signature_algorithms` extension omits RSA-PSS, and any server with an
+ * RSA certificate (e.g. AWS CloudFront, api.metascriptlang.org) sends
+ * `handshake_failure(40)` → mbedTLS returns MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE
+ * (-0x6E00). ECDSA servers (e.g. github.com) are unaffected.
+ *
+ * When upstream PR #10591 lands in a mbedTLS release we vendor, this define
+ * can be removed — RSA-PSS will be keyed off PSA_WANT_ALG_RSA_PSS instead. */
+#define MBEDTLS_X509_RSASSA_PSS_SUPPORT
 
 /* SSL/TLS */
 #define MBEDTLS_SSL_TLS_C

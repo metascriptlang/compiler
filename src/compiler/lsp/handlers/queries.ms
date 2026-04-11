@@ -17,7 +17,7 @@ import {
 } from "../format";
 import {
 	sgFormatHover, sgCollectSymbolsInFile, sgFormatSignature, sgFormatExtensionSignatures,
-	sgGetSignatureContext, sgCollectInlayHints,
+	sgGetSignatureContext, sgPickActiveOverload, sgCollectInlayHints,
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
 	sgQueryAtPosition, sgQueryBySym, sgQueryByName, sgQueryByDefiningModule,
 	SgDocumentSymbol,
@@ -130,16 +130,23 @@ export function handleSignatureHelp(id: string, params: string, db: TransAmDb): 
 	const source = dbGetSource(db, path);
 	if (source === "") return lspResponse(id, "null");
 
-	// AST-based signature context (with text-based fallback for incomplete source)
-	const program = dbParse(db, path);
-	const sigCtx = sgGetSignatureContext(program, source, pos.line, pos.col);
-	if (sigCtx.calleeName === "") return lspResponse(id, "null");
-
+	// Run type check first so nodeType is populated — sgPickActiveOverload
+	// reads arg.nodeType to score candidates. Using dbParse (raw tree) would
+	// give null nodeTypes and the scoring would always pick the primary.
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
+	// AST-based signature context (with text-based fallback for incomplete source)
+	// Prefer the CHECKED program (has nodeType set on arguments) over the raw
+	// parse tree — overload scoring needs the argument types.
+	let program = dbGetCheckedProgram(db, path);
+	if (program === null) program = dbParse(db, path);
+	const sigCtx = sgGetSignatureContext(program, source, pos.line, pos.col);
+	if (sigCtx.calleeName === "") return lspResponse(id, "null");
+
 	// For member calls (receiver.method()), try extension-based signatures first
 	let sigs: SgSignatureInfo[] = [];
+	let activeSignature = 0;
 	if (sigCtx.receiverName !== "") {
 		const recSym = lookupSymbol(ctx.table, sigCtx.receiverName);
 		if (recSym !== null && recSym.symbolType !== null) {
@@ -151,6 +158,12 @@ export function handleSignatureHelp(id: string, params: string, db: TransAmDb): 
 		const sym = lookupSymbol(ctx.table, sigCtx.calleeName);
 		if (sym === null) return lspResponse(id, "null");
 		sigs = sgFormatSignature(sym);
+		// Overload narrowing: pick the signature whose param types best match
+		// the already-typed arguments at the cursor position. Without this,
+		// the LSP always highlights the primary (first) overload, so typing
+		// `createNodeAt(NodeKind.StringLiteral, ...)` shows the NumberLiteral
+		// signature hint — misleading for macro authors.
+		activeSignature = sgPickActiveOverload(sigCtx.callNode, sym);
 	}
 	if (sigs.length === 0) return lspResponse(id, "null");
 
@@ -168,7 +181,7 @@ export function handleSignatureHelp(id: string, params: string, db: TransAmDb): 
 	}
 	sigArray = sigArray + "]";
 
-	return lspResponse(id, lspFmtSignatureHelp(sigArray, 0, sigCtx.activeParam));
+	return lspResponse(id, lspFmtSignatureHelp(sigArray, activeSignature, sigCtx.activeParam));
 }
 
 // ===== Inlay Hints =====

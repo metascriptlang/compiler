@@ -187,7 +187,7 @@ export function parseArgs(): CliOptions {
 				opts.inputFile = arg;
 			}
 			positionalIdx += 1;
-		} else if (opts.command === "add" || opts.command === "remove" || opts.command === "install" || opts.command === "update" || opts.command === "publish" || opts.command === "login" || opts.command === "logout") {
+		} else if (opts.command === "add" || opts.command === "remove" || opts.command === "install" || opts.command === "update" || opts.command === "publish" || opts.command === "login" || opts.command === "logout" || opts.command === "whoami") {
 			// Package manager commands: pass unknown flags through
 			opts.extraArgs.push(arg);
 		} else {

@@ -117,13 +117,11 @@ MS_FUTURE_STRUCT(msFuture_ptr, void*);
 /* Backward compat: msFuture = msFuture_ptr (used by combinators, dispatch) */
 typedef msFuture_ptr msFuture;
 
-/* Session 4: value field offset must be consistent across all future types.
- * msWaitForStruct and msSpawnWorkerRun cast through msFuture_ptr* to reach
- * the value bytes at the correct offset. */
-_Static_assert(offsetof(msFuture_ptr, value) == offsetof(msFuture_double, value),
-    "future value field offset must be consistent (double)");
-_Static_assert(offsetof(msFuture_ptr, value) == offsetof(msFuture_int32, value),
-    "future value field offset must be consistent (int32)");
+/* Note: value field offset varies across future types on 32-bit platforms.
+ * msFuture_ptr.value (void*, 4 bytes) sits at offset 20 on WASM32, but
+ * msFuture_double.value (double, 8 bytes) sits at offset 24 due to 8-byte
+ * alignment. msWaitForStruct and msSpawnInto use the correct typed struct
+ * cast / offsetof to handle this — they do NOT cast through msFuture_ptr. */
 
 /* ===== Base Operations (work on any future via msFutureBase*) ===== */
 

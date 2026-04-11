@@ -167,6 +167,10 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath) {
 		caFile ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_OPTIONAL);
 	mbedtls_ssl_conf_ca_chain(&ctx->conf, &ctx->cacert, NULL);
 
+	/* ALPN: advertise http/1.1 — required by some CDNs (e.g. CloudFront) */
+	static const char *alpnProtocols[] = { "http/1.1", NULL };
+	mbedtls_ssl_conf_alpn_protocols(&ctx->conf, alpnProtocols);
+
 	if (mbedtls_ssl_setup(&ctx->ssl, &ctx->conf) != 0) goto fail;
 
 	/* SNI + certificate hostname verification */

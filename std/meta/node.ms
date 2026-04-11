@@ -304,7 +304,7 @@ export type NodeData =
 	| { assertExpr: Node, assertSource: string, assertMessage: string } // AssertStmt
 	// Extern / Macro / Quote variants
 	| { externKind: ExternKind, externName: string, nativeName: string, externType: string } // ExternDecl
-	| { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node } // MacroDecl
+	| { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclBody: Node } // MacroDecl
 	| { quoteBody: Node }                                          // QuoteExpr
 	| { comptimeBody: Node }                                       // ComptimeBlock
 	// Type expression variants (positioned type AST — standard parity)
@@ -318,6 +318,81 @@ export type NodeData =
 	| { programStmts: Node[] }                                     // Program
 	// Actor (appended after Program to preserve union discriminant ordering)
 	| { actorName: string, actorBody: Node[], nameLocation: SourceLocation } // ActorDecl
+
+// ===== Flow Graph (TypeScript-go parity) =====
+//
+// A Control Flow Graph built by the binder pass between parse and check.
+// Each reference expression (Identifier, MemberExpr, etc.) gets a `flowNode`
+// pointing into this graph. The checker walks antecedents backward from the
+// reference to compute a narrowed type at that program point.
+//
+// Reference: microsoft/typescript-go/internal/ast/flow.go
+//
+// Single FlowNode struct with a FlowFlags bitset tag (NOT a sum type) —
+// matches TS's design and keeps memory layout simple. Per-variant meaning:
+//
+// - Start            -> owning function/container (Node=container or null)
+// - Assignment       -> the assigned target (VarDecl / BindingElem / Binary LHS)
+// - TrueCondition    -> the predicate expression (narrow parent's type assuming true)
+// - FalseCondition   -> the predicate expression (narrow parent's type assuming false)
+// - SwitchClause     -> synthetic FlowSwitchClauseData (switch stmt + clause range)
+// - Call             -> the CallExpr (assertion function / type predicate call)
+// - ArrayMutation    -> the mutation call/assignment
+// - ReduceLabel      -> synthetic FlowReduceLabelData (try/finally re-routing)
+// - BranchLabel      -> fan-in join; Node=null, Antecedents=list of predecessors
+// - LoopLabel        -> looping junction; Node=null, Antecedents=list (first = pre-loop)
+// - Unreachable      -> singleton after return/throw/break/continue
+// - Referenced/Shared -> set by setFlowNodeReferenced; cache metadata, not semantic
+
+export enum FlowFlags {
+	Unreachable    = 1,       // 1 << 0
+	Start          = 2,       // 1 << 1
+	BranchLabel    = 4,       // 1 << 2
+	LoopLabel      = 8,       // 1 << 3
+	Assignment     = 16,      // 1 << 4
+	TrueCondition  = 32,      // 1 << 5
+	FalseCondition = 64,      // 1 << 6
+	SwitchClause   = 128,     // 1 << 7
+	ArrayMutation  = 256,     // 1 << 8
+	Call           = 512,     // 1 << 9
+	ReduceLabel    = 1024,    // 1 << 10
+	Referenced     = 2048,    // 1 << 11
+	Shared         = 4096,    // 1 << 12
+}
+
+// FlowList — singly-linked list of FlowNode antecedents for join labels.
+// Duplicates are dropped at `addAntecedent` time (pointer-equality walk).
+export class FlowList {
+	flow: FlowNode;
+	next: FlowList;
+}
+
+// Synthetic node stored in FlowNode.node when Flags contains SwitchClause.
+// Represents a half-open range of switch case clauses [clauseStart, clauseEnd).
+// Coalesces empty-fallthrough clauses into one range for efficiency.
+export class FlowSwitchClauseData {
+	switchStatement: Node; // the SwitchStmt AST node
+	clauseStart: int32;
+	clauseEnd: int32;
+}
+
+// Synthetic node stored in FlowNode.node when Flags contains ReduceLabel.
+// Used for try/finally re-routing: finally's antecedent set differs depending
+// on whether analysis is for normal exit, return exit, or exception exit.
+export class FlowReduceLabelData {
+	target: FlowNode;        // the LoopLabel/BranchLabel to re-route
+	antecedents: FlowList;   // alternate antecedent set for this query context
+}
+
+export class FlowNode {
+	flags: int32;            // FlowFlags bitset
+	node: Node;              // associated AST node (variant-dependent meaning; may be synthetic FlowSwitchClauseData / FlowReduceLabelData holder)
+	antecedent: FlowNode;    // single parent (non-Label variants)
+	antecedents: FlowList;   // list of parents (BranchLabel / LoopLabel only)
+	// Synthetic variant holders (null unless Flags has SwitchClause / ReduceLabel)
+	switchClauseData: FlowSwitchClauseData;
+	reduceLabelData: FlowReduceLabelData;
+}
 
 // ===== Node Interface =====
 
@@ -333,6 +408,7 @@ export class Node {
 	typeExprs: Node[]; // Per-param/per-field type annotation ASTs (parallel to string[] type fields)
 	paramLocations: SourceLocation[]; // Per-param source locations for DEF recording
 	typeArg: string; // Explicit generic type arg string (e.g. "Person" from parse<Person>()) — stored on AST, not side-channel
+	flowNode: FlowNode; // Flow graph node for narrowing queries (TypeScript-go parity). Null until binder runs; null for non-reference nodes.
 }
 
 export type Expression = Node;
@@ -412,7 +488,7 @@ export type PropertyDeclData = { propName: string, propType: string, propIsStati
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string, nameLocation: SourceLocation };
 export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] };
 export type ExternDeclData = { externKind: ExternKind, externName: string, nativeName: string, externType: string };
-export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node };
+export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclBody: Node };
 export type DecoratedDeclData = { decorators: Node[], decoratedNode: Node };
 export type ProgramData = { programStmts: Node[] };
 export type DeferStmtData = { deferExpr: Node };
@@ -451,9 +527,118 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	n.typeExprs = null;
 	n.paramLocations = null;
 	n.typeArg = "";
+	n.flowNode = null as unknown as FlowNode;
 	return n;
 }
 
+// createNodeAt — overloaded constructor for AST nodes. Per-kind signatures
+// pair each NodeKind with its matching *Data shape so macro authors see the
+// correct fields in IDE completion / signature help when calling
+// `createNodeAt(NodeKind.BinaryExpr, { ... }, loc)`. The wide implementation
+// at the bottom accepts any NodeKind + NodeData union so existing compiler
+// callers that pass runtime `kind`/`data` continue to work.
+//
+// Phase 5 enabled this pattern via contextual arg typing against the wide
+// impl in resolveOverloadCall — object literals contextually narrow via the
+// wide NodeData union, then scoring picks the specific overload.
+
+// Literals
+export function createNodeAt(kind: NodeKind.NumberLiteral, data: NumberLiteralData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.StringLiteral, data: StringLiteralData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.BooleanLiteral, data: BooleanLiteralData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.BigIntLiteral, data: BigIntLiteralData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.RegexLiteral, data: RegexLiteralData, loc: SourceLocation): Node;
+// Identifier
+export function createNodeAt(kind: NodeKind.Identifier, data: IdentifierData, loc: SourceLocation): Node;
+// Expressions
+export function createNodeAt(kind: NodeKind.BinaryExpr, data: BinaryExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.UnaryExpr, data: UnaryExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.UpdateExpr, data: UpdateExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.CallExpr, data: CallExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.MemberExpr, data: MemberExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ArrayAccess, data: ArrayAccessData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ObjectLiteral, data: ObjectLiteralData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ArrayLiteral, data: ArrayLiteralData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ArrowFunction, data: ArrowFunctionData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.FunctionExpr, data: FunctionExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.TypeAssertion, data: TypeAssertionData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ConditionalExpr, data: ConditionalExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.SpreadExpr, data: SpreadExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.NewExpr, data: NewExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.TryExpr, data: TryExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.MatchExpr, data: MatchExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.MatchCase, data: MatchCaseData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.AwaitExpr, data: AwaitExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.YieldExpr, data: YieldExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.MoveExpr, data: MoveExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.OutExpr, data: OutExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.HiddenDeref, data: HiddenDerefData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.HiddenStdConv, data: HiddenStdConvData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.TypeAnnotation, data: TypeAnnotationData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.SizeofExpr, data: SizeofExprData, loc: SourceLocation): Node;
+// Patterns
+export function createNodeAt(kind: NodeKind.ArrayPattern, data: ArrayPatternData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ObjectPattern, data: ObjectPatternData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ObjectPatternProp, data: ObjectPatternPropData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.DestructuringDecl, data: DestructuringDeclData, loc: SourceLocation): Node;
+// Statements
+export function createNodeAt(kind: NodeKind.VariableDecl, data: VariableDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.IfStmt, data: IfStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.WhileStmt, data: WhileStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ForStmt, data: ForStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ForOfStmt, data: ForOfStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ForInStmt, data: ForInStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.BlockStmt, data: BlockStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ExprStmt, data: ExprStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ReturnStmt, data: ReturnStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.BreakStmt, data: BreakStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ContinueStmt, data: ContinueStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.FunctionDecl, data: FunctionDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.DoWhileStmt, data: DoWhileStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.SwitchStmt, data: SwitchStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.SwitchCase, data: SwitchCaseData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.UnreachableStmt, data: UnreachableStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.MatchStmt, data: MatchStmtData, loc: SourceLocation): Node;
+// Declarations
+export function createNodeAt(kind: NodeKind.ImportDecl, data: ImportDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ExportDecl, data: ExportDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.TypeAliasDecl, data: TypeAliasDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.EnumDecl, data: EnumDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.InterfaceDecl, data: InterfaceDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.StructDecl, data: StructDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ClassDecl, data: ClassDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ActorDecl, data: ActorDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.PropertyDecl, data: PropertyDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.MethodDecl, data: MethodDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ConstructorDecl, data: ConstructorDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ExternDecl, data: ExternDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.MacroDecl, data: MacroDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.DecoratedDecl, data: DecoratedDeclData, loc: SourceLocation): Node;
+// Error handling
+export function createNodeAt(kind: NodeKind.ThrowStmt, data: ThrowStmtData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.TryCatchStmt, data: TryCatchStmtData, loc: SourceLocation): Node;
+// Decorators & macros
+export function createNodeAt(kind: NodeKind.MacroInvocation, data: MacroInvocationData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.DeferStmt, data: DeferStmtData, loc: SourceLocation): Node;
+// Testing
+export function createNodeAt(kind: NodeKind.TestDecl, data: TestDeclData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.AssertStmt, data: AssertStmtData, loc: SourceLocation): Node;
+// Quote / Comptime
+export function createNodeAt(kind: NodeKind.QuoteExpr, data: QuoteExprData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ComptimeBlock, data: ComptimeBlockData, loc: SourceLocation): Node;
+// Type expression nodes
+export function createNodeAt(kind: NodeKind.TypeGeneric, data: TypeGenericData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.TypeArray, data: TypeArrayData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.TypeUnion, data: TypeUnionData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.TypeFunction, data: TypeFunctionData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.TypeObject, data: TypeObjectData, loc: SourceLocation): Node;
+// Program
+export function createNodeAt(kind: NodeKind.Program, data: ProgramData, loc: SourceLocation): Node;
+
+// Implementation — widest signature, accepts any NodeKind and the NodeData union.
+// This is the body; all overload signatures above delegate here via the checker's
+// overload resolution. It also serves as the fallback for callers that pass a
+// runtime (non-literal) NodeKind or a NodeData value that isn't known to narrow.
 export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation): Node {
 	const n = new Node();
 	n.kind = kind;
@@ -467,6 +652,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	n.typeExprs = null;
 	n.paramLocations = null;
 	n.typeArg = "";
+	n.flowNode = null as unknown as FlowNode;
 	return n;
 }
 

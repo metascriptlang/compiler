@@ -22,6 +22,15 @@ export function printUsage(): void {
 	console.log("  " + cyan("clean") + "                 Remove build artifacts");
 	console.log("  " + cyan("lsp") + "                   Start language server");
 	console.log("");
+	console.log(yellow("PACKAGE MANAGER:"));
+	console.log("  " + cyan("add") + " <name>@<ver>     Add a dependency (registry / file: / git:)");
+	console.log("  " + cyan("remove") + " <name>        Remove a dependency");
+	console.log("  " + cyan("install") + "              Install locked dependencies");
+	console.log("  " + cyan("publish") + "              Publish current package to registry");
+	console.log("  " + cyan("login") + "                Authenticate with the registry (GitHub)");
+	console.log("  " + cyan("logout") + "               Remove stored credentials");
+	console.log("  " + cyan("whoami") + "               Print current user " + dim("(--json for full user object)"));
+	console.log("");
 	console.log(yellow("VISIBILITY/DEBUGGING:"));
 	console.log("  " + cyan("dump-tokens") + " <file>    Show tokenization output");
 	console.log("  " + cyan("dump-ast") + " <file>       Show parsed AST");

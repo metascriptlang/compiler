@@ -16,7 +16,7 @@ import { join } from "std/fs/path";
 // NOTE: imported for Bun test runner (finds inline tests). The C build path
 // (msc build/run src/index.ms) also compiles these modules; any link errors
 // from OTHER files in the working tree are pre-existing, not caused by this import.
-import { cmdAdd } from "./compiler/package/index";
+import { cmdAdd, cmdRemove, cmdInstall, cmdLogin, cmdLogout, cmdWhoami, cmdPublish } from "./compiler/package/index";
 
 function requireFile(opts: CliOptions): void {
 	if (opts.inputFile === "") {
@@ -113,11 +113,32 @@ export function main(): number {
 			}
 		},
 		"add" => {
-			// inputFile has the package specifier; extraArgs has flags like -D
 			const addArgs: string[] = [];
 			if (opts.inputFile !== "") addArgs.push(opts.inputFile);
 			for (const ea of opts.extraArgs) { addArgs.push(ea); }
 			if (!cmdAdd(projectRoot, addArgs)) exit(1);
+		},
+		"remove" => {
+			const rmArgs: string[] = [];
+			if (opts.inputFile !== "") rmArgs.push(opts.inputFile);
+			if (!cmdRemove(projectRoot, rmArgs)) exit(1);
+		},
+		"install" => {
+			if (!cmdInstall(projectRoot)) exit(1);
+		},
+		"login" => {
+			if (!cmdLogin(projectRoot)) exit(1);
+		},
+		"logout" => {
+			if (!cmdLogout()) exit(1);
+		},
+		"whoami" => {
+			const whoArgs: string[] = [];
+			for (const ea of opts.extraArgs) { whoArgs.push(ea); }
+			if (!cmdWhoami(whoArgs)) exit(1);
+		},
+		"publish" => {
+			if (!cmdPublish(projectRoot)) exit(1);
 		},
 		_ => {
 			console.log(`${error("error")}: unknown command '${bold(cmd)}'`);

@@ -3,7 +3,7 @@
 // Usage:
 //   msc add <name>@<version>         — registry dep (exact version)
 //   msc add <name>@<version> -D      — dev dep
-//   msc add git+<url>@<ref>          — git dep
+//   msc add git:<url>@<ref>          — git dep
 //
 // For v1: adds dep to build.ms and writes/updates msc.lock.
 // Registry fetch (resolving "latest" without @version) requires the registry
@@ -16,11 +16,12 @@ import { readLockfile, writeLockfile, entryName } from "./lockfile";
 import { parseSourceSpec, SourceKind } from "./version";
 import { parseGitSpec } from "./version";
 import { LockEntry, Lockfile } from "./lockfile";
+import { fetchPackageInfo, latestVersion } from "./registry";
 
 // Parse "name@version" into { name, version }.
 function parseNameVersion(arg: string): { name: string, version: string } {
 	// Git source: entire string is the version spec
-	if (arg.length >= 4 && arg.slice(0, 4) === "git+") {
+	if (arg.length >= 4 && arg.slice(0, 4) === "git:") {
 		// Extract alias from the repo name (last path segment before @)
 		const spec = parseGitSpec(arg);
 		if (spec.isValid) {
@@ -37,24 +38,24 @@ function parseNameVersion(arg: string): { name: string, version: string } {
 		return { name: "", version: "" };
 	}
 
-	// Check for alias=git+... syntax
+	// Check for alias=git:... syntax
 	let eqIdx = -1;
 	let ei = 0;
 	while (ei < arg.length) {
 		if (arg.charAt(ei) === "=") { eqIdx = ei; ei = arg.length; }
 		ei = ei + 1;
 	}
-	if (eqIdx > 0 && eqIdx + 4 < arg.length && arg.slice(eqIdx + 1, eqIdx + 5) === "git+") {
+	if (eqIdx > 0 && eqIdx + 4 < arg.length && arg.slice(eqIdx + 1, eqIdx + 5) === "git:") {
 		const alias = arg.slice(0, eqIdx);
 		const gitSpec = arg.slice(eqIdx + 1, arg.length);
 		return { name: alias, version: gitSpec };
 	}
 
-	// Registry: "name@version"
+	// "name@version" — split on FIRST @ (version may contain @ for git refs)
 	let atIdx = -1;
 	let ai = 0;
 	while (ai < arg.length) {
-		if (arg.charAt(ai) === "@") atIdx = ai;
+		if (arg.charAt(ai) === "@") { atIdx = ai; ai = arg.length; }
 		ai = ai + 1;
 	}
 	if (atIdx > 0) {
@@ -107,9 +108,20 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		return false;
 	}
 	if (parsed.version === "") {
-		console.log("error: version required — use " + parsed.name + "@1.0.0");
-		console.log("(registry lookup for latest version is not yet implemented)");
-		return false;
+		// Resolve latest version from registry.
+		console.log("resolving latest version of " + parsed.name + " from registry...");
+		const infoResult = fetchPackageInfo(parsed.name);
+		if (!infoResult.ok) {
+			console.log("error: " + infoResult.error.message);
+			return false;
+		}
+		const latest = latestVersion(infoResult.value);
+		if (latest === null) {
+			console.log("error: no published versions for " + parsed.name);
+			return false;
+		}
+		parsed.version = latest.version;
+		console.log("  → " + parsed.version);
 	}
 
 	// file: source — local folder, no version validation, no lockfile entry
@@ -135,7 +147,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	}
 	if (spec.kind === SourceKind.Git && !spec.git.isValid) {
 		console.log("error: invalid git source '" + parsed.version + "'");
-		console.log("expected format: git+<host>/<path>@<tag-or-sha>");
+		console.log("expected format: git:<host>/<path>@<tag-or-sha>");
 		return false;
 	}
 

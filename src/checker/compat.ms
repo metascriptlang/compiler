@@ -276,6 +276,14 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 }
 
 function typeRelationInner(formal: Type, actual: Type): TypeRelation {
+	// Ownership modifiers (Sink/Lent) are transparent — unwrap before comparison.
+	// inferOwnership wraps sink params in TypeKind.Sink; overload scoring must see through.
+	if (formal.kind === TypeKind.Sink || formal.kind === TypeKind.Lent) {
+		if (formal.typeReturn !== null) formal = formal.typeReturn;
+	}
+	if (actual.kind === TypeKind.Sink || actual.kind === TypeKind.Lent) {
+		if (actual.typeReturn !== null) actual = actual.typeReturn;
+	}
 	// Same kind: dispatch on type-specific rules
 	if (formal.kind === actual.kind) {
 		return match (formal.kind) {
@@ -441,6 +449,14 @@ export function isNoMatch(score: CandidateScore): boolean {
 // Maps TypeRelation → counter increments matching standard reference implementation.
 // minArity: minimum required args (default = paramTypes.length, i.e. all required).
 export function scoreCandidatePriority(paramTypes: Type[], argTypes: Type[], minArity: number): CandidateScore {
+	return scoreCandidateWithSkip(paramTypes, argTypes, minArity, null as unknown as boolean[]);
+}
+
+// Score variant that treats args marked in skipMask as unconditional Subtype
+// matches (context-sensitive args in two-pass overload resolution — object
+// literals and arrow functions are re-checked with the winner's param types in
+// Pass 2, so Pass 1 scoring must not reject them for partial/incomplete typing).
+export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], minArity: number, skipMask: boolean[]): CandidateScore {
 	const score = emptyCandidateScore();
 	if (argTypes.length < minArity || argTypes.length > paramTypes.length) {
 		score.exactMatches = -1;
@@ -448,6 +464,10 @@ export function scoreCandidatePriority(paramTypes: Type[], argTypes: Type[], min
 	}
 	// Score only provided args (default-filled params don't contribute)
 	for (let i = 0; i < argTypes.length; i += 1) {
+		if (skipMask !== null && i < skipMask.length && skipMask[i]) {
+			score.subtypeMatches = score.subtypeMatches + 1;
+			continue;
+		}
 		const rel = typeRelation(paramTypes[i], argTypes[i]);
 		if (rel === TypeRelation.None) {
 			score.exactMatches = -1;

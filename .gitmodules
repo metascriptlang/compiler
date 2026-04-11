@@ -16,3 +16,6 @@
 [submodule "vendor/monocypher"]
 	path = vendor/monocypher
 	url = https://github.com/LoupVaillant/Monocypher.git
+[submodule "vendor/miniz"]
+	path = vendor/miniz
+	url = https://github.com/richgel999/miniz.git

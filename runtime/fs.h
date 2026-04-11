@@ -77,6 +77,28 @@ static inline double msFsWriteFileMode(msString path, msString content, msString
 	return (written == (size_t)content.len) ? 1.0 : 0.0;
 }
 
+/* ===== Permissions ===== */
+
+/**
+ * chmod(path, mode) — POSIX file permission bits.
+ * Returns 1.0 on success, 0.0 on failure.
+ * Windows is a no-op (ACL model is different; not our first-class target).
+ * Used by `saveToken()` in login.ms to tighten ~/.metascript/credentials to 0600.
+ */
+static inline double msFsChmod(msString path, int32_t mode) {
+	_msFsLastErrno = 0;
+#ifdef _WIN32
+	(void)path; (void)mode;
+	return 1.0;
+#else
+	if (chmod(msStringToCString(path), (mode_t)mode) != 0) {
+		_msFsLastErrno = errno;
+		return 0.0;
+	}
+	return 1.0;
+#endif
+}
+
 /* ===== Stat ===== */
 
 static inline double msFsExists(msString path) {
@@ -126,6 +148,90 @@ static inline double msFsRmdir(msString path) {
 	if (rmdir(msStringToCString(path)) == 0) return 1.0;
 	_msFsLastErrno = errno;
 	return 0.0;
+}
+
+/**
+ * List directory entries. Returns a "\n"-joined string where directories
+ * have a trailing "/" marker. "." and ".." are always excluded. Returns an
+ * empty string on error (check msFsLastErrno to distinguish error from
+ * empty directory — a truly empty dir still returns ""; callers use
+ * msFsLastErrno == 0 to confirm success).
+ *
+ * Format: "name1\nname2/\nname3\n" (trailing newline after each entry).
+ *
+ * Falls back to stat() when d_type is DT_UNKNOWN (some filesystems don't
+ * populate d_type — e.g. older ReiserFS, some FUSE mounts).
+ */
+static inline msString msFsReadDirEntries(msString path) {
+	_msFsLastErrno = 0;
+	const char* cpath = msStringToCString(path);
+	DIR* d = opendir(cpath);
+	if (!d) {
+		_msFsLastErrno = errno;
+		return MS_EMPTY_STRING;
+	}
+	size_t cap = 4096;
+	size_t len = 0;
+	char* buf = (char*)malloc(cap);
+	if (!buf) {
+		closedir(d);
+		_msFsLastErrno = ENOMEM;
+		return MS_EMPTY_STRING;
+	}
+	size_t pathLen = strlen(cpath);
+	struct dirent* e;
+	while ((e = readdir(d)) != NULL) {
+		/* Skip "." and ".." */
+		if (e->d_name[0] == '.' &&
+		    (e->d_name[1] == '\0' ||
+		     (e->d_name[1] == '.' && e->d_name[2] == '\0'))) {
+			continue;
+		}
+		size_t nlen = strlen(e->d_name);
+		int isDir = 0;
+#ifdef DT_DIR
+		if (e->d_type == DT_DIR) {
+			isDir = 1;
+		} else if (e->d_type == DT_UNKNOWN || e->d_type == DT_LNK) {
+#endif
+			/* Fall back to stat: build "path/name" and check S_ISDIR */
+			char* tmp = (char*)malloc(pathLen + 1 + nlen + 1);
+			if (tmp) {
+				memcpy(tmp, cpath, pathLen);
+				tmp[pathLen] = '/';
+				memcpy(tmp + pathLen + 1, e->d_name, nlen);
+				tmp[pathLen + 1 + nlen] = '\0';
+				struct stat st;
+				if (stat(tmp, &st) == 0 && S_ISDIR(st.st_mode)) {
+					isDir = 1;
+				}
+				free(tmp);
+			}
+#ifdef DT_DIR
+		}
+#endif
+		/* Resize buffer if needed: name + optional "/" + "\n" */
+		while (len + nlen + 2 >= cap) {
+			size_t newCap = cap * 2;
+			char* nb = (char*)realloc(buf, newCap);
+			if (!nb) {
+				free(buf);
+				closedir(d);
+				_msFsLastErrno = ENOMEM;
+				return MS_EMPTY_STRING;
+			}
+			buf = nb;
+			cap = newCap;
+		}
+		memcpy(buf + len, e->d_name, nlen);
+		len += nlen;
+		if (isDir) buf[len++] = '/';
+		buf[len++] = '\n';
+	}
+	closedir(d);
+	msString result = msStringNew(buf, (int64_t)len);
+	free(buf);
+	return result;
 }
 
 /* ===== Remove / Rename ===== */

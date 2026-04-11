@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateHasAsgn, createConditionalType, evaluateConditionalType, typeNameOf } from "./types";
+import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateHasAsgn, createConditionalType, evaluateConditionalType, typeNameOf, emptyType } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -780,6 +780,34 @@ export function resolveDeclarations(ctx: CheckerContext, program: Node): void {
 
 // getDeclName imported from collectPass (single canonical copy)
 
+// findPredicateInfix — locate the ` is ` keyword in a function return
+// annotation so we can split the parameter name from the predicate target
+// type. Returns the index of the `i` of "is", or -1 if no top-level predicate
+// exists. Only a leading `<ident> is ` pattern qualifies — we check that the
+// prefix is an identifier-shaped token (no whitespace, no dots, no colons)
+// so we never misread constructs like `Result< is Whatever >` (impossible but
+// covered defensively).
+function findPredicateInfix(text: string): int32 {
+	// Accept only the canonical shape: `<ident> is <type>`.
+	const idxSp = findChar(text, " ");
+	if (idxSp <= 0) return -1;
+	if (idxSp + 3 >= text.length) return -1;
+	if (text.charAt(idxSp + 1) !== "i") return -1;
+	if (text.charAt(idxSp + 2) !== "s") return -1;
+	if (text.charAt(idxSp + 3) !== " ") return -1;
+	// Prefix must be a bare identifier (letters/digits/underscore).
+	let i: int32 = 0;
+	while (i < idxSp) {
+		const c = text.charAt(i);
+		const isLetter = (c >= "a" && c <= "z") || (c >= "A" && c <= "Z");
+		const isDigit = c >= "0" && c <= "9";
+		const isUnder = c === "_";
+		if (!isLetter && !isDigit && !isUnder) return -1;
+		i = i + 1;
+	}
+	return (idxSp + 1) as int32;
+}
+
 function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	// Use resolvedSym set by collectPass (preserves overloadIdx for overloaded functions).
@@ -827,10 +855,42 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 
 	const retLoc = node.typeExpr !== null ? node.typeExpr.location : node.location;
-	const returnType = (d.fnReturnType !== "") ? resolveAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column) : unknownType();
+	// Type predicate detection: fnReturnType is `"<paramName> is <typeText>"`
+	// (see captureOptionalType in parser/util.ms). Split once, resolve the
+	// target type, set the function's actual return type to `boolean`, and
+	// stash a sentinel on the function Type's `typeExtra` slot — flow.ms
+	// narrowType reads this to narrow callers in conditions.
+	let returnType: Type;
+	let predicateSentinel: Type = null as unknown as Type;
+	if (d.fnReturnType !== "") {
+		const predIdx = findPredicateInfix(d.fnReturnType);
+		if (predIdx > 0) {
+			// predIdx points at the `i` of `is`. The paramName ends one char
+			// before (the space). The target type starts 3 chars past — after
+			// `i`, `s`, and the trailing space.
+			const paramName = d.fnReturnType.slice(0, predIdx - 1).trim();
+			const targetText = d.fnReturnType.slice(predIdx + 3, d.fnReturnType.length).trim();
+			const targetType = resolveAnnotation(targetText, ctx, retLoc.line, retLoc.column);
+			returnType = booleanType();
+			// Sentinel: kind=Unknown is otherwise unused for Function.typeExtra.
+			// typeName holds the predicate parameter name; typeReturn holds the
+			// narrowing target type. flow.ms reads both fields.
+			predicateSentinel = emptyType();
+			predicateSentinel.kind = TypeKind.Unknown;
+			predicateSentinel.typeName = paramName;
+			predicateSentinel.typeReturn = targetType;
+		} else {
+			returnType = resolveAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column);
+		}
+	} else {
+		returnType = unknownType();
+	}
 	// Record return type annotation positions for LSP
 	resolveTypeExpr(node.typeExpr, ctx);
 	const fnType = createFunction(paramTypes, d.params, returnType);
+	if (predicateSentinel !== null) {
+		fnType.typeExtra = predicateSentinel;
+	}
 
 	// Set minArity for functions with default parameters (Reference parity: count non-null defaults)
 	let defCount = 0;

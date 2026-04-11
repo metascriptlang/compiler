@@ -13,8 +13,8 @@ extern function msNetSetTimeout(fd: int32, ms: int32): int32;
 import { tlsConnect, tlsRead, tlsWrite, tlsClose } from "std/crypto/tls";
 
 import {
-	HttpMethod, HttpResponse, RequestOptions,
-	methodToString,
+	HttpMethod, HttpResponse, RequestOptions, FetchOptions, ParsedUrl, HttpHeaders,
+	methodToString, parseMethod,
 } from "./types";
 import {
 	HttpError,
@@ -25,6 +25,15 @@ import {
 	getContentLength, isChunked,
 } from "./headers";
 import { parseResponse, parseUrl, decodeChunked } from "./parser";
+
+// ===== Constants =====
+
+// Socket recv buffer per call — typical MTU-aligned chunk for HTTP/1.1.
+const RECV_CHUNK_SIZE: int32 = 8192;
+
+// Max total bytes for response headers section — prevents unbounded buffering
+// on malicious/broken servers. GitHub's headers are ~4-6 KB; 64 KB is ample.
+const MAX_HEADER_BYTES: int32 = 65536;
 
 // ===== Client Interface =====
 
@@ -42,78 +51,72 @@ export function createClient(): HttpClient {
 	};
 }
 
-// ===== One-Shot Functions =====
+// ===== Public API =====
 
-export function httpGet(host: string, port: int32, path: string): Result<HttpResponse, HttpError> {
-	const headers = createHeaders();
-	return doRequest({
-		method: HttpMethod.GET, hostname: host, port: port, path: path,
-		headers: headers, body: "", timeout: 30000, tls: false,
-	});
-}
-
-export function httpPost(host: string, port: int32, path: string, body: string, contentType: string): Result<HttpResponse, HttpError> {
-	const headers = createHeaders();
-	setHeader(headers, "content-type", contentType);
-	return doRequest({
-		method: HttpMethod.POST, hostname: host, port: port, path: path,
-		headers: headers, body: body, timeout: 30000, tls: false,
-	});
-}
-
-// Full options request.
+// Full options request (low-level escape hatch).
 export function request(options: RequestOptions): Result<HttpResponse, HttpError> {
 	return doRequest(options);
 }
 
-// URL-based request — auto-detects HTTP vs HTTPS from URL.
-export function fetch(url: string): Result<HttpResponse, HttpError> {
-	const parsed = parseUrl(url);
-	if (!parsed.ok) return Result.err(parsed.error);
-	const u = parsed.value;
-	const headers = createHeaders();
-	let path = u.path;
-	if (u.query.length > 0) path = path + "?" + u.query;
-	return doRequest({
-		method: HttpMethod.GET, hostname: u.hostname, port: u.port, path: path,
-		headers: headers, body: "", timeout: 30000, tls: u.protocol === "https",
-	});
+// Resolved FetchOptions with defaults applied.
+interface ResolvedOptions {
+	method: HttpMethod;
+	body: string;
+	headers: HttpHeaders;
+	timeout: int32;
+	maxRedirects: int32;
+}
+
+// Apply FetchOptions over defaults. Null options → all defaults.
+function resolveFetchOptions(options: FetchOptions, defaultTimeout: int32, defaultMaxRedirects: int32): ResolvedOptions {
+	let method = HttpMethod.GET;
+	let body = "";
+	let headers = createHeaders();
+	let timeout = defaultTimeout;
+	let maxRedirects = defaultMaxRedirects;
+
+	if (options !== null) {
+		if (options.method !== "") method = parseMethod(options.method);
+		body = options.body;
+		if (options.headers._names.length > 0) headers = options.headers;
+		if (options.timeout > 0) timeout = options.timeout;
+		if (options.maxRedirects >= 0) maxRedirects = options.maxRedirects;
+	}
+
+	return { method: method, body: body, headers: headers, timeout: timeout, maxRedirects: maxRedirects };
+}
+
+// Build path + query string from parsed URL.
+function urlPath(u: ParsedUrl): string {
+	if (u.query.length === 0) return u.path;
+	return u.path + "?" + u.query;
+}
+
+// URL-based fetch with auto TLS, redirect following, and optional options.
+//   fetch("https://example.com")                          — simple GET
+//   fetch("https://example.com", { method: "POST", ... }) — with options
+export function fetch(url: string, options: FetchOptions = null): Result<HttpResponse, HttpError> {
+	const u = try parseUrl(url);
+	const r = resolveFetchOptions(options, 30000, 5);
+	return requestWithRedirects({
+		method: r.method, hostname: u.hostname, port: u.port, path: urlPath(u),
+		headers: r.headers, body: r.body, timeout: r.timeout,
+		tls: u.protocol === "https",
+	}, r.maxRedirects);
 }
 
 // ===== Client Methods =====
 
-export function clientGet(c: HttpClient, host: string, port: int32, path: string): Result<HttpResponse, HttpError> {
-	const headers = createHeaders();
-	setHeader(headers, "user-agent", c.userAgent);
+// URL-based fetch with client defaults (user-agent, timeout, redirects).
+export function clientFetch(c: HttpClient, url: string, options: FetchOptions = null): Result<HttpResponse, HttpError> {
+	const u = try parseUrl(url);
+	const r = resolveFetchOptions(options, c.timeout, c.maxRedirects);
+	setHeader(r.headers, "user-agent", c.userAgent);
 	return requestWithRedirects({
-		method: HttpMethod.GET, hostname: host, port: port, path: path,
-		headers: headers, body: "", timeout: c.timeout, tls: false,
-	}, c.maxRedirects);
-}
-
-export function clientPost(c: HttpClient, host: string, port: int32, path: string, body: string, contentType: string): Result<HttpResponse, HttpError> {
-	const headers = createHeaders();
-	setHeader(headers, "content-type", contentType);
-	setHeader(headers, "user-agent", c.userAgent);
-	return requestWithRedirects({
-		method: HttpMethod.POST, hostname: host, port: port, path: path,
-		headers: headers, body: body, timeout: c.timeout, tls: false,
-	}, c.maxRedirects);
-}
-
-// URL-based client request with redirects — auto-detects HTTP/HTTPS.
-export function clientFetch(c: HttpClient, url: string): Result<HttpResponse, HttpError> {
-	const parsed = parseUrl(url);
-	if (!parsed.ok) return Result.err(parsed.error);
-	const u = parsed.value;
-	const headers = createHeaders();
-	setHeader(headers, "user-agent", c.userAgent);
-	let path = u.path;
-	if (u.query.length > 0) path = path + "?" + u.query;
-	return requestWithRedirects({
-		method: HttpMethod.GET, hostname: u.hostname, port: u.port, path: path,
-		headers: headers, body: "", timeout: c.timeout, tls: u.protocol === "https",
-	}, c.maxRedirects);
+		method: r.method, hostname: u.hostname, port: u.port, path: urlPath(u),
+		headers: r.headers, body: r.body, timeout: r.timeout,
+		tls: u.protocol === "https",
+	}, r.maxRedirects);
 }
 
 // ===== Transport Abstraction =====
@@ -177,8 +180,14 @@ function doRequest(options: RequestOptions): Result<HttpResponse, HttpError> {
 		return Result.err(socketError("send failed"));
 	}
 
-	// Read response headers
-	let data = transportRecv(fd, tlsCtx, 8192);
+	// Read response headers — loop until \r\n\r\n (headers may span multiple TLS records).
+	let data = "";
+	while (!data.contains("\r\n\r\n")) {
+		const chunk = transportRecv(fd, tlsCtx, RECV_CHUNK_SIZE);
+		if (chunk.length === 0) break;
+		data = data + chunk;
+		if (data.length > MAX_HEADER_BYTES) break;
+	}
 	if (data.length === 0) {
 		transportClose(fd, tlsCtx);
 		return Result.err(invalidResponse("empty response"));
@@ -198,7 +207,7 @@ function doRequest(options: RequestOptions): Result<HttpResponse, HttpError> {
 	if (isChunked(parsed.value.headers)) {
 		let chunkedData = data.slice(parsed.value.bodyStart, data.length);
 		while (!chunkedData.startsWith("0\r\n") && !chunkedData.contains("\r\n0\r\n")) {
-			const more = transportRecv(fd, tlsCtx, 8192);
+			const more = transportRecv(fd, tlsCtx, RECV_CHUNK_SIZE);
 			if (more.length === 0) break;
 			chunkedData = chunkedData + more;
 		}
@@ -245,7 +254,7 @@ function readFullBody(fd: int32, tlsCtx: int64, initialData: string, bodyStart: 
 function readUntilClose(fd: int32, tlsCtx: int64, initialData: string, bodyStart: int32): string {
 	let body = initialData.slice(bodyStart, initialData.length);
 	while (true) {
-		const chunk = transportRecv(fd, tlsCtx, 8192);
+		const chunk = transportRecv(fd, tlsCtx, RECV_CHUNK_SIZE);
 		if (chunk.length === 0) break;
 		body = body + chunk;
 	}

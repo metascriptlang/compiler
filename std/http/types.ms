@@ -68,6 +68,17 @@ export interface RequestOptions {
 	tls: boolean;
 }
 
+// Fetch-style request options (URL-based API).
+// Defaults: method="GET", timeout=30000, maxRedirects=5.
+// Use timeout <= 0 for default 30s, maxRedirects < 0 for default 5.
+export interface FetchOptions {
+	method: string;
+	body: string;
+	headers: HttpHeaders;
+	timeout: int32;
+	maxRedirects: int32;
+}
+
 // Parsed URL components.
 export interface ParsedUrl {
 	protocol: string;

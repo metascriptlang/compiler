@@ -82,6 +82,15 @@ function emitInstanceFieldDefaults(g: CGen, p: CProc, tmp: string, classType: Ty
 	}
 }
 
+// Check if a node is effectively null — unwraps TypeAssertion chains (e.g., `null as unknown as T`).
+function isNullExpr(node: Node): boolean {
+	let cur = node;
+	while (cur.kind === NodeKind.TypeAssertion) {
+		cur = (cur.data as TypeAssertionData).asExpr;
+	}
+	return cur.kind === NodeKind.NullLiteral;
+}
+
 // Check if a node is a CallExpr("msRefArrayAccess", ...) — used by MemberExpr and HiddenDeref
 // to handle void* results from ref array macros. Returns true if the node matches.
 function isRefArrayAccessCall(node: Node): boolean {
@@ -104,7 +113,7 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, arg
 			if (!argIsPtr && argNode.resolvedSym !== null && argNode.resolvedSym.symbolType !== null) {
 				argIsPtr = isPointerType(argNode.resolvedSym.symbolType);
 			}
-			if (paramIsPtr && !argIsPtr && argNode.kind !== NodeKind.NullLiteral) {
+			if (paramIsPtr && !argIsPtr && !isNullExpr(argNode)) {
 				return safeAddrOf(g, p, arg, argNode, paramType);
 			} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
 				return `*(${arg})`;
@@ -1701,26 +1710,39 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		return;
 	}
 
-	// msSpawnInto(fut, closure, sizeof_T) → codegen reads T from the first arg's
-	// nodeType (set to the inner struct type by builtinLower). The call node's
-	// own nodeType is Promise<T> for downstream type correctness.
+	// msSpawnInto(fut, closure, sizeof_T, offsetof_value) → codegen reads T from
+	// the first arg's nodeType. Emits sizeof(T) + offsetof(msFuture_<T>, value) so
+	// the worker memcpys to the correct offset (differs on 32-bit WASM due to alignment).
 	if (callee === "msSpawnInto" && cd.arguments.length >= 1 && cd.arguments[0].nodeType !== null) {
 		const innerC = getTypeDesc(g, cd.arguments[0].nodeType);
-		ctx.results.push(`msSpawnInto(${argsStr}, sizeof(${innerC}))`);
+		const futStructName = "msFuture_" + mangle(innerC);
+		addLine(sec(g, CSection.Types), `#ifndef ${futStructName}_DEFINED`);
+		addLine(sec(g, CSection.Types), `#define ${futStructName}_DEFINED`);
+		addLine(sec(g, CSection.Types), `MS_FUTURE_STRUCT(${futStructName}, ${innerC});`);
+		addLine(sec(g, CSection.Types), `#endif`);
+		ctx.results.push(`msSpawnInto(${argsStr}, sizeof(${innerC}), offsetof(${futStructName}, value))`);
 		return;
 	}
 
 	// msWaitForStruct(fut) → blocking wait + typed inline read of struct value.
 	// Emitted by WaitFor builtin for struct return types. Assumes the source future
 	// was allocated via msFutureCreateInline (or asyncBridge for struct returns).
-	// Reads bytes directly at the value field offset, not through void* cast.
+	// Casts to the actual typed future struct (msFuture_<T>) to read .value at the
+	// correct offset — msFuture_ptr cast would be wrong on 32-bit (WASM) where
+	// double/struct alignment differs from void* alignment.
 	if (callee === "msWaitForStruct" && node.nodeType !== null) {
 		const structType = getTypeDesc(g, node.nodeType);
+		const futStructName = "msFuture_" + mangle(structType);
+		// Ensure the typed future struct is defined
+		addLine(sec(g, CSection.Types), `#ifndef ${futStructName}_DEFINED`);
+		addLine(sec(g, CSection.Types), `#define ${futStructName}_DEFINED`);
+		addLine(sec(g, CSection.Types), `MS_FUTURE_STRUCT(${futStructName}, ${structType});`);
+		addLine(sec(g, CSection.Types), `#endif`);
 		const futTmp = getTemp(p, "void*");
 		const valTmp = getTemp(p, structType);
 		emitStmtsLine(p, `${futTmp.snippet} = ${argsStr};`);
 		emitStmtsLine(p, `msWaitForReady(${futTmp.snippet});`);
-		emitStmtsLine(p, `${valTmp.snippet} = *(${structType}*)(&((msFuture_ptr*)${futTmp.snippet})->value);`);
+		emitStmtsLine(p, `${valTmp.snippet} = ((${futStructName}*)${futTmp.snippet})->value;`);
 		ctx.results.push(valTmp.snippet);
 		return;
 	}

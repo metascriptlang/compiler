@@ -147,36 +147,8 @@ export function isAlwaysTrue(node: Node): boolean {
 	return false;
 }
 
-// ===== Null Fact Query =====
-
-// Check if a BinaryExprData is a null comparison for a specific variable
-function isNullCompareFor(d: BinaryExprData, varName: string): boolean {
-	if (d.left.kind === NodeKind.Identifier && d.right.kind === NodeKind.NullLiteral) {
-		return (d.left.data as IdentifierData).name === varName;
-	}
-	if (d.right.kind === NodeKind.Identifier && d.left.kind === NodeKind.NullLiteral) {
-		return (d.right.data as IdentifierData).name === varName;
-	}
-	return false;
-}
-
-// Query: do narrow facts prove varName is not null?
-// Returns: 1 = yes (not null), -1 = no (is null), 0 = unknown
-export function impliesNotNull(facts: Node[], varName: string): number {
-	let i = 0;
-	while (i < facts.length) {
-		const fact = facts[i];
-		if (fact.kind === NodeKind.BinaryExpr) {
-			const d = fact.data as BinaryExprData;
-			if (isNullCompareFor(d, varName)) {
-				if (d.operator === "!==") return 1;
-				if (d.operator === "===") return -1;
-			}
-		}
-		i = i + 1;
-	}
-	return 0;
-}
+// Phase 4: `impliesNotNull` (fact-list null query) deleted. Replaced by
+// `isDefinitelyNonNullAt` in src/checker/flow.ms which walks the CFG.
 
 // ===== Tests =====
 

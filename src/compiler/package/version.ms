@@ -304,15 +304,15 @@ function extractHost(url: string): string {
 	return url;
 }
 
-// Parse a git source spec: "git+<host>/<path>@<ref>"
+// Parse a git source spec: "git:<host>/<path>@<ref>"
 // Returns ParsedGitSpec with isValid=false on any format error.
 // Ref must be a tag (passes parseVersion) or a 40-char hex SHA.
 // Branch-like refs (main, develop) are rejected in v1 per PACKAGE.md.
 export function parseGitSpec(s: string): ParsedGitSpec {
 	const invalid: ParsedGitSpec = { url: "", ref: "", isValid: false };
 	if (s.length < 5) return invalid;
-	// Must start with "git+"
-	if (s.slice(0, 4) !== "git+") return invalid;
+	// Must start with "git:"
+	if (s.slice(0, 4) !== "git:") return invalid;
 
 	const rest = s.slice(4, s.length);  // "github.com/owner/repo@v1.2.3"
 	// Split on LAST @ — URL may contain slashes but not @
@@ -337,7 +337,7 @@ export function parseGitSpec(s: string): ParsedGitSpec {
 
 // Top-level dispatcher: classify a dependency version string as registry or git source.
 export function parseSourceSpec(s: string): { kind: SourceKind, version: ParsedVersion, git: ParsedGitSpec } {
-	if (s.length >= 4 && s.slice(0, 4) === "git+") {
+	if (s.length >= 4 && s.slice(0, 4) === "git:") {
 		const git = parseGitSpec(s);
 		const emptyVer: ParsedVersion = { major: -1, minor: -1, patch: -1, pre: "", isValid: false };
 		return { kind: SourceKind.Git, version: emptyVer, git };
@@ -543,60 +543,60 @@ test "isValidVersion convenience" {
 // --- Git spec tests ---
 
 test "parseGitSpec valid tag" {
-	const g = parseGitSpec("git+github.com/acme/foo@v1.2.3");
+	const g = parseGitSpec("git:github.com/acme/foo@v1.2.3");
 	assert g.isValid;
 	assert g.url === "github.com/acme/foo";
 	assert g.ref === "v1.2.3";  // git ref preserves the original tag name
 }
 
 test "parseGitSpec valid SHA" {
-	const g = parseGitSpec("git+github.com/acme/foo@abcdef1234567890abcdef1234567890abcdef12");
+	const g = parseGitSpec("git:github.com/acme/foo@abcdef1234567890abcdef1234567890abcdef12");
 	assert g.isValid;
 	assert g.ref === "abcdef1234567890abcdef1234567890abcdef12";
 }
 
 test "parseGitSpec gitlab host" {
-	const g = parseGitSpec("git+gitlab.com/group/project@v2.0.0");
+	const g = parseGitSpec("git:gitlab.com/group/project@v2.0.0");
 	assert g.isValid;
 	assert g.url === "gitlab.com/group/project";
 }
 
 test "parseGitSpec bitbucket host" {
-	const g = parseGitSpec("git+bitbucket.org/team/repo@v1.0.0");
+	const g = parseGitSpec("git:bitbucket.org/team/repo@v1.0.0");
 	assert g.isValid;
 }
 
 test "parseGitSpec codeberg host" {
-	const g = parseGitSpec("git+codeberg.org/user/repo@v0.1.0");
+	const g = parseGitSpec("git:codeberg.org/user/repo@v0.1.0");
 	assert g.isValid;
 }
 
 test "parseGitSpec rejects unknown host" {
-	assert !parseGitSpec("git+example.com/foo/bar@v1.0.0").isValid;
+	assert !parseGitSpec("git:example.com/foo/bar@v1.0.0").isValid;
 }
 
 test "parseGitSpec accepts branch ref" {
-	const g = parseGitSpec("git+github.com/acme/foo@main");
+	const g = parseGitSpec("git:github.com/acme/foo@main");
 	assert g.isValid;
 	assert g.ref === "main";
 }
 
 test "parseGitSpec accepts short ref" {
-	const g = parseGitSpec("git+github.com/acme/foo@abc123");
+	const g = parseGitSpec("git:github.com/acme/foo@abc123");
 	assert g.isValid;
 	assert g.ref === "abc123";
 }
 
-test "parseGitSpec rejects missing git+ prefix" {
+test "parseGitSpec rejects missing git: prefix" {
 	assert !parseGitSpec("github.com/acme/foo@v1.0.0").isValid;
 }
 
 test "parseGitSpec rejects empty ref" {
-	assert !parseGitSpec("git+github.com/acme/foo@").isValid;
+	assert !parseGitSpec("git:github.com/acme/foo@").isValid;
 }
 
 test "parseGitSpec rejects no @" {
-	assert !parseGitSpec("git+github.com/acme/foo").isValid;
+	assert !parseGitSpec("git:github.com/acme/foo").isValid;
 }
 
 // --- parseSourceSpec tests ---
@@ -609,7 +609,7 @@ test "parseSourceSpec registry" {
 }
 
 test "parseSourceSpec git" {
-	const s = parseSourceSpec("git+github.com/acme/foo@v1.2.3");
+	const s = parseSourceSpec("git:github.com/acme/foo@v1.2.3");
 	assert s.kind === SourceKind.Git;
 	assert s.git.isValid;
 	assert s.git.url === "github.com/acme/foo";
@@ -622,7 +622,7 @@ test "parseSourceSpec invalid registry" {
 }
 
 test "parseSourceSpec invalid git" {
-	const s = parseSourceSpec("git+example.com/foo@v1.0.0");
+	const s = parseSourceSpec("git:example.com/foo@v1.0.0");
 	assert s.kind === SourceKind.Git;
 	assert !s.git.isValid;
 }

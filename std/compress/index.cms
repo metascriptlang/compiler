@@ -1,0 +1,41 @@
+// std/compress — aggregate entry point.
+//
+// Importing from `"std/compress"` pulls in all three feature submodules
+// (inflate + deflate + zip) and re-exports their public API. This is the
+// convenient path for code that uses multiple features.
+//
+// For SIZE-SENSITIVE builds, import directly from the specific submodule:
+//
+//   import { gunzip }   from "std/compress/inflate";   // ~22 KB
+//   import { gzip }     from "std/compress/deflate";   // ~38 KB
+//   import { openZip }  from "std/compress/zip";       // ~85 KB
+//
+// Each submodule owns its own `import from "vendor/miniz/…"` directives, so
+// tree-shaking is automatic at the file level: the miniz .c files only get
+// compiled when the submodule that declares them is actually loaded.
+
+// Shared types
+export {
+	CompressFormat, CompressError, CompressErrorKind, compressError,
+} from "./errors";
+
+// Inflate (decompress)
+export {
+	InflateStream,
+	createInflate, inflateFeed, inflateFinish,
+	gunzip, inflate, inflateRaw,
+} from "./inflate";
+
+// Deflate (compress)
+export {
+	DeflateStream,
+	createDeflate, deflateFeed, deflateFinish,
+	gzip, deflate, deflateRaw,
+} from "./deflate";
+
+// ZIP archive read + write
+export {
+	ZipEntry, ZipReader, ZipWriter,
+	openZip, zipCount, zipEntries, zipExtract, zipFindByName, zipExtractByName, closeZip,
+	newZipWriter, zipAdd, zipFinalize, closeZipWriter,
+} from "./zip";

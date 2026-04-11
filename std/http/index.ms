@@ -2,7 +2,8 @@
 
 // Types
 export {
-	HttpMethod, HttpRequest, HttpResponse, ServerResponse, RequestHandler, AsyncRequestHandler, RequestOptions, ParsedUrl,
+	HttpMethod, HttpRequest, HttpResponse, ServerResponse, RequestHandler, AsyncRequestHandler,
+	RequestOptions, FetchOptions, ParsedUrl,
 	HttpHeaders, statusText, methodToString, parseMethod,
 	isSuccess, isRedirect, isClientError, isServerError,
 } from "./types";
@@ -39,6 +40,6 @@ export {
 // Client
 export {
 	HttpClient, createClient,
-	httpGet, httpPost, request, fetch,
-	clientGet, clientPost, clientFetch, requestWithRedirects,
+	request, fetch,
+	clientFetch, requestWithRedirects,
 } from "./client";

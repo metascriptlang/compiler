@@ -1,4 +1,3 @@
-// Auth — GitHub device-flow OAuth + credentials file management.
-// Stub — implementation lands in Phase F.
-
-// TODO Phase F: login, logout, loadToken, saveToken
+// Auth — re-exports from login.ms for backward compatibility.
+// The actual implementation lives in login.ms.
+export { loadToken, saveToken } from "./login";

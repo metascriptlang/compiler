@@ -422,7 +422,7 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.MacroDecl => {
 			const d = node.data as MacroDeclData;
-			h = hS(h, d.macroDeclName); h = hStrings(h, d.macroDeclParams); h = hN(h, d.macroDeclBody);
+			h = hS(h, d.macroDeclName); h = hStrings(h, d.macroDeclParams); h = hStrings(h, d.macroDeclParamTypes); h = hN(h, d.macroDeclBody);
 		},
 		NodeKind.QuoteExpr => {
 			h = hN(h, (node.data as QuoteExprData).quoteBody);

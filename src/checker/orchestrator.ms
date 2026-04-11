@@ -116,6 +116,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 				hasConstructor: hasFlag(sym, SymbolFlag.HasConstructor),
 				location: sym.location !== null ? sym.location : makeLoc(0, 0),
 				memberLocations: memberLocs,
+				primaryFlags: sym.symFlags,
+				overloadFlags: [],
 				};
 				earlyExports.push(info);
 			}

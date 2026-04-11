@@ -1680,6 +1680,7 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 
 	const raw = parseParamList(state, nameToken.value);
 	const macroDeclParams = extractParamNames(raw);
+	const macroDeclParamTypes = extractParamTypes(raw);
 
 	// Optional return type
 	skipOptionalType(state);
@@ -1689,6 +1690,7 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.MacroDecl, {
 		macroDeclName: nameToken.value,
 		macroDeclParams,
+		macroDeclParamTypes,
 		macroDeclBody: body,
 	}, macroToken));
 }

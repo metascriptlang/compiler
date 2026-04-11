@@ -1,0 +1,106 @@
+// std/compress/deflate — gzip / zlib / raw-deflate COMPRESSION.
+//
+// Import directly as `std/compress/deflate` for minimal binaries: only the
+// miniz core + tdefl translation units get compiled (~38 KB), no inflate/zip.
+//
+// Wraps runtime/compress/deflate.c which drives miniz's low-level
+// tdefl_compress state machine. Exposes one-shot helpers and a streaming
+// handle-based API for large inputs.
+
+import { CompressError, CompressErrorKind, CompressFormat, compressError } from "./errors";
+import { msDeflateCtx } from "runtime/compress/deflate.h";
+import { mz_ulong } from "vendor/miniz/miniz.h";
+import { tdefl_compressor } from "vendor/miniz/miniz_tdef.h";
+
+// Re-export for convenience so callers don't need a separate `./errors` import.
+export { CompressFormat, CompressError, CompressErrorKind } from "./errors";
+
+// ===== Extern bindings =====
+
+extern function msDeflateNew(format: int32, level: int32): int64;
+extern function msDeflateFeed(handle: int64, chunk: string, isLast: int32): int32;
+extern function msDeflateDrain(handle: int64, maxBytes: int32): string;
+extern function msDeflateFree(handle: int64): void;
+extern function msDeflateOneShot(data: string, format: int32, level: int32): string;
+
+// ===== Streaming API =====
+
+// Stream encoder state. Feed chunks with deflateFeed, receive compressed
+// output, terminate with deflateFinish.
+export interface DeflateStream {
+	handle: int64;
+	finished: boolean;
+}
+
+// Create a streaming deflate context.
+//   format: gzip / zlib / raw deflate (default: gzip)
+//   level:  0-10 (0 = none, 1 = fastest, 6 = default, 9 = best, 10 = uber)
+export function createDeflate(format: CompressFormat = CompressFormat.Gzip, level: int32 = 6): DeflateStream {
+	return { handle: msDeflateNew(format as int32, level), finished: false };
+}
+
+// Feed a chunk of uncompressed input. Returns any compressed bytes produced
+// so far (may be "" while the compressor buffers input internally).
+export function deflateFeed(s: DeflateStream, chunk: string): Result<string, CompressError> {
+	if (s.handle === 0) {
+		return Result.err(compressError(CompressErrorKind.OutOfMemory, "deflate context allocation failed"));
+	}
+	if (s.finished) {
+		return Result.err(compressError(CompressErrorKind.InvalidInput, "feed after finish"));
+	}
+	const st = msDeflateFeed(s.handle, chunk, 0);
+	if (st < 0) {
+		return Result.err(compressError(CompressErrorKind.CompressionFailed, "compression failed"));
+	}
+	return Result.ok(msDeflateDrain(s.handle, 0));
+}
+
+// Signal end of input, flush the compressor, drain the remaining output,
+// and release the context. For gzip, appends the CRC32 + ISIZE trailer.
+export function deflateFinish(s: DeflateStream): Result<string, CompressError> {
+	if (s.handle === 0) {
+		return Result.err(compressError(CompressErrorKind.OutOfMemory, "deflate context allocation failed"));
+	}
+	if (s.finished) return Result.ok("");
+	s.finished = true;
+	const st = msDeflateFeed(s.handle, "", 1);
+	if (st < 0) {
+		msDeflateFree(s.handle);
+		s.handle = 0;
+		return Result.err(compressError(CompressErrorKind.CompressionFailed, "flush failed"));
+	}
+	const tail = msDeflateDrain(s.handle, 0);
+	msDeflateFree(s.handle);
+	s.handle = 0;
+	return Result.ok(tail);
+}
+
+// ===== One-shot helpers =====
+
+// Compress to a complete gzip blob (RFC 1952).
+export function gzip(data: string, level: int32 = 6): Result<string, CompressError> {
+	const out = msDeflateOneShot(data, CompressFormat.Gzip as int32, level);
+	if (out.length === 0) {
+		return Result.err(compressError(CompressErrorKind.CompressionFailed, "gzip compression failed"));
+	}
+	return Result.ok(out);
+}
+
+// Compress to a zlib-wrapped DEFLATE blob (RFC 1950).
+export function deflate(data: string, level: int32 = 6): Result<string, CompressError> {
+	const out = msDeflateOneShot(data, CompressFormat.Zlib as int32, level);
+	if (out.length === 0) {
+		return Result.err(compressError(CompressErrorKind.CompressionFailed, "zlib compression failed"));
+	}
+	return Result.ok(out);
+}
+
+// Compress to a raw DEFLATE stream (RFC 1951). Empty input is allowed and
+// produces a 2-byte end-of-stream marker.
+export function deflateRaw(data: string, level: int32 = 6): Result<string, CompressError> {
+	const out = msDeflateOneShot(data, CompressFormat.Deflate as int32, level);
+	if (out.length === 0) {
+		return Result.err(compressError(CompressErrorKind.CompressionFailed, "deflate compression failed"));
+	}
+	return Result.ok(out);
+}

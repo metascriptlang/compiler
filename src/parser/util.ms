@@ -46,6 +46,28 @@ export function captureOptionalType(state: ParserState): string {
 	_lastTypeExpr = null;
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
 		advance(state);
+		// Type predicate return annotation: `: <paramName> is <Type>`.
+		// Stored verbatim in the fnReturnType string; the checker detects the
+		// " is " infix, resolves the RHS as the predicate target, and sets the
+		// function's actual return type to `boolean`. This covers user-defined
+		// type guards: `function isString(x: unknown): x is string { ... }`.
+		if (current(state).kind === TokenKind.Ident
+				&& state.position + 1 < state.tokens.length
+				&& state.tokens[state.position + 1].kind === TokenKind.Is) {
+			const paramName = current(state).value;
+			advance(state); // param name
+			advance(state); // `is`
+			const targetStart = state.position;
+			skipTypeAnnotation(state);
+			const targetEnd = state.position;
+			const targetText = collectTokenText(state, targetStart, targetEnd);
+			// Re-parse target for positioned TypeExpr so LSP symbol recording works.
+			const savedPos = state.position;
+			state.position = targetStart;
+			_lastTypeExpr = parseTypeExpr(state);
+			state.position = savedPos;
+			return `${paramName} is ${targetText}`;
+		}
 		const typeStart = state.position;
 		// Skip using the battle-tested skip path (never changes parser behavior)
 		skipTypeAnnotation(state);

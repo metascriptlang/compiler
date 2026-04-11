@@ -5,6 +5,7 @@ import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, getFil
 import { requestCancel } from "../../transam/cancel";
 import { clockMs } from "std/process";
 import { writeStderr } from "std/io";
+import { readFile } from "std/fs";
 import {
 	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField,
 	lspResponse, lspNotification, lspFormatMessage, lspUriToPath,
@@ -387,6 +388,106 @@ test "dispatch routes sig help" {
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = lspDispatch("textDocument/signatureHelp", "32", params, db, testCache());
 	assert lspGetNumberField(r, "id") === 32;
+}
+
+test "signature help picks matching enum-literal overload" {
+	// Three signatures: K.A, K.B, and the wide impl. Calling f(K.B) should
+	// pick the K.B signature (activeSignature=1 — primary is K.A at index 0).
+	const src = "enum K { A, B }\n"
+		+ "function f(k: K.A): string;\n"
+		+ "function f(k: K.B): string;\n"
+		+ "function f(k: K): string { return \"\"; }\n"
+		+ "const x = f(K.B);\n";
+	const db = testDb("file:///ovlsig.ms", src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///ovlsig.ms\"},\"position\":{\"line\":4,\"character\":16}}";
+	const r = handleSignatureHelp("40", params, db);
+	assert lspGetNumberField(r, "id") === 40;
+	assert r.indexOf("\"activeSignature\":1", 0) >= 0;
+}
+
+test "phase 5: sig help narrows on object literal arg via Pass-2 commit" {
+	// Two-pass overload resolution: arg[0] = K.B EnumLiteral discriminates
+	// between the two specific overloads, and Pass 2 re-checks the context-
+	// sensitive object literal against the winner's struct param. Sig help
+	// should report activeSignature=1 (the K.B overload) while the cursor
+	// is inside the {} literal.
+	const src = "enum K { A, B }\n"
+		+ "function g(k: K.A, d: { x: number }): number;\n"
+		+ "function g(k: K.B, d: { y: string }): number;\n"
+		+ "function g(k: K, d: { x: number } | { y: string }): number { return 0; }\n"
+		+ "const r = g(K.B, { y: \"hi\" });\n";
+	const db = testDb("file:///phase5sig.ms", src);
+	// Cursor inside the `{` object literal at line 4 (0-indexed), after "{ "
+	const params = "{\"textDocument\":{\"uri\":\"file:///phase5sig.ms\"},\"position\":{\"line\":4,\"character\":20}}";
+	const r = handleSignatureHelp("41", params, db);
+	assert lspGetNumberField(r, "id") === 41;
+	assert r.indexOf("\"activeSignature\":1", 0) >= 0;
+}
+
+// ===== Phase 5/6 end-to-end on real example files =====
+
+function loadExample(relPath: string): string {
+	const r = readFile(relPath);
+	return r.ok ? r.value : "";
+}
+
+// An example file is "clean" if its diagnostics contain no error-severity
+// entries (severity 1). Format-violation hints (severity 4) are emitted
+// because testDb doesn't load the project's build.ms which sets useTabs=true,
+// so the default useTabs=false flags our tab-indented examples. Those are
+// cosmetic and unrelated to Phase 5/6 narrowing correctness.
+function hasNoErrors(diags: string): boolean {
+	return diags.indexOf("\"severity\":1", 0) < 0;
+}
+
+test "phase 5: examples/phase5Overloads.ms type-checks cleanly" {
+	const src = loadExample("examples/phase5Overloads.ms");
+	assert src.length > 0;
+	const uri = "file:///ex-phase5ovl.ms";
+	const db = testDb(uri, src);
+	const diags = buildDiagnosticsJson(uri, db, lspUriToPath(uri));
+	assert hasNoErrors(diags);
+}
+
+test "phase 6: examples/phase6AliasedCond.ms type-checks cleanly" {
+	const src = loadExample("examples/phase6AliasedCond.ms");
+	assert src.length > 0;
+	const uri = "file:///ex-phase6alias.ms";
+	const db = testDb(uri, src);
+	const diags = buildDiagnosticsJson(uri, db, lspUriToPath(uri));
+	assert hasNoErrors(diags);
+}
+
+test "phase 6: examples/phase6Assignment.ms type-checks cleanly" {
+	const src = loadExample("examples/phase6Assignment.ms");
+	assert src.length > 0;
+	const uri = "file:///ex-phase6assign.ms";
+	const db = testDb(uri, src);
+	const diags = buildDiagnosticsJson(uri, db, lspUriToPath(uri));
+	assert hasNoErrors(diags);
+}
+
+test "phase 6: examples/phase6TypePredicate.ms type-checks cleanly" {
+	const src = loadExample("examples/phase6TypePredicate.ms");
+	assert src.length > 0;
+	const uri = "file:///ex-phase6pred.ms";
+	const db = testDb(uri, src);
+	const diags = buildDiagnosticsJson(uri, db, lspUriToPath(uri));
+	assert hasNoErrors(diags);
+}
+
+test "phase 5: sig help on examples/phase5Overloads.ms narrows to Square" {
+	// Inside `area(Kind.Square, { side: 5 })` the cursor inside the object
+	// literal should report activeSignature = 1 (Square is the 2nd specific
+	// overload; Circle is 0). Line 30 (0-indexed) col 32 — just after `{ `.
+	const src = loadExample("examples/phase5Overloads.ms");
+	assert src.length > 0;
+	const uri = "file:///ex-phase5ovlsig.ms";
+	const db = testDb(uri, src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///ex-phase5ovlsig.ms\"},\"position\":{\"line\":30,\"character\":32}}";
+	const r = handleSignatureHelp("100", params, db);
+	assert lspGetNumberField(r, "id") === 100;
+	assert r.indexOf("\"activeSignature\":1", 0) >= 0;
 }
 
 test "type hint for untyped var" {

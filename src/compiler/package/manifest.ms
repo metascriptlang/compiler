@@ -149,29 +149,29 @@ export function removeDepFromManifest(buildPath: string, name: string): boolean 
 test "addDepToManifest creates deps block" {
 	const path = "/tmp/test-manifest-add.ms";
 	writeFile(path, "const config = {\n\tentry: \"./src/index\",\n};\n\nexport default config;\n");
-	const ok = addDepToManifest(path, "cool-json", "v1.2.3", "deps");
+	const ok = addDepToManifest(path, "cool-json", "1.2.3", "deps");
 	assert ok;
 	const content = try readFile(path) catch "";
-	assert content.indexOf("\"cool-json\": \"v1.2.3\"") >= 0;
+	assert content.indexOf("\"cool-json\": \"1.2.3\"") >= 0;
 	assert content.indexOf("deps:") >= 0;
 }
 
 test "addDepToManifest adds to existing block" {
 	const path = "/tmp/test-manifest-add2.ms";
-	writeFile(path, "const config = {\n\tdeps: {\n\t\t\"foo\": \"v1.0.0\",\n\t},\n};\n\nexport default config;\n");
-	const ok = addDepToManifest(path, "bar", "v2.0.0", "deps");
+	writeFile(path, "const config = {\n\tdeps: {\n\t\t\"foo\": \"1.0.0\",\n\t},\n};\n\nexport default config;\n");
+	const ok = addDepToManifest(path, "bar", "2.0.0", "deps");
 	assert ok;
 	const content = try readFile(path) catch "";
-	assert content.indexOf("\"bar\": \"v2.0.0\"") >= 0;
-	assert content.indexOf("\"foo\": \"v1.0.0\"") >= 0;
+	assert content.indexOf("\"bar\": \"2.0.0\"") >= 0;
+	assert content.indexOf("\"foo\": \"1.0.0\"") >= 0;
 }
 
 test "addDepToManifest updates existing dep" {
 	const path = "/tmp/test-manifest-add3.ms";
-	writeFile(path, "const config = {\n\tdeps: {\n\t\t\"foo\": \"v1.0.0\",\n\t},\n};\n\nexport default config;\n");
-	const ok = addDepToManifest(path, "foo", "v2.0.0", "deps");
+	writeFile(path, "const config = {\n\tdeps: {\n\t\t\"foo\": \"1.0.0\",\n\t},\n};\n\nexport default config;\n");
+	const ok = addDepToManifest(path, "foo", "2.0.0", "deps");
 	assert ok;
 	const content = try readFile(path) catch "";
-	assert content.indexOf("\"foo\": \"v2.0.0\"") >= 0;
-	assert content.indexOf("v1.0.0") < 0;
+	assert content.indexOf("\"foo\": \"2.0.0\"") >= 0;
+	assert content.indexOf("1.0.0") < 0;
 }

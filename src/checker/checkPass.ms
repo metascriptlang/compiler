@@ -1,12 +1,12 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { unknownType, nullType, stringType, charType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, typeNameOf, isPromise, isSpawnHandle, isStrictPromise, getPromiseInner, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, findVariantByDiscriminant, findVariantByStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
+import { Scope, ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -19,14 +19,17 @@ import { isAssignable } from "./compat";
 import { setConditionalAssignFn } from "./types";
 setConditionalAssignFn(isAssignable);
 import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, ensureShaped } from "./resolvePass";
+import { bindFlowGraph } from "../binder/index";
+import { getFlowTypeOfReference } from "./flow";
 import { inferOwnership } from "./ownershipInference";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr, checkEnumExhaustiveness, checkDuplicatePatterns, fitNode, estimateExprEndCol } from "./checkExprPass";
 import { registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
+import { forEachChild } from "../ast/visitor";
 import { parseSource } from "../parser/statements/validation";
-import { BreakState, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, impliesNotNull, varDecl } from "./initTracker";
+import { BreakState, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, varDecl } from "./initTracker";
 
 // Extract directory from module path (e.g. "src/foo/bar.ms" → "src/foo")
 // Brief type description for error messages
@@ -138,7 +141,8 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.ClassDecl => checkClassDecl(ctx, node),
 		NodeKind.ActorDecl => checkActorDecl(ctx, node),
 		NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.EnumDecl | NodeKind.TypeAliasDecl |
-		NodeKind.ExternDecl | NodeKind.MacroDecl | NodeKind.ImportDecl => {},
+		NodeKind.ExternDecl | NodeKind.ImportDecl => {},
+		NodeKind.MacroDecl => markMacroUsedSymbols(ctx, node),
 		NodeKind.ExportDecl => checkExportDecl(ctx, node),
 		NodeKind.IfStmt => checkIfStmt(ctx, node),
 		NodeKind.WhileStmt => checkWhileStmt(ctx, node),
@@ -488,148 +492,16 @@ function checkExportDecl(ctx: CheckerContext, node: Node): void {
 }
 
 // ===== Null Narrowing (Fact-Based Model) =====
-//
-// Reference-aligned design: a Node[] knowledge base tracks known conditions.
-// addFact decomposes && into separate facts. addFactNeg negates conditions.
-// impliesNotNull queries the fact list. Save/restore via array length truncation.
-// sym.symbolType mutation still applies narrowing (single-pass checker requirement).
-
-function saveFacts(ctx: CheckerContext): number {
-	return ctx.narrowFacts.length;
-}
-
-function restoreFacts(ctx: CheckerContext, snapshot: number): void {
-	ctx.narrowFacts.length = snapshot;
-}
-
-// Decompose && into separate facts (both sides true). Other conditions pushed as-is.
-function addFact(ctx: CheckerContext, condition: Node): void {
-	if (condition.kind === NodeKind.BinaryExpr) {
-		const d = condition.data as BinaryExprData;
-		if (d.operator === "&&") {
-			addFact(ctx, d.left);
-			addFact(ctx, d.right);
-			return;
-		}
-	}
-	ctx.narrowFacts.push(condition);
-}
-
-function negateOp(op: string): string {
-	if (op === "===") return "!==";
-	if (op === "!==") return "===";
-	if (op === "==") return "!=";
-	if (op === "!=") return "==";
-	return op;
-}
-
-// Negate and add. NOT(a||b) = !a && !b (decompose). NOT(a&&b) = !a || !b (opaque).
-// Simple comparisons: flip operator. Fallback: push as opaque (impliesNotNull returns unknown).
-function addFactNeg(ctx: CheckerContext, condition: Node): void {
-	if (condition.kind === NodeKind.BinaryExpr) {
-		const d = condition.data as BinaryExprData;
-		// NOT(a || b) = !a && !b — CAN decompose
-		if (d.operator === "||") {
-			addFactNeg(ctx, d.left);
-			addFactNeg(ctx, d.right);
-			return;
-		}
-		// Simple comparisons: flip operator
-		if (d.operator === "!==" || d.operator === "===" ||
-			d.operator === "!=" || d.operator === "==") {
-			const flipped = negateOp(d.operator);
-			const neg = createNodeAt(NodeKind.BinaryExpr,
-				{ operator: flipped, left: d.left, right: d.right }, condition.location);
-			ctx.narrowFacts.push(neg);
-			return;
-		}
-		// NOT(a && b) = !a || !b — CANNOT decompose, push as opaque
-	}
-	// Fallback: opaque fact (impliesNotNull won't match → returns unknown → no narrowing)
-	ctx.narrowFacts.push(condition);
-}
-
-// impliesNotNull is now imported from initTracker.ms (shared with checkExprPass.ms)
-
-// Extract variable names involved in null comparisons from a condition
-function collectNullVars(node: Node, dest: string[]): void {
-	if (node.kind !== NodeKind.BinaryExpr) return;
-	const d = node.data as BinaryExprData;
-	if (d.operator === "&&" || d.operator === "||") {
-		collectNullVars(d.left, dest);
-		collectNullVars(d.right, dest);
-		return;
-	}
-	if (d.operator === "!==" || d.operator === "===") {
-		if (d.left.kind === NodeKind.Identifier && d.right.kind === NodeKind.NullLiteral) {
-			dest.push((d.left.data as IdentifierData).name);
-		} else if (d.right.kind === NodeKind.Identifier && d.left.kind === NodeKind.NullLiteral) {
-			dest.push((d.right.data as IdentifierData).name);
-		}
-	}
-}
-
-function extractNullCheckedVars(condition: Node): string[] {
-	const result: string[] = [];
-	collectNullVars(condition, result);
-	return result;
-}
-
-// Apply narrowing to symbols based on current facts. Returns arrays for later restore.
-// Deduplicates by symbol identity — prevents double-narrow corruption on (x !== null && x !== null).
-function applyNarrowing(ctx: CheckerContext, vars: string[], narrowedSyms: Symbol[], savedTypes: Type[]): void {
-	let i = 0;
-	while (i < vars.length) {
-		const sym = lookupSymbol(ctx.table, vars[i]);
-		if (sym !== null && sym.symbolType !== null && sym.symbolType.kind !== TypeKind.Unknown) {
-			// Skip if already narrowed in this batch
-			let already = false;
-			let k = 0;
-			while (k < narrowedSyms.length) {
-				if (narrowedSyms[k] === sym) { already = true; }
-				k = k + 1;
-			}
-			if (already) { i = i + 1; continue; }
-			const verdict = impliesNotNull(ctx.narrowFacts, vars[i]);
-			if (verdict === 1) {
-				savedTypes.push(sym.symbolType);
-				narrowedSyms.push(sym);
-				sym.symbolType = removeNullFromType(sym.symbolType);
-			} else if (verdict === -1) {
-				savedTypes.push(sym.symbolType);
-				narrowedSyms.push(sym);
-				sym.symbolType = nullType();
-			}
-		}
-		i = i + 1;
-	}
-}
-
-// Restore narrowed symbols to their original types
-function restoreNarrowing(narrowedSyms: Symbol[], savedTypes: Type[]): void {
-	let i = 0;
-	while (i < narrowedSyms.length) {
-		narrowedSyms[i].symbolType = savedTypes[i];
-		i = i + 1;
-	}
-}
-
-// Remove Null from a type (for narrowing after null checks)
-function removeNullFromType(t: Type): Type {
-	// Maybe<T> → T (Reference: Maybe/Option extraction)
-	if (isMaybeType(t)) return unwrapMaybeType(t);
-	if (t.kind === TypeKind.Union) {
-		const nonNull: Type[] = [];
-		for (const member of t.typeChildren) {
-			if (member.kind !== TypeKind.Null) nonNull.push(member);
-		}
-		if (nonNull.length === 1) return nonNull[0];
-		if (nonNull.length > 0) return createUnion(nonNull);
-		return t;
-	}
-	if (t.kind === TypeKind.Null) return unknownType();
-	return t;
-}
+// Phase 4: fact-based null narrowing deleted. Narrowing now flows through
+// src/binder/ (CFG construction) and src/checker/flow.ms
+// (getFlowTypeOfReference). The Identifier handler in checkExprPass.ms
+// queries the flow graph per use site — no symbolType mutation, no
+// scope-based fact stack. `narrowFacts`, `addFact`, `addFactNeg`,
+// `applyNarrowing`, `restoreNarrowing`, `saveFacts`, `restoreFacts`,
+// `extractNullCheckedVars`, `collectNullVars`, `removeNullFromType`,
+// `checkNarrowedBranch`, `invalidateFacts`, `factReferencesVar` — all
+// gone. The `checkNarrowedBranch` callers (checkIfStmt, checkBlock
+// guard-clause) now call `checkStmt` directly and rely on the flow graph.
 
 // ===== Effect System (@pure) =====
 // Walk function body looking for impure operations: calls to non-pure functions.
@@ -712,102 +584,12 @@ function isDefiniteExit(node: Node): boolean {
 	return false;
 }
 
-// Tier 2: detect `var.field === "literal"` discriminant checks in if conditions.
-// Returns {varName, fieldName, litValue} for each such check, or empty array.
-function extractDiscriminantChecks(condition: Node): DiscriminantCheck[] {
-	const result: DiscriminantCheck[] = [];
-	collectDiscriminantChecks(condition, result);
-	return result;
-}
-
-interface DiscriminantCheck {
-	varName: string;
-	fieldName: string;
-	litValue: string;
-}
-
-function collectDiscriminantChecks(node: Node, dest: DiscriminantCheck[]): void {
-	if (node.kind !== NodeKind.BinaryExpr) return;
-	const d = node.data as BinaryExprData;
-	if (d.operator === "&&") {
-		collectDiscriminantChecks(d.left, dest);
-		collectDiscriminantChecks(d.right, dest);
-		return;
-	}
-	if (d.operator !== "===") return;
-	// Detect MemberExpr side (s.kind) and value side (string literal or enum member)
-	let memberSide: Node = null as unknown as Node;
-	let valueSide: Node = null as unknown as Node;
-	if (d.left.kind === NodeKind.MemberExpr) {
-		memberSide = d.left; valueSide = d.right;
-	} else if (d.right.kind === NodeKind.MemberExpr) {
-		memberSide = d.right; valueSide = d.left;
-	}
-	if (memberSide === null) return;
-	const md = memberSide.data as MemberExprData;
-	if (md.object === null || md.object.kind !== NodeKind.Identifier) return;
-	const varName = (md.object.data as IdentifierData).name;
-	// Pattern 1: s.kind === "literal" (string-literal DU)
-	if (valueSide.kind === NodeKind.StringLiteral) {
-		const ld = valueSide.data as StringLiteralData;
-		dest.push({ varName, fieldName: md.property, litValue: ld.value });
-		return;
-	}
-	// Pattern 2: s.kind === EnumType.Member (enum-based DU)
-	// After checkExpr, EnumType.Member is rewritten to Identifier "EnumType_Member"
-	// with resolvedSym.symbolKind === SymbolKind.EnumMember
-	if (valueSide.kind === NodeKind.Identifier && valueSide.resolvedSym !== null
-			&& valueSide.resolvedSym.symbolKind === SymbolKind.EnumMember) {
-		const enumMemberName = (valueSide.data as IdentifierData).name; // "EnumType_Member"
-		dest.push({ varName, fieldName: md.property, litValue: enumMemberName });
-	}
-}
-
-// Tier 2: record discriminant narrowing facts on CheckerContext.
-// We DON'T mutate sym.symbolType (that breaks C codegen union variant access paths).
-// Instead we push to ctx.narrowedDiscriminants so checkMemberExpr can validate field
-// access against the narrowed variant and reject fields that belong to other variants.
-function applyDiscriminantNarrowing(ctx: CheckerContext, checks: DiscriminantCheck[]): void {
-	for (const check of checks) {
-		const sym = lookupSymbol(ctx.table, check.varName);
-		if (sym === null || sym.symbolType === null) continue;
-		if (sym.symbolType.kind !== TypeKind.Union) continue;
-		const di = detectUnionDiscriminant(sym.symbolType, check.fieldName);
-		if (di.discField === "") continue;
-		let variantIdx = -1;
-		if (di.isStringDU) {
-			variantIdx = findVariantByStringDiscriminant(sym.symbolType, check.fieldName, check.litValue);
-		} else {
-			variantIdx = findVariantByDiscriminant(sym.symbolType, check.litValue);
-		}
-		if (variantIdx < 0 || variantIdx >= sym.symbolType.typeChildren.length) continue;
-		ctx.narrowedDiscriminants.push({ varName: check.varName, variantIdx });
-	}
-}
-
-// Check a branch body under narrowed facts. Saves/restores facts and symbol types.
-function checkNarrowedBranch(ctx: CheckerContext, vars: string[], body: Node, addFacts: (ctx: CheckerContext, cond: Node) => void, condition: Node): void {
-	const snap = saveFacts(ctx);
-	addFacts(ctx, condition);
-	const narrowedSyms: Symbol[] = [];
-	const savedTypes: Type[] = [];
-	applyNarrowing(ctx, vars, narrowedSyms, savedTypes);
-	// Tier 2: record discriminant-narrowed variables (fact-based, no symbolType mutation)
-	const discChecks = extractDiscriminantChecks(condition);
-	const discSnap = ctx.narrowedDiscriminants.length;
-	applyDiscriminantNarrowing(ctx, discChecks);
-	checkStmt(ctx, body);
-	ctx.narrowedDiscriminants.length = discSnap;
-	restoreNarrowing(narrowedSyms, savedTypes);
-	restoreFacts(ctx, snap);
-}
-
 function checkIfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as IfStmtData;
 	checkExpr(ctx, d.condition, null);
-	const vars = extractNullCheckedVars(d.condition);
 
-	// Ref parity: trackIf (sempass2 lines 847-889) — count table + exhaustiveness
+	// Ref parity: trackIf — count table + exhaustiveness for init/affine trackers.
+	// Phase 4: narrowing flows through the flow graph — no fact stack needed.
 	const oldState = saveInitState(ctx.initTracker);
 	const oldAffine = saveConsumeState(ctx.affineTracker);
 	const branchInits: string[][] = [];
@@ -815,7 +597,7 @@ function checkIfStmt(ctx: CheckerContext, node: Node): void {
 	const branchConsumes: string[][] = [];
 
 	// Track consequent
-	checkNarrowedBranch(ctx, vars, d.consequent, addFact, d.condition);
+	checkStmt(ctx, d.consequent);
 	branchInits.push(collectNewInits(ctx.initTracker, oldState));
 	branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 	branchBreaks.push(breaksBlock(d.consequent));
@@ -825,7 +607,7 @@ function checkIfStmt(ctx: CheckerContext, node: Node): void {
 	if (hasElse) {
 		restoreInitState(ctx.initTracker, oldState);
 		restoreConsumeState(ctx.affineTracker, oldAffine);
-		checkNarrowedBranch(ctx, vars, d.alternate, addFactNeg, d.condition);
+		checkStmt(ctx, d.alternate);
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 		branchBreaks.push(breaksBlock(d.alternate));
@@ -1016,28 +798,16 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 function checkBlock(ctx: CheckerContext, node: Node): void {
 	const d = node.data as BlockStmtData;
 	openScope(ctx.table, ScopeKind.Block);
-	const snap = saveFacts(ctx);
-	const guardSyms: Symbol[] = [];
-	const guardSaved: Type[] = [];
+	// Phase 4: guard-clause narrowing (`if (x === null) return; x.foo`) flows
+	// automatically through the binder's post-if BranchLabel. The flow graph
+	// sees the FalseCondition edge for the fall-through path and narrows
+	// subsequent references via getFlowTypeOfReference.
 	let i = 0;
 	while (i < d.statements.length) {
 		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { break; }
-		const stmt = d.statements[i];
-		checkStmt(ctx, stmt);
-
-		// Guard clause: if (x === null) return; → NOT(condition) holds for rest of block
-		if (stmt.kind === NodeKind.IfStmt) {
-			const guardD = stmt.data as IfStmtData;
-			if (guardD.alternate === null && isDefiniteExit(guardD.consequent)) {
-				addFactNeg(ctx, guardD.condition);
-				const vars = extractNullCheckedVars(guardD.condition);
-				applyNarrowing(ctx, vars, guardSyms, guardSaved);
-			}
-		}
+		checkStmt(ctx, d.statements[i]);
 		i = i + 1;
 	}
-	restoreNarrowing(guardSyms, guardSaved);
-	restoreFacts(ctx, snap);
 	// PARALOCK Phase 1: verify every SpawnHandle declared in this block was consumed
 	checkAffineConsumption(ctx, ctx.table.current, ctx.affineTracker);
 	closeScope(ctx.table);
@@ -1243,43 +1013,14 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 			}
 		}
 
-		// Variant narrowing: use fact-based approach (ctx.narrowedDiscriminants) which doesn't
-		// mutate symbolType — C codegen needs the full Union type for .vN.field accessor paths.
-		const discSnap = ctx.narrowedDiscriminants.length;
-		if (narrowBase !== null && cd.casePatterns.length === 1) {
-			const pat = cd.casePatterns[0];
-			let variantIdx = -1;
-			if (narrowIsStringDU) {
-				if (pat.kind === NodeKind.StringLiteral) {
-					const sd = pat.data as StringLiteralData;
-					variantIdx = findVariantByStringDiscriminant(narrowUnion, narrowDiscField, sd.value);
-				}
-				if (variantIdx >= 0) {
-					const baseName = narrowBase.name;
-					ctx.narrowedDiscriminants.push({ varName: baseName, variantIdx });
-				}
-			} else {
-				let patEnumName = "";
-				if (pat.kind === NodeKind.MemberExpr) {
-					patEnumName = (pat.data as MemberExprData).property;
-				} else if (pat.kind === NodeKind.Identifier && pat.resolvedSym !== null) {
-					patEnumName = pat.resolvedSym.name;
-				}
-				if (patEnumName !== "") {
-					variantIdx = findVariantByDiscriminant(narrowUnion, patEnumName);
-				}
-				if (variantIdx >= 0) {
-					ctx.narrowedDiscriminants.push({ varName: narrowBase.name, variantIdx });
-				}
-			}
-		}
+		// Phase 4: per-arm variant narrowing flows through the binder's
+		// synthesizeMatchArmFlow → TrueCondition → getFlowTypeOfReference path.
+		// The checker no longer needs to push/pop narrowing state here.
 
 		if (cd.caseGuard !== null) {
 			checkExpr(ctx, cd.caseGuard, null);
 		}
 		checkStmt(ctx, cd.caseBody);
-
-		ctx.narrowedDiscriminants.length = discSnap;
 
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
@@ -1438,8 +1179,37 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	collectTopLevel(ctx, program);
 	resolveDeclarations(ctx, program);
+	bindFlowGraph(program);  // Phase 1: build the CFG (unused by checker yet — Phase 2 will query)
 	checkProgramBody(ctx, program);
 	if (ctx.modulePath !== "") reportUnusedSymbols(ctx, program);
+}
+
+// Mark symbols referenced inside a macro body as used.
+// Macro bodies are not type-checked (they run in the Raiser VM), but their
+// identifiers (e.g. NodeKind in `NodeKind.BinaryExpr`) come from imports that
+// would otherwise be reported as unused.
+function markMacroUsedSymbols(ctx: CheckerContext, node: Node): void {
+	const d = node.data as MacroDeclData;
+	// Mark param type names as used (e.g. `x: Node` → mark Node)
+	for (const paramType of d.macroDeclParamTypes) {
+		if (paramType !== "") {
+			const sym = lookupSymbol(ctx.table, paramType);
+			if (sym !== null) markUsed(sym);
+		}
+	}
+	markMacroBodyUsed(ctx, d.macroDeclBody);
+}
+
+function markMacroBodyUsed(ctx: CheckerContext, node: Node): void {
+	if (node === null) return;
+	if (node.kind === NodeKind.Identifier) {
+		const id = node.data as IdentifierData;
+		const sym = lookupSymbol(ctx.table, id.name);
+		if (sym !== null) markUsed(sym);
+	}
+	forEachChild(node, (child: Node): void => {
+		markMacroBodyUsed(ctx, child);
+	});
 }
 
 // Two-phase unused detection (reference parity).
@@ -2275,6 +2045,48 @@ test "overload resolution prefers enum literal over enum" {
 	assert checkOk("enum K { A, B } function f(k: K.A): string; function f(k: K): string { return \"default\"; } f(K.A);");
 }
 
+test "phase 5: overload with object literal — matching variant accepted" {
+	// The object literal contextually types against the wide impl's union,
+	// then scoring picks the specific overload whose param matches exactly.
+	assert checkOk(
+		"enum K { A, B }\n"
+		+ "type Data = { kind: K.A, x: number } | { kind: K.B, y: string };\n"
+		+ "function g(k: K.A, d: { x: number }): void;\n"
+		+ "function g(k: K.B, d: { y: string }): void;\n"
+		+ "function g(k: K, d: { x: number } | { y: string }): void { }\n"
+		+ "g(K.A, { x: 42 });\n"
+		+ "g(K.B, { y: \"hi\" });\n"
+	);
+}
+
+test "phase 5: overload with object literal — dispatches to specific when matched" {
+	// When the arg pair matches a specific overload, resolvedOverloadIdx
+	// should point at that overload, not the wide impl. This is what
+	// drives LSP hover / signature help narrowing. (Verification is via
+	// successful type-check; the index is observable through LSP tests.)
+	assert checkOk(
+		"enum K { A, B }\n"
+		+ "function g(k: K.A, d: { x: number }): number;\n"
+		+ "function g(k: K.B, d: { y: string }): number;\n"
+		+ "function g(k: K, d: { x: number } | { y: string }): number { return 0; }\n"
+		+ "const r = g(K.A, { x: 42 });\n"
+	);
+}
+
+test "phase 5: runtime kind falls through to wide impl" {
+	// `createNodeAt(node.kind, node.data, loc)`-style callers pass a runtime
+	// NodeKind and the wide union data. They should type-check against the
+	// wide impl even when specific overloads exist. This is the scenario
+	// that broke the previous session's 80-overload attempt.
+	assert checkOk(
+		"enum K { A, B }\n"
+		+ "function g(k: K.A, d: { x: number }): number;\n"
+		+ "function g(k: K.B, d: { y: string }): number;\n"
+		+ "function g(k: K, d: { x: number } | { y: string }): number { return 0; }\n"
+		+ "function caller(k: K, d: { x: number } | { y: string }): number { return g(k, d); }\n"
+	);
+}
+
 test "overload with wrong enum literal errors" {
 	// f is defined to accept only K.A via overload sig, impl takes K but arg K.B must match
 	// some signature. Since K.B doesn't match the K.A sig literal, it falls through to K impl.
@@ -2474,12 +2286,6 @@ test "equals null narrows" { assert checkOk("const x = 1; if (x === null) { cons
 
 test "no narrowing without null check" { assert checkOk("const x = 1; if (x === x) { const y = x; }"); }
 
-test "removeNullFromType unit" {
-	const unionType = createUnion([stringType(), nullType()]);
-	const narrowed = removeNullFromType(unionType);
-	assert narrowed.kind === TypeKind.String;
-}
-
 test "guard clause narrows after early return" {
 	// if (x === null) return; → x should be non-null after
 	assert checkOk("function f(x: string): string { if (x === null) return \"\"; const y = x; return y; }");
@@ -2653,3 +2459,761 @@ test "index sig in function parameter" {
 // and the write mutation only handles operator === "=".
 // Users must write: m["k"] = m["k"] + 1; explicitly.
 // This is documented, not a bug — compound assignment on Map is a v2 feature.
+
+// ===== Phase 2 flow-graph integration tests =====
+//
+// Verify that getFlowTypeOfReference actually narrows types end-to-end.
+// Parse → bind → check, then find a specific reference in the AST and call
+// the flow query with the declared type. The returned type must match the
+// narrowed variant (not the full declared union).
+//
+// These run AFTER the checker pass, so Identifier nodes have resolvedSym
+// set. We walk the AST to locate a target reference by structural position
+// (no name-based guessing), then query its flowNode.
+
+// Walk function body's statements looking for the first Identifier matching
+// `targetName` whose `flowNode` is non-null. Skips declaration sites.
+function findFlowRef(root: Node, targetName: string): Node {
+	if (root === null) return null as unknown as Node;
+	// Quick structural check: is this the identifier we want?
+	if (root.kind === NodeKind.Identifier) {
+		const d = root.data as IdentifierData;
+		if (d.name === targetName && root.flowNode !== null) return root;
+	}
+	// Recurse into children per NodeKind. Only the shapes we use in tests.
+	let hit: Node = null as unknown as Node;
+	match (root.kind) {
+		NodeKind.Program => {
+			const d = root.data as ProgramData;
+			for (const s of d.programStmts) {
+				if (hit === null) hit = findFlowRef(s, targetName);
+			}
+		},
+		NodeKind.BlockStmt => {
+			const d = root.data as BlockStmtData;
+			for (const s of d.statements) {
+				if (hit === null) hit = findFlowRef(s, targetName);
+			}
+		},
+		NodeKind.IfStmt => {
+			const d = root.data as IfStmtData;
+			if (hit === null) hit = findFlowRef(d.condition, targetName);
+			if (hit === null) hit = findFlowRef(d.consequent, targetName);
+			if (hit === null) hit = findFlowRef(d.alternate, targetName);
+		},
+		NodeKind.ExprStmt => {
+			const d = root.data as ExprStmtData;
+			if (hit === null) hit = findFlowRef(d.expr, targetName);
+		},
+		NodeKind.ReturnStmt => {
+			const d = root.data as ReturnStmtData;
+			if (hit === null) hit = findFlowRef(d.argument, targetName);
+		},
+		NodeKind.MemberExpr => {
+			const d = root.data as MemberExprData;
+			if (hit === null) hit = findFlowRef(d.object, targetName);
+		},
+		NodeKind.BinaryExpr => {
+			const d = root.data as BinaryExprData;
+			if (hit === null) hit = findFlowRef(d.left, targetName);
+			if (hit === null) hit = findFlowRef(d.right, targetName);
+		},
+		NodeKind.UnaryExpr => {
+			const d = root.data as UnaryExprData;
+			if (hit === null) hit = findFlowRef(d.operand, targetName);
+		},
+		NodeKind.CallExpr => {
+			const d = root.data as CallExprData;
+			if (hit === null) hit = findFlowRef(d.callee, targetName);
+			for (const a of d.arguments) {
+				if (hit === null) hit = findFlowRef(a, targetName);
+			}
+		},
+		NodeKind.FunctionDecl => {
+			const d = root.data as FunctionDeclData;
+			if (hit === null) hit = findFlowRef(d.fnBody, targetName);
+		},
+		NodeKind.VariableDecl => {
+			const d = root.data as VariableDeclData;
+			if (hit === null) hit = findFlowRef(d.initializer, targetName);
+		},
+		NodeKind.WhileStmt => {
+			const d = root.data as WhileStmtData;
+			if (hit === null) hit = findFlowRef(d.whileCondition, targetName);
+			if (hit === null) hit = findFlowRef(d.whileBody, targetName);
+		},
+		NodeKind.DoWhileStmt => {
+			const d = root.data as DoWhileStmtData;
+			if (hit === null) hit = findFlowRef(d.doBody, targetName);
+			if (hit === null) hit = findFlowRef(d.doCondition, targetName);
+		},
+		NodeKind.ForStmt => {
+			const d = root.data as ForStmtData;
+			if (hit === null) hit = findFlowRef(d.forInit, targetName);
+			if (hit === null) hit = findFlowRef(d.forCondition, targetName);
+			if (hit === null) hit = findFlowRef(d.forUpdate, targetName);
+			if (hit === null) hit = findFlowRef(d.forBody, targetName);
+		},
+		NodeKind.ForOfStmt => {
+			const d = root.data as ForOfStmtData;
+			if (hit === null) hit = findFlowRef(d.forOfIterable, targetName);
+			if (hit === null) hit = findFlowRef(d.forOfBody, targetName);
+		},
+		NodeKind.ArrayAccess => {
+			const d = root.data as ArrayAccessData;
+			if (hit === null) hit = findFlowRef(d.array, targetName);
+			if (hit === null) hit = findFlowRef(d.index, targetName);
+		},
+		_ => {},
+	};
+	return hit;
+}
+
+// Find a reference inside a specific consequent/alternate branch of an if.
+function findFnBody(program: Node): Node {
+	const pd = program.data as ProgramData;
+	for (const s of pd.programStmts) {
+		if (s.kind === NodeKind.FunctionDecl) {
+			const fd = s.data as FunctionDeclData;
+			return fd.fnBody;
+		}
+	}
+	return null as unknown as Node;
+}
+
+function findIfConsequent(body: Node): Node {
+	if (body === null || body.kind !== NodeKind.BlockStmt) return null as unknown as Node;
+	const bd = body.data as BlockStmtData;
+	for (const s of bd.statements) {
+		if (s.kind === NodeKind.IfStmt) {
+			const ifd = s.data as IfStmtData;
+			return ifd.consequent;
+		}
+	}
+	return null as unknown as Node;
+}
+
+test "flow: string DU narrowing produces correct variant" {
+	const src = "type Shape = { kind: \"circle\", radius: number } | { kind: \"square\", side: number };\n"
+		+ "function f(s: Shape): number {\n"
+		+ "  if (s.kind === \"circle\") { return s.radius; }\n"
+		+ "  return 0;\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	// checkProgram runs collect + resolve + bindFlowGraph + check
+	checkProgram(program);
+	// Locate the `s` reference inside `return s.radius;` (the if consequent)
+	const fnBody = findFnBody(program);
+	assert fnBody !== null;
+	const consequent = findIfConsequent(fnBody);
+	assert consequent !== null;
+	const sRef = findFlowRef(consequent, "s");
+	assert sRef !== null;
+	assert sRef.flowNode !== null;
+	// The checker set resolvedSym + nodeType; declared type = the union
+	assert sRef.resolvedSym !== null;
+	const declared = sRef.resolvedSym.symbolType;
+	assert declared !== null;
+	assert declared.kind === TypeKind.Union;
+	// Query the flow — should narrow to the "circle" variant (a struct)
+	const narrowed = getFlowTypeOfReference(sRef, declared);
+	assert narrowed !== null;
+	assert narrowed.kind === TypeKind.Struct;
+	// The "circle" variant has `kind` and `radius` fields
+	assert narrowed.typeNames !== null;
+	let hasRadius = false;
+	for (const fn of narrowed.typeNames) {
+		if (fn === "radius") { hasRadius = true; break; }
+	}
+	assert hasRadius;
+}
+
+test "flow: string DU negative narrowing (else branch)" {
+	const src = "type Shape = { kind: \"circle\", radius: number } | { kind: \"square\", side: number };\n"
+		+ "function f(s: Shape): number {\n"
+		+ "  if (s.kind === \"circle\") { return 1; }\n"
+		+ "  return s.side;\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	// Find the `s` inside `return s.side;` (after the if, post-else path)
+	const fnBody = findFnBody(program);
+	assert fnBody !== null;
+	// The `return s.side` is the second statement in the function body
+	const bd = fnBody.data as BlockStmtData;
+	assert bd.statements.length >= 2;
+	const postReturn = bd.statements[1];
+	assert postReturn.kind === NodeKind.ReturnStmt;
+	const sRef = findFlowRef(postReturn, "s");
+	assert sRef !== null;
+	assert sRef.flowNode !== null;
+	const declared = sRef.resolvedSym.symbolType;
+	assert declared.kind === TypeKind.Union;
+	const narrowed = getFlowTypeOfReference(sRef, declared);
+	// After the if-then returns early, `s` is narrowed to NOT "circle" →
+	// the "square" variant (only remaining).
+	assert narrowed !== null;
+	assert narrowed.kind === TypeKind.Struct;
+	assert narrowed.typeNames !== null;
+	let hasSide = false;
+	for (const fn of narrowed.typeNames) {
+		if (fn === "side") { hasSide = true; break; }
+	}
+	assert hasSide;
+}
+
+test "flow: no narrowing returns declared type" {
+	// A plain reference with no conditional context should get the declared type back.
+	const src = "function f(x: number): number { return x; }\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	const fnBody = findFnBody(program);
+	const xRef = findFlowRef(fnBody, "x");
+	assert xRef !== null;
+	assert xRef.resolvedSym !== null;
+	const declared = xRef.resolvedSym.symbolType;
+	assert declared !== null;
+	const result = getFlowTypeOfReference(xRef, declared);
+	assert result === declared;
+}
+
+test "flow: while loop preserves narrowing in body" {
+	// Inside `while (x !== null) { body }`, references to x in the body
+	// should be narrowed to non-null via the LoopLabel → TrueCondition edge.
+	const src = "function f(x: string): string {\n"
+		+ "  while (x.length > 0) { const y = x; return y; }\n"
+		+ "  return \"\";\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	// Ensure the while body's `x` reference has a non-null flowNode — this
+	// is the foundational invariant for loop narrowing (pre-loop edge is the
+	// first antecedent of the LoopLabel).
+	const fnBody = findFnBody(program);
+	const bd = fnBody.data as BlockStmtData;
+	const whileStmt = bd.statements[0];
+	assert whileStmt.kind === NodeKind.WhileStmt;
+	const wd = whileStmt.data as WhileStmtData;
+	const xRef = findFlowRef(wd.whileBody, "x");
+	assert xRef !== null;
+	assert xRef.flowNode !== null;
+	// Narrowed type should be x's declared type (string) — no union narrowing
+	// happens here, but the query must return successfully without infinite
+	// recursion. This proves the loop fixed-point terminates.
+	const declared = xRef.resolvedSym.symbolType;
+	const narrowed = getFlowTypeOfReference(xRef, declared);
+	assert narrowed !== null;
+	assert narrowed.kind === TypeKind.String;
+}
+
+test "flow: narrowing inside loop body via discriminant check" {
+	const src = "type Shape = { kind: \"circle\", radius: number } | { kind: \"square\", side: number };\n"
+		+ "function f(shapes: Shape[]): number {\n"
+		+ "  let total: number = 0;\n"
+		+ "  for (const s of shapes) {\n"
+		+ "    if (s.kind === \"circle\") { total = total + s.radius; }\n"
+		+ "  }\n"
+		+ "  return total;\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	// Walk into the for-of body's if-consequent
+	const fnBody = findFnBody(program);
+	const bd = fnBody.data as BlockStmtData;
+	// Statements: [let total, for-of, return]
+	const forOf = bd.statements[1];
+	assert forOf.kind === NodeKind.ForOfStmt;
+	const fd = forOf.data as ForOfStmtData;
+	const consequent = findIfConsequent(fd.forOfBody);
+	assert consequent !== null;
+	const sRef = findFlowRef(consequent, "s");
+	assert sRef !== null;
+	const declared = sRef.resolvedSym.symbolType;
+	assert declared.kind === TypeKind.Union;
+	// Narrowing via condition inside loop body — the LoopLabel walk back
+	// must traverse the TrueCondition(s.kind === "circle") correctly.
+	const narrowed = getFlowTypeOfReference(sRef, declared);
+	assert narrowed !== null;
+	assert narrowed.kind === TypeKind.Struct;
+	let hasRadius = false;
+	for (const fn of narrowed.typeNames) {
+		if (fn === "radius") { hasRadius = true; break; }
+	}
+	assert hasRadius;
+}
+
+test "flow: nested loops don't infinite-recurse" {
+	// The fixed-point must terminate even when two LoopLabels point at each
+	// other. This exercises the per-query flowLoopStack re-entry detection.
+	const src = "function f(n: number): number {\n"
+		+ "  let i: number = 0;\n"
+		+ "  while (i < n) {\n"
+		+ "    let j: number = 0;\n"
+		+ "    while (j < n) { j = j + 1; }\n"
+		+ "    i = i + 1;\n"
+		+ "  }\n"
+		+ "  return i;\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	const fnBody = findFnBody(program);
+	// Query the outer `i` inside the outer while body — must terminate.
+	const iRef = findFlowRef(fnBody, "i");
+	assert iRef !== null;
+	assert iRef.flowNode !== null;
+	const declared = iRef.resolvedSym.symbolType;
+	const narrowed = getFlowTypeOfReference(iRef, declared);
+	assert narrowed !== null;  // must not hang
+}
+
+test "flow: do-while narrowing inside body" {
+	const src = "type Shape = { kind: \"circle\", radius: number } | { kind: \"square\", side: number };\n"
+		+ "function f(shapes: Shape[]): number {\n"
+		+ "  let i: number = 0;\n"
+		+ "  let total: number = 0;\n"
+		+ "  do {\n"
+		+ "    const s: Shape = shapes[i];\n"
+		+ "    if (s.kind === \"circle\") { total = total + s.radius; }\n"
+		+ "    i = i + 1;\n"
+		+ "  } while (i < shapes.length);\n"
+		+ "  return total;\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	// Verify the fixed-point terminates and narrowing works inside do-while body.
+	const fnBody = findFnBody(program);
+	const bd = fnBody.data as BlockStmtData;
+	// Statements: [let i, let total, do-while, return]
+	const doW = bd.statements[2];
+	assert doW.kind === NodeKind.DoWhileStmt;
+	const dwd = doW.data as DoWhileStmtData;
+	const consequent = findIfConsequent(dwd.doBody);
+	assert consequent !== null;
+	const sRef = findFlowRef(consequent, "s");
+	assert sRef !== null;
+	const declared = sRef.resolvedSym.symbolType;
+	assert declared.kind === TypeKind.Union;
+	const narrowed = getFlowTypeOfReference(sRef, declared);
+	assert narrowed !== null;
+	assert narrowed.kind === TypeKind.Struct;
+}
+
+test "flow: classic for loop narrowing inside body" {
+	const src = "type Shape = { kind: \"circle\", radius: number } | { kind: \"square\", side: number };\n"
+		+ "function f(shapes: Shape[]): number {\n"
+		+ "  let total: number = 0;\n"
+		+ "  for (let i: number = 0; i < shapes.length; i = i + 1) {\n"
+		+ "    const s: Shape = shapes[i];\n"
+		+ "    if (s.kind === \"square\") { total = total + s.side; }\n"
+		+ "  }\n"
+		+ "  return total;\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	const fnBody = findFnBody(program);
+	const bd = fnBody.data as BlockStmtData;
+	// Statements: [let total, for, return]
+	const forStmt = bd.statements[1];
+	assert forStmt.kind === NodeKind.ForStmt;
+	const fsd = forStmt.data as ForStmtData;
+	const consequent = findIfConsequent(fsd.forBody);
+	assert consequent !== null;
+	const sRef = findFlowRef(consequent, "s");
+	assert sRef !== null;
+	const declared = sRef.resolvedSym.symbolType;
+	assert declared.kind === TypeKind.Union;
+	const narrowed = getFlowTypeOfReference(sRef, declared);
+	assert narrowed !== null;
+	assert narrowed.kind === TypeKind.Struct;
+	// Narrowed to the "square" variant
+	let hasSide = false;
+	for (const fn of narrowed.typeNames) {
+		if (fn === "side") { hasSide = true; break; }
+	}
+	assert hasSide;
+}
+
+test "flow: narrowing survives across loop back-edge" {
+	// x starts as string|number, narrowed in the loop body. The back-edge
+	// join must include both the pre-loop type AND the body-narrowed type.
+	// On the next iteration (or after the loop), the union should be the
+	// declared type (because the back-edge can return any variant).
+	const src = "function f(x: string | number): number {\n"
+		+ "  let i: number = 0;\n"
+		+ "  while (i < 10) {\n"
+		+ "    if (typeof x === \"number\") { i = i + 1; }\n"
+		+ "    i = i + 1;\n"
+		+ "  }\n"
+		+ "  return i;\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	// Find the `x` reference inside the typeof condition — it should have a
+	// flowNode pointing into the loop body. Query must terminate.
+	const fnBody = findFnBody(program);
+	const bd = fnBody.data as BlockStmtData;
+	const whileStmt = bd.statements[1];
+	assert whileStmt.kind === NodeKind.WhileStmt;
+	const wd = whileStmt.data as WhileStmtData;
+	const xRef = findFlowRef(wd.whileBody, "x");
+	assert xRef !== null;
+	assert xRef.flowNode !== null;
+	const declared = xRef.resolvedSym.symbolType;
+	const narrowed = getFlowTypeOfReference(xRef, declared);
+	// Must not hang; result should be the declared union (no narrowing from
+	// a reference that appears BEFORE its narrowing check — fine for Phase 3).
+	assert narrowed !== null;
+}
+
+test "flow: break inside loop preserves post-loop flow" {
+	// After `break`, control jumps to postLoop. The post-loop narrowing is
+	// the union of pre-loop type (if loop never ran) and the break point's
+	// type. Primarily a termination test.
+	const src = "function f(xs: number[]): number {\n"
+		+ "  let i: number = 0;\n"
+		+ "  while (i < xs.length) {\n"
+		+ "    if (xs[i] === 42) { break; }\n"
+		+ "    i = i + 1;\n"
+		+ "  }\n"
+		+ "  return i;\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	// Query i after the loop — must terminate, must return number.
+	const fnBody = findFnBody(program);
+	const iRef = findFlowRef(fnBody, "i");
+	assert iRef !== null;
+	const declared = iRef.resolvedSym.symbolType;
+	const narrowed = getFlowTypeOfReference(iRef, declared);
+	assert narrowed !== null;
+	assert narrowed.kind === TypeKind.Number;
+}
+
+test "flow: reassignment inside loop does not hang" {
+	// Pathological: narrow x, reassign it, query x after reassignment. The
+	// flow walker must not infinite-recurse even if the variable is
+	// reassigned inside a loop.
+	const src = "function f(x: string | number, n: number): number {\n"
+		+ "  let i: number = 0;\n"
+		+ "  while (i < n) {\n"
+		+ "    if (typeof x === \"number\") { x = x + 1; }\n"
+		+ "    i = i + 1;\n"
+		+ "  }\n"
+		+ "  return i;\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	const fnBody = findFnBody(program);
+	const iRef = findFlowRef(fnBody, "i");
+	assert iRef !== null;
+	const declared = iRef.resolvedSym.symbolType;
+	const narrowed = getFlowTypeOfReference(iRef, declared);
+	assert narrowed !== null;
+}
+
+test "flow: switch clause narrows DU" {
+	const src = "type Shape = { kind: \"circle\", radius: number } | { kind: \"square\", side: number };\n"
+		+ "function f(s: Shape): number {\n"
+		+ "  switch (s.kind) {\n"
+		+ "    case \"circle\": { return s.radius; }\n"
+		+ "    default: { return 0; }\n"
+		+ "  }\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	const fnBody = findFnBody(program);
+	assert fnBody !== null;
+	// Walk into the switch's "circle" case body
+	const bd = fnBody.data as BlockStmtData;
+	assert bd.statements.length >= 1;
+	const sw = bd.statements[0];
+	assert sw.kind === NodeKind.SwitchStmt;
+	const swData = sw.data as SwitchStmtData;
+	assert swData.switchCases.length >= 1;
+	const circleCase = swData.switchCases[0];
+	const ccd = circleCase.data as SwitchCaseData;
+	assert !ccd.isDefault;
+	// Locate `s` inside `return s.radius;`
+	const caseBody = ccd.caseStmts[0];
+	const sRef = findFlowRef(caseBody, "s");
+	assert sRef !== null;
+	assert sRef.flowNode !== null;
+	const declared = sRef.resolvedSym.symbolType;
+	assert declared.kind === TypeKind.Union;
+	const narrowed = getFlowTypeOfReference(sRef, declared);
+	assert narrowed !== null;
+	assert narrowed.kind === TypeKind.Struct;
+	let hasRadius = false;
+	for (const fn of narrowed.typeNames) {
+		if (fn === "radius") { hasRadius = true; break; }
+	}
+	assert hasRadius;
+}
+
+test "flow: typeof narrows union to primitive" {
+	const src = "function f(x: string | number): number {\n"
+		+ "  if (typeof x === \"number\") { return x; }\n"
+		+ "  return 0;\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	const fnBody = findFnBody(program);
+	const consequent = findIfConsequent(fnBody);
+	assert consequent !== null;
+	const xRef = findFlowRef(consequent, "x");
+	assert xRef !== null;
+	assert xRef.flowNode !== null;
+	const declared = xRef.resolvedSym.symbolType;
+	assert declared.kind === TypeKind.Union;
+	const narrowed = getFlowTypeOfReference(xRef, declared);
+	assert narrowed !== null;
+	assert narrowed.kind === TypeKind.Number;
+}
+
+test "flow: typeof negation in else" {
+	const src = "function f(x: string | number): string {\n"
+		+ "  if (typeof x === \"number\") { return \"n\"; }\n"
+		+ "  return x;\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	const fnBody = findFnBody(program);
+	const bd = fnBody.data as BlockStmtData;
+	const postReturn = bd.statements[1];
+	const xRef = findFlowRef(postReturn, "x");
+	assert xRef !== null;
+	assert xRef.flowNode !== null;
+	const declared = xRef.resolvedSym.symbolType;
+	const narrowed = getFlowTypeOfReference(xRef, declared);
+	// After `typeof x === "number"` returns, x is narrowed to string (union minus number).
+	assert narrowed !== null;
+	assert narrowed.kind === TypeKind.String;
+}
+
+test "flow: enum DU narrowing via match-syntax discriminated union" {
+	// Uses the checker-recognized discriminated-union syntax:
+	//   type V = match (kind: K) { K.A => { x }, K.B => { y } }
+	// This is the pattern the existing ctx.narrowedDiscriminants path supports
+	// and is the shape findVariantByDiscriminant was designed for.
+	const src = "enum K { A, B }\n"
+		+ "type V = match (kind: K) { K.A => { x: number }, K.B => { y: string } };\n"
+		+ "function f(v: V): number {\n"
+		+ "  if (v.kind === K.A) { return v.x; }\n"
+		+ "  return 0;\n"
+		+ "}\n";
+	const pr = parseSource(src);
+	assert pr.ok;
+	const program = pr.value;
+	checkProgram(program);
+	const fnBody = findFnBody(program);
+	const consequent = findIfConsequent(fnBody);
+	assert consequent !== null;
+	const vRef = findFlowRef(consequent, "v");
+	assert vRef !== null;
+	assert vRef.flowNode !== null;
+	assert vRef.resolvedSym !== null;
+	const declared = vRef.resolvedSym.symbolType;
+	assert declared !== null;
+	assert declared.kind === TypeKind.Union;
+	const narrowed = getFlowTypeOfReference(vRef, declared);
+	assert narrowed !== null;
+	// Narrowed to the A-variant (has `x`)
+	assert narrowed.kind === TypeKind.Struct;
+	let hasX = false;
+	for (const fn of narrowed.typeNames) {
+		if (fn === "x") { hasX = true; break; }
+	}
+	assert hasX;
+}
+
+// ===== Phase 5: two-pass overload resolution =====
+
+test "phase 5: overload with object literal picks specific variant" {
+	// Specific overload with EnumLiteral arg[0] wins over wide impl. Object
+	// literal arg[1] is context-sensitive — skipped in Pass 1, checked in
+	// Pass 2 against the winner's param type (the specific struct).
+	assert checkOk(
+		"enum K { A, B }\n"
+		+ "function g(k: K.A, d: { x: number }): number;\n"
+		+ "function g(k: K.B, d: { y: string }): number;\n"
+		+ "function g(k: K, d: { x: number } | { y: string }): number { return 0; }\n"
+		+ "const r1 = g(K.A, { x: 42 });\n"
+		+ "const r2 = g(K.B, { y: \"hi\" });\n"
+	);
+}
+
+test "phase 5: runtime kind falls through to wide impl" {
+	// createNodeAt(node.kind, node.data, loc)-style callers pass runtime kinds.
+	// Specific overloads all fail the EnumLiteral-vs-Enum check; wide impl wins.
+	assert checkOk(
+		"enum K { A, B }\n"
+		+ "function g(k: K.A, d: { x: number }): number;\n"
+		+ "function g(k: K.B, d: { y: string }): number;\n"
+		+ "function g(k: K, d: { x: number } | { y: string }): number { return 0; }\n"
+		+ "function caller(k: K, d: { x: number } | { y: string }): number { return g(k, d); }\n"
+	);
+}
+
+test "phase 5: nested overload calls compose" {
+	// Bottom-up expression evaluation: the inner call's Pass 2 commit runs
+	// before the outer call's Pass 1 sees the arg.
+	assert checkOk(
+		"enum K { A, B }\n"
+		+ "function g(k: K.A, d: { x: number }): number;\n"
+		+ "function g(k: K, d: { x: number }): number { return 0; }\n"
+		+ "function h(v: number): number { return v; }\n"
+		+ "const r = h(g(K.A, { x: 42 }));\n"
+	);
+}
+
+// ===== Phase 6: Polish — aliased conditions =====
+
+test "phase 6: aliased typeof narrows union" {
+	// `const isStr = typeof val === "string"` should narrow `val` in both
+	// branches when `isStr` is tested. Flow graph walks the identifier's
+	// declNode and recurses narrowType on the stored initializer.
+	assert checkOk(
+		"function f(val: string | number): number {\n"
+		+ "  const isStr = typeof val === \"string\";\n"
+		+ "  if (isStr) { return val.length; }\n"
+		+ "  return val;\n"
+		+ "}\n"
+	);
+}
+
+test "phase 6: aliased negation narrows union" {
+	// `const notStr = typeof val !== "string"` — when true, `val` is number.
+	assert checkOk(
+		"function f(val: string | number): number {\n"
+		+ "  const notStr = typeof val !== \"string\";\n"
+		+ "  if (notStr) { return val; }\n"
+		+ "  return val.length;\n"
+		+ "}\n"
+	);
+}
+
+test "phase 6: aliased null check narrows" {
+	// Nullable narrowing via aliased const.
+	assert checkOk(
+		"function f(val: string): number {\n"
+		+ "  const hasVal = val !== null;\n"
+		+ "  if (hasVal) { return val.length; }\n"
+		+ "  return 0;\n"
+		+ "}\n"
+	);
+}
+
+test "phase 6: let does NOT alias (reassignable)" {
+	// `let` bindings can be reassigned, so their stored initializer is not
+	// guaranteed to reflect the current value. Must stay wide.
+	assert !checkOk(
+		"function f(val: string | number): number {\n"
+		+ "  let isStr = typeof val === \"string\";\n"
+		+ "  if (isStr) { return val.length; }\n"
+		+ "  return 0;\n"
+		+ "}\n"
+	);
+}
+
+test "phase 6: logical && narrows both operands" {
+	// `if (a && b)` narrows by `a` then by `b`.
+	assert checkOk(
+		"function f(val: string | number | null): number {\n"
+		+ "  if (val !== null && typeof val === \"string\") {\n"
+		+ "    return val.length;\n"
+		+ "  }\n"
+		+ "  return 0;\n"
+		+ "}\n"
+	);
+}
+
+test "phase 6: assignment narrows union to primitive variant" {
+	// `let x: string | number; x = "hello"; x.length` — after the assignment,
+	// x is narrowed to string.
+	assert checkOk(
+		"function f(): number {\n"
+		+ "  let x: string | number = 1;\n"
+		+ "  x = \"hello\";\n"
+		+ "  return x.length;\n"
+		+ "}\n"
+	);
+}
+
+test "phase 6: assignment narrow respects declared upper bound" {
+	// After reassigning x = 42, x is number. .length rejected.
+	assert !checkOk(
+		"function f(): number {\n"
+		+ "  let x: string | number = \"hi\";\n"
+		+ "  x = 42;\n"
+		+ "  return x.length;\n"
+		+ "}\n"
+	);
+}
+
+test "phase 6: type predicate narrows in truthy branch" {
+	// `isString(val)` true → val is string → return val is valid.
+	assert checkOk(
+		"function isString(x: string | number): x is string {\n"
+		+ "  return typeof x === \"string\";\n"
+		+ "}\n"
+		+ "function f(val: string | number): string {\n"
+		+ "  if (isString(val)) { return val; }\n"
+		+ "  return \"\";\n"
+		+ "}\n"
+	);
+}
+
+test "phase 6: type predicate excludes variant in falsy branch" {
+	// `isString(val)` false → val is number → return val is valid as number.
+	assert checkOk(
+		"function isString(x: string | number): x is string {\n"
+		+ "  return typeof x === \"string\";\n"
+		+ "}\n"
+		+ "function f(val: string | number): number {\n"
+		+ "  if (isString(val)) { return 0; }\n"
+		+ "  return val;\n"
+		+ "}\n"
+	);
+}
+
+test "phase 6: non-predicate function does not narrow" {
+	// A normal boolean-returning function doesn't narrow its argument.
+	// val stays `string | number` after the check.
+	assert !checkOk(
+		"function isTruthy(x: string | number): boolean {\n"
+		+ "  return true;\n"
+		+ "}\n"
+		+ "function f(val: string | number): string {\n"
+		+ "  if (isTruthy(val)) { return val; }\n"
+		+ "  return \"\";\n"
+		+ "}\n"
+	);
+}

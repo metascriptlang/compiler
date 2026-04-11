@@ -37,7 +37,7 @@ import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { globalImports } from "../checker/prelude";
 import { drainPendingInstances } from "../checker/instantiate";
-import { ResolveSection, defaultResolveSection, defaultCcSection, resolveCcForTarget, loadBuildConfig } from "./buildConfig";
+import { ResolveSection, DepsSection, defaultResolveSection, defaultCcSection, resolveCcForTarget, loadBuildConfig } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { CliOptions, Target } from "./options";
@@ -53,6 +53,42 @@ import { clockMs } from "std/process";
 // ===== Build Helpers =====
 
 // Build ResolverConfig from CLI target + optional build.ms resolve section.
+
+// Scan a DepsSection for file: entries, add as aliases, and recursively
+// walk each dep's own build.ms to discover transitive file: deps.
+// This handles A → B → C chains where each package's build.ms declares
+// its own file: deps. The `visited` set prevents infinite loops on cycles.
+function addFileDepAliases(deps: DepsSection, baseDir: string, config: ResolverConfig, visited: string[], depth: number = 0): void {
+	if (depth > 20) return; // prevent runaway on deep non-cyclic trees
+	let i = 0;
+	while (i < deps.keys.length) {
+		const name = deps.keys[i];
+		const ver = deps.values[i];
+		if (ver.length > 5 && ver.slice(0, 5) === "file:") {
+			const relPath = ver.slice(5, ver.length);
+			const absPath = relPath.charAt(0) === "/" ? relPath : join(baseDir, relPath);
+			// Skip if already registered (cycle prevention)
+			let alreadyVisited = false;
+			for (const v of visited) { if (v === absPath) alreadyVisited = true; }
+			if (!alreadyVisited) {
+				config.aliasKeys.push(name);
+				config.aliasValues.push(absPath);
+				visited.push(absPath);
+				// Recursively read this dep's own build.ms for transitive file: deps
+				const depBuildMs = join(absPath, "build.ms");
+				if (exists(depBuildMs)) {
+					const depCfg = loadBuildConfig(depBuildMs, false);
+					if (depCfg.valid) {
+						addFileDepAliases(depCfg.deps, absPath, config, visited, depth + 1);
+						addFileDepAliases(depCfg.devDeps, absPath, config, visited, depth + 1);
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+}
+
 export function buildResolverConfig(target: Target, resolve: ResolveSection, osTarget: string = "", projectRoot: string = ""): ResolverConfig {
 	let backend = Backend.C;
 	if (target === Target.JS) { backend = Backend.JS; }
@@ -83,30 +119,9 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection, osT
 	if (projectRoot !== "") {
 		const cfg = loadBuildConfig(join(projectRoot, "build.ms"), false);
 		if (cfg.valid) {
-			let di = 0;
-			while (di < cfg.deps.keys.length) {
-				const depName = cfg.deps.keys[di];
-				const depVer = cfg.deps.values[di];
-				if (depVer.length > 5 && depVer.slice(0, 5) === "file:") {
-					const relPath = depVer.slice(5, depVer.length);
-					const absPath = relPath.charAt(0) === "/" ? relPath : join(projectRoot, relPath);
-					config.aliasKeys.push(depName);
-					config.aliasValues.push(absPath);
-				}
-				di = di + 1;
-			}
-			let ddi = 0;
-			while (ddi < cfg.devDeps.keys.length) {
-				const depName = cfg.devDeps.keys[ddi];
-				const depVer = cfg.devDeps.values[ddi];
-				if (depVer.length > 5 && depVer.slice(0, 5) === "file:") {
-					const relPath = depVer.slice(5, depVer.length);
-					const absPath = relPath.charAt(0) === "/" ? relPath : join(projectRoot, relPath);
-					config.aliasKeys.push(depName);
-					config.aliasValues.push(absPath);
-				}
-				ddi = ddi + 1;
-			}
+			const visited: string[] = [];
+			addFileDepAliases(cfg.deps, projectRoot, config, visited);
+			addFileDepAliases(cfg.devDeps, projectRoot, config, visited);
 		}
 	}
 

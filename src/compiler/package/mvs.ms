@@ -20,7 +20,7 @@ import { compareVersionStrings } from "./version";
 
 export interface DepEntry {
 	name: string;
-	version: string;   // "1.2.3" for registry, "git+..." for git (passed through)
+	version: string;   // "1.2.3" for registry, "git:..." for git (passed through)
 }
 
 export interface BuildListEntry {
@@ -35,9 +35,9 @@ export type LoadDepsFn = (name: string, version: string) => DepEntry[];
 
 // --- Algorithm ---
 
-// Check if a version string is a git source (starts with "git+").
+// Check if a version string is a git source (starts with "git:").
 function isGitSource(version: string): boolean {
-	return version.length >= 4 && version.slice(0, 4) === "git+";
+	return version.length >= 4 && version.slice(0, 4) === "git:";
 }
 
 // Resolve the build list from root deps using MVS.
@@ -237,23 +237,23 @@ test "mvs transitive bump" {
 test "mvs git source pass-through" {
 	const root: DepEntry[] = [
 		{ name: "foo", version: "1.0.0" },
-		{ name: "my-fork", version: "git+github.com/me/foo@v1.0.0" },
+		{ name: "my-fork", version: "git:github.com/me/foo@v1.0.0" },
 	];
 	const list = mvsResolve(root, emptyLoader);
 	assert list.length === 2;
 	assert findInBuildList(list, "foo") === "1.0.0";
-	assert findInBuildList(list, "my-fork") === "git+github.com/me/foo@v1.0.0";
+	assert findInBuildList(list, "my-fork") === "git:github.com/me/foo@v1.0.0";
 }
 
 test "mvs git source not merged with registry" {
 	// Both foo (registry) and my-fork (git of same canonical pkg) coexist.
 	const root: DepEntry[] = [
 		{ name: "foo", version: "1.0.0" },
-		{ name: "my-fork", version: "git+github.com/acme/foo@v2.0.0" },
+		{ name: "my-fork", version: "git:github.com/acme/foo@v2.0.0" },
 	];
 	const list = mvsResolve(root, emptyLoader);
 	assert findInBuildList(list, "foo") === "1.0.0";
-	assert findInBuildList(list, "my-fork") === "git+github.com/acme/foo@v2.0.0";
+	assert findInBuildList(list, "my-fork") === "git:github.com/acme/foo@v2.0.0";
 }
 
 // Hoisted test loaders — must be at module scope for the self-hosted compiler

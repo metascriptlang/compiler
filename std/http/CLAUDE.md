@@ -22,16 +22,17 @@ Feature-comparable HTTP/1.1 module to Node.js `http`. Not API-identical — we u
 | `res.write(chunk)` | `res.write(chunk)` (streaming) | Phase 4 |
 | `res.end(data?)` | `res.end()` / `res.end(data)` | Phase 4 |
 | `res.statusCode = N` | `res.status = N` | Phase 1 |
-| `http.request(options, cb)` | `request(options): Result<HttpResponse, HttpError>` | Phase 5 |
-| `http.get(url, cb)` | `httpGet(host, port, path): Result` | Phase 5 |
+| `http.request(options, cb)` | `request(options): Result<HttpResponse, HttpError>` | done |
+| `fetch(url, init?)` | `fetch(url, options?: FetchOptions): Result` | done |
 | Keep-alive (default) | Keep-alive with configurable timeout | Phase 4 |
 | `Transfer-Encoding: chunked` | Chunked response encoding | Phase 4 |
 | `Content-Length` auto | Auto Content-Length for buffered responses | Phase 4 |
 | Status codes + reason phrases | `statusText(code)` function | Phase 1 |
 | URL parsing | `parseUrl(url)` + `splitPathQuery` | Phase 3 |
+| TLS/HTTPS | auto via `std/crypto/tls` (mbedTLS) | done |
+| Redirect following | `fetch` follows up to 5 by default | done |
 | **NOT planned (v1)** | | |
 | `http.Agent` / connection pooling | Future (F6) | — |
-| TLS/HTTPS | Future (F4) | — |
 | WebSocket upgrade | Future (F5) | — |
 | Multipart form data | Future (F7) | — |
 | HTTP/2 | Not planned | — |
@@ -167,7 +168,7 @@ export interface HttpRequest {
     clientFd: int32;           // socket fd for advanced use
 }
 
-// Client response (immutable result from httpGet/httpPost)
+// Client response (immutable result from fetch/request)
 export interface HttpResponse {
     status: int32;
     statusText: string;
@@ -642,17 +643,18 @@ function handleConnection(server: HttpServer, fd: int32): void {
 
 Imports: `std/net`, `./types`, `./errors`, `./headers`, `./parser`.
 
-### Core API
+### Core API (Node.js fetch parity)
 
 ```ms
-// Simple one-shot functions
-export function httpGet(host: string, port: int32, path: string): Result<HttpResponse, HttpError> { ... }
-export function httpPost(host: string, port: int32, path: string, body: string, contentType: string): Result<HttpResponse, HttpError> { ... }
+// URL-based fetch — primary API. Auto TLS from URL, redirects by default.
+//   fetch("https://example.com")                          — simple GET
+//   fetch("https://example.com", { method: "POST", ... }) — with options
+export function fetch(url: string, options: FetchOptions = null): Result<HttpResponse, HttpError> { ... }
 
-// Full options (Node.js http.request() equivalent)
+// Full options (Node.js http.request() equivalent) — low-level escape hatch
 export function request(options: RequestOptions): Result<HttpResponse, HttpError> { ... }
 
-// Stateful client with defaults
+// Stateful client with defaults (user-agent, timeout, redirects)
 export interface HttpClient {
     timeout: int32;
     maxRedirects: int32;
@@ -660,8 +662,19 @@ export interface HttpClient {
 }
 
 export function createClient(): HttpClient { ... }
-export function get(this c: HttpClient, host: string, port: int32, path: string): Result<HttpResponse, HttpError> { ... }
-export function post(this c: HttpClient, host: string, port: int32, path: string, body: string, contentType: string): Result<HttpResponse, HttpError> { ... }
+export function clientFetch(c: HttpClient, url: string, options: FetchOptions = null): Result<HttpResponse, HttpError> { ... }
+```
+
+### FetchOptions
+
+```ms
+export interface FetchOptions {
+    method: string;       // "GET", "POST", etc. Default: "GET"
+    body: string;         // Request body. Default: ""
+    headers: HttpHeaders; // Pre-built via createHeaders()/setHeader()
+    timeout: int32;       // ms, <= 0 means default 30000
+    maxRedirects: int32;  // < 0 means default 5; 0 disables redirects
+}
 ```
 
 ### Full response body reading
@@ -780,8 +793,8 @@ export { HttpServer, createServer, listen, serve, serveN, stop,
          sendText, sendJson, sendHtml, sendError } from "./server";
 
 // Client
-export { httpGet, httpPost, request, HttpClient, createClient,
-         requestWithRedirects } from "./client";
+export { request, fetch, HttpClient, createClient,
+         clientFetch, requestWithRedirects } from "./client";
 ```
 
 ---
@@ -810,13 +823,11 @@ export { httpGet, httpPost, request, HttpClient, createClient,
 
 | Phase | Feature | Node.js Equivalent |
 |-------|---------|-------------------|
-| F1 | Event-driven server (kqueue/epoll via existing `runtime/core/selector.h`) | Concurrency / multi-client |
-| F2 | Connection pooling (client) | `http.Agent` |
-| F3 | TLS/HTTPS (mbedTLS lazy link) | `https` module |
-| F4 | WebSocket upgrade | `ws` package |
-| F5 | Multipart form data | `multer` / `formidable` |
-| F6 | Cookie jar (client) | `tough-cookie` |
-| F7 | Compression (gzip/deflate) | `zlib` |
+| F1 | Connection pooling (client) | `http.Agent` |
+| F2 | WebSocket upgrade | `ws` package |
+| F3 | Multipart form data | `multer` / `formidable` |
+| F4 | Cookie jar (client) | `tough-cookie` |
+| F5 | Compression (gzip/deflate) | `zlib` |
 
 ## Key Design Principles
 

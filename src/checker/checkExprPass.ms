@@ -8,49 +8,31 @@ import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymb
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult, findExportedSymbol } from "./context";
 import {
 	isAssignable, needsStdConv, findFirstMismatch,
-	scoreCandidatePriority, isNoMatch, emptyCandidateScore, cmpCandidates,
+	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
+	CandidateScore,
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
+import { cloneNodeForCheck } from "../monomorphize/clone";
 import { expandMacroInvocation } from "../compiler/meta/expand";
 import { findChar, splitTopLevel } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 import { markConsumedName, isConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import {
-	markInitialized, isInitialized, impliesNotNull, getDeclBlock,
+	markInitialized, isInitialized, getDeclBlock,
 	saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState,
 } from "./initTracker";
 import { callInstantiateGeneric } from "./checkerCallbacks";
+import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
+import { resetArgForRecheck, isContextSensitive } from "./speculate";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
-// ===== Definite Assignment Helpers (sempass2 parity) =====
-
-// Reference parity: invalidateFacts — when a variable is reassigned, remove
-// any narrowing facts about it (e.g., `x !== null` becomes stale after `x = ...`).
-function invalidateFacts(ctx: CheckerContext, name: string): void {
-	let i = ctx.narrowFacts.length - 1;
-	while (i >= 0) {
-		if (factReferencesVar(ctx.narrowFacts[i], name)) {
-			ctx.narrowFacts[i] = ctx.narrowFacts[ctx.narrowFacts.length - 1];
-			ctx.narrowFacts.length = ctx.narrowFacts.length - 1;
-		}
-		i = i - 1;
-	}
-}
-
-function factReferencesVar(fact: Node, name: string): boolean {
-	if (fact === null) return false;
-	if (fact.kind === NodeKind.BinaryExpr) {
-		const d = fact.data as BinaryExprData;
-		if (d.left !== null && d.left.kind === NodeKind.Identifier &&
-			(d.left.data as IdentifierData).name === name) return true;
-		if (d.right !== null && d.right.kind === NodeKind.Identifier &&
-			(d.right.data as IdentifierData).name === name) return true;
-	}
-	return false;
-}
+// Phase 4: invalidateFacts / factReferencesVar deleted.
+// Assignments that invalidate narrowing now flow through the binder's
+// FlowAssignment node + getFlowTypeOfReference. Per-use-site queries see
+// the post-assignment flow state naturally — no fact stack to purge.
 
 // ===== Generic NewExpr Resolution =====
 // Resolves `new Box<number>(42)` — captures type args from side-channel,
@@ -240,7 +222,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 				}
 			}
 			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.name.length, sym, sym.symbolType, sym.symbolKind, d.name, "", false);
-			return sym.symbolType;
+			// Phase 4: narrow via the flow graph per use site. For identifiers
+			// with no flowNode (non-reference positions) this is a no-op;
+			// otherwise it walks back through TrueCondition/FalseCondition
+			// edges to compute the refined type at this program point.
+			return getFlowTypeOfReference(node, sym.symbolType);
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
@@ -359,8 +345,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 					}
 				}
 				markInitialized(ctx.initTracker, lhsId.name);
-				// Ref parity: invalidate narrowing facts about reassigned variable
-				invalidateFacts(ctx, lhsId.name);
+				// Phase 4: reassignment invalidation now flows through the
+				// binder's FlowAssignment node — no fact stack to purge.
 			}
 			// Post-hoc literal coercion: if one side is typed integer and other is integer literal that fits, coerce.
 			// Example: `h: int64; h * 33` — coerces literal 33 (default int32) to int64.
@@ -1257,17 +1243,16 @@ function getCalleeNameForDefaults(callNode: Node): string {
 	return "";
 }
 
-// Reference parity: clone a default expression node for insertion into call.
-// Shallow clone suffices for literals; deep clone would be needed for complex exprs.
+// Reference parity: deep clone a default expression node for insertion into call.
+// Reference uses copyTree (recursive deep copy). We use cloneNodeForCheck from monomorphize.
+// Deep clone is required because defaults may be complex expressions (object literals,
+// function calls) and each call site needs its own independent AST to type-check.
 function cloneDefaultNode(node: Node): Node {
-	const clone = createNodeAt(node.kind, node.data, node.location);
-	clone.resolvedSym = node.resolvedSym;
+	const clone = cloneNodeForCheck(node);
 	// Prelude defaults are parsed but not semchecked — infer type from kind
-	if (node.nodeType !== null) {
-		clone.nodeType = node.nodeType;
-	} else {
-		match (node.kind) {
-			NodeKind.NumberLiteral => { if (isNodeIntLit(node)) { clone.nodeType = int32Type(); } else { clone.nodeType = float64Type(); } },
+	if (clone.nodeType === null) {
+		match (clone.kind) {
+			NodeKind.NumberLiteral => { clone.nodeType = isNodeIntLit(clone) ? int32Type() : float64Type(); },
 			NodeKind.BigIntLiteral => { clone.nodeType = createPrimitive(TypeKind.Int64); },
 			NodeKind.StringLiteral => { clone.nodeType = stringType(); },
 			NodeKind.BooleanLiteral => { clone.nodeType = booleanType(); },
@@ -1658,11 +1643,17 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			calleeType = instantiateGeneric(calleeType, backBindings.names, backBindings.types);
 		}
 	}
-	// Check args — with expectedType from callee params (Reference parity: signature match formal type)
+	// Overloaded direct calls — delegate arg checking to resolveOverloadCall
+	// which re-checks per candidate with speculative rollback (Phase 5).
+	// SpawnHandle consumption also happens inside, during the commit step.
+	if (needsOverloadScoring) {
+		return resolveOverloadCall(ctx, overloadSym, node);
+	}
+	// Non-overload path: check args once with callee-derived expected types.
 	const argTypes: Type[] = [];
 	for (let ai = 0; ai < d.arguments.length; ai += 1) {
 		let paramExpected: Type = null;
-		if (!needsOverloadScoring && calleeType !== null && calleeType.kind === TypeKind.Function
+		if (calleeType !== null && calleeType.kind === TypeKind.Function
 			&& calleeType.typeChildren !== null
 			&& ai < calleeType.typeChildren.length) {
 			paramExpected = calleeType.typeChildren[ai];
@@ -1670,10 +1661,6 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		checkExpr(ctx, d.arguments[ai], paramExpected);
 		let argType = d.arguments[ai].nodeType;
 		// Tier 1: narrow direct enum member access to its EnumLiteral form for call checking.
-		// The member access was rewritten to an Identifier earlier (checkMemberExpr); we stored
-		// the literal type on resolvedSym.symbolType while keeping nodeType as the wider Enum.
-		// Using the literal type here lets both overload scoring (Exact match vs Subtype) and
-		// single-function arg checking (EnumLiteral → EnumLiteral assignable) succeed.
 		if (argType !== null && argType.kind === TypeKind.Enum) {
 			const argNode = d.arguments[ai];
 			if (argNode.resolvedSym !== null
@@ -1685,9 +1672,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		}
 		argTypes.push(argType);
 		// PARALOCK Phase 1: passing a SpawnHandle identifier as a function argument
-		// counts as consumption — the handle flows out of the caller's scope via
-		// the call, and will be upcast to Promise<T> anyway. This keeps legacy
-		// sinks like waitFor(h) working without requiring a surface-syntax `await`.
+		// counts as consumption. For overloaded calls this happens inside the
+		// overload resolver's commit step instead (see resolveOverloadCall).
 		if (argType !== null && isSpawnHandle(argType) && d.arguments[ai].kind === NodeKind.Identifier) {
 			const argSym = d.arguments[ai].resolvedSym;
 			if (argSym !== null) {
@@ -1695,10 +1681,6 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				markConsumed(argSym);
 			}
 		}
-	}
-	// Overloaded direct calls — use argTypes for scoring
-	if (needsOverloadScoring) {
-		return resolveOverloadCall(ctx, overloadSym, argTypes, node);
 	}
 	// Pre-resolved single extension — return type inference (needs argTypes)
 	if (extPreResolved) {
@@ -1995,132 +1977,260 @@ function findOverloadImpl(sym: Symbol): Symbol {
 	return null as unknown as Symbol;
 }
 
-function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, argTypes: Type[], callNode: Node): Type {
-	// Tier 1: locate the implementation in the overload set. Reused below for the
-	// no-impl check, the same-return-type check, and the OverloadSig redirect.
+// Validate every overload sig against the implementation. Runs once per
+// overload set (flagged by `SymbolFlag.OverloadValidated` on the impl).
+// Rules:
+//   1. sig arity must equal impl arity
+//   2. each sig param type must be assignable to the impl's corresponding param
+//   3. sig return type must be assignable to impl return type
+// Emits errors and returns false if any rule is violated.
+function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, callNode: Node): boolean {
+	if (hasFlag(impl, SymbolFlag.OverloadValidated)) return true;
+	setFlag(impl, SymbolFlag.OverloadValidated);
+	const implFnType = impl.symbolType;
+	if (implFnType === null || implFnType.kind !== TypeKind.Function) return true;
+	const implRet = implFnType.typeReturn;
+	const implParams = implFnType.typeChildren;
+	const allSyms: Symbol[] = [sym];
+	for (const o of sym.overloads) allSyms.push(o);
+	for (const s of allSyms) {
+		if (s === impl) continue;
+		if (!hasFlag(s, SymbolFlag.OverloadSig)) continue;
+		const sigType = s.symbolType;
+		if (sigType === null || sigType.kind !== TypeKind.Function) continue;
+		if (sigType.typeChildren.length !== implParams.length) {
+			addError(ctx, `Overload signature for '${sym.name}' has ${sigType.typeChildren.length} parameter(s) but implementation has ${implParams.length}`,
+				callNode.location.line, callNode.location.column);
+			return false;
+		}
+		let paramMismatch = -1;
+		for (let pi = 0; pi < sigType.typeChildren.length; pi += 1) {
+			if (!isAssignable(sigType.typeChildren[pi], implParams[pi])) {
+				paramMismatch = pi;
+				break;
+			}
+		}
+		if (paramMismatch >= 0) {
+			addError(ctx, `Overload signature for '${sym.name}' param ${paramMismatch + 1} type '${typeNameOf(sigType.typeChildren[paramMismatch])}' not assignable to implementation param type '${typeNameOf(implParams[paramMismatch])}'`,
+				callNode.location.line, callNode.location.column);
+			return false;
+		}
+		const sRet = sigType.typeReturn;
+		if (sRet !== null && implRet !== null && !isAssignable(sRet, implRet)) {
+			addError(ctx, `Overload signature for '${sym.name}' has return type '${typeNameOf(sRet)}' incompatible with implementation return type '${typeNameOf(implRet)}'`,
+				callNode.location.line, callNode.location.column);
+			return false;
+		}
+	}
+	return true;
+}
+
+// Check one argument with a specific expected type, then extract its nodeType
+// (with EnumLiteral narrowing for direct enum-member accesses).
+function checkArgWithExpected(ctx: CheckerContext, arg: Node, expected: Type): Type {
+	checkExpr(ctx, arg, expected);
+	let argType = arg.nodeType;
+	if (argType !== null && argType.kind === TypeKind.Enum
+			&& arg.resolvedSym !== null
+			&& arg.resolvedSym.symbolKind === SymbolKind.EnumMember
+			&& arg.resolvedSym.symbolType !== null
+			&& arg.resolvedSym.symbolType.kind === TypeKind.EnumLiteral) {
+		argType = arg.resolvedSym.symbolType;
+	}
+	return argType;
+}
+
+// Check all arguments against a candidate's parameter types. Returns the
+// list of inferred argument types. For arity < params, unfilled positions
+// are skipped (defaults are filled later in the commit step).
+function checkArgsAgainstCandidate(ctx: CheckerContext, args: Node[], candType: Type): Type[] {
+	const argTypes: Type[] = [];
+	for (let ai = 0; ai < args.length; ai += 1) {
+		let expected: Type = null;
+		if (candType !== null && candType.kind === TypeKind.Function
+				&& candType.typeChildren !== null
+				&& ai < candType.typeChildren.length) {
+			expected = candType.typeChildren[ai];
+		}
+		argTypes.push(checkArgWithExpected(ctx, args[ai], expected));
+	}
+	return argTypes;
+}
+
+// Phase 5: two-pass overload resolution (ref: typescript-go
+// `internal/checker/checker.go:8682-8903`, `chooseOverload`).
+//
+// Pass 1 (scoring): check each arg once with `null` expected type. Object
+// literals become anonymous structs (`checkObjectLiteral` anon-synthesis
+// path at ~line 762). Enum member accesses rewrite `K.A` to Identifier
+// `K_A` once, with `resolvedSym.symbolType` set to `EnumLiteral(K, A)` —
+// `checkArgWithExpected` narrows via resolvedSym even when `nodeType`
+// remains the wider `Enum(K)`. Score candidates via the existing
+// `scoreCandidatePriority` / `cmpCandidates` machinery.
+//
+// Pass 2 (commit): for context-sensitive args only (ObjectLiteral,
+// ArrowFunction), reset and re-check with the winning candidate's param
+// type so they get precise variant typing + codegen flag stamping.
+// Non-context-sensitive args (identifiers, member accesses, literals,
+// calls) keep their Pass 1 state.
+//
+// No per-candidate snapshot/rewind. TS doesn't do it either: PR #57421
+// (Wigham, 2024) proposed formal speculation, was marked Experimental,
+// closed unmerged. Known leakage bugs microsoft/TypeScript#49820, #13430
+// are accepted.
+function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node): Type {
 	const impl = findOverloadImpl(sym);
 	if (impl === null) {
 		addError(ctx, `Overloaded function '${sym.name}' has no implementation — at least one definition must have a body`,
 			callNode.location.line, callNode.location.column);
 		return getReturnType(sym.symbolType);
 	}
-	// Tier 1: validate each overload sig against the implementation.
-	// Rules (stricter than TypeScript — we don't insert HiddenStdConv at call sites yet):
-	//   1. sig arity must equal impl arity
-	//   2. each sig param type must be assignable to the corresponding impl param type
-	//   3. sig return type must be assignable to impl return type
-	// One-shot per overload set: marked on the impl symbol after first validation.
-	if (!hasFlag(impl, SymbolFlag.OverloadValidated)) {
-		setFlag(impl, SymbolFlag.OverloadValidated);
-		const implFnType = impl.symbolType;
-		if (implFnType !== null && implFnType.kind === TypeKind.Function) {
-			const implRet = implFnType.typeReturn;
-			const implParams = implFnType.typeChildren;
-			const implFallback = implRet !== null ? implRet : unknownType();
-			const allSyms: Symbol[] = [sym];
-			for (const o of sym.overloads) allSyms.push(o);
-			for (const s of allSyms) {
-				if (s === impl) continue;
-				if (!hasFlag(s, SymbolFlag.OverloadSig)) continue;
-				const sigType = s.symbolType;
-				if (sigType === null || sigType.kind !== TypeKind.Function) continue;
-				// 1. arity
-				if (sigType.typeChildren.length !== implParams.length) {
-					addError(ctx, `Overload signature for '${sym.name}' has ${sigType.typeChildren.length} parameter(s) but implementation has ${implParams.length}`,
-						callNode.location.line, callNode.location.column);
-					return implFallback;
-				}
-				// 2. per-param assignability (sig → impl)
-				let paramMismatch = -1;
-				for (let pi = 0; pi < sigType.typeChildren.length; pi += 1) {
-					if (!isAssignable(sigType.typeChildren[pi], implParams[pi])) {
-						paramMismatch = pi;
-						break;
-					}
-				}
-				if (paramMismatch >= 0) {
-					addError(ctx, `Overload signature for '${sym.name}' param ${paramMismatch + 1} type '${typeNameOf(sigType.typeChildren[paramMismatch])}' not assignable to implementation param type '${typeNameOf(implParams[paramMismatch])}'`,
-						callNode.location.line, callNode.location.column);
-					return implFallback;
-				}
-				// 3. return type assignability
-				const sRet = sigType.typeReturn;
-				if (sRet !== null && implRet !== null && !isAssignable(sRet, implRet)) {
-					addError(ctx, `Overload signature for '${sym.name}' has return type '${typeNameOf(sRet)}' incompatible with implementation return type '${typeNameOf(implRet)}'`,
-						callNode.location.line, callNode.location.column);
-					return implRet;
-				}
-			}
-		}
-	}
-	// Build candidate array: primary at [0], overloads at [1..n]
-	const candidates: Type[] = [sym.symbolType];
-	for (const o of sym.overloads) candidates.push(o.symbolType);
-	// All same scope for now (cross-module scope = Phase 6)
-	const scopeDepths: number[] = [];
-	for (const _c of candidates) scopeDepths.push(0);
-	const idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths);
-	if (idx === -2) {
-		// Ambiguous call — find the two matching candidates for error
-		addError(ctx, "Ambiguous call to overloaded function '" + sym.name + "'", callNode.location.line, callNode.location.column);
+	if (!validateOverloadSigs(ctx, sym, impl, callNode)) {
 		return getReturnType(sym.symbolType);
 	}
-	if (idx === -1) {
-		// No matching overload — detailed error with per-candidate mismatch
-		let msg = "No matching overload for '" + sym.name + "'\n  Expected one of:";
-		let ci = 0;
-		while (ci < candidates.length) {
-			if (candidates[ci].kind === TypeKind.Function) {
-				msg = msg + "\n    " + formatCandidateSig(sym.name, candidates[ci]);
-				const mpos = findFirstMismatch(candidates[ci].typeChildren, argTypes, getMinArity(candidates[ci]));
-				if (mpos >= 0 && mpos < argTypes.length && mpos < candidates[ci].typeChildren.length) {
-					msg = msg + "\n      first mismatch at position " + String(mpos + 1) + ": expected '" + typeNameOf(candidates[ci].typeChildren[mpos]) + "', got '" + typeNameOf(argTypes[mpos]) + "'";
-				} else if (candidates[ci].typeChildren.length !== argTypes.length) {
-					msg = msg + "\n      expected " + String(candidates[ci].typeChildren.length) + " argument(s), got " + String(argTypes.length);
-				}
+
+	const d = callNode.data as CallExprData;
+	const args = d.arguments;
+
+	// Build candidate arrays: primary at [0], overloads at [1..n]
+	const candSyms: Symbol[] = [sym];
+	for (const o of sym.overloads) candSyms.push(o);
+	const candidates: Type[] = [];
+	for (const cs of candSyms) candidates.push(cs.symbolType);
+
+	// Pass 1: check non-context-sensitive args with null expected type.
+	// Context-sensitive args (object literals, arrow functions) are SKIPPED
+	// entirely — Pass 2 checks them against the winner's param type. This
+	// matches TypeScript-go's `CheckModeSkipContextSensitive` (checker.go:8682-8686).
+	// Skipping (rather than null-checking) avoids stamping cached types on the
+	// literal's children that would survive into Pass 2 and defeat inference.
+	const argTypes: Type[] = [];
+	const skipMask: boolean[] = [];
+	for (const arg of args) {
+		if (isContextSensitive(arg)) {
+			argTypes.push(null as unknown as Type);
+			skipMask.push(true);
+		} else {
+			argTypes.push(checkArgWithExpected(ctx, arg, null as unknown as Type));
+			skipMask.push(false);
+		}
+	}
+
+	// Score each candidate using the shared priority machinery, detecting
+	// ambiguity (two candidates with equal top scores).
+	let bestIdx: int32 = -1;
+	let bestScore: CandidateScore = null as unknown as CandidateScore;
+	let ambiguous = false;
+	let ci: int32 = 0;
+	while (ci < candidates.length) {
+		const candType = candidates[ci];
+		if (candType === null || candType.kind !== TypeKind.Function) { ci = ci + 1; continue; }
+		const score = scoreCandidateWithSkip(candType.typeChildren, argTypes, getMinArity(candType), skipMask);
+		if (score.exactMatches < 0) { ci = ci + 1; continue; }
+		if (bestIdx < 0) {
+			bestIdx = ci;
+			bestScore = score;
+			ambiguous = false;
+		} else {
+			const cmp = cmpCandidates(score, bestScore, candType, candidates[bestIdx]);
+			if (cmp > 0) {
+				bestIdx = ci;
+				bestScore = score;
+				ambiguous = false;
+			} else if (cmp === 0) {
+				ambiguous = true;
 			}
-			ci = ci + 1;
+		}
+		ci = ci + 1;
+	}
+
+	if (ambiguous) {
+		addError(ctx, `Ambiguous call to overloaded function '${sym.name}'`,
+			callNode.location.line, callNode.location.column);
+		return getReturnType(sym.symbolType);
+	}
+
+	if (bestIdx < 0) {
+		// No candidate matched — detailed error with per-candidate mismatch.
+		let msg = `No matching overload for '${sym.name}'\n  Expected one of:`;
+		for (const candType of candidates) {
+			if (candType === null || candType.kind !== TypeKind.Function) continue;
+			msg = `${msg}\n    ${formatCandidateSig(sym.name, candType)}`;
+			const mpos = findFirstMismatch(candType.typeChildren, argTypes, getMinArity(candType));
+			if (mpos >= 0 && mpos < argTypes.length && mpos < candType.typeChildren.length) {
+				const gotName = argTypes[mpos] !== null ? typeNameOf(argTypes[mpos]) : "<skipped>";
+				msg = `${msg}\n      first mismatch at position ${mpos + 1}: expected '${typeNameOf(candType.typeChildren[mpos])}', got '${gotName}'`;
+			} else if (candType.typeChildren.length !== argTypes.length) {
+				msg = `${msg}\n      expected ${candType.typeChildren.length} argument(s), got ${argTypes.length}`;
+			}
 		}
 		addError(ctx, msg, callNode.location.line, callNode.location.column);
 		return getReturnType(sym.symbolType);
 	}
-	// Success — store resolved index + symbol on AST node, fill default args, infer return
-	const cd = callNode.data as CallExprData;
-	cd.resolvedOverloadIdx = idx;
-	let pickedSym: Symbol = sym;
-	if (idx === 0) {
-		pickedSym = sym;
-	} else if (idx > 0 && idx - 1 < sym.overloads.length) {
-		pickedSym = sym.overloads[idx - 1];
+
+	const winnerType = candidates[bestIdx];
+
+	// Pass 2: check context-sensitive args for the first time, using the
+	// winner's param types. Object literals get stamped with the specific
+	// variant / struct type; arrow functions get their parameter types
+	// inferred from the candidate. Pass 1 skipped these (so no Sem flag is
+	// set) — no reset needed.
+	if (winnerType.kind === TypeKind.Function && winnerType.typeChildren !== null) {
+		for (let ai = 0; ai < args.length; ai += 1) {
+			if (ai >= winnerType.typeChildren.length) break;
+			if (!isContextSensitive(args[ai])) continue;
+			checkExpr(ctx, args[ai], winnerType.typeChildren[ai]);
+			argTypes[ai] = args[ai].nodeType;
+		}
 	}
-	// Tier 1: if the selected winner is a body-less overload signature, redirect to the
-	// implementation (the unique non-OverloadSig member of the overload set). Codegen only
-	// emits the implementation; overload sigs exist solely for type checking.
-	if (hasFlag(pickedSym, SymbolFlag.OverloadSig)) {
-		// `impl` was already located at the top of resolveOverloadCall.
-		pickedSym = impl;
-		if (impl === sym) {
-			cd.resolvedOverloadIdx = 0;
-		} else {
-			for (let ok = 0; ok < sym.overloads.length; ok += 1) {
-				if (sym.overloads[ok] === impl) { cd.resolvedOverloadIdx = ok + 1; break; }
+
+	// Consume SpawnHandle arguments now that arg checking has settled.
+	// Done AFTER Pass 2 so we only consume once (not once per pass).
+	for (const arg of args) {
+		const at = arg.nodeType;
+		if (at !== null && isSpawnHandle(at) && arg.kind === NodeKind.Identifier) {
+			const argSym = arg.resolvedSym;
+			if (argSym !== null) {
+				markConsumedName(ctx.affineTracker, symbolConsumeKey(argSym));
+				markConsumed(argSym);
 			}
 		}
 	}
-	callNode.resolvedSym = pickedSym;
-	// Tier 1: also rewrite the callee Identifier's resolvedSym so the direct-call codegen
-	// path (which reads d.callee.resolvedSym.overloadIdx for mangling) emits the correct
-	// function name when the winner is not at slot 0. This fixes both the overload-sig
-	// redirect case and the general case where a non-primary overload wins.
-	if (cd.callee !== null && cd.callee.kind === NodeKind.Identifier && pickedSym !== null) {
-		cd.callee.resolvedSym = pickedSym;
-		if (pickedSym.symbolType !== null) cd.callee.nodeType = pickedSym.symbolType;
+
+	// Pick symbol + sig→impl redirect for codegen. Codegen emits only the
+	// implementation; overload signatures exist solely for type checking.
+	//
+	// node.resolvedSym stays the PRIMARY so codegen's overload dispatch
+	// (TAG_CALL_OVERLOAD, expressions.ms:858) picks the sym.overloads path
+	// and uses cd.resolvedOverloadIdx for mangling. Replacing it with the
+	// impl symbol would break that check — impl's own .overloads field is
+	// empty, so codegen falls through to TAG_CALL_DIRECT and reads the
+	// wrong (default-0) overloadIdx on the imported symbol.
+	const winnerSym: Symbol = candSyms[bestIdx];
+	if (hasFlag(winnerSym, SymbolFlag.OverloadSig)) {
+		// Redirect to impl slot. If the primary itself is the impl, slot 0;
+		// otherwise find impl's position in sym.overloads and shift by +1
+		// (primary is at logical slot 0, sym.overloads[k] is slot k+1).
+		if (impl === sym) {
+			d.resolvedOverloadIdx = 0;
+		} else {
+			for (let ok = 0; ok < sym.overloads.length; ok += 1) {
+				if (sym.overloads[ok] === impl) { d.resolvedOverloadIdx = ok + 1; break; }
+			}
+		}
+	} else {
+		// Winner IS the impl (or a body-bearing candidate). Use its slot directly.
+		d.resolvedOverloadIdx = bestIdx;
 	}
-	const winner = candidates[idx];
-	if (winner.kind === TypeKind.Function && argTypes.length < winner.typeChildren.length) {
-		fillDefaultArgsForNode(ctx, callNode, sym.name, winner.typeChildren.length, 0);
+	callNode.resolvedSym = sym;
+	if (d.callee !== null && d.callee.kind === NodeKind.Identifier) {
+		d.callee.resolvedSym = sym;
+		if (sym.symbolType !== null) d.callee.nodeType = sym.symbolType;
 	}
-	return inferGenericReturn(winner, argTypes, null);
+	if (winnerType.kind === TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
+		fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0);
+	}
+	return inferGenericReturn(winnerType, argTypes, null);
 }
 
 // Resolve extension method overloads: multiple extensions match same receiver+method.
@@ -2319,11 +2429,16 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 	if (expInfo.headerPath !== "") sym.headerPath = expInfo.headerPath;
 	if (expInfo.jsModulePath !== "") sym.jsModulePath = expInfo.jsModulePath;
 	sym.defaultParams = expInfo.defaultParams;
+	// Preserve OverloadSig flag on the primary sym for namespace access paths.
+	if ((expInfo.primaryFlags & SymbolFlag.OverloadSig) !== 0) {
+		setFlag(sym, SymbolFlag.OverloadSig);
+	}
 	if (expInfo.overloadTypes.length > 0) {
 		sym.overloads = [];
 		let oi = 0;
 		while (oi < expInfo.overloadTypes.length) {
 			const overSym = makeSymbolState(expInfo.name, expInfo.kind, expInfo.overloadTypes[oi], false, SymbolState.Shaped);
+			overSym.overloadIdx = oi + 1;
 			overSym.modulePath = sym.modulePath;
 			if (oi < expInfo.overloadNativeNames.length && expInfo.overloadNativeNames[oi] !== "") {
 				overSym.nativeName = expInfo.overloadNativeNames[oi];
@@ -2341,6 +2456,10 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 					let di = 0;
 					while (di < cnt) { overSym.defaultParams.push(expInfo.overloadDefaultParamsFlat[startIdx + di]); di = di + 1; }
 				}
+			}
+			if (expInfo.overloadFlags !== null && oi < expInfo.overloadFlags.length
+					&& (expInfo.overloadFlags[oi] & SymbolFlag.OverloadSig) !== 0) {
+				setFlag(overSym, SymbolFlag.OverloadSig);
 			}
 			sym.overloads.push(overSym);
 			oi = oi + 1;
@@ -2461,10 +2580,12 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type): T
 	checkExpr(ctx, d.object, null);
 	const objType = d.object.nodeType;
 	if (objType === null) return unknownType();
-	// Ref parity: strictNotNil — warn on unguarded class (heap pointer) member access
+	// Ref parity: strictNotNil — warn on unguarded class (heap pointer) member access.
+	// Phase 4: uses the flow graph's isDefinitelyNonNullAt walker (replaced the
+	// fact-stack-based impliesNotNull).
 	if (ctx.strictNullChecks && objType.kind === TypeKind.Ref && d.object.kind === NodeKind.Identifier) {
-		const objName = (d.object.data as IdentifierData).name;
-		if (impliesNotNull(ctx.narrowFacts, objName) === 0) {
+		if (!isDefinitelyNonNullAt(d.object)) {
+			const objName = (d.object.data as IdentifierData).name;
 			addWarning(ctx, "accessing member '" + d.property + "' on potentially null class '" + objName + "'",
 				node.location.line, node.location.column);
 		}
@@ -2625,28 +2746,31 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type): T
 			}
 		}
 	}
-	// Tier 2: discriminant-narrowed Union field validation.
-	// When `if (s.kind === "a")` narrows `s` to variant 0, accessing `s.y` (variant 1 only)
-	// should error. getProperty finds the field across ALL variants — we restrict here.
-	if (propType.kind !== TypeKind.Unknown && resolvedObjType.kind === TypeKind.Union
-			&& d.object.kind === NodeKind.Identifier && ctx.narrowedDiscriminants.length > 0) {
-		const objVarName = (d.object.data as IdentifierData).name;
-		for (const nd of ctx.narrowedDiscriminants) {
-			if (nd.varName !== objVarName) continue;
-			if (nd.variantIdx >= 0 && nd.variantIdx < resolvedObjType.typeChildren.length) {
-				const narrowedVariant = resolvedObjType.typeChildren[nd.variantIdx];
-				const fieldInVariant = findFieldInVariant(narrowedVariant, d.property);
-				if (fieldInVariant === null) {
-					// Field exists on some variant but NOT on the narrowed one — error
-					addError(ctx, `Property '${d.property}' does not exist on type '${typeNameOf(narrowedVariant)}'. Available: ${narrowedVariant.typeNames.join(", ")}`,
-						node.location.line, node.location.column);
-					return propType; // still return found type to prevent cascading errors
-				}
-				// If the field IS on the narrowed variant, use that variant's specific type
-				// (may differ from the ambiguous getProperty result across all variants)
-				propType = fieldInVariant;
+	// Phase 4: Flow-graph discriminated union narrowing.
+	// When the object reference's flow type is narrower than its declared
+	// union type (e.g. `if (s.kind === "a") { s.y }` inside the narrowed
+	// block), resolve the property against the narrowed variant instead of
+	// the full union. Errors if the field doesn't exist on the narrowed
+	// variant, even though it exists on some other variant.
+	if (propType.kind !== TypeKind.Unknown && resolvedObjType.kind === TypeKind.Union) {
+		const narrowedObjType = getFlowTypeOfReference(d.object, resolvedObjType);
+		if (narrowedObjType !== null && narrowedObjType !== resolvedObjType
+				&& narrowedObjType.kind === TypeKind.Struct) {
+			const fieldInVariant = findFieldInVariant(narrowedObjType, d.property);
+			if (fieldInVariant === null) {
+				addError(ctx, `Property '${d.property}' does not exist on type '${typeNameOf(narrowedObjType)}'. Available: ${narrowedObjType.typeNames.join(", ")}`,
+					node.location.line, node.location.column);
+				return propType;
 			}
-			break;
+			propType = fieldInVariant;
+			// Record synthetic sym for LSP hover/go-to-definition on narrowed DU fields.
+			// The normal sym-recording paths search resolvedObjType (the full union) whose
+			// typeNames holds discriminant metadata, not field names — so they miss.
+			const narrowedSym = makeSymbol(d.property, SymbolKind.Property, fieldInVariant, false);
+			narrowedSym.state = SymbolState.Shaped;
+			inheritContainerInfo(narrowedSym, ctx, resolvedObjType.typeName);
+			node.resolvedSym = narrowedSym;
+			sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, narrowedSym, fieldInVariant, SymbolKind.Property, d.property, resolvedObjType.typeName, false);
 		}
 	}
 	if (propType.kind !== TypeKind.Unknown) {
@@ -2956,35 +3080,9 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 				checkExpr(ctx, p, discType);
 			}
 		}
-		// Variant narrowing: fact-based approach (no symbolType mutation) — C codegen needs
-		// the full Union type for .vN.field accessor paths.
-		const discSnap = ctx.narrowedDiscriminants.length;
-		if (narrowBase !== null && cd.casePatterns.length === 1) {
-			const pat = cd.casePatterns[0];
-			let variantIdx = -1;
-			if (narrowIsStringDU) {
-				if (pat.kind === NodeKind.StringLiteral) {
-					const sd = pat.data as StringLiteralData;
-					variantIdx = findVariantByStringDiscriminant(narrowUnion, narrowDiscField, sd.value);
-				}
-				if (variantIdx >= 0) {
-					ctx.narrowedDiscriminants.push({ varName: narrowBase.name, variantIdx });
-				}
-			} else {
-				let patEnumName = "";
-				if (pat.kind === NodeKind.MemberExpr) {
-					patEnumName = (pat.data as MemberExprData).property;
-				} else if (pat.kind === NodeKind.Identifier && pat.resolvedSym !== null) {
-					patEnumName = pat.resolvedSym.name;
-				}
-				if (patEnumName !== "") {
-					variantIdx = findVariantByDiscriminant(narrowUnion, patEnumName);
-				}
-				if (variantIdx >= 0) {
-					ctx.narrowedDiscriminants.push({ varName: narrowBase.name, variantIdx });
-				}
-			}
-		}
+		// Phase 4: per-arm variant narrowing flows through the binder's
+		// synthesizeMatchArmFlow → TrueCondition → getFlowTypeOfReference path.
+		// The checker no longer needs to push/pop narrowing state here.
 
 		// Type-check guard expression with narrowing active
 		if (cd.caseGuard !== null) {
@@ -3009,8 +3107,6 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 			checkExpr(ctx, cd.caseBody, null); bodyType = cd.caseBody.nodeType;
 		}
 
-		// Restore narrowed discriminants
-		ctx.narrowedDiscriminants.length = discSnap;
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchBreaks.push(breaksBlock(cd.caseBody));
 		if (returnType.kind === TypeKind.Unknown && bodyType.kind !== TypeKind.Unknown) {
