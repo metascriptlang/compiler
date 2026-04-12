@@ -11,17 +11,18 @@
 
 import {
 	Node, NodeKind, DeclKind,
-	FlowNode, FlowFlags, FlowList, FlowSwitchClauseData,
+	FlowNode, FlowFlags, FlowList,
 	Type, TypeKind,
 	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData,
-	StringLiteralData, NumberLiteralData, BooleanLiteralData,
+	StringLiteralData,
 	SwitchStmtData, SwitchCaseData, VariableDeclData, CallExprData,
 } from "../ast/node";
 import {
-	createUnion, unknownType, nullType, stringType, numberType, booleanType,
+	createUnion, unknownType, nullType, neverType,
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant,
 } from "./types";
+import { typeRelation, TypeRelation } from "./compat";
 
 // ===== FlowType =====
 //
@@ -704,16 +705,45 @@ function narrowTypeInner(t: Type, expr: Node, refNode: Node, assumeTrue: boolean
 			|| d.operator === "==" || d.operator === "!=") {
 			return narrowTypeByEquality(t, d.left, d.right, d.operator, refNode, assumeTrue);
 		}
-		// Logical && inside a truthy test: both operands must hold.
-		// `if (a && b)` → narrow by a, then by b.
-		if (d.operator === "&&" && assumeTrue) {
-			const afterLeft = narrowType(t, d.left, refNode, true);
-			return narrowType(afterLeft, d.right, refNode, true);
+		// instanceof narrowing: `x instanceof Foo` narrows x to Foo (or
+		// excludes Foo from a union in the falsy branch).
+		if (d.operator === "instanceof") {
+			return narrowTypeByInstanceof(t, d.left, d.right, refNode, assumeTrue);
 		}
-		// Logical || inside a falsy test: both operands must be falsy.
-		if (d.operator === "||" && !assumeTrue) {
-			const afterLeft = narrowType(t, d.left, refNode, false);
-			return narrowType(afterLeft, d.right, refNode, false);
+		// Logical && / || narrowing — full DeMorgan coverage:
+		//
+		// `if (a && b)`:
+		//   true  → both hold: narrow by a, then by b (intersection)
+		//   false → at least one fails: union of (narrow !a, narrow !b)
+		//
+		// `if (a || b)`:
+		//   true  → at least one holds: union of (narrow a, narrow b)
+		//   false → both fail: narrow by !a, then by !b (intersection)
+		if (d.operator === "&&") {
+			if (assumeTrue) {
+				const afterLeft = narrowType(t, d.left, refNode, true);
+				return narrowType(afterLeft, d.right, refNode, true);
+			}
+			// false branch: !(a && b) = !a || !b → union of negations.
+			const withoutLeft = narrowType(t, d.left, refNode, false);
+			const withoutRight = narrowType(t, d.right, refNode, false);
+			if (withoutLeft === t) return withoutRight;
+			if (withoutRight === t) return withoutLeft;
+			if (withoutLeft === withoutRight) return withoutLeft;
+			return createUnion([withoutLeft, withoutRight]);
+		}
+		if (d.operator === "||") {
+			if (!assumeTrue) {
+				const afterLeft = narrowType(t, d.left, refNode, false);
+				return narrowType(afterLeft, d.right, refNode, false);
+			}
+			// true branch: a || b → union of positives.
+			const withLeft = narrowType(t, d.left, refNode, true);
+			const withRight = narrowType(t, d.right, refNode, true);
+			if (withLeft === t) return withRight;
+			if (withRight === t) return withLeft;
+			if (withLeft === withRight) return withLeft;
+			return createUnion([withLeft, withRight]);
 		}
 	}
 	// Aliased condition: `const isX = <predicate>; if (isX) { ... }` — look up
@@ -732,6 +762,17 @@ function narrowTypeInner(t: Type, expr: Node, refNode: Node, assumeTrue: boolean
 	// reference, narrow to (or exclude) the predicate's target type.
 	if (expr.kind === NodeKind.CallExpr) {
 		return narrowTypeByPredicate(t, expr, refNode, assumeTrue);
+	}
+	// Truthiness narrowing: bare expression used as a condition.
+	// `if (x)` where x: T | null → truthy: T (null removed), falsy: null.
+	// Handles both Identifier and MemberExpr via isMatchingReference.
+	// Positioned as the last-resort case — aliased conditions, type
+	// predicates, and equality checks all get priority above.
+	if (isMatchingReference(expr, refNode)) {
+		if (assumeTrue) {
+			return removeNullFromType(t);
+		}
+		return extractNullFromType(t);
 	}
 	return t;
 }
@@ -767,21 +808,101 @@ function narrowTypeByPredicate(t: Type, callExpr: Node, refNode: Node, assumeTru
 	if (paramIdx < 0 || paramIdx >= cd.arguments.length) return t;
 	const predicateArg = cd.arguments[paramIdx];
 	if (predicateArg === null || !isMatchingReference(predicateArg, refNode)) return t;
-	// TrueCondition narrows to the target type; FalseCondition removes it
-	// from a union (or leaves the type unchanged if it doesn't match).
-	if (assumeTrue) return predicateTarget;
+	// TrueCondition: narrow to the predicate target, but only if it's
+	// compatible with the current type `t` (intersection semantics).
+	// Returning predicateTarget for a type outside `t` would widen past
+	// the declared union. Uses `typeRelation` for cross-module resilience
+	// (no pointer-identity or string-key assumptions).
+	if (assumeTrue) {
+		if (t.kind === TypeKind.Union && t.typeChildren !== null) {
+			for (const v of t.typeChildren) {
+				const rel = typeRelation(predicateTarget, v);
+				if (rel !== TypeRelation.None) return predicateTarget;
+			}
+			return t;
+		}
+		return predicateTarget;
+	}
+	// FalseCondition: remove variants assignable to the predicate target.
 	if (t.kind === TypeKind.Union && t.typeChildren !== null) {
 		const remaining: Type[] = [];
 		for (const v of t.typeChildren) {
-			if (v !== predicateTarget && v.kind !== predicateTarget.kind) {
-				remaining.push(v);
-			} else if (v.kind === predicateTarget.kind && v.typeName !== predicateTarget.typeName) {
+			const rel = typeRelation(predicateTarget, v);
+			if (rel === TypeRelation.None) {
 				remaining.push(v);
 			}
 		}
 		if (remaining.length === 0) return t;
 		if (remaining.length === 1) return remaining[0];
 		return createUnion(remaining);
+	}
+	return t;
+}
+
+// ===== instanceof narrowing =====
+
+// Narrow by `x instanceof Foo`. `left` is the tested value, `right` is the
+// class/type identifier. If `left` matches our reference, resolve the RHS to
+// a type and narrow accordingly: truthy → intersect with target, falsy →
+// exclude target from the union.
+function narrowTypeByInstanceof(t: Type, left: Node, right: Node, refNode: Node, assumeTrue: boolean): Type {
+	if (left === null || right === null) return t;
+	if (!isMatchingReference(left, refNode)) return t;
+	// Resolve the RHS to a type. The RHS is typically an Identifier referencing
+	// a class — its resolvedSym.symbolType is the class/struct type.
+	if (right.resolvedSym === null || right.resolvedSym.symbolType === null) return t;
+	const target = right.resolvedSym.symbolType;
+	if (assumeTrue) {
+		// Truthy: narrow to the target type. For unions, verify target is a
+		// member; for non-unions, trust the user's instanceof check.
+		if (t.kind === TypeKind.Union && t.typeChildren !== null) {
+			for (const v of t.typeChildren) {
+				const rel = typeRelation(target, v);
+				if (rel !== TypeRelation.None) return target;
+			}
+			return t;
+		}
+		return target;
+	}
+	// Falsy: remove the target from the union.
+	if (t.kind === TypeKind.Union && t.typeChildren !== null) {
+		const remaining: Type[] = [];
+		for (const v of t.typeChildren) {
+			const rel = typeRelation(target, v);
+			if (rel === TypeRelation.None) remaining.push(v);
+		}
+		if (remaining.length === 0) return t;
+		if (remaining.length === 1) return remaining[0];
+		return createUnion(remaining);
+	}
+	return t;
+}
+
+// ===== Truthiness helpers =====
+
+// Remove Null variants from a type. For unions, filters out TypeKind.Null
+// members and reconstructs. Non-union, non-null types pass through unchanged
+// (non-nullable values aren't affected by truthiness narrowing).
+function removeNullFromType(t: Type): Type {
+	if (t.kind === TypeKind.Null) return neverType();
+	if (t.kind !== TypeKind.Union || t.typeChildren === null) return t;
+	const remaining: Type[] = [];
+	for (const v of t.typeChildren) {
+		if (v.kind !== TypeKind.Null) remaining.push(v);
+	}
+	if (remaining.length === t.typeChildren.length) return t;
+	if (remaining.length === 0) return neverType();
+	if (remaining.length === 1) return remaining[0];
+	return createUnion(remaining);
+}
+
+// Extract the Null variant from a type. For unions, returns the Null member
+// if present. Non-union types or unions without Null return t unchanged.
+function extractNullFromType(t: Type): Type {
+	if (t.kind === TypeKind.Null) return t;
+	if (t.kind !== TypeKind.Union || t.typeChildren === null) return t;
+	for (const v of t.typeChildren) {
+		if (v.kind === TypeKind.Null) return v;
 	}
 	return t;
 }
@@ -832,19 +953,14 @@ function constrainToDeclared(rhs: Type, declared: Type): Type {
 	if (declared.kind !== TypeKind.Union || declared.typeChildren === null) {
 		return declared;
 	}
+	// Find the best-matching variant in the declared union using typeRelation.
+	// This handles identity matches, named-type matches, primitive kind
+	// matches, AND structural compatibility for anonymous structs — all in
+	// one pass via the established comparison infrastructure.
 	for (const v of declared.typeChildren) {
 		if (v === rhs) return rhs;
-		if (v.kind === rhs.kind && v.typeName !== "" && v.typeName === rhs.typeName) {
-			return rhs;
-		}
-	}
-	// Typeof-style narrowing: if rhs is a primitive (number/string/boolean)
-	// and declared is a union containing that primitive, pick it.
-	if (rhs.kind === TypeKind.Number || rhs.kind === TypeKind.String
-			|| rhs.kind === TypeKind.Boolean || rhs.kind === TypeKind.Null) {
-		for (const v of declared.typeChildren) {
-			if (v.kind === rhs.kind) return v;
-		}
+		const rel = typeRelation(v, rhs);
+		if (rel !== TypeRelation.None) return rhs;
 	}
 	return declared;
 }
@@ -868,10 +984,16 @@ function getAliasedCondition(idNode: Node): Node {
 	if (d.declKind !== DeclKind.Const) return null as unknown as Node;
 	const init = d.initializer;
 	if (init === null) return null as unknown as Node;
-	// Only alias condition-shaped initializers. Accept BinaryExpr (comparison,
-	// && / ||) and UnaryExpr (!). Bare identifiers would chain indefinitely
-	// without adding information.
-	if (init.kind === NodeKind.BinaryExpr || init.kind === NodeKind.UnaryExpr) {
+	// Alias condition-shaped initializers:
+	//   BinaryExpr: comparison (===, !==), logical (&&, ||)
+	//   UnaryExpr:  negation (!)
+	//   CallExpr:   type-predicate calls (`const isX = isString(val)`)
+	// Bare identifiers are excluded — they'd chain (a → b → a) without
+	// adding narrowing information. The depth guard in narrowType bounds
+	// any residual recursion from chained aliases.
+	if (init.kind === NodeKind.BinaryExpr
+			|| init.kind === NodeKind.UnaryExpr
+			|| init.kind === NodeKind.CallExpr) {
 		return init;
 	}
 	return null as unknown as Node;

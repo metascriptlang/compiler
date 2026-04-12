@@ -73,19 +73,11 @@
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ctr_drbg.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/hmac_drbg.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform.c");
-@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c");
+// platform_util.c, md.c, sha*.c, md5.c, ripemd160.c are compiled by
+// std/crypto/index.cms — not duplicated here to avoid linker errors.
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/constant_time.c");
-@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_util.c");
+// psa_util.c compiled by std/crypto/index.cms
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/block_cipher.c");
-
-// Hash algorithms
-@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c");
-@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha256.c");
-@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha512.c");
-@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha1.c");
-@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha3.c");
-@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md5.c");
-@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ripemd160.c");
 
 // Symmetric ciphers
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aes.c");

@@ -490,6 +490,102 @@ test "phase 5: sig help on examples/phase5Overloads.ms narrows to Square" {
 	assert r.indexOf("\"activeSignature\":1", 0) >= 0;
 }
 
+// ===== Phase 5 hover: overload-aware callee signature =====
+//
+// Regression guard for the "hover on `area(Kind.Square, ...)` shows Circle"
+// bug. Root cause: the symRecord for the callee identifier points at the
+// PRIMARY sym (so find-references sees every call site). Hover for an
+// overloaded call needs the RESOLVED overload's sig, which is stored on
+// the CallExpr's `resolvedOverloadIdx`. handleHover walks the AST to find
+// the enclosing CallExpr and substitutes the winning overload's type.
+//
+// Position coordinates are 0-indexed LSP — the phase5Overloads.ms source
+// uses tabs so `area` starts at column 11 (tab + "const s = " = 11 chars).
+
+test "phase 5 hover: Kind.Circle call shows Circle overload" {
+	const src = loadExample("examples/phase5Overloads.ms");
+	assert src.length > 0;
+	const uri = "file:///ex-phase5hovC.ms";
+	const db = testDb(uri, src);
+	// Line 26 col 11: `\tconst c = area(Kind.Circle, { radius: 4 });`
+	const params = "{\"textDocument\":{\"uri\":\"file:///ex-phase5hovC.ms\"},\"position\":{\"line\":26,\"character\":11}}";
+	const r = handleHover("200", params, db);
+	assert lspGetNumberField(r, "id") === 200;
+	assert r.indexOf("Kind.Circle", 0) >= 0;
+	assert r.indexOf("radius", 0) >= 0;
+}
+
+test "phase 5 hover: Kind.Square call shows Square overload" {
+	const src = loadExample("examples/phase5Overloads.ms");
+	assert src.length > 0;
+	const uri = "file:///ex-phase5hovS.ms";
+	const db = testDb(uri, src);
+	// Line 30 col 11: `\tconst s = area(Kind.Square, { side: 5 });`
+	const params = "{\"textDocument\":{\"uri\":\"file:///ex-phase5hovS.ms\"},\"position\":{\"line\":30,\"character\":11}}";
+	const r = handleHover("201", params, db);
+	assert lspGetNumberField(r, "id") === 201;
+	assert r.indexOf("Kind.Square", 0) >= 0;
+	assert r.indexOf("side", 0) >= 0;
+	// Negative assertion: must NOT surface the Circle variant any more.
+	assert r.indexOf("Kind.Circle", 0) < 0;
+}
+
+test "phase 5 hover: Kind.Line call shows Line overload" {
+	const src = loadExample("examples/phase5Overloads.ms");
+	assert src.length > 0;
+	const uri = "file:///ex-phase5hovL.ms";
+	const db = testDb(uri, src);
+	// Line 34 col 11: `\tconst l = area(Kind.Line, { length: 10 });`
+	const params = "{\"textDocument\":{\"uri\":\"file:///ex-phase5hovL.ms\"},\"position\":{\"line\":34,\"character\":11}}";
+	const r = handleHover("202", params, db);
+	assert lspGetNumberField(r, "id") === 202;
+	assert r.indexOf("Kind.Line", 0) >= 0;
+	assert r.indexOf("length", 0) >= 0;
+}
+
+test "phase 5 hover: runtime kind shows wide impl" {
+	// Opposite direction: when overload resolution picks the wide impl
+	// (runtime Kind value, not an EnumLiteral), hover must show the wide
+	// signature — NOT a specific variant.
+	const src = loadExample("examples/phase5Overloads.ms");
+	assert src.length > 0;
+	const uri = "file:///ex-phase5hovR.ms";
+	const db = testDb(uri, src);
+	// Line 40 col 11: `\tconst r = area(runtime, runtimeData);`
+	const params = "{\"textDocument\":{\"uri\":\"file:///ex-phase5hovR.ms\"},\"position\":{\"line\":40,\"character\":11}}";
+	const r = handleHover("203", params, db);
+	assert lspGetNumberField(r, "id") === 203;
+	// Wide impl: `area(k: Kind, ...)` — Kind without a member-access dot.
+	// Must NOT show `Kind.Circle` / `Kind.Square` / `Kind.Line`.
+	assert r.indexOf("Kind.Circle", 0) < 0;
+	assert r.indexOf("Kind.Square", 0) < 0;
+	assert r.indexOf("Kind.Line", 0) < 0;
+	// Should mention `k: Kind` (with a param label before it).
+	assert r.indexOf("Kind", 0) >= 0;
+}
+
+test "phase 5 hover: identifier-as-value falls back to primary" {
+	// `const f = area;` — hovering on `area` here has no enclosing CallExpr
+	// whose callee is this position. Hover must fall back to the primary
+	// (first-declared overload — Circle here), matching goto-def semantics
+	// for the declaration target. This is the degenerate case that the
+	// CallExpr walk is designed to skip cleanly via returning null.
+	const src = "enum K { A, B }\n"
+		+ "function g(k: K.A): number;\n"
+		+ "function g(k: K.B): number;\n"
+		+ "function g(k: K): number { return 0; }\n"
+		+ "const f = g;\n";
+	const uri = "file:///ex-ovlvalue.ms";
+	const db = testDb(uri, src);
+	// Line 4 col 10: position of `g` in `const f = g;` (0-indexed: tab=0, c=0 nope — no tab here).
+	// `const f = g;` — c=0 o=1 n=2 s=3 t=4 space=5 f=6 space=7 ==8 space=9 g=10.
+	const params = "{\"textDocument\":{\"uri\":\"file:///ex-ovlvalue.ms\"},\"position\":{\"line\":4,\"character\":10}}";
+	const r = handleHover("204", params, db);
+	assert lspGetNumberField(r, "id") === 204;
+	// Falls back to the primary sig (K.A, declared first).
+	assert r.indexOf("K.A", 0) >= 0;
+}
+
 test "type hint for untyped var" {
 	const db = testDb("file:///test.ms", "const x = 42;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";

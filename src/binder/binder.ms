@@ -20,7 +20,7 @@ import {
 	ForStmtData, ForOfStmtData, ForInStmtData,
 	SwitchStmtData, SwitchCaseData, MatchStmtData, MatchExprData, MatchCaseData,
 	FunctionDeclData, ArrowFunctionData, FunctionExprData,
-	ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData,
+	ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData,
 	VariableDeclData, ReturnStmtData, ThrowStmtData, ExprStmtData,
 	TryCatchStmtData, DeferStmtData, AssertStmtData,
 	BinaryExprData, UnaryExprData, UpdateExprData,
@@ -30,8 +30,7 @@ import {
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
 	TypeAssertionData, DestructuringDeclData,
 	ExportDeclData, DecoratedDeclData, TestDeclData,
-	MacroDeclData, MacroInvocationData,
-	ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
+	MacroInvocationData,
 	HiddenDerefData, HiddenStdConvData,
 	IdentifierData,
 } from "../ast/node";

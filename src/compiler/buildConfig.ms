@@ -115,12 +115,16 @@ export interface PackageSection {
 	homepage: string;
 	keywords: string[];
 	author: string;
+	files: string[];        // publish include globs (empty = all)
+	ignore: string[];       // publish exclude globs (applied after files)
 	valid: boolean;         // false if no `package` block present
 }
 
 export function defaultPackageSection(): PackageSection {
 	const kw: string[] = [];
-	return { name: "", version: "", description: "", license: "", repository: "", homepage: "", keywords: kw, author: "", valid: false };
+	const files: string[] = [];
+	const ignore: string[] = [];
+	return { name: "", version: "", description: "", license: "", repository: "", homepage: "", keywords: kw, author: "", files, ignore, valid: false };
 }
 
 export interface DepsSection {
@@ -336,6 +340,10 @@ function extractPackage(pkgNode: Node): PackageSection {
 	if (auth.length > 0) pkg.author = auth;
 	const kwNode = findObjField(pkgNode, "keywords");
 	if (kwNode !== null) pkg.keywords = nodeStringArray(kwNode);
+	const filesNode = findObjField(pkgNode, "files");
+	if (filesNode !== null) pkg.files = nodeStringArray(filesNode);
+	const ignoreNode = findObjField(pkgNode, "ignore");
+	if (ignoreNode !== null) pkg.ignore = nodeStringArray(ignoreNode);
 	pkg.valid = pkg.name.length > 0;
 	return pkg;
 }
@@ -554,4 +562,30 @@ test "extractPackage keywords array" {
 	assert cfg.package.keywords.length === 2;
 	assert cfg.package.keywords[0] === "json";
 	assert cfg.package.keywords[1] === "parser";
+}
+
+test "extractPackage files array" {
+	const cfg = testExtractFromSource("const config = { package: { name: \"x\", version: \"1.0.0\", files: [\"src/**/*.ms\", \"README.md\"] } }; export default config;");
+	assert cfg.package.files.length === 2;
+	assert cfg.package.files[0] === "src/**/*.ms";
+	assert cfg.package.files[1] === "README.md";
+}
+
+test "extractPackage ignore array" {
+	const cfg = testExtractFromSource("const config = { package: { name: \"x\", version: \"1.0.0\", ignore: [\"src/internal/**\", \"**/*_test.ms\"] } }; export default config;");
+	assert cfg.package.ignore.length === 2;
+	assert cfg.package.ignore[0] === "src/internal/**";
+	assert cfg.package.ignore[1] === "**/*_test.ms";
+}
+
+test "extractPackage files + ignore together" {
+	const cfg = testExtractFromSource("const config = { package: { name: \"x\", version: \"1.0.0\", files: [\"src/**\"], ignore: [\"src/dev/**\"] } }; export default config;");
+	assert cfg.package.files.length === 1;
+	assert cfg.package.ignore.length === 1;
+}
+
+test "extractPackage files/ignore default empty" {
+	const cfg = testExtractFromSource("const config = { package: { name: \"x\", version: \"1.0.0\" } }; export default config;");
+	assert cfg.package.files.length === 0;
+	assert cfg.package.ignore.length === 0;
 }

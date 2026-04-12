@@ -1,13 +1,12 @@
 // Registry — HTTP client for the MetaScript package registry API.
 // Endpoints:
 //   GET /packages/:name           → package metadata + all versions
-//   GET /packages/:name/:version  → specific version (integrity, tarballUrl, deps)
-//   GET /packages/:name/-/:file   → tarball download (redirects to R2 signed URL)
+//   GET /packages/:name/:version  → specific version (integrity, archiveUrl, deps)
+//   GET /packages/:name/-/:file   → archive download (redirects to R2 signed URL)
 //
 // API reference: ~/metascript/landing/apps/api/src/routes/packages.ts
 
 import { fetch } from "std/http/client";
-import { HttpResponse } from "std/http/types";
 import { HttpError, httpError, HttpErrorKind, invalidResponse } from "std/http/errors";
 import { parseJson, JsonValue, JsonKind } from "std/core/json";
 
@@ -20,7 +19,7 @@ const DEFAULT_REGISTRY = "https://api.metascriptlang.org";
 export interface RegistryVersion {
 	version: string;      // "1.2.3"
 	integrity: string;    // "sha256-<base64>" (W3C SRI, matches lockfile + spec)
-	tarballUrl: string;   // direct URL (may be R2 signed URL)
+	archiveUrl: string;   // direct URL (may be R2 signed URL)
 	publishedAt: string;  // ISO timestamp
 	depKeys: string[];    // dependency names
 	depValues: string[];  // dependency version specs (parallel array)
@@ -91,7 +90,7 @@ function parseVersionRecord(v: JsonValue): RegistryVersion {
 	return {
 		version: getStr(v, "version"),
 		integrity: getStr(v, "integrity"),
-		tarballUrl: getStr(v, "tarballUrl"),
+		archiveUrl: getStr(v, "archiveUrl"),
 		publishedAt: getStr(v, "publishedAt"),
 		depKeys: deps.keys,
 		depValues: deps.values,

@@ -51,6 +51,27 @@ export function captureOptionalType(state: ParserState): string {
 		// " is " infix, resolves the RHS as the predicate target, and sets the
 		// function's actual return type to `boolean`. This covers user-defined
 		// type guards: `function isString(x: unknown): x is string { ... }`.
+		// Assertion function: `asserts paramName is Type`. Detected before
+		// regular predicates. `asserts` is a contextual keyword (TokenKind.Asserts).
+		if (current(state).kind === TokenKind.Asserts
+				&& state.position + 2 < state.tokens.length
+				&& (state.tokens[state.position + 1].kind === TokenKind.Ident || isIdentLike(state.tokens[state.position + 1]))
+				&& state.tokens[state.position + 2].kind === TokenKind.Is) {
+			advance(state); // `asserts`
+			const assertParamName = current(state).value;
+			advance(state); // param name
+			advance(state); // `is`
+			const assertTargetStart = state.position;
+			skipTypeAnnotation(state);
+			const assertTargetEnd = state.position;
+			const assertTargetText = collectTokenText(state, assertTargetStart, assertTargetEnd);
+			const assertSavedPos = state.position;
+			state.position = assertTargetStart;
+			_lastTypeExpr = parseTypeExpr(state);
+			state.position = assertSavedPos;
+			return `asserts ${assertParamName} is ${assertTargetText}`;
+		}
+		// Type predicate: `paramName is Type`.
 		if (current(state).kind === TokenKind.Ident
 				&& state.position + 1 < state.tokens.length
 				&& state.tokens[state.position + 1].kind === TokenKind.Is) {

@@ -18,36 +18,36 @@ export function cacheRoot(): string {
 
 // --- Registry paths ---
 
-// Extracted source path for a registry package.
-// Example: registrySrcPath("cool-json", "1.2.3") → "~/.metascript/cache/src/cool-json@v1.2.3"
+// Extracted package path for a registry package.
+// Example: registrySrcPath("cool-json", "1.2.3") → "~/.metascript/cache/extracted/cool-json@v1.2.3"
 export function registrySrcPath(name: string, version: string): string {
 	const root = cacheRoot();
 	if (root === "") return "";
-	return `${root}/src/${name}@${version}`;
+	return `${root}/extracted/${name}@${version}`;
 }
 
-// Download tarball path for a registry package.
+// Download archive path for a registry package.
 export function registryDownloadPath(name: string, version: string): string {
 	const root = cacheRoot();
 	if (root === "") return "";
-	return `${root}/download/registry/${name}/${version}.tar.gz`;
+	return `${root}/download/registry/${name}/${version}.zip`;
 }
 
 // --- Git paths ---
 
-// Extracted source path for a git package.
-// Example: gitSrcPath("github.com/acme/foo", "abc123def4") → "~/.metascript/cache/src/github.com/acme/foo@abc123def4"
+// Extracted package path for a git source.
+// Example: gitSrcPath("github.com/acme/foo", "abc123def4") → "~/.metascript/cache/extracted/github.com/acme/foo@abc123def4"
 export function gitSrcPath(url: string, commit: string): string {
 	const root = cacheRoot();
 	if (root === "") return "";
-	return `${root}/src/${url}@${commit}`;
+	return `${root}/extracted/${url}@${commit}`;
 }
 
-// Download tarball path for a git package.
+// Download archive path for a git package.
 export function gitDownloadPath(url: string, commit: string): string {
 	const root = cacheRoot();
 	if (root === "") return "";
-	return `${root}/download/git/${url}/${commit}.tar.gz`;
+	return `${root}/download/git/${url}/${commit}.zip`;
 }
 
 // --- Cache check ---
@@ -68,15 +68,15 @@ test "cacheRoot uses HOME" {
 
 test "registrySrcPath format" {
 	const p = registrySrcPath("cool-json", "1.2.3");
-	assert p.endsWith("/src/cool-json@1.2.3");
+	assert p.endsWith("/extracted/cool-json@1.2.3");
 }
 
 test "gitSrcPath format" {
 	const p = gitSrcPath("github.com/acme/foo", "abc123");
-	assert p.endsWith("/src/github.com/acme/foo@abc123");
+	assert p.endsWith("/extracted/github.com/acme/foo@abc123");
 }
 
 test "registryDownloadPath format" {
 	const p = registryDownloadPath("cool-json", "1.2.3");
-	assert p.endsWith("/download/registry/cool-json/1.2.3.tar.gz");
+	assert p.endsWith("/download/registry/cool-json/1.2.3.zip");
 }

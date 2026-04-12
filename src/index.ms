@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
-import { exit, exec, argv } from "std/process";
+import { exit, exec } from "std/process";
 import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
@@ -138,7 +138,9 @@ export function main(): number {
 			if (!cmdWhoami(whoArgs)) exit(1);
 		},
 		"publish" => {
-			if (!cmdPublish(projectRoot)) exit(1);
+			const pubArgs: string[] = [];
+			for (const ea of opts.extraArgs) { pubArgs.push(ea); }
+			if (!cmdPublish(projectRoot, pubArgs)) exit(1);
 		},
 		_ => {
 			console.log(`${error("error")}: unknown command '${bold(cmd)}'`);

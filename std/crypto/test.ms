@@ -1,7 +1,7 @@
 // Crypto — Comprehensive Test Suite
 
 import { sha256, sha512, sha384, sha1, md5, hash, hmac, randomBytes, randomInt, randomUUID,
-	timingSafeEqual, createHash, createHmac, isHashSupported, init } from "std/core/crypto";
+	timingSafeEqual, createHash, createHmac, isHashSupported, init } from "std/crypto";
 
 // ===== Known Test Vectors =====
 

@@ -10,7 +10,7 @@
 // Set + branch-merge primitives live in branchSet.ms and are shared with
 // spawnAffinity.ms so both trackers stay in lockstep.
 
-import { Node, NodeKind, BlockStmtData, CallExprData, ExprStmtData, IdentifierData, BooleanLiteralData, BinaryExprData, TypeKind } from "../ast/node";
+import { Node, NodeKind, BlockStmtData, CallExprData, ExprStmtData, BooleanLiteralData, TypeKind } from "../ast/node";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { BreakState, addName, hasName, collectSince, mergeBranches } from "./branchSet";
 

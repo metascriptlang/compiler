@@ -21,6 +21,11 @@ function isAssignableInner(source: Type, target: Type): boolean {
 	source = skipModifier(source);
 	target = skipModifier(target);
 
+	// Never is the bottom type — assignable TO everything. After exhaustive
+	// narrowing (all union variants handled), the residual type is never.
+	// `return x` where `x: never` must be valid regardless of the return type.
+	if (source.kind === TypeKind.Never) return true;
+
 	// Same kind is always compatible
 	if (source.kind === target.kind) {
 		return match (source.kind) {
@@ -284,6 +289,9 @@ function typeRelationInner(formal: Type, actual: Type): TypeRelation {
 	if (actual.kind === TypeKind.Sink || actual.kind === TypeKind.Lent) {
 		if (actual.typeReturn !== null) actual = actual.typeReturn;
 	}
+	// Never is the bottom type — relates to everything. After exhaustive
+	// narrowing eliminates all union variants, the residual is never.
+	if (actual.kind === TypeKind.Never) return TypeRelation.Exact;
 	// Same kind: dispatch on type-specific rules
 	if (formal.kind === actual.kind) {
 		return match (formal.kind) {

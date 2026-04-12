@@ -63,6 +63,64 @@ export interface SgSignatureInfo {
 	paramLabels: string[];
 }
 
+// ===== sgFindCallExprByCalleeLocation =====
+//
+// Locate a CallExpr in `program` whose `d.callee.location` matches
+// `(line, col)` exactly. Used by hover to look up overload resolution
+// results stored on the CallExpr (`cd.resolvedOverloadIdx`).
+//
+// Rationale (Phase 5 hover architecture):
+//   - The symRecord for an overloaded callee identifier stores the PRIMARY
+//     sym so find-references / goto-def work across all call sites.
+//   - Hover on an overloaded call needs the RESOLVED overload's signature,
+//     which lives on the parent CallExpr, not the Identifier.
+//   - This walker bridges the two: given the cursor position, it finds the
+//     enclosing CallExpr whose callee is that Identifier and returns it.
+//
+// Returns null when no enclosing CallExpr matches. That includes the case
+// where the Identifier is used as a value (`const f = area`), in which case
+// the hover presenter falls back to the primary type — the correct answer.
+//
+// Cost: O(nodes in the file). Acceptable at hover latency targets; the
+// cursor is a single position and the walker short-circuits on the first hit.
+
+let _callExprWalkDepth: int32 = 0;
+const CALL_EXPR_WALK_LIMIT: int32 = 200;
+
+export function sgFindCallExprByCalleeLocation(program: Node, line: number, col: number): Node {
+	if (program === null) return null as unknown as Node;
+	_callExprWalkDepth = 0;
+	return findCallExprHelper(program, line, col);
+}
+
+function findCallExprHelper(node: Node, line: number, col: number): Node {
+	if (node === null) return null as unknown as Node;
+	if (_callExprWalkDepth >= CALL_EXPR_WALK_LIMIT) return null as unknown as Node;
+	_callExprWalkDepth = _callExprWalkDepth + 1;
+	if (node.kind === NodeKind.CallExpr) {
+		const cd = node.data as CallExprData;
+		if (cd.callee !== null && cd.callee.location !== null
+				&& cd.callee.location.line === line
+				&& cd.callee.kind === NodeKind.Identifier) {
+			const cid = cd.callee.data as IdentifierData;
+			const start = cd.callee.location.column;
+			if (col >= start && col < start + cid.name.length) {
+				return node;
+			}
+		}
+	}
+	let found: Node = null as unknown as Node;
+	forEachChild(node, (child: Node): void => {
+		if (found === null) {
+			const hit = findCallExprHelper(child, line, col);
+			if (hit !== null) {
+				found = hit;
+			}
+		}
+	});
+	return found;
+}
+
 // ===== sgQueryAtPosition — binary search on check-time records =====
 // Replaces the fragile AST walker (sgFindNodeAtPosition + sgGetSymbolAtCursor).
 // Records are sorted by (line, col) after check completes.

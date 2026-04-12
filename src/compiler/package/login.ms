@@ -95,27 +95,7 @@ function percentDecode(s: string): string {
 	return result;
 }
 
-// Extract "field":"value" from a JSON string (simple, no nesting)
-function extractJsonField(json: string, field: string): string {
-	const needle = "\"" + field + "\":\"";
-	let idx = 0;
-	while (idx <= json.length - needle.length) {
-		let match = true;
-		let j = 0;
-		while (j < needle.length) {
-			if (json.charAt(idx + j) !== needle.charAt(j)) { match = false; j = needle.length; }
-			j = j + 1;
-		}
-		if (match) {
-			const start = idx + needle.length;
-			let end = start;
-			while (end < json.length && json.charAt(end) !== "\"") end = end + 1;
-			return json.slice(start, end);
-		}
-		idx = idx + 1;
-	}
-	return "";
-}
+import { extractJsonField } from "./json";
 
 // HTTPS POST — uses fetch() with auto TLS from URL.
 function httpsPost(host: string, path: string, body: string, contentType: string): Result<HttpResponse, HttpError> {

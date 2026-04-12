@@ -1568,20 +1568,51 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	const sym = node.resolvedSym;
 
 	if (tag === TAG_CALL_OVERLOAD) {
-		// Overloaded: all cc children are args (no callee child)
-		const idx = cd.resolvedOverloadIdx;
-		// Resolve the chosen overload's function type for ABI shim
-		let ovType = sym.symbolType;
-		if (idx > 0 && idx - 1 < sym.overloads.length) {
-			ovType = sym.overloads[idx - 1].symbolType;
+		// Overloaded: all cc children are args (no callee child).
+		//
+		// cd.resolvedOverloadIdx is the RAW winner slot from check-time
+		// overload resolution — slot 0 = primary, slot k = sym.overloads[k-1].
+		// The winner may be a body-less signature (OverloadSig flag). In that
+		// case we sig→impl redirect HERE (codegen-local concern): find the
+		// unique body-bearing sym in the overload set and emit the call
+		// against ITS mangled name. Keeping the redirect in codegen lets
+		// check-time preserve the winner slot for LSP views (hover, sig
+		// help) while still emitting correct C.
+		const winnerIdx = cd.resolvedOverloadIdx;
+		let winnerSym: Symbol = sym;
+		if (winnerIdx > 0 && winnerIdx - 1 < sym.overloads.length) {
+			winnerSym = sym.overloads[winnerIdx - 1];
 		}
+		let emitIdx = winnerIdx;
+		let emitSym = winnerSym;
+		if (winnerSym !== null && hasFlag(winnerSym, SymbolFlag.OverloadSig)) {
+			// Winner is a body-less sig — redirect to the impl.
+			if (!hasFlag(sym, SymbolFlag.OverloadSig)) {
+				emitSym = sym;
+				emitIdx = 0;
+			} else {
+				let oi: int32 = 0;
+				while (oi < sym.overloads.length) {
+					const cand = sym.overloads[oi];
+					if (cand !== null && !hasFlag(cand, SymbolFlag.OverloadSig)) {
+						emitSym = cand;
+						emitIdx = oi + 1;
+						break;
+					}
+					oi = oi + 1;
+				}
+			}
+		}
+		// ABI shim uses the EMITTED (impl) function type — that's the
+		// actual C function signature we're calling into.
+		let ovType = emitSym !== null && emitSym.symbolType !== null
+			? emitSym.symbolType
+			: sym.symbolType;
 		const hasOvParams = ovType !== null && ovType.kind === TypeKind.Function && ovType.typeChildren !== null;
-		// Resolve nativeName early — need to know if & prefix requires first-arg address-of
+		// Resolve nativeName from the EMITTED sym (the impl owns the binding).
 		let ovNativeName = "";
-		if (idx === 0 && sym.nativeName !== "") {
-			ovNativeName = sym.nativeName;
-		} else if (idx > 0 && idx - 1 < sym.overloads.length && sym.overloads[idx - 1].nativeName !== "") {
-			ovNativeName = sym.overloads[idx - 1].nativeName;
+		if (emitSym !== null && emitSym.nativeName !== "") {
+			ovNativeName = emitSym.nativeName;
 		}
 		const ovNeedsAddr = hasAddrPrefix(ovNativeName);
 		// Build args with pointer/value ABI shim (genArg via shimCallArg)
@@ -1605,7 +1636,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 			ctx.results.push(`${stripAddrPrefix(ovNativeName)}(${argsStr})`);
 			return;
 		}
-		const ovIdx = idx >= 0 ? idx : 0;
+		const ovIdx = emitIdx >= 0 ? emitIdx : 0;
 		const ovCalleeName = mangledFunctionName(sym, sym.name, ovIdx);
 		// On-demand cross-module prototype (reference parity: genProcPrototype)
 		ensureCrossModuleProto(g, ovCalleeName, ovType, sym);

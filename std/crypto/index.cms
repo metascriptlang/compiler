@@ -10,7 +10,7 @@
 
 // Our crypto implementation
 @compile("runtime/crypto/hash.c");
-@compile("runtime/crypto/psaCryptoStubs.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_util.c");
 
 // mbedTLS vendor sources (hash algorithms)
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c");

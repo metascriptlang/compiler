@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
+import { Node, NodeKind, NodeData, createNode, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isPromise, isSpawnHandle, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, createEnumLiteral } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
@@ -25,7 +25,7 @@ import {
 } from "./initTracker";
 import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
-import { resetArgForRecheck, isContextSensitive } from "./speculate";
+import { isContextSensitive } from "./speculate";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -675,7 +675,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 				&& isDiscriminatedUnion(objExpected)) {
 				// Discriminated union construction validation
 				// Pass original expectedType so Ref wrapper is preserved for codegen heap-alloc
-				checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
+				return checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
 			} else if (objExpected !== null && objExpected.kind === TypeKind.Union) {
 				// Non-discriminated union: resolve variant, propagate field types.
 				// Reference parity: sem resolves fields then calls fitNode(field.typ, value)
@@ -1023,7 +1023,7 @@ function promoteNumeric(a: Type, b: Type): Type {
 
 function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 	return match (op) {
-		"===" | "!==" | "==" | "!=" | "<" | ">" | "<=" | ">=" => booleanType(),
+		"===" | "!==" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "instanceof" | "in" => booleanType(),
 		"&&" | "||" => leftType,
 		"+" => {
 			if (isStringLike(leftType) || isStringLike(rightType)) return stringType();
@@ -1863,6 +1863,16 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				return inferGenericReturnWithExplicit(calleeType, argTypes, expectedType, explicitArg, ctx, node);
 			}
 		}
+		// Assertion function narrowing: `asserts x is T`. Applied on the
+		// general return path (not just extensions) so direct calls like
+		// `assertString(val)` narrow `val` for subsequent statements.
+		if (calleeType !== null && calleeType.kind === TypeKind.Function
+				&& calleeType.typeExtra !== null
+				&& calleeType.typeExtra.kind === TypeKind.Unknown
+				&& calleeType.typeExtra.typeName.length > 8
+				&& calleeType.typeExtra.typeName.slice(0, 8) === "asserts:") {
+			applyAssertionNarrowing(calleeType, d.arguments);
+		}
 		return inferGenericReturn(calleeType, argTypes, expectedType);
 	}
 	return getReturnType(calleeType);
@@ -1941,6 +1951,31 @@ function findFirstGenericParamName(t: Type): string {
 		if (name !== "") return name;
 	}
 	return "";
+}
+
+// Apply assertion narrowing: `asserts paramName is TargetType`. Mutates the
+// argument's Symbol.symbolType so all subsequent checker references see the
+// narrowed type. Safe because assertion functions are contracts — if they
+// pass, the type holds unconditionally; if they fail, they throw/abort.
+function applyAssertionNarrowing(calleeType: Type, args: Node[]): void {
+	const sentinel = calleeType.typeExtra;
+	const assertParamName = sentinel.typeName.slice(8, sentinel.typeName.length);
+	const targetType = sentinel.typeReturn;
+	if (targetType === null || assertParamName === "") return;
+	// Find the matching parameter index.
+	if (calleeType.typeNames === null) return;
+	let paramIdx: int32 = -1;
+	let pi: int32 = 0;
+	while (pi < calleeType.typeNames.length) {
+		if (calleeType.typeNames[pi] === assertParamName) { paramIdx = pi; break; }
+		pi = pi + 1;
+	}
+	if (paramIdx < 0 || paramIdx >= args.length) return;
+	const arg = args[paramIdx];
+	if (arg === null || arg.kind !== NodeKind.Identifier) return;
+	const argSym = arg.resolvedSym;
+	if (argSym === null) return;
+	argSym.symbolType = targetType;
 }
 
 export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType: Type): Type {
@@ -2145,9 +2180,22 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node): 
 	}
 
 	if (ambiguous) {
-		addError(ctx, `Ambiguous call to overloaded function '${sym.name}'`,
-			callNode.location.line, callNode.location.column);
-		return getReturnType(sym.symbolType);
+		// When ALL args are context-sensitive (skipMask all-true), every
+		// candidate gets the same score (N subtypeMatches). This is not a
+		// real ambiguity — it's the degenerate "no discriminating args" case.
+		// Fall through to Pass 2 with the first matching candidate (TS-go
+		// `chooseOverload` picks the first applicable candidate when scores
+		// are tied). Only report ambiguity when at least one non-skipped arg
+		// actually discriminates but two candidates still tie.
+		let allSkipped = true;
+		for (const s of skipMask) {
+			if (!s) { allSkipped = false; break; }
+		}
+		if (!allSkipped) {
+			addError(ctx, `Ambiguous call to overloaded function '${sym.name}'`,
+				callNode.location.line, callNode.location.column);
+			return getReturnType(sym.symbolType);
+		}
 	}
 
 	if (bestIdx < 0) {
@@ -2197,31 +2245,15 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node): 
 		}
 	}
 
-	// Pick symbol + sig→impl redirect for codegen. Codegen emits only the
-	// implementation; overload signatures exist solely for type checking.
-	//
-	// node.resolvedSym stays the PRIMARY so codegen's overload dispatch
-	// (TAG_CALL_OVERLOAD, expressions.ms:858) picks the sym.overloads path
-	// and uses cd.resolvedOverloadIdx for mangling. Replacing it with the
-	// impl symbol would break that check — impl's own .overloads field is
-	// empty, so codegen falls through to TAG_CALL_DIRECT and reads the
-	// wrong (default-0) overloadIdx on the imported symbol.
-	const winnerSym: Symbol = candSyms[bestIdx];
-	if (hasFlag(winnerSym, SymbolFlag.OverloadSig)) {
-		// Redirect to impl slot. If the primary itself is the impl, slot 0;
-		// otherwise find impl's position in sym.overloads and shift by +1
-		// (primary is at logical slot 0, sym.overloads[k] is slot k+1).
-		if (impl === sym) {
-			d.resolvedOverloadIdx = 0;
-		} else {
-			for (let ok = 0; ok < sym.overloads.length; ok += 1) {
-				if (sym.overloads[ok] === impl) { d.resolvedOverloadIdx = ok + 1; break; }
-			}
-		}
-	} else {
-		// Winner IS the impl (or a body-bearing candidate). Use its slot directly.
-		d.resolvedOverloadIdx = bestIdx;
-	}
+	// Store the RAW winner slot (pre sig→impl redirect). This is the
+	// semantic fact "overload resolution picked candidate N" and is what
+	// hover/sig-help/rename/LSP views want to read. Codegen applies the
+	// sig→impl redirect locally when emitting the mangled call name —
+	// body-less sigs don't emit C functions, so the C backend walks from
+	// the winner sym to the body-bearing impl before mangling. Keeping
+	// the redirect localized to codegen avoids conflating "which overload
+	// matched" with "which symbol gets emitted".
+	d.resolvedOverloadIdx = bestIdx;
 	callNode.resolvedSym = sym;
 	if (d.callee !== null && d.callee.kind === NodeKind.Identifier) {
 		d.callee.resolvedSym = sym;

@@ -20,13 +20,14 @@ import {
 	sgGetSignatureContext, sgPickActiveOverload, sgCollectInlayHints,
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
 	sgQueryAtPosition, sgQueryBySym, sgQueryByName, sgQueryByDefiningModule,
+	sgFindCallExprByCalleeLocation,
 	SgDocumentSymbol,
 	SgSignatureInfo,
 	SgInlayHintKind,
 } from "../../../checker/suggest";
 import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
-import { Symbol, SymbolKind } from "../../../ast/node";
+import { Symbol, SymbolKind, Node, NodeKind, CallExprData, TypeKind } from "../../../ast/node";
 import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded } from "./shared";
 
 // ===== Hover =====
@@ -43,6 +44,37 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 
 	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
 	if (suggest === null) return lspResponse(id, "null");
+
+	// Overload-aware hover: the symRecord stores the PRIMARY sym (so
+	// find-references, goto-def, rename see all call sites as references
+	// to a single declaration). For HOVER on an overloaded function call,
+	// we want the RESOLVED overload's signature instead — TypeScript-go
+	// does the same. The truth lives on the CallExpr's `resolvedOverloadIdx`
+	// field, set by resolveOverloadCall at check time.
+	//
+	// Query the AST for a CallExpr whose callee is this exact Identifier
+	// position. If found, substitute the winning overload's type into
+	// `suggest.symType` before formatting. Non-overloaded calls and
+	// Identifier-as-value references fall through unchanged.
+	if (suggest.kind === SymbolKind.Function && suggest.sym !== null
+			&& suggest.sym.overloads !== null && suggest.sym.overloads.length > 0) {
+		// Use the checked program (AST with resolvedOverloadIdx populated).
+		// Fall back to the raw parse tree if the checked version is missing.
+		let checkedProgram = dbGetCheckedProgram(db, path);
+		if (checkedProgram === null) checkedProgram = program;
+		const callExpr = sgFindCallExprByCalleeLocation(checkedProgram, pos.line, pos.col1);
+		if (callExpr !== null) {
+			const cd = callExpr.data as CallExprData;
+			const idx = cd.resolvedOverloadIdx;
+			if (idx > 0 && idx - 1 < suggest.sym.overloads.length) {
+				const winnerSym = suggest.sym.overloads[idx - 1];
+				if (winnerSym !== null && winnerSym.symbolType !== null
+						&& winnerSym.symbolType.kind === TypeKind.Function) {
+					suggest.symType = winnerSym.symbolType;
+				}
+			}
+		}
+	}
 
 	const hoverText = sgFormatHover(suggest);
 	// Extract doc comment from the symbol's source file (may differ for cross-file symbols)

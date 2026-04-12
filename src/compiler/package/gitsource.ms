@@ -90,7 +90,7 @@ function replaceFirst(s: string, from: string, to: string): string {
 // Build the archive download URL for a given host, URL, and ref.
 // url: "github.com/owner/repo"
 // ref: "1.2.3" or 40-char SHA
-// Returns the full HTTPS URL to download the tarball.
+// Returns the full HTTPS URL to download the archive.
 export function archiveUrl(hostConfig: HostConfig, url: string, gitRef: string): string {
 	const path = extractPath(url);
 	const repo = extractRepoName(url);

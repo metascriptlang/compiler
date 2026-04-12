@@ -74,13 +74,3 @@ export function getEnv(name: string): string {
 export function clockMs(): number {
 	return msProcessClockMs();
 }
-
-
-// =============================================================================
-// Directory listing
-// =============================================================================
-
-export function readDir(path: string): string[] {
-	// Bun shim provides this; C backend would need POSIX opendir/readdir
-	return [];
-}

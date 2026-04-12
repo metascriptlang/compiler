@@ -863,21 +863,28 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	let returnType: Type;
 	let predicateSentinel: Type = null as unknown as Type;
 	if (d.fnReturnType !== "") {
-		const predIdx = findPredicateInfix(d.fnReturnType);
+		// Assertion function: `asserts paramName is Type` — strip `asserts `
+		// prefix and handle as a predicate with void return type and a distinct
+		// sentinel marker ("asserts:" prefix on typeName).
+		let predSource = d.fnReturnType;
+		let isAssertion = false;
+		if (predSource.length > 8 && predSource.slice(0, 8) === "asserts ") {
+			predSource = predSource.slice(8, predSource.length);
+			isAssertion = true;
+		}
+		const predIdx = findPredicateInfix(predSource);
 		if (predIdx > 0) {
-			// predIdx points at the `i` of `is`. The paramName ends one char
-			// before (the space). The target type starts 3 chars past — after
-			// `i`, `s`, and the trailing space.
-			const paramName = d.fnReturnType.slice(0, predIdx - 1).trim();
-			const targetText = d.fnReturnType.slice(predIdx + 3, d.fnReturnType.length).trim();
+			const paramName = predSource.slice(0, predIdx - 1).trim();
+			const targetText = predSource.slice(predIdx + 3, predSource.length).trim();
 			const targetType = resolveAnnotation(targetText, ctx, retLoc.line, retLoc.column);
-			returnType = booleanType();
-			// Sentinel: kind=Unknown is otherwise unused for Function.typeExtra.
-			// typeName holds the predicate parameter name; typeReturn holds the
-			// narrowing target type. flow.ms reads both fields.
+			// Predicates return boolean; assertions return void (they throw on failure).
+			returnType = isAssertion ? voidType() : booleanType();
+			// Sentinel: kind=Unknown on Function.typeExtra. typeName holds the
+			// parameter name (prefixed with "asserts:" for assertion functions).
+			// typeReturn holds the narrowing target type.
 			predicateSentinel = emptyType();
 			predicateSentinel.kind = TypeKind.Unknown;
-			predicateSentinel.typeName = paramName;
+			predicateSentinel.typeName = isAssertion ? `asserts:${paramName}` : paramName;
 			predicateSentinel.typeReturn = targetType;
 		} else {
 			returnType = resolveAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column);

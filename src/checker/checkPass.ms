@@ -1,10 +1,10 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { unknownType, nullType, stringType, charType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, typeNameOf, isPromise, isSpawnHandle, isStrictPromise, getPromiseInner, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, findVariantByDiscriminant, findVariantByStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
+import { unknownType, charType, float64Type, voidType, createFunction, typeNameOf, isPromise, isSpawnHandle, isStrictPromise, getPromiseInner, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
@@ -3214,6 +3214,153 @@ test "phase 6: non-predicate function does not narrow" {
 		+ "function f(val: string | number): string {\n"
 		+ "  if (isTruthy(val)) { return val; }\n"
 		+ "  return \"\";\n"
+		+ "}\n"
+	);
+}
+
+// ===== Truthiness narrowing =====
+
+test "truthiness: if (x) removes null from string | null" {
+	assert checkOk(
+		"function f(val: string | null): number {\n"
+		+ "  if (val) { return val.length; }\n"
+		+ "  return 0;\n"
+		+ "}\n"
+	);
+}
+
+test "truthiness: if (!x) narrows to null in falsy branch" {
+	// When !x is true, x is falsy → null. The function returns "" (string)
+	// from both branches, which is valid.
+	assert checkOk(
+		"function f(val: string | null): string {\n"
+		+ "  if (!val) { return \"\"; }\n"
+		+ "  return val;\n"
+		+ "}\n"
+	);
+}
+
+test "truthiness: guard clause pattern" {
+	// `if (!val) return ""` → after the guard, val is string (null removed).
+	assert checkOk(
+		"function f(val: string | null): string {\n"
+		+ "  if (!val) return \"\";\n"
+		+ "  return val;\n"
+		+ "}\n"
+	);
+}
+
+test "truthiness: non-nullable is a no-op" {
+	// `if (x)` where x: number → no narrowing, x stays number. Still valid.
+	assert checkOk(
+		"function f(val: number): number {\n"
+		+ "  if (val) { return val; }\n"
+		+ "  return 0;\n"
+		+ "}\n"
+	);
+}
+
+test "truthiness: multi-variant removes only null" {
+	// string | number | null → truthy branch: string | number (null removed).
+	// .length doesn't exist on string | number → should fail.
+	assert !checkOk(
+		"function f(val: string | number | null): number {\n"
+		+ "  if (val) { return val.length; }\n"
+		+ "  return 0;\n"
+		+ "}\n"
+	);
+}
+
+test "truthiness: compound x && x.length works" {
+	// First operand narrows x from string|null to string (truthiness),
+	// then x.length is valid as the second operand.
+	assert checkOk(
+		"function f(val: string | null): boolean {\n"
+		+ "  if (val && val.length > 0) { return true; }\n"
+		+ "  return false;\n"
+		+ "}\n"
+	);
+}
+
+// ===== never as bottom type =====
+
+test "never: exhaustive typeof chain returns never residual" {
+	// After handling string and number, x is never. Returning never
+	// satisfies any return type (bottom type).
+	assert checkOk(
+		"function f(x: string | number): string {\n"
+		+ "  if (typeof x === \"string\") return x;\n"
+		+ "  if (typeof x === \"number\") return x.toString();\n"
+		+ "  return x;\n"
+		+ "}\n"
+	);
+}
+
+test "never: assignable to any type" {
+	assert checkOk(
+		"function f(x: string | number): number {\n"
+		+ "  if (typeof x === \"string\") return 0;\n"
+		+ "  if (typeof x === \"number\") return x;\n"
+		+ "  return x;\n"
+		+ "}\n"
+	);
+}
+
+// ===== instanceof narrowing =====
+
+test "instanceof: narrows to class type in truthy branch" {
+	assert checkOk(
+		"class Dog { breed: string; }\n"
+		+ "class Cat { indoor: boolean; }\n"
+		+ "function f(pet: Dog | Cat): string {\n"
+		+ "  if (pet instanceof Dog) { return pet.breed; }\n"
+		+ "  return \"\";\n"
+		+ "}\n"
+	);
+}
+
+test "instanceof: excludes class type in falsy branch" {
+	assert checkOk(
+		"class Dog { breed: string; }\n"
+		+ "class Cat { indoor: boolean; }\n"
+		+ "function f(pet: Dog | Cat): boolean {\n"
+		+ "  if (pet instanceof Dog) { return true; }\n"
+		+ "  return pet.indoor;\n"
+		+ "}\n"
+	);
+}
+
+test "instanceof: returns boolean type" {
+	assert checkOk(
+		"class Foo {}\n"
+		+ "function f(x: Foo): boolean {\n"
+		+ "  return x instanceof Foo;\n"
+		+ "}\n"
+	);
+}
+
+// ===== asserts x is T =====
+
+test "asserts: narrows argument type after call" {
+	assert checkOk(
+		"function assertString(x: string | number): asserts x is string {\n"
+		+ "  if (typeof x !== \"string\") { return; }\n"
+		+ "}\n"
+		+ "function f(val: string | number): string {\n"
+		+ "  assertString(val);\n"
+		+ "  return val;\n"
+		+ "}\n"
+	);
+}
+
+test "asserts: returns void" {
+	assert checkOk(
+		"function assertNum(x: string | number): asserts x is number {\n"
+		+ "  if (typeof x !== \"number\") { return; }\n"
+		+ "}\n"
+		+ "function f(): void {\n"
+		+ "  let v: string | number = 42;\n"
+		+ "  assertNum(v);\n"
 		+ "}\n"
 	);
 }

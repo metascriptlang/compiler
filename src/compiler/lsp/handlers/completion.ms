@@ -1,7 +1,8 @@
 // LSP Handlers — Completion, completion resolve, import path/name completion.
 
 import { TransAmDb, dbParse, dbTypeCheck, dbEnsureModuleExports } from "../../transam/index";
-import { readDir, clockMs } from "std/process";
+import { readDir } from "std/fs";
+import { clockMs } from "std/process";
 import {
 	lspJsonString,
 	lspGetField,

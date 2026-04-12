@@ -11,12 +11,13 @@
 
 import { exists } from "std/fs";
 import { join } from "std/fs/path";
-import { addDepToManifest, readManifest } from "./manifest";
-import { readLockfile, writeLockfile, entryName } from "./lockfile";
+import { addDepToManifest } from "./manifest";
+import { readLockfile, writeLockfile } from "./lockfile";
 import { parseSourceSpec, SourceKind } from "./version";
 import { parseGitSpec } from "./version";
-import { LockEntry, Lockfile } from "./lockfile";
-import { fetchPackageInfo, latestVersion } from "./registry";
+import { LockEntry } from "./lockfile";
+import { fetchPackageInfo, findVersion, latestVersion, RegistryVersion } from "./registry";
+import { downloadPackage } from "./download";
 
 // Parse "name@version" into { name, version }.
 function parseNameVersion(arg: string): { name: string, version: string } {
@@ -187,19 +188,26 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 			depValues: emptyVals,
 		};
 	} else {
+		// Fetch version details from registry (archiveUrl + integrity + deps)
+		let regVersion: RegistryVersion = null as unknown as RegistryVersion;
+		const infoResult = fetchPackageInfo(parsed.name);
+		if (infoResult.ok) {
+			regVersion = findVersion(infoResult.value, parsed.version);
+		}
+
 		lockKey = parsed.name + "@" + parsed.version;
-		const emptyKeys: string[] = [];
-		const emptyVals: string[] = [];
+		const depKeys: string[] = regVersion !== null ? regVersion.depKeys : [];
+		const depValues: string[] = regVersion !== null ? regVersion.depValues : [];
 		entry = {
 			key: lockKey,
 			source: "registry",
 			version: parsed.version,
-			integrity: "",
-			url: "",
+			integrity: regVersion !== null ? regVersion.integrity : "",
+			url: regVersion !== null ? regVersion.archiveUrl : "",
 			gitRef: "",
 			commit: "",
-			depKeys: emptyKeys,
-			depValues: emptyVals,
+			depKeys,
+			depValues,
 		};
 	}
 
@@ -221,6 +229,13 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	if (!written) {
 		console.log("error: failed to write msc.lock");
 		return false;
+	}
+
+	// Download the package archive
+	if (entry.source === "registry" && entry.url !== "") {
+		if (!downloadPackage(parsed.name, parsed.version, entry.url, entry.integrity)) {
+			console.log("warning: added to lockfile but download failed — run `msc install` to retry");
+		}
 	}
 
 	const devTag = isDev ? " (dev)" : "";
