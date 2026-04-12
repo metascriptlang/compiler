@@ -36,6 +36,8 @@ export enum TokenKind {
 	// Actor (appended after Eof to preserve enum ordering — isIdentOrKeyword range check still works
 	// because Actor > Break and Actor !== Comment and Actor !== Eof)
 	Actor,
+	// Quote interpolation: ${ — appended at end to preserve all existing ordinals.
+	QuoteInterp,
 }
 
 export interface Token {
@@ -174,6 +176,7 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.TemplateMiddle => "TEMPLATE_MIDDLE",
 		TokenKind.TemplateTail => "TEMPLATE_TAIL",
 		TokenKind.TemplateNoSub => "TEMPLATE_NOSUB",
+		TokenKind.QuoteInterp => "QUOTE_INTERP",
 		TokenKind.Ident => "IDENT",
 		TokenKind.OperatorIdent => "OPERATOR_IDENT",
 		TokenKind.Plus => "PLUS",

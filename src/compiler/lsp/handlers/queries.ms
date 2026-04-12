@@ -27,7 +27,7 @@ import {
 } from "../../../checker/suggest";
 import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
-import { Symbol, SymbolKind, Node, NodeKind, CallExprData, TypeKind } from "../../../ast/node";
+import { Symbol, SymbolKind, CallExprData, TypeKind } from "../../../ast/node";
 import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded } from "./shared";
 
 // ===== Hover =====

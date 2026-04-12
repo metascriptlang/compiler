@@ -167,8 +167,8 @@ function doRequest(options: RequestOptions): Result<HttpResponse, HttpError> {
 
 	// Build request
 	setHeader(options.headers, "host", options.hostname);
-	if (options.body.length > 0) {
-		setHeader(options.headers, "content-length", options.body.length.toString());
+	if (options.body.byteLength > 0) {
+		setHeader(options.headers, "content-length", options.body.byteLength.toString());
 	}
 	setHeader(options.headers, "connection", "close");
 

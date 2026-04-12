@@ -148,6 +148,10 @@ export function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: Rais
 	heapObjectSetField(objHeap, handle, "line", lineVal);
 	const colVal = raiserInt(node.location.column);
 	heapObjectSetField(objHeap, handle, "column", colVal);
+	if (node.location.endLine > 0) {
+		heapObjectSetField(objHeap, handle, "endLine", raiserInt(node.location.endLine));
+		heapObjectSetField(objHeap, handle, "endColumn", raiserInt(node.location.endColumn));
+	}
 
 	match (node.kind) {
 		// === Literals ===
@@ -639,7 +643,13 @@ function readStrs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number
 }
 
 function readLoc(objHeap: RaiserObjectHeap, h: number): SourceLocation {
-	return makeLoc(readInt(objHeap, h, "line"), readInt(objHeap, h, "column"));
+	const loc = makeLoc(readInt(objHeap, h, "line"), readInt(objHeap, h, "column"));
+	const el = readInt(objHeap, h, "endLine");
+	if (el > 0) {
+		loc.endLine = el as int32;
+		loc.endColumn = readInt(objHeap, h, "endColumn") as int32;
+	}
+	return loc;
 }
 
 // ===== valueToNode: RaiserValue → AST Node =====

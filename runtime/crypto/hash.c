@@ -82,15 +82,17 @@ static msString encode_to_base64(const uint8_t* data, size_t len) {
 	p->cap = (int64_t)outLen;
 	size_t i = 0, j = 0;
 	while (i < len) {
+		size_t groupStart = i;
 		uint32_t a = i < len ? data[i++] : 0;
 		uint32_t b = i < len ? data[i++] : 0;
 		uint32_t c = i < len ? data[i++] : 0;
+		size_t nread = i - groupStart;  /* 1, 2, or 3 bytes actually read */
 		uint32_t triple = (a << 16) | (b << 8) | c;
 
 		p->data[j++] = b64_table[(triple >> 18) & 0x3f];
 		p->data[j++] = b64_table[(triple >> 12) & 0x3f];
-		p->data[j++] = (i > len + 1) ? '=' : b64_table[(triple >> 6) & 0x3f];
-		p->data[j++] = (i > len) ? '=' : b64_table[triple & 0x3f];
+		p->data[j++] = (nread < 2) ? '=' : b64_table[(triple >> 6) & 0x3f];
+		p->data[j++] = (nread < 3) ? '=' : b64_table[triple & 0x3f];
 	}
 	p->data[outLen] = '\0';
 

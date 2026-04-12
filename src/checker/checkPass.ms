@@ -1520,7 +1520,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		const subExports: ExportedSymInfo[] = [];
 		for (const sym of subScope.symbols) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
-				subExports.push(buildExportInfo(sym, subCtx.extensionRegistry, subResolved));
+				subExports.push(buildExportInfo(sym, subCtx.extensionRegistry, subResolved, subCtx));
 			}
 		}
 		registerModuleExports(ctx.exportRegistry, subResolved, subExports);

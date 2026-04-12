@@ -80,7 +80,7 @@ export type HashAlgorithm =
 
 export type HashEncoding = "hex" | "base64";
 
-import { CryptoError, CryptoErrorKind, cryptoError, hashFailed, hmacFailed, randomFailed, keyDerivationFailed } from "./errors";
+import { CryptoError, CryptoErrorKind, hashFailed, hmacFailed, randomFailed, keyDerivationFailed } from "./errors";
 export { CryptoError, CryptoErrorKind } from "./errors";
 
 // ===== Initialization =====

@@ -211,12 +211,18 @@ export enum ExternKind {
 // ===== Source Location =====
 
 export interface SourceLocation {
-	line: number;
-	column: number;
+	line: int32;
+	column: int32;
+	endLine: int32;    // 0 = unknown (falls back to line)
+	endColumn: int32;  // 0 = unknown (falls back to column + 1)
 }
 
 export function makeLoc(line: number, column: number): SourceLocation {
-	return { line, column };
+	return { line: line as int32, column: column as int32, endLine: 0 as int32, endColumn: 0 as int32 };
+}
+
+export function makeLocRange(line: int32, column: int32, endLine: int32, endColumn: int32): SourceLocation {
+	return { line, column, endLine, endColumn };
 }
 
 // ===== Node Data (Discriminated Union) =====

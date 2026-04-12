@@ -220,9 +220,16 @@ int32_t msTlsWrite(int64_t handle, msString data) {
 	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
 	if (!ctx || data.len == 0 || !data.p) return -1;
 
-	int ret = mbedtls_ssl_write(&ctx->ssl, (const unsigned char*)data.p->data, data.len);
-	if (ret < 0) return -1;
-	return (int32_t)ret;
+	const unsigned char *buf = (const unsigned char*)data.p->data;
+	int32_t total = 0;
+	int32_t len = (int32_t)data.len;
+	while (total < len) {
+		int ret = mbedtls_ssl_write(&ctx->ssl, buf + total, (size_t)(len - total));
+		if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
+		if (ret < 0) return -1;
+		total += (int32_t)ret;
+	}
+	return total;
 }
 
 void msTlsClose(int64_t handle) {

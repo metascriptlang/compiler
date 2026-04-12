@@ -12,11 +12,11 @@
 import { exists } from "std/fs";
 import { join } from "std/fs/path";
 import { addDepToManifest } from "./manifest";
-import { readLockfile, writeLockfile } from "./lockfile";
+import { readLockfile, writeLockfile, entryName } from "./lockfile";
 import { parseSourceSpec, SourceKind } from "./version";
 import { parseGitSpec } from "./version";
 import { LockEntry } from "./lockfile";
-import { fetchPackageInfo, findVersion, latestVersion, RegistryVersion } from "./registry";
+import { fetchPackageInfo, findVersion, latestVersion, RegistryVersion, RegistryPackage } from "./registry";
 import { downloadPackage } from "./download";
 
 // Parse "name@version" into { name, version }.
@@ -108,6 +108,9 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		console.log("error: invalid package specifier: " + pkgArg);
 		return false;
 	}
+	// Fetch registry metadata (reused for latest-resolve + lockfile population)
+	let registryPkg: RegistryPackage = null as unknown as RegistryPackage;
+
 	if (parsed.version === "") {
 		// Resolve latest version from registry.
 		console.log("resolving latest version of " + parsed.name + " from registry...");
@@ -116,7 +119,8 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 			console.log("error: " + infoResult.error.message);
 			return false;
 		}
-		const latest = latestVersion(infoResult.value);
+		registryPkg = infoResult.value;
+		const latest = latestVersion(registryPkg);
 		if (latest === null) {
 			console.log("error: no published versions for " + parsed.name);
 			return false;
@@ -188,11 +192,14 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 			depValues: emptyVals,
 		};
 	} else {
-		// Fetch version details from registry (archiveUrl + integrity + deps)
+		// Get version details from registry (archiveUrl + integrity + deps)
 		let regVersion: RegistryVersion = null as unknown as RegistryVersion;
-		const infoResult = fetchPackageInfo(parsed.name);
-		if (infoResult.ok) {
-			regVersion = findVersion(infoResult.value, parsed.version);
+		if (registryPkg === null) {
+			const infoResult = fetchPackageInfo(parsed.name);
+			if (infoResult.ok) registryPkg = infoResult.value;
+		}
+		if (registryPkg !== null) {
+			regVersion = findVersion(registryPkg, parsed.version);
 		}
 
 		lockKey = parsed.name + "@" + parsed.version;
@@ -211,11 +218,13 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		};
 	}
 
-	// Check if already in lockfile
+	// Check if already in lockfile — match by package name (not full key,
+	// since the key includes the version and we're updating to a new version)
 	let found = false;
 	let fi = 0;
 	while (fi < lock.entries.length) {
-		if (lock.entries[fi].key === lockKey) {
+		const existingName = entryName(lock.entries[fi].key);
+		if (existingName === parsed.name) {
 			lock.entries[fi] = entry;
 			found = true;
 		}

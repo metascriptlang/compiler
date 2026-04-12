@@ -9,6 +9,7 @@
 
 import { Node, NodeKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
+import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
 import { CheckerContext, Severity, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
@@ -77,7 +78,9 @@ function isStdPathFor(db: TransAmDb, filePath: string): boolean {
 
 export function dbSetStdPath(db: TransAmDb, stdPath: string): void {
 	db.stdPath = stdPath;
+	db.resolverConfig = createDefaultConfig(Backend.C, stdPath);
 }
+
 
 export function dbEnsurePrelude(db: TransAmDb): void {
 	if (db.preludeCtx === null && db.stdPath.length > 0) {
@@ -120,6 +123,7 @@ export class TransAmDb {
 	interner: TaStringInterner;
 	exportRegistry: ExportRegistry;
 	stdPath: string;
+	resolverConfig: ResolverConfig;
 	preludeCtx: CheckerContext;
 	preprocessCache: Map<number, string>;  // fileId → preprocessed source
 }
@@ -135,6 +139,7 @@ export function createTransAmDb(cacheCapacity: number): TransAmDb {
 		interner: createStringInterner(),
 		exportRegistry: createExportRegistry(),
 		stdPath: "",
+		resolverConfig: createDefaultConfig(Backend.C, ""),
 		preludeCtx: null as unknown as CheckerContext,
 		preprocessCache: new Map<number, string>(),
 	};
@@ -325,28 +330,17 @@ function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 }
 
 // Resolve import specifier to absolute path (relative + std/ imports).
-function dbResolveImport(db: TransAmDb, basePath: string, importSpec: string): string {
-	// Relative imports — try candidates (.ms, /index.ms, .cms, /index.cms)
-	const relCandidates = lspResolveImportCandidates(basePath, importSpec);
-	for (const c of relCandidates) {
+export function dbResolveImport(db: TransAmDb, basePath: string, importSpec: string): string {
+	// Use the compiler's resolver with the db's config (includes std/, aliases, packages)
+	const candidates = resolveImportWithConfig(importSpec, basePath, db.resolverConfig);
+	// Fast path: already in db
+	for (const c of candidates) {
 		if (getFileId(db.fileInput, c) >= 0) return c;
 	}
-	for (const c of relCandidates) {
+	// Slow path: try loading from disk
+	for (const c of candidates) {
 		dbEnsureFileLoaded(db, c);
 		if (getFileId(db.fileInput, c) >= 0) return c;
-	}
-	// std/ imports
-	if (db.stdPath.length > 0 && importSpec.length > 4 && importSpec.slice(0, 4) === "std/") {
-		const rest = importSpec.slice(4, importSpec.length);
-		const base = db.stdPath + "/" + rest;
-		const candidates: string[] = [base + ".ms", base + ".cms", base + "/index.ms", base + "/index.cms"];
-		for (const c of candidates) {
-			if (getFileId(db.fileInput, c) >= 0) return c;
-		}
-		for (const c of candidates) {
-			dbEnsureFileLoaded(db, c);
-			if (getFileId(db.fileInput, c) >= 0) return c;
-		}
 	}
 	return "";
 }
@@ -479,21 +473,8 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 		// for unused-import detection only — don't create a module import entry.
 		if (imp.importSource.length >= 2 && imp.importSource.slice(imp.importSource.length - 2, imp.importSource.length) === ".h") continue;
 
-		// Find resolved path from dep edges
-		let resolvedPath = "";
-		const depIds = getDirectImports(db.moduleDeps, fileId);
-		for (let di = 0; di < depIds.length; di = di + 1) {
-			const dp = getFilePath(db.fileInput, depIds[di]);
-			// Match: dep path should end with the import specifier (+ .ms suffix)
-			// More robust: check if this dep was recorded for this import
-			if (dp !== "") {
-				// Simple heuristic: if specifier is "./foo", path ends with "/foo.ms"
-				if (matchesImportSpec(dp, imp.importSource)) {
-					resolvedPath = dp;
-					break;
-				}
-			}
-		}
+		// Resolve import specifier using the same resolver as everything else
+		const resolvedPath = dbResolveImport(db, filePath, imp.importSource);
 
 		entries.push(createImportEntry(imp.importNames, imp.importAliases, resolvedPath, imp.importSource));
 	}
@@ -501,27 +482,6 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 }
 
 // Check if an absolute path matches an import specifier
-function matchesImportSpec(absPath: string, spec: string): boolean {
-	if (spec === "" || absPath === "") return false;
-	// Strip leading "./" or "../" to get the relative stem
-	let stem = spec;
-	while (stem.length >= 3 && stem[0] === "." && stem[1] === "." && stem[2] === "/") {
-		stem = stem.slice(3, stem.length);
-	}
-	if (stem.length >= 2 && stem[0] === "." && stem[1] === "/") {
-		stem = stem.slice(2, stem.length);
-	}
-	// absPath should end with /stem.ms, /stem/index.ms, /stem/index.cms, or /stem directly (for .h/.cms)
-	const suffixes = ["/" + stem + ".ms", "/" + stem + "/index.ms", "/" + stem + "/index.cms", "/" + stem];
-	for (let si = 0; si < suffixes.length; si = si + 1) {
-		const suf = suffixes[si];
-		if (absPath.length >= suf.length) {
-			if (absPath.slice(absPath.length - suf.length, absPath.length) === suf) return true;
-		}
-	}
-	return false;
-}
-
 // Hash checker result for Salsa early cutoff. If error count + exported symbol
 // signatures are unchanged, dependents stay GREEN (comment-only edits, etc.).
 function hashCheckerResult(ctx: CheckerContext): number {

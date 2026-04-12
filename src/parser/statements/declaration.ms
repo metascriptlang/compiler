@@ -447,6 +447,11 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
+	if (nextKind === TokenKind.Macro) {
+		const decl = try parseMacroDecl(state);
+		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+	}
+
 	// export async function f() {}
 	if (nextKind === TokenKind.Async) {
 		const decl = try parseFunctionDecl(state);

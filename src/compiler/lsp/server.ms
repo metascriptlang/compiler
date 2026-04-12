@@ -10,10 +10,40 @@ import {
 	lspGetField, lspGetNumberField, lspGetObjectField, lspJsonNumber,
 	lspErrorResponse
 } from "./protocol";
-import { TransAmDb, createTransAmDb, dbEnsurePrelude } from "../transam/index";
+import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath } from "../transam/index";
+import { readLockfile, entryName } from "../package/lockfile";
+import { registrySrcPath, gitSrcPath } from "../package/cache";
+import { findProjectRoot } from "../../utils/path";
+import { exists } from "std/fs";
+import { join } from "std/fs/path";
 import { resetCancel } from "../transam/cancel";
 import { CompletionCache, createCompletionCache } from "./handlers/shared";
 import { buildTransitiveDiagnosticsWire } from "./handlers/diagnostics";
+
+// Set up package aliases on the db's resolverConfig from the project's lockfile.
+// Uses findProjectRoot (walks up from filePath looking for build.ms).
+function setupPackageAliases(db: TransAmDb, filePath: string): void {
+	if (db.resolverConfig.aliasKeys.length > 0) return;
+	const projectRoot = findProjectRoot(filePath);
+	const lockPath = join(projectRoot, "msc.lock");
+	if (!exists(lockPath)) return;
+	const lock = readLockfile(lockPath);
+	if (!lock.valid) return;
+	for (const entry of lock.entries) {
+		const name = entryName(entry.key);
+		let srcPath = "";
+		if (entry.source === "git" && entry.url !== "" && entry.commit !== "") {
+			srcPath = gitSrcPath(entry.url, entry.commit);
+		} else if (entry.version !== "") {
+			srcPath = registrySrcPath(name, entry.version);
+		}
+		if (srcPath !== "") {
+			db.resolverConfig.aliasKeys.push(name);
+			db.resolverConfig.aliasValues.push(srcPath);
+		}
+	}
+}
+
 import { lspDispatch, publishPendingDiagnostics } from "./handlers/lifecycle";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { clockMs } from "std/process";
@@ -233,9 +263,8 @@ export function processMessage(msg: string, state: LspServerState): string {
 		state.initialized = true;
 		const root = resolveRuntimeDir();
 		if (root.length > 0) {
-			state.db.stdPath = root + "/std";
+			dbSetStdPath(state.db, root + "/std");
 		}
-		// Eagerly build prelude so completions work even before first type check
 		dbEnsurePrelude(state.db);
 	}
 	if (method === "shutdown") {
@@ -246,6 +275,14 @@ export function processMessage(msg: string, state: LspServerState): string {
 	if (method === "textDocument/didChange" || method === "textDocument/didOpen") {
 		state.completionCache.uri = "";
 		state.completionCache.line = -1;
+	}
+
+	// Set up package aliases BEFORE dispatch (so imports resolve during parse/check)
+	if (method === "textDocument/didOpen") {
+		const textDoc = lspGetObjectField(params, "textDocument");
+		const openUri = lspGetField(textDoc, "uri");
+		const openPath = lspUriToPath(openUri);
+		setupPackageAliases(state.db, openPath);
 	}
 
 	// Log all requests for debugging

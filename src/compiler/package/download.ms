@@ -7,12 +7,12 @@
 //   4. extract to cache/extracted/<name>@<version>/
 //   5. chmod -R read-only on extracted dir
 
-import { exists, writeFile, mkdir, chmod } from "std/fs";
+import { exists, writeFile, ensureDir, chmod } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { fetch } from "std/http/client";
 import { createHeaders } from "std/http/headers";
 import { sha256 } from "std/crypto";
-import { openZip, zipEntries, zipExtract, closeZip } from "std/compress/zip";
+import { openZip, zipEntries, zipExtract, zipFindByName, closeZip } from "std/compress/zip";
 import { registryDownloadPath, registrySrcPath } from "./cache";
 
 // Download and verify a package archive from the registry.
@@ -62,14 +62,12 @@ export function downloadPackage(name: string, version: string, archiveUrl: strin
 	// Step 3: Save archive to cache/download/
 	const dlPath = registryDownloadPath(name, version);
 	if (dlPath !== "") {
-		const dlDir = dirname(dlPath);
-		if (!exists(dlDir)) mkdir(dlDir);
+		ensureDir(dirname(dlPath));
 		writeFile(dlPath, archiveBytes);
 	}
 
 	// Step 4: Extract to cache/extracted/<name>@<version>/
-	if (!exists(dirname(extractedPath))) mkdir(dirname(extractedPath));
-	if (!exists(extractedPath)) mkdir(extractedPath);
+	ensureDir(extractedPath);
 
 	const zipR = openZip(archiveBytes);
 	if (!zipR.ok) {
@@ -92,11 +90,10 @@ export function downloadPackage(name: string, version: string, archiveUrl: strin
 		if (entryPath === "manifest.json") continue;
 
 		const outPath = join(extractedPath, entryPath);
-		const outDir = dirname(outPath);
-		if (!exists(outDir)) mkdir(outDir);
+		ensureDir(dirname(outPath));
 
 		// Extract file content
-		const idx = zipFindIdx(reader, entry.name, entries);
+		const idx = zipFindByName(reader, entry.name);
 		if (idx < 0) continue;
 		const contentR = zipExtract(reader, idx);
 		if (!contentR.ok) {
@@ -111,14 +108,4 @@ export function downloadPackage(name: string, version: string, archiveUrl: strin
 	closeZip(reader);
 	console.log(`  extracted ${name}@${version} (${entries.length.toString()} files)`);
 	return true;
-}
-
-// Find entry index by name (zipEntries returns metadata, but zipExtract needs index)
-function zipFindIdx(reader: any, name: string, entries: any[]): int32 {
-	let i: int32 = 0;
-	while (i < entries.length) {
-		if (entries[i].name === name) return i;
-		i = i + 1;
-	}
-	return -1;
 }

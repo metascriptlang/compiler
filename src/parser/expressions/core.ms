@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode, QuoteExprData, BlockStmtData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, addExplicitTypeArg, collectTokenText } from "../context";
+import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, addExplicitTypeArg, collectTokenText, stampEnd } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, isIdentLike } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
@@ -41,7 +41,9 @@ export function parseExpression(tokens: Token[]): ExprResult {
 }
 
 export function parseExpressionFromState(state: ParserState): ExprResult {
-	return parseExprWithPrec(state, 0);
+	const result = parseExprWithPrec(state, 0);
+	if (result.ok) stampEnd(state, result.value);
+	return result;
 }
 
 // Register parseExpression into util.ms for sub-module integration tests.
@@ -486,6 +488,22 @@ function parsePrimary(state: ParserState): ExprResult {
 		}
 		advance(state);
 		return Result.ok(createNode(NodeKind.Identifier, { name: token.value }, token));
+	}
+
+	// Quote interpolation: ${ expr } → desugared to splice(expr) call.
+	// The preprocessor in expand.ms handles splice() calls inside quote
+	// bodies. Outside quote, splice is undefined → checker error.
+	if (token.kind === TokenKind.QuoteInterp) {
+		advance(state);
+		const spliceExpr = try parseExpressionFromState(state);
+		if (!isAtEnd(state) && current(state).kind === TokenKind.RBrace) {
+			advance(state);
+		}
+		const spliceCallee = createNode(NodeKind.Identifier, { name: "splice" }, token);
+		return Result.ok(createNode(NodeKind.CallExpr, {
+			callee: spliceCallee, arguments: [spliceExpr],
+			isDirectCall: true, resolvedOverloadIdx: -1,
+		}, token));
 	}
 
 	// Spread: ...expr

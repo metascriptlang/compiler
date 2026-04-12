@@ -7,12 +7,13 @@ import {
 import { detectCycle } from "../../transam/moduleDeps";
 import { writeStderr } from "std/io";
 import { lspNotification, lspFormatMessage, lspPathToUri, lspDirname } from "../protocol";
-import { lspFmtDiagnostic, lspFmtPublishDiagnostics } from "../format";
+import { lspFmtDiagnostic, lspFmtDiagnosticRange, lspFmtPublishDiagnostics } from "../format";
 import { sgCollectDiagnostics } from "../../../checker/suggest";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../../../ast/node";
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../../fmt/options";
 import { loadFmtSection, validateBuildConfig } from "../../buildConfig";
-import { dbGetSource, resolveImportForLsp, lspEnsureFileLoaded } from "./shared";
+import { dbGetSource, lspEnsureFileLoaded } from "./shared";
+import { dbResolveImport } from "../../transam/index";
 
 
 // ===== Format Options from build.ms =====
@@ -202,9 +203,10 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 			const line = d.line - 1;
 			// Convert 1-based checker columns to 0-based LSP columns
 			const col = d.column > 0 ? d.column - 1 : 0;
+			const endLine = d.endLine > 0 ? d.endLine - 1 : line;
 			const endCol = d.endColumn > d.column ? d.endColumn - 1 : col + 1;
-			diagArray = diagArray + lspFmtDiagnostic(
-				line, col, endCol, d.severity, d.message, "metascript", 0, d.tags
+			diagArray = diagArray + lspFmtDiagnosticRange(
+				line, col, endLine, endCol, d.severity, d.message, "metascript", 0, d.tags
 			);
 			diagCount = diagCount + 1;
 		}
@@ -223,7 +225,7 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 			}
 			if (circStmt.kind === NodeKind.ImportDecl) {
 				const circImp = circStmt.data as ImportDeclData;
-				const circTarget = resolveImportForLsp(db, path, circImp.importSource);
+				const circTarget = dbResolveImport(db, path,circImp.importSource);
 				if (circTarget !== "") {
 					const circTargetId = getFileId(db.fileInput, circTarget);
 					if (circTargetId >= 0 && circFileId >= 0) {
@@ -298,7 +300,7 @@ export function recordImportsForFile(db: TransAmDb, path: string, program: Node)
 		}
 		if (stmt.kind === NodeKind.ImportDecl) {
 			const imp = stmt.data as ImportDeclData;
-			const targetPath = resolveImportForLsp(db, path, imp.importSource);
+			const targetPath = dbResolveImport(db, path, imp.importSource);
 			if (targetPath === "") continue;
 			const alreadyLoaded = getFileId(db.fileInput, targetPath) >= 0;
 			lspEnsureFileLoaded(db, targetPath);

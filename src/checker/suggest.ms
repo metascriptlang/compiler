@@ -35,6 +35,7 @@ export interface SgDiagnostic {
 	message: string;
 	line: number;
 	column: number;
+	endLine: number;   // 0 = same as line (single-line range)
 	endColumn: number; // 0 = use column+1
 	severity: number;  // 1=Error, 2=Warning, 3=Info, 4=Hint
 	tags: number;      // LSP DiagnosticTag (1=Unnecessary, 2=Deprecated)
@@ -958,6 +959,7 @@ export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnostic[] {
 			message: err.message,
 			line: err.line > 0 ? err.line : 1,
 			column: err.column,
+			endLine: err.endLine,
 			endColumn: err.endColumn,
 			severity: lspSeverity,
 			tags: err.tags,

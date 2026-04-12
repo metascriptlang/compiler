@@ -41,10 +41,14 @@ export function buildMultipart(parts: MultipartPart[], boundary: string): Multip
 		out = out + dashBoundary + CRLF;
 		out = out + `Content-Disposition: form-data; name="${p.name}"`;
 		if (p.filename !== "") {
+			// File part: filename + Content-Type (RFC 7578 §4.2)
 			out = out + `; filename="${p.filename}"`;
+			out = out + CRLF;
+			out = out + "Content-Type: " + p.contentType + CRLF;
+		} else {
+			// Text field: no Content-Type (RFC 7578 §4.4)
+			out = out + CRLF;
 		}
-		out = out + CRLF;
-		out = out + "Content-Type: " + p.contentType + CRLF;
 		out = out + CRLF;
 		out = out + p.body + CRLF;
 	}
@@ -84,7 +88,6 @@ test "single text part" {
 	const expected =
 		"--B\r\n" +
 		"Content-Disposition: form-data; name=\"metadata\"\r\n" +
-		"Content-Type: application/json\r\n" +
 		"\r\n" +
 		"{\"a\":1}\r\n" +
 		"--B--\r\n";
@@ -106,21 +109,20 @@ test "file part with filename" {
 	assert r.body === expected;
 }
 
-test "two parts (metadata + tarball)" {
+test "two parts (metadata + archive)" {
 	const parts: MultipartPart[] = [
 		{ name: "metadata", filename: "", contentType: "application/json", body: "{}" },
-		{ name: "tarball", filename: "p.tar.gz", contentType: "application/gzip", body: "XYZ" },
+		{ name: "archive", filename: "p.zip", contentType: "application/zip", body: "XYZ" },
 	];
 	const r = buildMultipart(parts, "BB");
 	const expected =
 		"--BB\r\n" +
 		"Content-Disposition: form-data; name=\"metadata\"\r\n" +
-		"Content-Type: application/json\r\n" +
 		"\r\n" +
 		"{}\r\n" +
 		"--BB\r\n" +
-		"Content-Disposition: form-data; name=\"tarball\"; filename=\"p.tar.gz\"\r\n" +
-		"Content-Type: application/gzip\r\n" +
+		"Content-Disposition: form-data; name=\"archive\"; filename=\"p.zip\"\r\n" +
+		"Content-Type: application/zip\r\n" +
 		"\r\n" +
 		"XYZ\r\n" +
 		"--BB--\r\n";

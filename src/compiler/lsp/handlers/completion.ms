@@ -1,6 +1,6 @@
 // LSP Handlers — Completion, completion resolve, import path/name completion.
 
-import { TransAmDb, dbParse, dbTypeCheck, dbEnsureModuleExports } from "../../transam/index";
+import { TransAmDb, dbParse, dbTypeCheck, dbEnsureModuleExports, dbResolveImport } from "../../transam/index";
 import { readDir } from "std/fs";
 import { clockMs } from "std/process";
 import {
@@ -28,7 +28,7 @@ import { Node, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, Ty
 import { forEachChild } from "../../../ast/visitor";
 import { isMsModuleExtension, stripMsModuleExtension } from "../../../module/resolver";
 import {
-	dbGetSource, lspExtractPosition, resolveImportForLsp, lspEnsureFileLoaded,
+	dbGetSource, lspExtractPosition, lspEnsureFileLoaded,
 	cacheResolveEdit, lookupResolveEdit,
 	CompletionCache, LspCursorParams
 } from "./shared";
@@ -623,7 +623,7 @@ function lspCompleteImportName(program: Node, source: string, pos: LspCursorPara
 	if (importSpec === "") return [];
 
 	// Resolve the module path
-	const targetPath = resolveImportForLsp(db, filePath, importSpec);
+	const targetPath = dbResolveImport(db, filePath, importSpec);
 	if (targetPath === "") return [];
 
 	// Ensure the target module is loaded and its exports are registered

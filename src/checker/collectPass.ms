@@ -619,6 +619,14 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 			if (exportInfo !== null) {
 				const nameLoc = d.nameLocations !== null && i < d.nameLocations.length ? d.nameLocations[i] : node.location;
 				importSymFromRegistry(ctx, localAlias, importName, exportInfo, sourcePath, nameLoc, node);
+				// Phase E: cross-module macros — register imported macro body
+				// in the local context's registry so expandMacroInvocation finds it.
+				if (exportInfo.kind === SymbolKind.Macro
+						&& exportInfo.macroBody !== null
+						&& exportInfo.macroParams !== null) {
+					ctx.macroBodyRegistry.set(localAlias, exportInfo.macroBody);
+					ctx.macroParamsRegistry.set(localAlias, exportInfo.macroParams);
+				}
 				// Implementation parity: import enum members alongside enum type
 				// (rawImportSymbol registers each skEnumField in the importing scope)
 				if (exportInfo.kind === SymbolKind.Enum && exportInfo.symType.typeNames !== null) {
@@ -1199,6 +1207,7 @@ test "re-export preserves original location and records sgSymRecord" {
 		definingModule: "/test/hub/accessors", originalName: "", headerPath: "",
 		location: origLoc, memberLocations: [],
 		primaryFlags: 0, overloadFlags: [],
+		macroBody: null as unknown as Node, macroParams: [],
 	};
 	registerModuleExports(ctx.exportRegistry, "/test/hub/accessors", [fakeExport]);
 

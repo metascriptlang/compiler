@@ -8,6 +8,8 @@ import { join } from "std/fs/path";
 import { loadBuildConfig } from "../buildConfig";
 import { readLockfile, entryName } from "./lockfile";
 import { registrySrcPath, isCached } from "./cache";
+import { fetchPackageInfo, findVersion } from "./registry";
+import { downloadPackage } from "./download";
 
 export function cmdInstall(projectRoot: string): boolean {
 	const buildPath = join(projectRoot, "build.ms");
@@ -82,9 +84,26 @@ export function cmdInstall(projectRoot: string): boolean {
 				if (isCached(srcPath)) {
 					installed = installed + 1;
 				} else {
-					console.log(`missing: ${name}@${entry.version} (not in cache, run \`msc add\` to download)`);
-					missing = missing + 1;
-					allOk = false;
+					// Resolve archiveUrl from lockfile or fetch from registry
+					let archiveUrl = entry.url;
+					let integrity = entry.integrity;
+					if (archiveUrl === "") {
+						const infoR = fetchPackageInfo(name);
+						if (infoR.ok) {
+							const ver = findVersion(infoR.value, entry.version);
+							if (ver !== null) {
+								archiveUrl = ver.archiveUrl;
+								if (integrity === "") integrity = ver.integrity;
+							}
+						}
+					}
+					if (archiveUrl !== "" && downloadPackage(name, entry.version, archiveUrl, integrity)) {
+						installed = installed + 1;
+					} else {
+						console.log(`missing: ${name}@${entry.version} (download failed)`);
+						missing = missing + 1;
+						allOk = false;
+					}
 				}
 			}
 		}

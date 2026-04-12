@@ -3,7 +3,7 @@
 // Pattern: ~/projects/metascript/src/lexer/lexer.zig
 
 import { Token, TokenKind } from "./token";
-import { createLexerState, peek, advanceChar, addToken } from "./state";
+import { createLexerState, peek, peekAt, advanceChar, skip, addToken } from "./state";
 import { isWhitespace, isNewline, isDigit, isLetter } from "./chars";
 import { scanNumber, scanString, scanTemplateString, scanIdentifier, scanOperator, scanPunctuation } from "./scanner";
 
@@ -40,6 +40,21 @@ export function lex(source: string): Result<Token[], string> {
 
 		// Punctuation (single-char tokens)
 		if (scanPunctuation(s)) { continue; }
+
+		// Dollar sign: `${` → QuoteInterp token for quote interpolation.
+		// `$` followed by letter/digit/underscore → identifier (e.g. `$result`).
+		if (ch === "$".code) {
+			if (peekAt(s, 1) === "{".code) {
+				const dl = s.line;
+				const dc = s.column;
+				skip(s, 2);
+				addToken(s, TokenKind.QuoteInterp, "${", dl, dc);
+				continue;
+			}
+			// $identifier — treat $ as identifier start (JS/TS parity)
+			scanIdentifier(s);
+			continue;
+		}
 
 		// Unknown character - error
 		return Result.err(`Unknown character at line ${s.line}, column ${s.column}`);

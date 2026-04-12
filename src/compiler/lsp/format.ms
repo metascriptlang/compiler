@@ -109,8 +109,15 @@ export function lspFmtDiagnostic(
 	line: number, col: number, endCol: number,
 	severity: number, message: string, source: string, code: number, tags: number
 ): string {
+	return lspFmtDiagnosticRange(line, col, line, endCol, severity, message, source, code, tags);
+}
+
+export function lspFmtDiagnosticRange(
+	line: number, col: number, endLine: number, endCol: number,
+	severity: number, message: string, source: string, code: number, tags: number
+): string {
 	const b = jsonObj();
-	jRaw(b, "range", lspFmtRange(line, col, line, endCol));
+	jRaw(b, "range", lspFmtRange(line, col, endLine, endCol));
 	jNum(b, "severity", severity);
 	if (tags > 0) jRaw(b, "tags", `[${tags}]`);
 	jStr(b, "source", source);

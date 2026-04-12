@@ -14,7 +14,8 @@ import {
 import { sgGetPrefix, sgFindImportSource, sgFindExportedDecl, sgQueryAtPosition } from "../../../checker/suggest";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc, SymbolKind } from "../../../ast/node";
-import { lspExtractPosition, dbGetSource, resolveImportForLsp, lspEnsureFileLoaded } from "./shared";
+import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded } from "./shared";
+import { dbResolveImport } from "../../transam/index";
 
 
 // Find the 0-based column of `name` as a whole word on 0-based `targetLine`.
@@ -331,7 +332,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	const importSpec = sgFindImportSource(program, identName);
 	if (importSpec === "") return lspResponse(id, "null");
 
-	const targetPath = resolveImportForLsp(db, path, importSpec);
+	const targetPath = dbResolveImport(db, path, importSpec);
 	if (targetPath === "") return lspResponse(id, "null");
 
 	lspEnsureFileLoaded(db, targetPath);

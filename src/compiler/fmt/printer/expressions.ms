@@ -75,6 +75,21 @@ export function printArrayAccess(node: Node, options: FormatOptions): Doc {
 	]);
 }
 
+// Check if an object key needs quoting — not a valid identifier (contains
+// hyphens, dots, starts with digit, empty).
+function needsQuote(key: string): boolean {
+	if (key.length === 0) return true;
+	const first = key.charCodeAt(0);
+	if (!((first >= "a".code && first <= "z".code) || (first >= "A".code && first <= "Z".code) || first === "_".code)) return true;
+	let j = 1;
+	while (j < key.length) {
+		const ch = key.charCodeAt(j);
+		if (!((ch >= "a".code && ch <= "z".code) || (ch >= "A".code && ch <= "Z".code) || (ch >= "0".code && ch <= "9".code) || ch === "_".code)) return true;
+		j = j + 1;
+	}
+	return false;
+}
+
 export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ObjectLiteralData;
 	if (d.keys.length === 0) return docText("{}");
@@ -123,8 +138,9 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 			if (isShorthand) {
 				entryDoc = docText(d.keys[i]);
 			} else {
+				const keyStr = needsQuote(d.keys[i]) ? "\"" + d.keys[i] + "\"" : d.keys[i];
 				entryDoc = docGroup([
-					docText(d.keys[i] + ": "),
+					docText(keyStr + ": "),
 					callPrintNode(prop, options),
 				]);
 			}

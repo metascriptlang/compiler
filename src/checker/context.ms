@@ -49,6 +49,10 @@ export interface ExportedSymInfo {
 	// to distinguish body-less sigs from the wide impl.
 	primaryFlags: int32;
 	overloadFlags: int32[];
+	// Phase E: cross-module macros — carry body AST + param names through
+	// the export pipeline so importing modules can register in macroBodyRegistry.
+	macroBody: Node;
+	macroParams: string[];
 }
 
 export interface ModuleExports {
@@ -142,7 +146,7 @@ export function findExportedSymbol(registry: ExportRegistry, modulePath: string,
 
 // ===== Export Info Builder (shared by orchestrator + loadPreludeSubModules) =====
 
-export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistry, modulePath: string): ExportedSymInfo {
+export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistry, modulePath: string, ctx: CheckerContext): ExportedSymInfo {
 	// Extension receiver metadata for primary symbol
 	let extRecv = "";
 	let extStatic = false;
@@ -217,6 +221,18 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		memberLocs = (sym.declNode.data as EnumDeclData).memberLocations;
 	}
 
+	// Phase E: carry macro body + params for cross-module macro import.
+	let mBody: Node = null as unknown as Node;
+	let mParams: string[] = [];
+	if (sym.symbolKind === SymbolKind.Macro && ctx !== null) {
+		if (ctx.macroBodyRegistry.has(sym.name)) {
+			mBody = ctx.macroBodyRegistry.get(sym.name);
+		}
+		if (ctx.macroParamsRegistry.has(sym.name)) {
+			mParams = ctx.macroParamsRegistry.get(sym.name);
+		}
+	}
+
 	return {
 		name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 		overloadTypes: ovTypes,
@@ -235,6 +251,8 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		hasConstructor: hasFlag(sym, SymbolFlag.HasConstructor),
 		location: sym.location !== null ? sym.location : makeLoc(0, 0),
 		memberLocations: memberLocs,
+		macroBody: mBody,
+		macroParams: mParams,
 	};
 }
 
@@ -244,7 +262,7 @@ export function collectExports(ctx: CheckerContext, modulePath: string): Exporte
 	const exports: ExportedSymInfo[] = [];
 	for (const sym of ctx.table.current.symbols) {
 		if (hasFlag(sym, SymbolFlag.Exported)) {
-			exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath));
+			exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx));
 		}
 	}
 	if (ctx.extensionRegistry !== null) {
@@ -255,7 +273,7 @@ export function collectExports(ctx: CheckerContext, modulePath: string): Exporte
 					if (e.name === ext.sym.name) { alreadyExported = true; break; }
 				}
 				if (!alreadyExported) {
-					exports.push(buildExportInfo(ext.sym, ctx.extensionRegistry, modulePath));
+					exports.push(buildExportInfo(ext.sym, ctx.extensionRegistry, modulePath, ctx));
 				}
 			}
 		}
@@ -691,6 +709,7 @@ export interface CheckerError {
 	message: string;
 	line: number;    // 1-based, 0 = unknown
 	column: number;  // 1-based (parser convention), 0 = unknown
+	endLine: number; // 1-based, 0 = same as line (single-line range)
 	endColumn: number; // 1-based, 0 = use column+1 (single char)
 	fatal: boolean;  // true = globalError (abort), false = localError (continue)
 	severity: Severity;
@@ -824,39 +843,49 @@ export function isInAsyncPromiseResult(ctx: CheckerContext): boolean {
 
 // localError — non-fatal, compilation continues
 export function addError(ctx: CheckerContext, msg: string, line: number, col: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: false, severity: Severity.Error, tags: 0 });
+	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: 0, fatal: false, severity: Severity.Error, tags: 0 });
 }
 
 // error with explicit end column — underlines a range (e.g., full identifier)
 export function addErrorRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: false, severity: Severity.Error, tags: 0 });
+	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: endCol, fatal: false, severity: Severity.Error, tags: 0 });
+}
+
+// error with full range (start line:col → end line:col) — for multi-line highlights
+export function addErrorFullRange(ctx: CheckerContext, msg: string, line: number, col: number, endLine: number, endCol: number): void {
+	ctx.errors.push({ message: msg, line, column: col, endLine, endColumn: endCol, fatal: false, severity: Severity.Error, tags: 0 });
+}
+
+// warning with full range
+export function addWarningFullRange(ctx: CheckerContext, msg: string, line: number, col: number, endLine: number, endCol: number): void {
+	ctx.errors.push({ message: msg, line, column: col, endLine, endColumn: endCol, fatal: false, severity: Severity.Warning, tags: 0 });
 }
 
 // warning — non-fatal, compilation continues, shown as warning in LSP
 export function addWarning(ctx: CheckerContext, msg: string, line: number, col: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: false, severity: Severity.Warning, tags: 0 });
+	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: 0, fatal: false, severity: Severity.Warning, tags: 0 });
 }
 
 export function addWarningRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number, tags: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: false, severity: Severity.Warning, tags });
+	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: endCol, fatal: false, severity: Severity.Warning, tags });
 }
 
 // globalError — fatal, compilation should abort
 export function addFatalError(ctx: CheckerContext, msg: string, line: number, col: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: true, severity: Severity.Error, tags: 0 });
+	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: 0, fatal: true, severity: Severity.Error, tags: 0 });
 }
 
 export function addFatalErrorRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: true, severity: Severity.Error, tags: 0 });
+	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: endCol, fatal: true, severity: Severity.Error, tags: 0 });
 }
 
 // hint — non-fatal, shown as subtle hint in LSP (curly underline + faded when tag=1)
 export function addHint(ctx: CheckerContext, msg: string, line: number, col: number, tags: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: false, severity: Severity.Hint, tags });
+	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: 0, fatal: false, severity: Severity.Hint, tags });
 }
 
 export function addHintRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number, tags: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: false, severity: Severity.Hint, tags });
+	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: endCol, fatal: false, severity: Severity.Hint, tags });
 }
 
 export function hasErrors(ctx: CheckerContext): boolean {
@@ -1038,7 +1067,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -1056,7 +1085,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");

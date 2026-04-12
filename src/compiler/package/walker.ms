@@ -17,7 +17,7 @@
 // Paths in `relPath` always use forward slashes, no leading "/".
 
 import { readDir, isFile, isDir, fileSize, join, exists } from "std/fs";
-import { compileGlobs, globMatchAny, Glob } from "std/fs/glob";
+import { compileGlobs, globMatchAny } from "std/fs/glob";
 
 export interface FileEntry {
 	relPath: string;   // forward slashes, project-root relative, no leading slash

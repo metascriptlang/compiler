@@ -26,6 +26,7 @@ import {
 	ObjectLiteralData, ArrayLiteralData, IdentifierData, MemberExprData,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BinaryExprData, CallExprData,
+	QuoteExprData,
 	// Phase B audit fixes — additional NodeKinds for full walker coverage
 	UnaryExprData, ArrayAccessData, ConditionalExprData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData,
@@ -35,11 +36,13 @@ import {
 	MethodDeclData, ConstructorDeclData, ClassDeclData, PropertyDeclData,
 	ThrowStmtData, DeferStmtData,
 } from "../../ast/node";
-import { CheckerContext, addError, createContext } from "../../checker/context";
+import { CheckerContext, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { callMacroEvaluator } from "./callbacks";
-import { clearObjectHeap, clearArrayHeap } from "../../raiser/value";
+import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { valueToNode, mkNumber, mkString, mkBool, mkNull, synthToken } from "./bridge";
+import { parseIntStr } from "../../utils/string";
+import { addWarning } from "../../checker/context";
 
 // ===== Built-in directives that pass through unchanged =====
 
@@ -56,6 +59,54 @@ function isBuiltinDirective(name: string): boolean {
 		|| name === "runtime"
 		|| name === "builtin"
 		|| name === "cImport";
+}
+
+// ===== Quote lowering: quote { code } → ObjectLiteral AST =====
+//
+// Converts a QuoteExpr into an ObjectLiteral tree at preprocessing time
+// (before Raiser execution). splice(expr) inside the quote body emits the
+// arg expression directly — the Raiser evaluates it at runtime and inserts
+// the resulting Node value. Everything else becomes literal ObjectLiteral
+// data via nodeToASTLiteral.
+
+// Flag: when true, nodeToASTLiteral checks for splice() calls and emits
+// their argument expressions as-is instead of lowering to ObjectLiteral.
+let _quoteSpliceActive = false;
+
+function isSpliceCall(node: Node): boolean {
+	if (node === null || node.kind !== NodeKind.CallExpr) return false;
+	const cd = node.data as CallExprData;
+	if (cd.callee === null || cd.callee.kind !== NodeKind.Identifier) return false;
+	return (cd.callee.data as IdentifierData).name === "splice" && cd.arguments.length === 1;
+}
+
+function lowerQuoteExpr(node: Node): Node {
+	const d = node.data as QuoteExprData;
+	const body = d.quoteBody;
+	if (body === null) return mkNull(node.location);
+	const loc = node.location;
+
+	// Enable splice detection in nodeToASTLiteral
+	_quoteSpliceActive = true;
+
+	let result: Node;
+	const bd = body.data as BlockStmtData;
+	// Single-expression shorthand: quote { expr } → lower the expr
+	if (bd.statements.length === 1 && bd.statements[0].kind === NodeKind.ExprStmt) {
+		const inner = (bd.statements[0].data as ExprStmtData).expr;
+		// Top-level splice: quote { splice(x) } → just x
+		if (isSpliceCall(inner)) {
+			result = (inner.data as CallExprData).arguments[0];
+		} else {
+			result = nodeToASTLiteral(inner, loc);
+		}
+	} else {
+		// Multi-statement or non-expression: lower the entire BlockStmt
+		result = nodeToASTLiteral(body, loc);
+	}
+
+	_quoteSpliceActive = false;
+	return result;
 }
 
 // ===== nodeToASTLiteral: Node → ObjectLiteral AST =====
@@ -83,6 +134,12 @@ function nodeToASTLiteral(node: Node, loc: SourceLocation): Node {
 	values.push(mkNumber(node.location.line, loc));
 	keys.push("column");
 	values.push(mkNumber(node.location.column, loc));
+	if (node.location.endLine > 0) {
+		keys.push("endLine");
+		values.push(mkNumber(node.location.endLine, loc));
+		keys.push("endColumn");
+		values.push(mkNumber(node.location.endColumn, loc));
+	}
 
 	// Append kind-specific fields
 	addKindFields(node, keys, values, loc);
@@ -109,7 +166,13 @@ function addBoolField(keys: string[], values: Node[], name: string, val: boolean
 
 function addNodeField(keys: string[], values: Node[], name: string, val: Node, loc: SourceLocation): void {
 	keys.push(name);
-	values.push(nodeToASTLiteral(val, loc));
+	// splice(expr) inside a quote body: emit the arg expression directly
+	// (Raiser evaluates at runtime) instead of converting to ObjectLiteral.
+	if (_quoteSpliceActive && isSpliceCall(val)) {
+		values.push((val.data as CallExprData).arguments[0]);
+	} else {
+		values.push(nodeToASTLiteral(val, loc));
+	}
 }
 
 function addNodeArrayField(keys: string[], values: Node[], name: string, arr: Node[], loc: SourceLocation): void {
@@ -213,8 +276,54 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addNumField(keys, values, "declKind", d.declKind as number, loc);
 		return;
 	}
-	// Other NodeKinds: kind/line/column only. Sufficient for v1 — most macros
-	// take simple expressions (literals, identifiers, binary exprs).
+	if (k === NodeKind.UnaryExpr) {
+		const d = node.data as UnaryExprData;
+		addStrField(keys, values, "unaryOp", d.unaryOp, loc);
+		addNodeField(keys, values, "operand", d.operand, loc);
+		return;
+	}
+	if (k === NodeKind.ConditionalExpr) {
+		const d = node.data as ConditionalExprData;
+		addNodeField(keys, values, "ternaryCondition", d.ternaryCondition, loc);
+		addNodeField(keys, values, "ternaryConsequent", d.ternaryConsequent, loc);
+		addNodeField(keys, values, "ternaryAlternate", d.ternaryAlternate, loc);
+		return;
+	}
+	if (k === NodeKind.IfStmt) {
+		const d = node.data as IfStmtData;
+		addNodeField(keys, values, "condition", d.condition, loc);
+		addNodeField(keys, values, "consequent", d.consequent, loc);
+		addNodeField(keys, values, "alternate", d.alternate, loc);
+		return;
+	}
+	if (k === NodeKind.WhileStmt) {
+		const d = node.data as WhileStmtData;
+		addNodeField(keys, values, "whileCondition", d.whileCondition, loc);
+		addNodeField(keys, values, "whileBody", d.whileBody, loc);
+		return;
+	}
+	if (k === NodeKind.FunctionDecl) {
+		const d = node.data as FunctionDeclData;
+		addStrField(keys, values, "fnName", d.fnName, loc);
+		addStrArrayField(keys, values, "params", d.params, loc);
+		addStrArrayField(keys, values, "fnParamTypes", d.fnParamTypes, loc);
+		addNodeField(keys, values, "fnBody", d.fnBody, loc);
+		addStrField(keys, values, "fnFlags", d.fnFlags, loc);
+		addStrField(keys, values, "fnReturnType", d.fnReturnType, loc);
+		addNodeArrayField(keys, values, "fnDefaults", d.fnDefaults, loc);
+		return;
+	}
+	if (k === NodeKind.ArrowFunction) {
+		const d = node.data as ArrowFunctionData;
+		addStrArrayField(keys, values, "arrowParams", d.arrowParams, loc);
+		addStrArrayField(keys, values, "arrowParamTypes", d.arrowParamTypes, loc);
+		addNodeField(keys, values, "arrowBody", d.arrowBody, loc);
+		addStrField(keys, values, "arrowFlags", d.arrowFlags, loc);
+		addStrField(keys, values, "arrowReturnType", d.arrowReturnType, loc);
+		return;
+	}
+	// Other NodeKinds: kind/line/column only. Extend here as macro authors
+	// need more NodeKinds in quote bodies.
 }
 
 // ===== hasUserMacroInvocation: quick predicate =====
@@ -569,6 +678,80 @@ function tryRewriteCreateNodeAt(node: Node): Node {
 	}, node.location);
 }
 
+// Compile-time diagnostics: `error("msg")` halts expansion and surfaces as
+// checker error; `warning("msg")` surfaces as checker warning but continues.
+// Rewritten to return statements with sentinel objects that expandMacroInvocation
+// detects before calling valueToNode.
+// Builds a MemberExpr: `obj.prop`
+function mkMember(obj: Node, prop: string, loc: SourceLocation): Node {
+	return createNodeAt(NodeKind.MemberExpr, { object: obj, property: prop, isOptional: false }, loc);
+}
+
+function tryRewriteCompileError(node: Node): Node {
+	if (node === null || node.kind !== NodeKind.ExprStmt) return node;
+	const ed = node.data as ExprStmtData;
+	if (ed.expr === null || ed.expr.kind !== NodeKind.CallExpr) return node;
+	const cd = ed.expr.data as CallExprData;
+	if (cd.callee === null || cd.callee.kind !== NodeKind.Identifier) return node;
+	const name = (cd.callee.data as IdentifierData).name;
+	if (name !== "error" && name !== "warning") return node;
+	if (cd.arguments.length < 1 || cd.arguments.length > 2) return node;
+	const loc = node.location;
+	const msgArg = cd.arguments[0];
+	// 2-arg form: error("msg", astNode) — location from the input AST node.
+	// astNode.line and astNode.column carry the original source position.
+	const hasLoc = cd.arguments.length === 2;
+	const locNode = hasLoc ? cd.arguments[1] : null as unknown as Node;
+	if (name === "error") {
+		// error("msg") → return { __compileError: 1, message: "msg" }
+		// error("msg", node) → return { ..., line, column, endLine, endColumn }
+		const keys: string[] = ["__compileError", "message"];
+		const props: Node[] = [mkNumber(1, loc), msgArg];
+		if (hasLoc) {
+			keys.push("line");
+			props.push(mkMember(locNode, "line", loc));
+			keys.push("column");
+			props.push(mkMember(locNode, "column", loc));
+			keys.push("endLine");
+			props.push(mkMember(locNode, "endLine", loc));
+			keys.push("endColumn");
+			props.push(mkMember(locNode, "endColumn", loc));
+		}
+		const sentinel = createNodeAt(NodeKind.ObjectLiteral, {
+			properties: props, keys, keyLocations: [],
+		}, loc);
+		return createNodeAt(NodeKind.ReturnStmt, { argument: sentinel }, loc);
+	}
+	// warning("msg") / warning("msg", node) → console.log with encoded location.
+	// Non-halting — macro continues after the warning.
+	// Format: "__MACRO_WARN__:msg" or "__MACRO_WARN__:msg\tline\tcol"
+	let warnPayload: Node = createNodeAt(NodeKind.BinaryExpr, {
+		operator: "+", left: mkString("__MACRO_WARN__:", loc), right: msgArg,
+	}, loc);
+	if (hasLoc) {
+		// Append "\t" + line + "\t" + column for location extraction
+		warnPayload = createNodeAt(NodeKind.BinaryExpr, {
+			operator: "+", left: warnPayload, right: mkString("\t", loc),
+		}, loc);
+		warnPayload = createNodeAt(NodeKind.BinaryExpr, {
+			operator: "+", left: warnPayload, right: mkMember(locNode, "line", loc),
+		}, loc);
+		warnPayload = createNodeAt(NodeKind.BinaryExpr, {
+			operator: "+", left: warnPayload, right: mkString("\t", loc),
+		}, loc);
+		warnPayload = createNodeAt(NodeKind.BinaryExpr, {
+			operator: "+", left: warnPayload, right: mkMember(locNode, "column", loc),
+		}, loc);
+	}
+	const logCallee = mkMember(
+		createNodeAt(NodeKind.Identifier, { name: "console" }, loc), "log", loc);
+	const logCall = createNodeAt(NodeKind.CallExpr, {
+		callee: logCallee, arguments: [warnPayload],
+		isDirectCall: true, resolvedOverloadIdx: -1,
+	}, loc);
+	return createNodeAt(NodeKind.ExprStmt, { expr: logCall }, loc);
+}
+
 // Walk the macro body in place, rewriting recognized patterns.
 // Order: recurse into children FIRST, then try rewrites at this node.
 // This ensures `createNodeAt(NodeKind.X, ...)` has its NodeKind.X already
@@ -635,6 +818,18 @@ function preprocessNode(node: Node): Node {
 	}
 
 	// Now try rewrites at THIS node — children are already preprocessed
+
+	// Phase C: quote { } lowering — convert to ObjectLiteral tree
+	if (k === NodeKind.QuoteExpr) {
+		return lowerQuoteExpr(node);
+	}
+
+	// Compile-time error/warning: rewrite `error("msg")` and `warning("msg")`
+	// in ExprStmt position to return statements with sentinel values.
+	// error → halts macro (returns sentinel), warning → stores msg + continues.
+	const errorRewrite = tryRewriteCompileError(node);
+	if (errorRewrite !== node) return errorRewrite;
+
 	const enumRewrite = tryRewriteEnumMember(node);
 	if (enumRewrite !== node) return enumRewrite;
 
@@ -726,6 +921,76 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 
 	// Run in Raiser VM
 	let vmCtx = callMacroEvaluator(program);
+
+	// Check for VM-level errors (instruction budget, division by zero, etc.)
+	if (vmCtx.lastError !== "") {
+		addError(ctx, `Macro '${d.macroName}' failed: ${vmCtx.lastError}`,
+			node.location.line, node.location.column);
+		clearObjectHeap(vmCtx.objectHeap);
+		clearArrayHeap(vmCtx.arrayHeap);
+		return node;
+	}
+
+	// Check for compile-time error sentinel.
+	// error("msg") → { __compileError: 1, message: "msg" }
+	// error("msg", node) → { __compileError: 1, message: "msg", line: N, column: N }
+	const lastVal = vmCtx.lastResult;
+	if (lastVal.kind === RaiserValueKind.Object) {
+		const errFlag = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "__compileError");
+		if (errFlag.kind === RaiserValueKind.Int && errFlag.intVal === 1) {
+			const errMsg = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "message");
+			const msg = errMsg.kind === RaiserValueKind.String ? errMsg.strVal : "compile error in macro";
+			// 2-arg form: use the input node's location if provided.
+			// Supports both point (line, column) and range (+ endLine, endColumn).
+			const errLine = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "line");
+			const errCol = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "column");
+			const errEndLine = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "endLine");
+			const errEndCol = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "endColumn");
+			const diagLine = errLine.kind === RaiserValueKind.Int ? errLine.intVal : (errLine.kind === RaiserValueKind.Float ? errLine.floatVal as int32 : node.location.line);
+			const diagCol = errCol.kind === RaiserValueKind.Int ? errCol.intVal : (errCol.kind === RaiserValueKind.Float ? errCol.floatVal as int32 : node.location.column);
+			const hasEndLine = errEndLine.kind === RaiserValueKind.Int || errEndLine.kind === RaiserValueKind.Float;
+			const hasEndCol = errEndCol.kind === RaiserValueKind.Int || errEndCol.kind === RaiserValueKind.Float;
+			if (hasEndLine || hasEndCol) {
+				const diagEndLine = hasEndLine ? (errEndLine.kind === RaiserValueKind.Int ? errEndLine.intVal : errEndLine.floatVal as int32) : diagLine;
+				const diagEndCol = hasEndCol ? (errEndCol.kind === RaiserValueKind.Int ? errEndCol.intVal : errEndCol.floatVal as int32) : diagCol + 1;
+				addErrorFullRange(ctx, `Macro '${d.macroName}': ${msg}`, diagLine, diagCol, diagEndLine, diagEndCol);
+			} else {
+				addError(ctx, `Macro '${d.macroName}': ${msg}`, diagLine, diagCol);
+			}
+			clearObjectHeap(vmCtx.objectHeap);
+			clearArrayHeap(vmCtx.arrayHeap);
+			return node;
+		}
+	}
+	// Check for compile-time warnings in Raiser output.
+	// warning("msg") → "__MACRO_WARN__:msg"
+	// warning("msg", node) → "__MACRO_WARN__:msg\tline\tcol"
+	if (vmCtx.lastOutput !== "") {
+		let warnStart = vmCtx.lastOutput.indexOf("__MACRO_WARN__:", 0);
+		while (warnStart >= 0) {
+			let warnEnd = vmCtx.lastOutput.indexOf("\n", warnStart);
+			if (warnEnd < 0) warnEnd = vmCtx.lastOutput.length;
+			const warnPayload = vmCtx.lastOutput.slice(warnStart + 15, warnEnd);
+			// Check for tab-separated location: "msg\tline\tcol"
+			const tabIdx = warnPayload.indexOf("\t", 0);
+			let warnMsg = warnPayload;
+			let warnLine = node.location.line;
+			let warnCol = node.location.column;
+			if (tabIdx >= 0) {
+				warnMsg = warnPayload.slice(0, tabIdx);
+				const locPart = warnPayload.slice(tabIdx + 1, warnPayload.length);
+				const tab2 = locPart.indexOf("\t", 0);
+				if (tab2 >= 0) {
+					warnLine = parseIntStr(locPart.slice(0, tab2)) as int32;
+					warnCol = parseIntStr(locPart.slice(tab2 + 1, locPart.length)) as int32;
+					if (warnLine <= 0) warnLine = node.location.line;
+					if (warnCol <= 0) warnCol = node.location.column;
+				}
+			}
+			addWarning(ctx, `Macro '${d.macroName}': ${warnMsg}`, warnLine, warnCol);
+			warnStart = vmCtx.lastOutput.indexOf("__MACRO_WARN__:", warnEnd);
+		}
+	}
 
 	// Deserialize result
 	let result = valueToNode(vmCtx.lastResult, vmCtx.objectHeap, vmCtx.arrayHeap, node.location);

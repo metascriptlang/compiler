@@ -3,7 +3,7 @@
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, createNode } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize } from "../context";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd } from "../context";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseAssertStmt } from "./control";
 import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl } from "./declaration";
@@ -101,6 +101,7 @@ export function parseStatement(state: ParserState): NodeResult {
 	};
 
 	if (!res.ok) return res;
+	stampEnd(state, res.value);
 	return Result.ok(attachComments(state, res.value));
 }
 

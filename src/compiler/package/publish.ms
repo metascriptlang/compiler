@@ -11,16 +11,16 @@ import { exists, readFile } from "std/fs";
 import { join } from "std/fs/path";
 import { loadBuildConfig, PackageSection } from "../buildConfig";
 import { loadToken } from "./login";
-import { collectPublishFiles, FileEntry } from "./walker";
+import { collectPublishFiles } from "./walker";
 import { newZipWriter, zipAdd, zipFinalize, closeZipWriter, ZipWriter } from "std/compress/zip";
 import { buildMultipart, MultipartPart, boundaryCollides } from "std/http/multipart";
 import { fetch } from "std/http/client";
 import { createHeaders, setHeader } from "std/http/headers";
 import { clockMs } from "std/process";
 import { error as errStyle, bold, green, cyan, dim } from "../../utils/color";
+import { registryBaseUrl } from "./registry";
 
-const PUBLISH_REGISTRY_HOST = "api.metascriptlang.org";
-const PUBLISH_API_BASE = "https://" + PUBLISH_REGISTRY_HOST;
+const PUBLISH_API_BASE = registryBaseUrl();
 
 // Server hard limits — mirror these client-side so the user gets a clear
 // error before we try to upload.

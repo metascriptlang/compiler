@@ -26,6 +26,17 @@ export function createState(tokens: Token[]): ParserState {
 	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "" };
 }
 
+// Stamp a node's end position from the last consumed token (position - 1).
+// Call AFTER the node is fully parsed. Safe to call multiple times.
+export function stampEnd(state: ParserState, node: Node): void {
+	if (node === null || node.location === null) return;
+	const prevIdx = state.position - 1;
+	if (prevIdx < 0 || prevIdx >= state.tokens.length) return;
+	const prev = state.tokens[prevIdx];
+	node.location.endLine = prev.line as int32;
+	node.location.endColumn = (prev.column + prev.value.length) as int32;
+}
+
 // Internal helper to get the raw token at current position (including comments)
 function rawCurrent(state: ParserState): Token {
 	if (state.position >= state.tokens.length) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
