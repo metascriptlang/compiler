@@ -150,11 +150,12 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.GenericInstance => {
 			// Futures (Promise<T>, SpawnHandle<T>) are exempt from DRC — their lifecycle
 			// is managed by the await transform (create → wait → explicit destroy).
-			// DRC scope cleanup races with worker-thread completion, corrupting values.
-			// Malebolgia parity: spawn results are caller-owned, no GC involvement.
-			// FlowVar parity: handle is managed but cross-thread data is unmanaged.
 			if (isPromise(t)) return noRcInfo();
-			return makeRcInfo(RcKind.Named, "", "", "", "", "", false);
+			// GenericInstance value types (SetEntry<T>, Result<T,E>, etc.): noRcInfo.
+			// Their containers (Array, env struct) handle ownership. Individual elements
+			// are borrowed — raw struct copy is correct. Hook name mangling (bare typeName
+			// vs C-mangled name) would need resolution before DRC can manage these directly.
+			return noRcInfo();
 		},
 		TypeKind.Ptr => {
 			// Ptr<T> is always unmanaged — no RC, no lifecycle hooks.

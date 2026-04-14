@@ -198,9 +198,44 @@ export function findEntry(lock: Lockfile, name: string, version: string): LockEn
 }
 
 // Extract the package name from a lock entry key.
-// Registry: "cool-json@v1.2.3" → "cool-json"
-// Git: "my-fork@git:github.com/me/foo@abc123" → "my-fork"
+// Unscoped:  "cool-json@v1.2.3"           → "cool-json"
+// Git:       "my-fork@git:github.com/..."  → "my-fork"
+// Personal:  "alice/router@1.0.0"          → "alice/router"
+// Org:       "@acme/router@1.0.0"          → "@acme/router"
 export function entryName(key: string): string {
+	// Org-scoped: starts with @, find / then find @ after /
+	if (key.length > 0 && key.charAt(0) === "@") {
+		let slashIdx = -1;
+		let si = 1;
+		while (si < key.length) {
+			if (key.charAt(si) === "/") { slashIdx = si; si = key.length; }
+			si = si + 1;
+		}
+		if (slashIdx > 0) {
+			let ai = slashIdx + 1;
+			while (ai < key.length) {
+				if (key.charAt(ai) === "@") return key.slice(0, ai);
+				ai = ai + 1;
+			}
+			return key;
+		}
+	}
+	// User-scoped: contains /, find @ after the /
+	let slashIdx = -1;
+	let sli = 0;
+	while (sli < key.length) {
+		if (key.charAt(sli) === "/") { slashIdx = sli; sli = key.length; }
+		sli = sli + 1;
+	}
+	if (slashIdx > 0) {
+		let ai = slashIdx + 1;
+		while (ai < key.length) {
+			if (key.charAt(ai) === "@") return key.slice(0, ai);
+			ai = ai + 1;
+		}
+		return key;
+	}
+	// Unscoped: split on first @
 	let i = 0;
 	while (i < key.length) {
 		if (key.charAt(i) === "@") return key.slice(0, i);
@@ -222,4 +257,20 @@ test "entryName registry" {
 
 test "entryName git" {
 	assert entryName("my-fork@git:github.com/me/foo@abc123") === "my-fork";
+}
+
+test "entryName org-scoped" {
+	assert entryName("@acme/router@1.0.0") === "@acme/router";
+}
+
+test "entryName user-scoped" {
+	assert entryName("alice/router@1.0.0") === "alice/router";
+}
+
+test "entryName org-scoped no version" {
+	assert entryName("@acme/router") === "@acme/router";
+}
+
+test "entryName user-scoped no version" {
+	assert entryName("alice/router") === "alice/router";
 }

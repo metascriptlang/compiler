@@ -305,9 +305,6 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 
 	// Cache check — skip if already instantiated.
 	// Reference parity (genericCacheGet + findPendingModule): return cached symbol only.
-	// The first module that created the instance has it in generatedInstances.
-	// Other modules get forward declarations via ensureCrossModuleProto at call sites.
-	// No AST re-injection — prevents shared-mutation by DRC across modules.
 	const existing = lookupSymbol(ctx.table, mangledName);
 	if (existing !== null) {
 		ctx.genericInstDepth = ctx.genericInstDepth - 1;
@@ -378,7 +375,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	}
 
 	// Push to global pending list — reliable regardless of context save/restore.
-	_pendingInstances.push(cloned);
+	addPendingInstance(cloned);
 
 	ctx.genericInstDepth = ctx.genericInstDepth - 1;
 	return instSym;

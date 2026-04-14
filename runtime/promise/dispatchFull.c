@@ -189,6 +189,10 @@ msDispatcher* msGetDispatcher(void) {
 	return gDispatcher;
 }
 
+void msCompletionQueuePush(void* fut, bool isFail, void* error) {
+	msPostCompletion(fut, NULL, isFail, error);
+}
+
 #else
 /* POSIX: MPSC queue for cross-thread completion + wake-only self-pipe.
  * Pony parity: lock-free queue replaces pipe for data delivery (100x faster).
@@ -518,7 +522,7 @@ void msWaitForReady(void* fp) {
 			msRunOnce(MS_ACTIVE_WAIT_MS);
 		} else if (helped && spins < 32) {
 			spins++;
-			sched_yield();
+			msYield();
 		} else {
 			msWorkerWaitOnFuture(fp);
 			spins = 0;

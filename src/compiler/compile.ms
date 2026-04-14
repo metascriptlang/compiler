@@ -855,6 +855,12 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			rtFiles = rtFiles + "\n" + "runtime/promise/selectorKqueue.c";
 			rtFiles = rtFiles + "\n" + "runtime/promise/selectorEpoll.c";
 			rtFiles = rtFiles + "\n" + "runtime/promise/selectorPoll.c";
+			// Platform-specific filesystem
+			if (opts.osTarget === "windows") {
+				rtFiles = rtFiles + "\n" + "runtime/fs/windows.c";
+			} else {
+				rtFiles = rtFiles + "\n" + "runtime/fs/posix.c";
+			}
 		}
 		if (rtFiles !== "") {
 			const rtObjs = processCompileDirectives(rtFiles, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.osTarget);

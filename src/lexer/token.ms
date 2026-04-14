@@ -38,6 +38,8 @@ export enum TokenKind {
 	Actor,
 	// Quote interpolation: ${ — appended at end to preserve all existing ordinals.
 	QuoteInterp,
+	// Template keyword — appended at end to preserve ordinals.
+	Template,
 }
 
 export interface Token {
@@ -140,6 +142,7 @@ export function identToKeyword(ident: string): TokenKind {
 		"test" => TokenKind.Test,
 		"assert" => TokenKind.Assert,
 		"macro" => TokenKind.Macro,
+		"template" => TokenKind.Template,
 		"extern" => TokenKind.Extern,
 		"quote" => TokenKind.Quote,
 		"char" => TokenKind.Char,
@@ -177,6 +180,7 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.TemplateTail => "TEMPLATE_TAIL",
 		TokenKind.TemplateNoSub => "TEMPLATE_NOSUB",
 		TokenKind.QuoteInterp => "QUOTE_INTERP",
+		TokenKind.Template => "TEMPLATE",
 		TokenKind.Ident => "IDENT",
 		TokenKind.OperatorIdent => "OPERATOR_IDENT",
 		TokenKind.Plus => "PLUS",

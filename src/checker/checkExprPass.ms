@@ -26,6 +26,7 @@ import {
 import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { isContextSensitive } from "./speculate";
+import { isTemplateSym, expandTemplate } from "./template";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -1540,6 +1541,11 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			node.resolvedSym = sym;
 			markUsed(sym);
 			sgRecordSym(ctx, d.callee.location.line, d.callee.location.column, d.callee.location.column + calleeName.length, sym, sym.symbolType, sym.symbolKind, calleeName, "", false);
+			// Template: inline AST substitution (reference parity). Expand the
+			// template body at the call site — no function call emitted.
+			if (sym.symbolKind === SymbolKind.Function && isTemplateSym(sym)) {
+				return expandTemplate(ctx, sym, node, d, expectedType);
+			}
 			if (hasOverloads(sym)) {
 				needsOverloadScoring = true;
 				overloadSym = sym;

@@ -142,6 +142,12 @@ export function main(): number {
 			for (const ea of opts.extraArgs) { pubArgs.push(ea); }
 			if (!cmdPublish(projectRoot, pubArgs)) exit(1);
 		},
+		"org" => {
+			const orgArgs: string[] = [];
+			if (opts.inputFile !== "") orgArgs.push(opts.inputFile);
+			for (const ea of opts.extraArgs) { orgArgs.push(ea); }
+			console.log("org: not available"); exit(1);
+		},
 		_ => {
 			console.log(`${error("error")}: unknown command '${bold(cmd)}'`);
 			printUsage();

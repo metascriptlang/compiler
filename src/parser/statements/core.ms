@@ -2,7 +2,7 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseStatement()
 
 import { TokenKind } from "../../lexer/token";
-import { Node, NodeKind, createNode } from "../../ast/node";
+import { Node, NodeKind, FunctionDeclData, createNode } from "../../ast/node";
 import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd } from "../context";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseAssertStmt } from "./control";
@@ -44,6 +44,15 @@ export function parseStatement(state: ParserState): NodeResult {
 			const node = createNode(NodeKind.ComptimeBlock, { comptimeBody }, token);
 			return Result.ok(attachComments(state, node));
 		}
+	}
+
+	// Template declaration — `template name<T>(...): T { ... }`
+	// Parsed like a function but without the `function` keyword.
+	if (token.kind === TokenKind.Template) {
+		const fn = try parseFunctionDecl(state);
+		const fd = fn.data as FunctionDeclData;
+		fd.fnFlags = fd.fnFlags === "" ? "template" : fd.fnFlags + " template";
+		return Result.ok(attachComments(state, fn));
 	}
 
 	// Decorator / directive handling — before match to avoid try-in-match-arm limitation

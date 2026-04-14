@@ -104,10 +104,34 @@ export function registryBaseUrl(): string {
 	return DEFAULT_REGISTRY;
 }
 
+// Build the API path for a package name, handling scoped names.
+// "void"          → "/packages/void"
+// "alice/router"  → "/packages/~alice/router"
+// "@acme/router"  → "/packages/@acme/router"
+function packageApiPath(name: string): string {
+	if (name.length > 0 && name.charAt(0) === "@") {
+		// Org-scoped: @acme/router → /packages/@acme/router
+		return "/packages/" + name;
+	}
+	// Check for user scope (contains /)
+	let slashIdx = -1;
+	let i = 0;
+	while (i < name.length) {
+		if (name.charAt(i) === "/") { slashIdx = i; i = name.length; }
+		i = i + 1;
+	}
+	if (slashIdx > 0) {
+		// User-scoped: alice/router → /packages/~alice/router
+		return "/packages/~" + name;
+	}
+	// Unscoped
+	return "/packages/" + name;
+}
+
 // Fetch package metadata including all published versions.
 // Returns null on network error or missing package.
 export function fetchPackageInfo(name: string): Result<RegistryPackage, HttpError> {
-	const url = registryBaseUrl() + "/packages/" + name;
+	const url = registryBaseUrl() + packageApiPath(name);
 	const resp = try fetch(url);
 	if (resp.status === 404) {
 		return Result.err(httpError(HttpErrorKind.InvalidResponse, "package not found: " + name));

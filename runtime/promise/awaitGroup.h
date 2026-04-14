@@ -47,8 +47,11 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#define msYield() SwitchToThread()
 #else
 #include <pthread.h>
+#include <sched.h>
+#define msYield() sched_yield()
 #endif
 
 /* ===== Types ===== */
@@ -225,7 +228,7 @@ static inline void msAwaitSlotWait(void* sp) {
     if (isWorker) msPoolBusyDec();  /* signal: I'm available to help while waiting */
     while (atomic_load_explicit(&s->pending, memory_order_acquire) > 0) {
         if (msPoolHelpOne()) continue;
-        sched_yield();
+        msYield();
     }
     if (isWorker) msPoolBusyInc();  /* back to own work */
 }

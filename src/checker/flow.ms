@@ -604,8 +604,14 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 	// Re-entry detection: if this (loopNode, refKey) is already on the
 	// stack, return the current accumulated union.
 	const existing = findLoopInfo(state.flowLoopStack, flow, state.refKey);
-	if (existing !== null && existing.types.length > 0) {
-		return flowType(unionOfTypes(existing.types), true);
+	if (existing !== null) {
+		// Re-entry: return accumulated types if any, otherwise declared type.
+		// The types.length===0 case means the first antecedent cycled back
+		// before producing any narrowing — conservatively return declared type.
+		if (existing.types.length > 0) {
+			return flowType(unionOfTypes(existing.types), true);
+		}
+		return flowType(state.declaredType, true);
 	}
 	// First visit: walk antecedents.
 	const info: FlowLoopInfo = { loopNode: flow, refKey: state.refKey, types: [] };

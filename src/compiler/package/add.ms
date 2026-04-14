@@ -20,6 +20,13 @@ import { fetchPackageInfo, findVersion, latestVersion, RegistryVersion, Registry
 import { downloadPackage } from "./download";
 
 // Parse "name@version" into { name, version }.
+// Handles scoped names:
+//   "void"                → { name: "void", version: "" }
+//   "void@1.0.0"          → { name: "void", version: "1.0.0" }
+//   "alice/router"        → { name: "alice/router", version: "" }
+//   "alice/router@1.0.0"  → { name: "alice/router", version: "1.0.0" }
+//   "@acme/router"        → { name: "@acme/router", version: "" }
+//   "@acme/router@1.0.0"  → { name: "@acme/router", version: "1.0.0" }
 function parseNameVersion(arg: string): { name: string, version: string } {
 	// Git source: entire string is the version spec
 	if (arg.length >= 4 && arg.slice(0, 4) === "git:") {
@@ -52,7 +59,53 @@ function parseNameVersion(arg: string): { name: string, version: string } {
 		return { name: alias, version: gitSpec };
 	}
 
-	// "name@version" — split on FIRST @ (version may contain @ for git refs)
+	// Scoped package: @org/name or @org/name@version
+	// The first @ is the org prefix, find the @ after the / for the version
+	if (arg.length > 0 && arg.charAt(0) === "@") {
+		let slashIdx = -1;
+		let si = 1;
+		while (si < arg.length) {
+			if (arg.charAt(si) === "/") { slashIdx = si; si = arg.length; }
+			si = si + 1;
+		}
+		if (slashIdx > 0) {
+			// Find @ after the slash — that's the version separator
+			let atIdx = -1;
+			let ai = slashIdx + 1;
+			while (ai < arg.length) {
+				if (arg.charAt(ai) === "@") { atIdx = ai; ai = arg.length; }
+				ai = ai + 1;
+			}
+			if (atIdx > 0) {
+				return { name: arg.slice(0, atIdx), version: arg.slice(atIdx + 1, arg.length) };
+			}
+			return { name: arg, version: "" };
+		}
+	}
+
+	// User-scoped: user/name or user/name@version
+	// Find the / first, then find @ after it for the version
+	let slashIdx = -1;
+	let sli = 0;
+	while (sli < arg.length) {
+		if (arg.charAt(sli) === "/") { slashIdx = sli; sli = arg.length; }
+		sli = sli + 1;
+	}
+	if (slashIdx > 0) {
+		// Find @ after the slash — that's the version separator
+		let atIdx = -1;
+		let ai = slashIdx + 1;
+		while (ai < arg.length) {
+			if (arg.charAt(ai) === "@") { atIdx = ai; ai = arg.length; }
+			ai = ai + 1;
+		}
+		if (atIdx > 0) {
+			return { name: arg.slice(0, atIdx), version: arg.slice(atIdx + 1, arg.length) };
+		}
+		return { name: arg, version: "" };
+	}
+
+	// Unscoped: "name@version" — split on FIRST @
 	let atIdx = -1;
 	let ai = 0;
 	while (ai < arg.length) {
@@ -63,7 +116,7 @@ function parseNameVersion(arg: string): { name: string, version: string } {
 		return { name: arg.slice(0, atIdx), version: arg.slice(atIdx + 1, arg.length) };
 	}
 
-	// No version specified — name only (would need registry to resolve latest)
+	// No version specified — name only
 	return { name: arg, version: "" };
 }
 

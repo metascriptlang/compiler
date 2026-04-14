@@ -57,6 +57,47 @@ export interface StateCollector {
 
 // ===== Helpers =====
 
+// Collect name→Type from VarDecl nodes in the body.
+// Reference parity (captureVar): env fields always carry their original type.
+function collectDeclTypes(node: Node, names: string[], types: Type[]): void {
+	if (node === null) return;
+	match (node.kind) {
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
+		NodeKind.VariableDecl => {
+			const d = node.data as VariableDeclData;
+			const t = node.nodeType !== null ? node.nodeType
+				: (d.initializer !== null ? d.initializer.nodeType : null);
+			if (t !== null) {
+				names.push(d.declName);
+				types.push(t);
+			}
+		},
+		NodeKind.BlockStmt => {
+			const d = node.data as BlockStmtData;
+			for (const s of d.statements) { collectDeclTypes(s, names, types); }
+		},
+		NodeKind.WhileStmt => {
+			const d = node.data as WhileStmtData;
+			collectDeclTypes(d.whileBody, names, types);
+		},
+		NodeKind.IfStmt => {
+			const d = node.data as IfStmtData;
+			collectDeclTypes(d.consequent, names, types);
+			collectDeclTypes(d.alternate, names, types);
+		},
+		_ => {},
+	};
+}
+
+function lookupDeclType(names: string[], types: Type[], name: string): Type {
+	let i = 0;
+	while (i < names.length) {
+		if (names[i] === name) return types[i];
+		i = i + 1;
+	}
+	return null as unknown as Type;
+}
+
 function buildIterResultType(returnNodeType: Type): Type {
 	if (returnNodeType === null || !isIterator(returnNodeType)) return null;
 	const yieldType = getIteratorYieldType(returnNodeType);
@@ -219,6 +260,15 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			splitIf(stmt, sc, currentState, afterSt, loc, resultType);
 			currentState = afterSt;
 			i += 1;
+		} else if (stmt.kind === NodeKind.BlockStmt) {
+			// Unwrap block: forOfLower wraps lowered while loops in BlockStmt.
+			const bd = stmt.data as BlockStmtData;
+			const merged: Node[] = [];
+			for (const bs of bd.statements) { merged.push(bs); }
+			let ri = i + 1;
+			while (ri < stmts.length) { merged.push(stmts[ri]); ri = ri + 1; }
+			splitStmts(merged, sc, currentState, exitState, loc, resultType);
+			return;
 		} else {
 			// Other stmt types containing yield — skip for V1
 			sc.items[currentState].stmts.push(stmt);
@@ -364,9 +414,12 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType:
 // ===== Generator Function Transform =====
 
 function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type, loc: SourceLocation): Node {
-	// 1. Collect all local variable names
+	// 1. Collect all local variable names and their types
 	const nc: NameSet = createNameSet();
 	collectDeclNames(body, nc, false);
+	const dtNames: string[] = [];
+	const dtTypes: Type[] = [];
+	collectDeclTypes(body, dtNames, dtTypes);
 
 	// 2. Extract body statements
 	const bodyStmts = extractBodyStmts(body);
@@ -424,7 +477,12 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	const newBodyStmts: Node[] = [];
 	newBodyStmts.push(makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc));
 	for (const localName of nc.items) {
-		newBodyStmts.push(makeVarDecl(localName, makeNull(loc), DeclKind.Let, loc));
+		// Stamp original nodeType so lambda lifting creates correctly-typed env fields.
+		// Reference parity: captureVar always adds field with original type.
+		const decl = makeVarDecl(localName, makeNull(loc), DeclKind.Let, loc);
+		const dt = lookupDeclType(dtNames, dtTypes, localName);
+		if (dt !== null) decl.nodeType = dt;
+		newBodyStmts.push(decl);
 	}
 	newBodyStmts.push(makeReturn(iterObj, loc));
 

@@ -23,6 +23,7 @@ import {
 	makeNull, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr,
 } from "../util";
 import { createPtr, createRef } from "../../checker/types";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Scope Stack =====
@@ -403,7 +404,7 @@ function detectAllWalk(node: Node): void {
 		const d = node.data as IdentifierData;
 		// Only capture at closure depth > 0 (inside ArrowFunction/FunctionExpr).
 		// Variables in the main function body are directly accessible — no capture needed.
-		if (_detectClosureDepth > 0 && !isBuiltinName(d.name) && !isLocalVar(_detectAllSS, d.name) && isOuterVar(_detectAllSS, d.name) && !isModuleLevelVar(_detectAllSS, d.name)) {
+		if (_detectClosureDepth > 0 && !isBuiltinName(d.name) && !isLocalVar(_detectAllSS, d.name) && isOuterVar(_detectAllSS, d.name)) {
 			// Reference parity (interestingVar): only capture variables and params.
 			// Skip types (Class, Interface, TypeAlias, Enum) — they're not runtime values.
 			if (node.resolvedSym !== null) {
@@ -413,10 +414,19 @@ function detectAllWalk(node: Node): void {
 					return;
 				}
 			}
-			if (!nameSetContains(_detectAllNames, d.name)) {
-				_detectAllIdents.push(node);
+			// Reference parity (interestingVar): sfGlobal check on resolved symbol.
+			// Only for Variable/Parameter — these have the Global flag set correctly.
+			// Functions and other symbols use name-based check (existing behavior).
+			const sym = node.resolvedSym;
+			const isModLevel = (sym !== null && (sym.symbolKind === SymbolKind.Variable || sym.symbolKind === SymbolKind.Parameter))
+				? hasFlag(sym, SymbolFlag.Global)
+				: isModuleLevelVar(_detectAllSS, d.name);
+			if (!isModLevel) {
+				if (!nameSetContains(_detectAllNames, d.name)) {
+					_detectAllIdents.push(node);
+				}
+				nameSetAdd(_detectAllNames, d.name);
 			}
-			nameSetAdd(_detectAllNames, d.name);
 		}
 		return;
 	}
@@ -549,7 +559,7 @@ function collectCaptures(node: Node): void {
 	if (node === null) return;
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
-		if (!isBuiltinName(d.name) && !isLocalVar(_captureSS, d.name) && isOuterVar(_captureSS, d.name) && !isModuleLevelVar(_captureSS, d.name)) {
+		if (!isBuiltinName(d.name) && !isLocalVar(_captureSS, d.name) && isOuterVar(_captureSS, d.name)) {
 			// Reference parity (interestingVar): skip types — not runtime values.
 			if (node.resolvedSym !== null) {
 				const sk = node.resolvedSym.symbolKind;
@@ -558,10 +568,16 @@ function collectCaptures(node: Node): void {
 					return;
 				}
 			}
-			if (!nameSetContains(_captureCC, d.name)) {
-				_captureIdents.push(node);
+			const sym = node.resolvedSym;
+			const isModLevel = (sym !== null && (sym.symbolKind === SymbolKind.Variable || sym.symbolKind === SymbolKind.Parameter))
+				? hasFlag(sym, SymbolFlag.Global)
+				: isModuleLevelVar(_captureSS, d.name);
+			if (!isModLevel) {
+				if (!nameSetContains(_captureCC, d.name)) {
+					_captureIdents.push(node);
+				}
+				nameSetAdd(_captureCC, d.name);
 			}
-			nameSetAdd(_captureCC, d.name);
 		}
 		return;
 	}

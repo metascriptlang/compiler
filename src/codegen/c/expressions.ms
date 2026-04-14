@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType, isStringLike } from "../../checker/types";
+import { isIntegerType, isFloatType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType, isStringLike } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -219,9 +219,10 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 		}
 		// Try 2: paramType (pointer type → strip * to get pointee)
 		if ((cType === "" || cType === "void" || cType === "void*") && paramType !== null) {
-			// Unwrap pointer to get inner type
+			// Unwrap pointer/ownership modifiers to get inner type
 			let innerType = paramType;
-			if (paramType.kind === TypeKind.Ptr || paramType.kind === TypeKind.Ref) {
+			if (paramType.kind === TypeKind.Ptr || paramType.kind === TypeKind.Ref
+				|| paramType.kind === TypeKind.Sink || paramType.kind === TypeKind.Lent) {
 				innerType = paramType.typeReturn;
 			}
 			if (innerType !== null && innerType.kind === TypeKind.Union && exprNode !== null && exprNode.kind === NodeKind.ObjectLiteral) {
@@ -309,6 +310,33 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 	// Fallback: non-lvalue expressions (calls, constructors) cannot have & applied directly.
 	// Hoist to a temp local so we can take its address.
 	if (p !== null && exprNode !== null && !isLvalueNode(exprNode)) {
+		// When paramType (from implementation) resolves to a Union but exprNode.nodeType
+		// is a Struct variant (from overload), wrap in the full tagged union.
+		let resolvedParam = paramType;
+		if (resolvedParam !== null && (resolvedParam.kind === TypeKind.Sink || resolvedParam.kind === TypeKind.Lent)) {
+			resolvedParam = resolvedParam.typeReturn;
+		}
+		if (resolvedParam !== null && resolvedParam.kind === TypeKind.Union
+			&& exprNode.nodeType !== null && exprNode.nodeType.kind === TypeKind.Struct
+			&& exprNode.kind === NodeKind.ObjectLiteral) {
+			const unionName = getTypeDesc(g, resolvedParam);
+			const variantType = getTypeDesc(g, exprNode.nodeType);
+			// Find variant index by matching the Struct in the Union's typeChildren
+			let varIdx = -1;
+			let vi = 0;
+			while (vi < resolvedParam.typeChildren.length) {
+				if (getTypeDesc(g, resolvedParam.typeChildren[vi]) === variantType) { varIdx = vi; }
+				vi = vi + 1;
+			}
+			if (varIdx >= 0 && unionName !== "") {
+				p.labels += 1;
+				const tmpName = `_clit${p.labels}_`;
+				emitProcLocalsLine(p, `${unionName} ${tmpName};`);
+				emitStmtsLine(p, `${tmpName}._tag = ${varIdx};`);
+				emitStmtsLine(p, `${tmpName}.v${varIdx} = ${snippet};`);
+				return "&" + tmpName;
+			}
+		}
 		let cType = "";
 		if (exprNode.nodeType !== null) {
 			cType = getTypeDesc(g, exprNode.nodeType);
@@ -934,13 +962,18 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				}
 			}
 		}
-		// Null assignment to value type: x = MS_NIL → memset(&x, 0, sizeof(Type))
-		// Reference parity: value types can't be nil — zero-init instead.
+		// Null assignment to value type: x = MS_NIL → zero-init.
+		// Structs/arrays: memset(&x, 0, sizeof(Type)).
+		// Numerics: x = 0 (MS_NIL is void*, incompatible with int/float in C).
 		if (d.operator === "=" && (finalRight === "MS_NIL" || finalRight === "NULL" || finalRight === "((void*)0)")) {
 			const lt = d.left.nodeType;
 			if (lt !== null && isNilableValueType(lt)) {
 				const cType = getTypeDesc(g, lt);
 				ctx.results.push(`memset(&(${left}), 0, sizeof(${cType}))`);
+				return;
+			}
+			if (lt !== null && (isIntegerType(lt) || isFloatType(lt))) {
+				ctx.results.push(`(${left} = 0)`);
 				return;
 			}
 		}

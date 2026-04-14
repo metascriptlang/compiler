@@ -452,6 +452,14 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
+	if (nextKind === TokenKind.Template) {
+		// parseFunctionDecl consumes the keyword token — 'template' acts like 'function'
+		const decl = try parseFunctionDecl(state);
+		const fd = decl.data as FunctionDeclData;
+		fd.fnFlags = fd.fnFlags === "" ? "template" : fd.fnFlags + " template";
+		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+	}
+
 	// export async function f() {}
 	if (nextKind === TokenKind.Async) {
 		const decl = try parseFunctionDecl(state);

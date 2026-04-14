@@ -4,7 +4,7 @@ import {
 	msFsReadFile, msFsWriteFileMode, msFsExists, msFsIsFile, msFsIsDir,
 	msFsMkdir, msFsRmdir, msFsRemove, msFsRename, msFsLastErrno,
 	msFsChmod, msFsReadDirEntries,
-} from "runtime/fs.h";
+} from "runtime/fs/header.h";
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
 
 // Path utilities (pure MetaScript)
