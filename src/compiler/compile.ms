@@ -725,6 +725,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
 
+		const modT0 = clockMs();
 		if (opts.verbose) verboseLog(`transforming ${modPath}`);
 
 		const program = parseOrExit(mod.source, modPath);
@@ -785,6 +786,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		if (opts.osTarget !== "") ctx.osTarget = opts.osTarget;
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
+		const modT1 = clockMs();
+		if (opts.showTime && (modT1 - modT0) > 50) {
+			printTiming(modPath, modT0);
+		}
 
 		processed.push({ program: nativeLowered, ctx, modPath });
 		transformedPrograms.push(nativeLowered);

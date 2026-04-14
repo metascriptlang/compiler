@@ -25,21 +25,18 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 // ===== Generic Instance Deduplication =====
 // Across all modules in Phase C, each generic instance is emitted ONCE.
 // First module to codegen it emits the body; other modules get forward decls only.
-let _emittedInstances: string[] = [];
+let _emittedInstances: Set<string> = new Set<string>();
 
 export function resetEmittedInstances(): void {
-	_emittedInstances = [];
+	_emittedInstances = new Set<string>();
 }
 
 function isInstanceEmitted(name: string): boolean {
-	for (const n of _emittedInstances) {
-		if (n === name) return true;
-	}
-	return false;
+	return _emittedInstances.has(name);
 }
 
 function markInstanceEmitted(name: string): void {
-	_emittedInstances.push(name);
+	_emittedInstances.add(name);
 }
 
 // ===== genDecl — main declaration dispatcher =====

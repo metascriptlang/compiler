@@ -63,10 +63,11 @@ export interface ModuleExports {
 export interface ExportRegistry {
 	entries: ModuleExports[];
 	nameIndex: Map<string, ExportedSymInfo[]>;  // name → all exports with that name (cross-module)
+	moduleIndex: Map<string, number>;  // modulePath → index in entries[]
 }
 
 export function createExportRegistry(): ExportRegistry {
-	return { entries: [], nameIndex: new Map<string, ExportedSymInfo[]>() };
+	return { entries: [], nameIndex: new Map<string, ExportedSymInfo[]>(), moduleIndex: new Map<string, number>() };
 }
 
 function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
@@ -105,26 +106,26 @@ export function removeFromNameIndex(registry: ExportRegistry, exports: ExportedS
 
 export function registerModuleExports(registry: ExportRegistry, modulePath: string, exports: ExportedSymInfo[]): void {
 	const entry: ModuleExports = { modulePath, symbols: exports };
+	registry.moduleIndex.set(modulePath, registry.entries.length);
 	registry.entries.push(entry);
 	addToNameIndex(registry, exports);
 }
 
 // Replace existing module's exports (Phase 2 updates Phase 1 placeholders)
 export function updateModuleExports(registry: ExportRegistry, modulePath: string, exports: ExportedSymInfo[]): void {
-	for (let i = 0; i < registry.entries.length; i += 1) {
-		if (registry.entries[i].modulePath === modulePath) {
-			removeFromNameIndex(registry, registry.entries[i].symbols);
-			registry.entries[i].symbols = exports;
-			addToNameIndex(registry, exports);
-			return;
-		}
+	if (registry.moduleIndex.has(modulePath)) {
+		const i = registry.moduleIndex.get(modulePath);
+		removeFromNameIndex(registry, registry.entries[i].symbols);
+		registry.entries[i].symbols = exports;
+		addToNameIndex(registry, exports);
+		return;
 	}
 	registerModuleExports(registry, modulePath, exports);
 }
 
 export function findModuleExports(registry: ExportRegistry, modulePath: string): ModuleExports {
-	for (const entry of registry.entries) {
-		if (entry.modulePath === modulePath) return entry;
+	if (registry.moduleIndex.has(modulePath)) {
+		return registry.entries[registry.moduleIndex.get(modulePath)];
 	}
 	return null as unknown as ModuleExports;
 }

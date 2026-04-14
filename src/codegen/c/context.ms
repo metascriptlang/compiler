@@ -485,34 +485,30 @@ export function internString(pool: StringPool, value: string): string {
 
 // ===== NameSet — tracks already-declared names =====
 
-export type NameSet = string[];
+export type NameSet = Set<string>;
 
 export function createNameSet(): NameSet {
-	return [];
+	return new Set<string>();
 }
 
 export function nameSetHas(ns: NameSet, name: string): boolean {
-	for (let i = 0; i < ns.length; i += 1) {
-		if (ns[i] === name) return true;
-	}
-	return false;
+	return ns.has(name);
 }
 
 export function nameSetAdd(ns: NameSet, name: string): void {
-	if (!nameSetHas(ns, name)) {
-		ns.push(name);
-	}
+	ns.add(name);
 }
 
 // ===== AliveSet — global DCE reachability (Standard reference parity) =====
 
 export class AliveSet {
-	entries: string[];   // "modulePath:symbolName" keys
-	_set: Set<string>;   // O(1) lookup mirror
+	entries: string[];       // "modulePath:symbolName" keys
+	_set: Set<string>;       // O(1) lookup mirror
+	_modules: Set<string>;   // O(1) module-level lookup
 }
 
 export function createAliveSet(): AliveSet {
-	return { entries: [], _set: new Set<string>() };
+	return { entries: [], _set: new Set<string>(), _modules: new Set<string>() };
 }
 
 export function aliveSetAdd(aliveSet: AliveSet, modulePath: string, name: string): void {
@@ -520,6 +516,7 @@ export function aliveSetAdd(aliveSet: AliveSet, modulePath: string, name: string
 	if (aliveSet._set.has(key)) return;
 	aliveSet._set.add(key);
 	aliveSet.entries.push(key);
+	aliveSet._modules.add(modulePath);
 }
 
 export function aliveSetHas(aliveSet: AliveSet, modulePath: string, name: string): boolean {
@@ -531,11 +528,7 @@ export function aliveSetHas(aliveSet: AliveSet, modulePath: string, name: string
 // Used for module-level DCE: skip entire modules with zero reachable symbols.
 export function aliveSetHasModule(aliveSet: AliveSet, modulePath: string): boolean {
 	if (aliveSet.entries.length === 0) return true;  // DCE disabled
-	const prefix = modulePath + ":";
-	for (const key of aliveSet.entries) {
-		if (key.startsWith(prefix)) return true;
-	}
-	return false;
+	return aliveSet._modules.has(modulePath);
 }
 
 // ===== CGen — module-level state (Standard reference parity) =====
@@ -820,7 +813,7 @@ test "no duplicates" {
 	const ns = createNameSet();
 	nameSetAdd(ns, "foo");
 	nameSetAdd(ns, "foo");
-	assert ns.length === 1;
+	assert ns.size === 1;
 }
 
 test "create with 10 sections" {

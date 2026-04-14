@@ -19,6 +19,7 @@ import { getIdentId } from "./idents";
 // Module-level pending list — all instantiated ASTs go here.
 // compile.ms drains this after each module's check.
 let _pendingInstances: Node[] = [];
+let _pendingNames: Set<string> = new Set<string>();
 
 // ===== Constructor Default Registry =====
 // Cross-module registry for constructor function types + defaults.
@@ -49,14 +50,12 @@ export function lookupCtorDefaults(ctorFnName: string): CtorEntry {
 export function addPendingInstance(node: Node): void {
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
-		for (const existing of _pendingInstances) {
-			if (existing.kind === NodeKind.FunctionDecl && (existing.data as FunctionDeclData).fnName === fd.fnName) return;
-		}
+		if (_pendingNames.has(fd.fnName)) return;
+		_pendingNames.add(fd.fnName);
 	} else if (node.kind === NodeKind.ClassDecl) {
 		const cd = node.data as ClassDeclData;
-		for (const existing of _pendingInstances) {
-			if (existing.kind === NodeKind.ClassDecl && (existing.data as ClassDeclData).className === cd.className) return;
-		}
+		if (_pendingNames.has(cd.className)) return;
+		_pendingNames.add(cd.className);
 	}
 	_pendingInstances.push(node);
 }
@@ -64,6 +63,7 @@ export function addPendingInstance(node: Node): void {
 export function drainPendingInstances(): Node[] {
 	const result = _pendingInstances;
 	_pendingInstances = [];
+	_pendingNames = new Set<string>();
 	return result;
 }
 

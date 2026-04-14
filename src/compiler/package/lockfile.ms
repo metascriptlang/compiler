@@ -220,27 +220,30 @@ export function entryName(key: string): string {
 			return key;
 		}
 	}
-	// User-scoped: contains /, find @ after the /
-	let slashIdx = -1;
-	let sli = 0;
-	while (sli < key.length) {
-		if (key.charAt(sli) === "/") { slashIdx = sli; sli = key.length; }
-		sli = sli + 1;
+	// Find first @ and first /
+	let firstAt = -1;
+	let firstSlash = -1;
+	let i = 0;
+	while (i < key.length) {
+		if (key.charAt(i) === "@" && firstAt === -1) firstAt = i;
+		if (key.charAt(i) === "/" && firstSlash === -1) firstSlash = i;
+		i = i + 1;
 	}
-	if (slashIdx > 0) {
-		let ai = slashIdx + 1;
+	// If @ comes before / (or no /), it's unscoped or git — split on first @
+	// e.g. "cool-json@1.0.0" or "my-fork@git:github.com/..."
+	if (firstAt > 0 && (firstSlash === -1 || firstAt < firstSlash)) {
+		return key.slice(0, firstAt);
+	}
+	// User-scoped: / comes before @ — e.g. "alice/router@1.0.0"
+	if (firstSlash > 0) {
+		let ai = firstSlash + 1;
 		while (ai < key.length) {
 			if (key.charAt(ai) === "@") return key.slice(0, ai);
 			ai = ai + 1;
 		}
 		return key;
 	}
-	// Unscoped: split on first @
-	let i = 0;
-	while (i < key.length) {
-		if (key.charAt(i) === "@") return key.slice(0, i);
-		i = i + 1;
-	}
+	// No @ at all
 	return key;
 }
 

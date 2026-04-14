@@ -23,6 +23,34 @@ interface ModuleIndex {
 let _progCacheKeys: string[] = [];
 let _progCacheVals: Node[] = [];
 
+// ===== Global Name Index =====
+// Pre-built name→modulePath index for O(1) cross-module lookup.
+// Replaces the O(n*m) linear scan of all modules for unresolved identifiers.
+// Built once at the start of computeAliveSet.
+let _nameIndex: Map<string, string> = new Map<string, string>();
+
+function nameIndexBuild(idx: ModuleIndex): void {
+	_nameIndex = new Map<string, string>();
+	for (let m = 0; m < idx.programs.length; m += 1) {
+		const prog = idx.programs[m];
+		if (prog === null) continue;
+		const pd = prog.data as ProgramData;
+		const modPath = idx.paths[m];
+		for (const stmt of pd.programStmts) {
+			if (stmt === null) continue;
+			const name = getDeclName(stmt);
+			if (name !== "" && !_nameIndex.has(name)) {
+				_nameIndex.set(name, modPath);
+			}
+		}
+	}
+}
+
+function nameIndexLookup(name: string): string {
+	if (_nameIndex.has(name)) return _nameIndex.get(name);
+	return "";
+}
+
 function findProgram(idx: ModuleIndex, path: string): Node {
 	for (let c = 0; c < _progCacheKeys.length; c += 1) {
 		if (_progCacheKeys[c] === path) return _progCacheVals[c];
@@ -144,20 +172,11 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 			}
 		} else if (id.name.length > 0) {
 			// No resolvedSym: transform-generated or generic-instantiated identifiers.
-			// Try current module first, then search all modules (cross-module callees
-			// inside generic instantiations have resolvedSym cleared during deep clone).
+			// Try current module first, then use pre-built name index for cross-module.
 			markAndWalk(modulePath, id.name);
-			const prog = findProgram(_modIdx, modulePath);
-			if (prog !== null && findDecl(prog, id.name) === null) {
-				// Not found locally — search all modules
-				for (let si = 0; si < _modIdx.paths.length; si += 1) {
-					if (_modIdx.paths[si] === modulePath) continue;
-					const decl = findDecl(_modIdx.programs[si], id.name);
-					if (decl !== null) {
-						markAndWalk(_modIdx.paths[si], id.name);
-						break;
-					}
-				}
+			const crossMod = nameIndexLookup(id.name);
+			if (crossMod !== "" && crossMod !== modulePath) {
+				markAndWalk(crossMod, id.name);
 			}
 		}
 		return;
@@ -188,12 +207,12 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 		} else if (md.property !== "") {
 			// No resolvedSym (generic instantiation clears it).
 			// Search all modules for the method — extension methods may be cross-module.
-			for (let si = 0; si < _modIdx.paths.length; si += 1) {
-				const decl = findDecl(_modIdx.programs[si], md.property);
-				if (decl !== null) {
-					markAndWalk(_modIdx.paths[si], md.property);
-					break;
-				}
+			// No resolvedSym — use pre-built name index for cross-module extension methods.
+			const crossMod2 = nameIndexLookup(md.property);
+			if (crossMod2 !== "") {
+				markAndWalk(crossMod2, md.property);
+			} else {
+				markAndWalk(modulePath, md.property);
 			}
 		}
 		return;
@@ -322,6 +341,7 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 	_importCacheVals = [];
 	_progCacheKeys = [];
 	_progCacheVals = [];
+	nameIndexBuild(_modIdx);
 
 	// For each module, find roots and mark them alive
 	for (let m = 0; m < programs.length; m += 1) {
@@ -416,6 +436,7 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 	_visitedSet = new Set<string>();
 	_progCacheKeys = [];
 	_progCacheVals = [];
+	_nameIndex = new Map<string, string>();
 	return result;
 }
 
