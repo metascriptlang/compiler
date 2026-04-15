@@ -351,6 +351,23 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 			return "&" + tmpName;
 		}
 	}
+	// Union variant lvalue: when &local is taken and the local's type is a variant struct
+	// (e.g. NodeData_v11) while the parameter expects the base union pointer (NodeData*),
+	// cast to the union type. The checker types the local as the declared variant type
+	// (correct), and the codegen maps it to the variant struct (correct). The pointer
+	// widening (variant* → union*) must happen here at the conversion point — same pattern
+	// as the compound literal union wrapping above (lines 183-213).
+	if (paramType !== null && exprNode !== null && exprNode.nodeType !== null) {
+		let innerParam = paramType;
+		if ((innerParam.kind === TypeKind.Ptr || innerParam.kind === TypeKind.Ref
+			|| innerParam.kind === TypeKind.Sink || innerParam.kind === TypeKind.Lent) && innerParam.typeReturn !== null) {
+			innerParam = innerParam.typeReturn;
+		}
+		if (innerParam.kind === TypeKind.Union && exprNode.nodeType.kind === TypeKind.Struct) {
+			const unionCType = getTypeDesc(g, innerParam);
+			return `(${unionCType}*)&(${snippet})`;
+		}
+	}
 	return `&(${snippet})`;
 }
 

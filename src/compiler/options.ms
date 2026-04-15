@@ -183,11 +183,13 @@ export function parseArgs(): CliOptions {
 		} else if (!arg.startsWith("-")) {
 			if (positionalIdx === 0) {
 				opts.command = arg;
-			} else {
+			} else if (positionalIdx === 1) {
 				opts.inputFile = arg;
+			} else {
+				opts.extraArgs.push(arg);
 			}
 			positionalIdx += 1;
-		} else if (opts.command === "add" || opts.command === "remove" || opts.command === "install" || opts.command === "update" || opts.command === "publish" || opts.command === "login" || opts.command === "logout" || opts.command === "whoami") {
+		} else if (opts.command === "add" || opts.command === "remove" || opts.command === "install" || opts.command === "update" || opts.command === "publish" || opts.command === "login" || opts.command === "logout" || opts.command === "whoami" || opts.command === "org") {
 			// Package manager commands: pass unknown flags through
 			opts.extraArgs.push(arg);
 		} else {

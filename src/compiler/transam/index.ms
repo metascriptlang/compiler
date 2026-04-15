@@ -58,7 +58,6 @@ import { openScope, ScopeKind } from "../../checker/symbol";
 import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
 import { createModule, createModuleGraph, addModule, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
-import { lspResolveImportCandidates } from "../lsp/protocol";
 import { translateCHeader } from "../../module/cimport/emit";
 import { inlineHeaderImports, createTaReadProvider, SourceProvider } from "../../module/loader";
 import { cloneNodeForCheck } from "../../monomorphize/clone";

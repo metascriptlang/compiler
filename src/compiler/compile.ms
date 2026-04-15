@@ -705,8 +705,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	if (opts.showTime) printTiming("graph load+check", t0);
 	const tA = clockMs();
 	const processed: ProcessedModule[] = [];
-	const transformedPrograms: Node[] = [];
-	const transformedPaths: string[] = [];
+	let transformedPrograms: Node[] = [];
+	let transformedPaths: string[] = [];
 	let hasUserMain = false;
 	let mainRetType = "void";
 	const bs = initCBuildState(opts);
@@ -830,6 +830,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false);
+	// Release DCE input arrays — no longer needed after alive set computed.
+	transformedPrograms = [];
+	transformedPaths = [];
 
 	if (opts.showTime) printTiming("phase B (DCE)", tB);
 	const tC = clockMs();
@@ -934,6 +937,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			}
 		}
 		compiled = compiled + 1;
+		// Release per-module AST + context after codegen so DRC can free memory.
+		// Without this, all 250 module ASTs stay alive (~20GB for self-compile).
+		p.program = null as unknown as Node;
+		p.ctx = null as unknown as CheckerContext;
 	}
 
 	// Filter load order to alive modules only (module-level DCE).

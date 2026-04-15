@@ -16,7 +16,7 @@ import { join } from "std/fs/path";
 // NOTE: imported for Bun test runner (finds inline tests). The C build path
 // (msc build/run src/index.ms) also compiles these modules; any link errors
 // from OTHER files in the working tree are pre-existing, not caused by this import.
-import { cmdAdd, cmdRemove, cmdInstall, cmdLogin, cmdLogout, cmdWhoami, cmdPublish } from "./compiler/package/index";
+import { cmdAdd, cmdRemove, cmdInstall, cmdLogin, cmdLogout, cmdWhoami, cmdPublish, cmdOrg } from "./compiler/package/index";
 
 function requireFile(opts: CliOptions): void {
 	if (opts.inputFile === "") {
@@ -146,7 +146,7 @@ export function main(): number {
 			const orgArgs: string[] = [];
 			if (opts.inputFile !== "") orgArgs.push(opts.inputFile);
 			for (const ea of opts.extraArgs) { orgArgs.push(ea); }
-			console.log("org: not available"); exit(1);
+			if (!cmdOrg(orgArgs)) exit(1);
 		},
 		_ => {
 			console.log(`${error("error")}: unknown command '${bold(cmd)}'`);

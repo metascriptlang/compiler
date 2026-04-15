@@ -106,12 +106,12 @@ export function registryBaseUrl(): string {
 
 // Build the API path for a package name, handling scoped names.
 // "void"          → "/packages/void"
-// "alice/router"  → "/packages/~alice/router"
-// "@acme/router"  → "/packages/@acme/router"
+// "alice/router"  → "/packages/user/alice/router"
+// "@acme/router"  → "/packages/org/acme/router"
 function packageApiPath(name: string): string {
 	if (name.length > 0 && name.charAt(0) === "@") {
-		// Org-scoped: @acme/router → /packages/@acme/router
-		return "/packages/" + name;
+		// Org-scoped: @acme/router → /packages/org/acme/router (strip @)
+		return "/packages/org/" + name.slice(1, name.length);
 	}
 	// Check for user scope (contains /)
 	let slashIdx = -1;
@@ -121,8 +121,8 @@ function packageApiPath(name: string): string {
 		i = i + 1;
 	}
 	if (slashIdx > 0) {
-		// User-scoped: alice/router → /packages/~alice/router
-		return "/packages/~" + name;
+		// User-scoped: alice/router → /packages/user/alice/router
+		return "/packages/user/" + name;
 	}
 	// Unscoped
 	return "/packages/" + name;

@@ -10,12 +10,10 @@
 //   "hello" != "world"  →  substituted to  →  !("hello" == "world")
 
 import {
-	Node, NodeKind, NodeData,
-	IdentifierData, BinaryExprData, UnaryExprData, CallExprData,
-	FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData,
-	VariableDeclData, ConditionalExprData, IfStmtData,
-	MemberExprData, ArrayAccessData, ObjectLiteralData,
-	Type, Symbol, SymbolKind,
+	Node, NodeKind, IdentifierData, BinaryExprData, UnaryExprData, CallExprData,
+	FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, VariableDeclData,
+	ConditionalExprData, IfStmtData, MemberExprData, ArrayAccessData, ObjectLiteralData,
+	Type, Symbol,
 } from "../ast/node";
 import { CheckerContext, addError } from "./context";
 import { unknownType } from "./types";

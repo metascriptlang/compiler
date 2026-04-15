@@ -58,6 +58,6 @@ export { cmdRemove } from "./remove";
 export { cmdInstall } from "./install";
 export { cmdLogin, cmdLogout, cmdWhoami } from "./login";
 export { cmdPublish } from "./publish";
-// export { cmdOrg } from "./org";
+export { cmdOrg } from "./org";
 export { downloadPackage } from "./download";
 export { addDepToManifest, removeDepFromManifest, readManifest } from "./manifest";

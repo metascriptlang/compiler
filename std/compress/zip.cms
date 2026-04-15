@@ -8,13 +8,14 @@
 // exposes entry metadata + extraction. The writer builds a new archive in a
 // growable heap buffer and returns the finalised bytes.
 
+@compile("runtime/compress/zip.c");
+@compile("vendor/miniz/miniz.c");
+@compile("vendor/miniz/miniz_tinfl.c");
+@compile("vendor/miniz/miniz_tdef.c");
+@compile("vendor/miniz/miniz_zip.c");
+
 import { CompressError, CompressErrorKind, compressError } from "./errors";
 import { msZipReaderCtx } from "runtime/compress/zip.h";
-import { mz_ulong } from "vendor/miniz/miniz.h";
-import { tinfl_decompressor } from "vendor/miniz/miniz_tinfl.h";
-import { tdefl_compressor } from "vendor/miniz/miniz_tdef.h";
-import { mz_zip_archive } from "vendor/miniz/miniz_zip.h";
-
 // Re-export for callers — keep in sync with inflate.cms / deflate.cms
 export { CompressFormat, CompressError, CompressErrorKind } from "./errors";
 

@@ -157,18 +157,12 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 			extRecv = ext.receiverTypeName;
 			extStatic = ext.isStatic;
 		} else {
-			const extFb = findExtensionByName(extensionRegistry, sym.name);
-			if (extFb !== null) {
-				extRecv = extFb.receiverTypeName;
-				extStatic = extFb.isStatic;
-			} else {
-				// Class methods: mangled name (GPUInstance_release) doesn't match
-				// extension entry (release). Fall back to symbol identity match.
-				const extSym = findExtensionBySym(extensionRegistry, sym);
-				if (extSym !== null) {
-					extRecv = extSym.receiverTypeName;
-					extStatic = extSym.isStatic;
-				}
+			// Class methods: mangled name (GPUInstance_release) doesn't match
+			// extension entry (release). Fall back to symbol identity match.
+			const extSym = findExtensionBySym(extensionRegistry, sym);
+			if (extSym !== null) {
+				extRecv = extSym.receiverTypeName;
+				extStatic = extSym.isStatic;
 			}
 		}
 	}

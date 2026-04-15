@@ -208,9 +208,18 @@ function genExprStmt(g: CGen, p: CProc, node: Node): void {
 		}
 		return;
 	}
+	// NRVO calls: genExpr emits the call as a side-effect statement and returns
+	// the temp name as the "result". When the result is discarded (ExprStmt),
+	// skip emitting the bare temp — the call itself is the only thing that matters.
+	if (d.expr.kind === NodeKind.CallExpr) {
+		const nrvoRet = getCalleeReturnType(d.expr);
+		const nrvoFuncType = getCalleeFuncType(d.expr);
+		if (nrvoRet !== null && isNrvoReturnType(nrvoRet, nrvoFuncType)) {
+			genExpr(g, p, d.expr);
+			return;
+		}
+	}
 	const snippet = genExpr(g, p, d.expr);
-	// Bare identifiers as statements trigger -Wunused-value. Cast to (void) to suppress.
-	// Common case: DRC-generated temps used for discarded return values.
 	if (d.expr.kind === NodeKind.Identifier) {
 		emitStmtsLine(p, `(void)${snippet};`);
 	} else {

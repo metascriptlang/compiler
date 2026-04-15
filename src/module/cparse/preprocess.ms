@@ -453,15 +453,20 @@ function expandMacro(tok: CToken, ctx: PPContext): CToken[] {
 		return [result, tok.next];
 	}
 
+	// Reusable single-element array — avoids DRC leak on inline [mac.name] literals.
+	// DRC doesn't generate cleanup for _clit temporaries from array literals in function args.
+	const macNameArr: string[] = [mac.name];
+
 	// Object-like macro
 	if (mac.isObjlike) {
-		const hs = hidesetUnion(tok.hideset, [mac.name]);
+		const hs = hidesetUnion(tok.hideset, macNameArr);
 		const body = copyTokenList(mac.body);
 		addHideset(body, mac.name);
 		// Set hideset on each token
 		let t = body;
 		while (t.kind !== CTokenKind.Eof) {
-			t.hideset = hidesetUnion(t.hideset, hs);
+			const merged = hidesetUnion(t.hideset, hs);
+			t.hideset = merged;
 			t = t.next;
 		}
 		// Preserve leading whitespace
@@ -490,11 +495,15 @@ function expandMacro(tok: CToken, ctx: PPContext): CToken[] {
 	if (rest.stringVal === ")") rest = rest.next;
 
 	const body = subst(mac.body, args, ctx);
-	const hs = hidesetIntersection(tok.hideset, rest.kind !== CTokenKind.Eof ? rest.hideset : []);
+	const emptyHideset: string[] = [];
+	const restHideset = rest.kind !== CTokenKind.Eof ? rest.hideset : emptyHideset;
+	const hs = hidesetIntersection(tok.hideset, restHideset);
 	addHideset(body, mac.name);
 	let t = body;
 	while (t.kind !== CTokenKind.Eof) {
-		t.hideset = hidesetUnion(t.hideset, hidesetUnion(hs, [mac.name]));
+		const hsWithName = hidesetUnion(hs, macNameArr);
+		const merged = hidesetUnion(t.hideset, hsWithName);
+		t.hideset = merged;
 		t = t.next;
 	}
 	if (body.kind !== CTokenKind.Eof) {
