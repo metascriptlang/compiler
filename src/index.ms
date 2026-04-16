@@ -17,6 +17,7 @@ import { join } from "std/fs/path";
 // (msc build/run src/index.ms) also compiles these modules; any link errors
 // from OTHER files in the working tree are pre-existing, not caused by this import.
 import { cmdAdd, cmdRemove, cmdInstall, cmdLogin, cmdLogout, cmdWhoami, cmdPublish, cmdOrg } from "./compiler/package/index";
+import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compiler/upgrade";
 
 function requireFile(opts: CliOptions): void {
 	if (opts.inputFile === "") {
@@ -27,6 +28,10 @@ function requireFile(opts: CliOptions): void {
 }
 
 export function main(): number {
+	// Windows-only: delete stale msc.exe.bak-* files left by previous upgrades.
+	// No-op on Unix. Must run before any network/heavy work.
+	sweepUpgradeBackups();
+
 	const opts = parseArgs();
 	const cmd = opts.command;
 
@@ -148,11 +153,22 @@ export function main(): number {
 			for (const ea of opts.extraArgs) { orgArgs.push(ea); }
 			if (!cmdOrg(orgArgs)) exit(1);
 		},
+		"upgrade" => { exit(cmdUpgrade(opts)); },
 		_ => {
 			console.log(`${error("error")}: unknown command '${bold(cmd)}'`);
 			printUsage();
 			exit(1);
 		},
+	};
+
+	// Update-check hook — fires only for user-facing commands (not lsp/fmt/check
+	// or developer tooling). Cached for 24h, silent on failure, opt-out via
+	// MSC_NO_UPDATE_CHECK / CI. Runs AFTER the command so user output comes first.
+	match (cmd) {
+		"build" | "run" | "test" | "version"
+			| "add" | "install" | "publish" | "login" | "whoami"
+			=> { maybeShowUpdateNotice(); },
+		_ => {},
 	};
 
 	return 0;

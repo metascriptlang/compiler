@@ -14,6 +14,7 @@ import { analyzeProgram } from "../analyzer/index";
 import { CliOptions } from "./options";
 import { readSource, writeOutput, printErrorsAndExit, printTiming, replaceExt, baseName, ensureDir } from "./io";
 import { cmdBuildC } from "./compile";
+import { maybeShowUpdateNotice } from "./upgrade";
 import { error, success, bold, cyan, dim, green, red, path } from "../utils/color";
 
 // Formatter imports
@@ -141,6 +142,9 @@ export function cmdRun(filePath: string, opts: CliOptions): void {
 
 	if (opts.showTime) printTiming("compiled", t0);
 	const runCode = exec(tmpBin);
+	// Show update notice before exit — cmdRun terminates here, bypassing
+	// main()'s post-command hook.
+	maybeShowUpdateNotice();
 	exit(runCode);
 }
 

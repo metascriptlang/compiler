@@ -2,7 +2,7 @@
 
 import { bold, cyan, yellow, dim, green } from "../utils/color";
 
-export const VERSION = "0.2.4";
+export const VERSION = "0.2.8";
 
 export function printUsage(): void {
 	console.log("");
@@ -21,6 +21,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("init") + " [name]            Create new project");
 	console.log("  " + cyan("clean") + "                 Remove build artifacts");
 	console.log("  " + cyan("lsp") + "                   Start language server");
+	console.log("  " + cyan("upgrade") + "               Upgrade msc to the latest release");
 	console.log("");
 	console.log(yellow("PACKAGE MANAGER:"));
 	console.log("  " + cyan("add") + " <name>@<ver>     Add a dependency (registry / file: / git:)");
