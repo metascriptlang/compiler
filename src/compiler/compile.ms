@@ -384,6 +384,40 @@ function initCBuildState(opts: CliOptions): CBuildState {
 	return { allFlags, includePaths };
 }
 
+// Resolve a relative directory path against the include search list.
+// Mirrors @compile path resolution (processCompileDirectives): try CWD first,
+// then search registered include paths (which contain compilerRoot).
+function resolveIncludeDir(dir: string, includePaths: Set<string>): string {
+	if (dir === "" || dir.charAt(0) === "/") return dir;
+	if (exists(dir)) return dir;
+	for (const ip of includePaths) {
+		const candidate = `${ip}/${dir}`;
+		if (exists(candidate)) return candidate;
+	}
+	return dir;
+}
+
+// Resolve relative -I/-iquote/-isystem paths in a flags string using the
+// same rule as @compile: try CWD, then search includePaths. Lets std @passC
+// directives work from any CWD when the compiler is installed elsewhere.
+function resolveIncludeFlags(flags: string, includePaths: Set<string>): string {
+	if (flags === "") return flags;
+	const parts = flags.split(" ");
+	let result = "";
+	for (const p of parts) {
+		let resolved = p;
+		if (p.length > 2 && p.slice(0, 2) === "-I") {
+			resolved = "-I" + resolveIncludeDir(p.slice(2, p.length), includePaths);
+		} else if (p.length > 7 && p.slice(0, 7) === "-iquote") {
+			resolved = "-iquote" + resolveIncludeDir(p.slice(7, p.length), includePaths);
+		} else if (p.length > 8 && p.slice(0, 8) === "-isystem") {
+			resolved = "-isystem" + resolveIncludeDir(p.slice(8, p.length), includePaths);
+		}
+		result = result === "" ? resolved : `${result} ${resolved}`;
+	}
+	return result;
+}
+
 // Register -I/-iquote paths from a module's compiler flags into the include path set.
 function registerIncludePaths(flags: string, paths: Set<string>): void {
 	if (flags === "") return;
@@ -795,10 +829,12 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		transformedPrograms.push(nativeLowered);
 		transformedPaths.push(modPath);
 
-		// Accumulate compiler flags (@passC) and link flags (@link/@passL) separately
-		allFlags = appendFlag(allFlags, ctx.compilerFlags);
+		// Accumulate compiler flags (@passC). Relative -I paths resolved using same
+		// rule as @compile (try CWD, then search includePaths which contains compilerRoot).
+		const resolved = resolveIncludeFlags(ctx.compilerFlags, includePaths);
+		allFlags = appendFlag(allFlags, resolved);
 		// @passL/@link go directly to global linkState — no per-module merge
-		registerIncludePaths(ctx.compilerFlags, includePaths);
+		registerIncludePaths(resolved, includePaths);
 
 		// Check for user main() in entry module
 		if (modPath === entryPath && ctx !== null && ctx.table !== null) {
@@ -1123,9 +1159,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		transformedPrograms.push(nativeLowered);
 		transformedPaths.push(modPath);
 
-		allFlags = appendFlag(allFlags, ctx.compilerFlags);
+		const resolved = resolveIncludeFlags(ctx.compilerFlags, includePaths);
+		allFlags = appendFlag(allFlags, resolved);
 		// @passL/@link go directly to global linkState — no per-module merge
-		registerIncludePaths(ctx.compilerFlags, includePaths);
+		registerIncludePaths(resolved, includePaths);
 	}
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)

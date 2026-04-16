@@ -150,8 +150,16 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 			headerPath = moduleDir + "/" + specifier.slice(specifier.startsWith("./") ? 2 : 0, specifier.length);
 		}
 
-		// Read the .h file
-		const headerSource = provideSource(provider, headerPath);
+		// Read the .h file. Try as-is first (works when CWD is project root). If that
+		// fails for a bare relative path, try resolving against the compiler root —
+		// this lets installed std (~/.metascript/std/...) work from any CWD without
+		// rewriting `headerPath` (which downstream code uses to derive companion .c
+		// paths and @include directives — must stay consistent).
+		let headerSource = provideSource(provider, headerPath);
+		if (!headerSource.ok && headerPath.charAt(0) !== "/") {
+			const root = resolveRuntimeDir();
+			if (root !== "") headerSource = provideSource(provider, `${root}/${headerPath}`);
+		}
 		if (!headerSource.ok) { searchPos = importIdx + 7; continue; }
 
 		// Parse specifier list once — used for both name filtering and re-export generation
