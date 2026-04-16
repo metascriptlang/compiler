@@ -837,34 +837,21 @@ msString msStringConcat(msString a, msString b) {
 	return result;
 }
 
-msString msStringConcatMany(int64_t count, ...) {
+msString msStringConcatArr(const msString* arr, int64_t count) {
 	if (count <= 0) return MS_EMPTY_STRING;
 
-	/* First pass: calculate total length */
-	va_list args;
-	va_start(args, count);
 	int64_t totalLen = 0;
-	for (int64_t i = 0; i < count; i++) {
-		msString s = va_arg(args, msString);
-		totalLen += s.len;
-	}
-	va_end(args);
-
+	for (int64_t i = 0; i < count; i++) totalLen += arr[i].len;
 	if (totalLen == 0) return MS_EMPTY_STRING;
 
-	/* Second pass: copy data */
 	msString result = msStringNewCap(totalLen);
-	va_start(args, count);
 	int64_t pos = 0;
 	for (int64_t i = 0; i < count; i++) {
-		msString s = va_arg(args, msString);
-		if (s.len > 0 && s.p != NULL) {
-			memcpy(result.p->data + pos, s.p->data, s.len);
-			pos += s.len;
+		if (arr[i].len > 0 && arr[i].p != NULL) {
+			memcpy(result.p->data + pos, arr[i].p->data, arr[i].len);
+			pos += arr[i].len;
 		}
 	}
-	va_end(args);
-
 	result.len = totalLen;
 	result.p->data[totalLen] = '\0';
 	return result;

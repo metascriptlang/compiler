@@ -13,7 +13,6 @@
 #include "runtime/drc.h"
 #include <stdio.h>
 #include <ctype.h>
-#include <stdarg.h>
 
 /* Forward declare array type for split/join */
 typedef struct msStringArray msStringArray;
@@ -241,8 +240,8 @@ static inline int64_t msStringByteLength(msString s) {
 /* Concatenate two strings into a new one */
 msString msStringConcat(msString a, msString b);
 
-/* Concatenate N strings (variadic) — for concat chain fusion */
-msString msStringConcatMany(int64_t count, ...);
+/* Concatenate N strings from an array — ABI-portable (no variadic struct passing) */
+msString msStringConcatArr(const msString* arr, int64_t count);
 
 /* Set character at index (mutating) — requires prior msStringPrepareMutation */
 void msStringSetChar(msString* s, int64_t idx, msString ch);

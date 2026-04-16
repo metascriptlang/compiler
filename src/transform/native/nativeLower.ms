@@ -205,7 +205,9 @@ function rewriteMemberExpr(node: Node): Node {
 // ===== Array Literal Lowering =====
 // Rewrites typed array literals to variadic runtime calls:
 //   [1, 2, 3]  on number[]  →  CallExpr("msNumberArrayFrom", [3, 1, 2, 3])
-//   ["a", "b"] on string[]  →  CallExpr("msStringArrayFrom", [2, "a", "b"])
+//   ["a", "b"] on string[]  →  CallExpr("msStringArrayFromArr", [2, "a", "b"])
+//                              (codegen rewrites to stack-local array + msStringArrayFromArr(arr, N)
+//                               — avoids variadic 16-byte struct ABI bug on aarch64-windows-gnu)
 // Other types (object[], ref[]) stay as ArrayLiteral for codegen's Temp+Push pattern.
 
 function rewriteArrayLiteral(node: Node): Node {
@@ -230,13 +232,13 @@ function rewriteArrayLiteral(node: Node): Node {
 		return call;
 	}
 
-	// string[] → msStringArrayFrom(count, e1, e2, ...)
+	// string[] → msStringArrayFromArr(count, e1, e2, ...)
 	if (elemType.kind === TypeKind.String) {
 		const args: Node[] = [makeNumber(d.elements.length, loc)];
 		for (let i = 0; i < d.elements.length; i += 1) {
 			args.push(d.elements[i]);
 		}
-		const call = makeCall(makeIdent("msStringArrayFrom", loc), args, loc);
+		const call = makeCall(makeIdent("msStringArrayFromArr", loc), args, loc);
 		call.nodeType = node.nodeType;
 		return call;
 	}

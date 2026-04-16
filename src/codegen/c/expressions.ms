@@ -1696,6 +1696,29 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 
 	// Direct or closure: first child is callee, rest are args
 	const callee = peekResult(ctx, cc, 0);
+
+	// msStringConcatArr(count, a, b, c) / msStringArrayFromArr(count, a, b, c)
+	// — emit stack-local array + call to avoid the variadic 16-byte struct ABI
+	// bug on aarch64-windows-gnu (LLVM #89615). A fixed-size local array is
+	// ABI-neutral. Joins the existing family of name-matched runtime intrinsics
+	// below (msBoxStruct, msSpawnInto, etc.).
+	if ((callee === "msStringConcatArr" || callee === "msStringArrayFromArr") && cc >= 3) {
+		const countStr = peekResult(ctx, cc, 1);
+		const n = cc - 2;
+		g.labels += 1;
+		const tmpName = `_mscc${g.labels}_`;
+		emitProcLocalsLine(p, `msString ${tmpName}[${n}];`);
+		let ai = 0;
+		while (ai < n) {
+			const argStr = peekResult(ctx, cc, ai + 2);
+			emitStmtsLine(p, `${tmpName}[${ai}] = ${argStr};`);
+			ai += 1;
+		}
+		truncResults(ctx, cc);
+		ctx.results.push(`${callee}(${tmpName}, ${countStr})`);
+		return;
+	}
+
 	// C varargs: msNumberArrayFrom(count, (double)(e1), ...) — va_arg reads 8 bytes for double
 	const isNumberArrayFrom = callee === "msNumberArrayFrom";
 	// Resolve callee's function type for parameter type checking
@@ -2000,7 +2023,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 	}
 
 	// Non-primitive: temp + push pattern
-	// (number/string arrays already lowered to msNumberArrayFrom/msStringArrayFrom CallExpr by nativeLower)
+	// (number/string arrays already lowered to msNumberArrayFrom/msStringArrayFromArr CallExpr by nativeLower)
 	const tmp = getTemp(p, arrayTypeName);
 	const tmpName = tmp.snippet;
 	emitStmtsLine(p, `${tmpName} = (${arrayTypeName}){0};`);

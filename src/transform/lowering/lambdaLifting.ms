@@ -133,6 +133,11 @@ interface PendingEnvRewrite {
 	envStructType: Type;        // the env interface type
 	capturedNames: NameSet;     // which variable names to rewrite
 	envVarDecl: Node;           // the VarDecl node to insert before the closure
+	// Snapshot envs (created inside a loop for an escaping closure) only emit
+	// their init statement; they do NOT activate an outer-ref rewrite, because
+	// code in the outer function must continue to read/write the shared env,
+	// not the per-closure snapshot. Default false = classic behavior.
+	snapshotOnly: boolean;
 }
 
 interface LiftState {
@@ -700,13 +705,22 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	let envVarName: string;
 	let envStructType: Type;
 
-	if (state.sharedEnvActive) {
+	// Closures created inside a loop body must NOT use the function-scope shared
+	// env — the shared env has one slot per variable, overwritten each iteration.
+	// A closure stored past the iteration (spawn, .then, actor.send, array.push)
+	// would later read whatever the LAST iteration wrote, not its own. Fix: when
+	// inside a loop, allocate a per-closure env (snapshot of captures at creation
+	// site). Outside loops, shared env is safe and faster.
+	const useShared = state.sharedEnvActive && state.insideLoop === 0;
+
+	if (useShared) {
 		// Shared env path (reference parity: ownerToType — all closures share one env)
 		envName = state.sharedEnvName;
 		envVarName = state.sharedEnvVarName;
 		envStructType = state.sharedEnvStructType;
 	} else {
-		// Per-closure env path (module-level closures, no shared env context)
+		// Per-closure env path — own env struct, fresh alloc at closure creation.
+		// Used for module-level closures AND for closures inside loops (snapshot).
 		envName = "$Env_" + state.currentFnName + "_" + counter.toString();
 		envVarName = "_env" + counter.toString() + "_";
 
@@ -738,7 +752,7 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 
 	// Rewrite closure body: captured vars → (*((EnvType*)_envP)).field
 	// For shared env, rewrite ALL captured names (env has fields for all captures)
-	const rewriteCaptures = state.sharedEnvActive ? state.sharedEnvCapturedNames : captures;
+	const rewriteCaptures = useShared ? state.sharedEnvCapturedNames : captures;
 	let rewrittenBody = rewriteNode(body, rewriteCaptures, envName, envStructType);
 	if (rewrittenBody.kind !== NodeKind.BlockStmt) {
 		rewrittenBody = makeBlock([makeReturn(rewrittenBody, loc)], loc);
@@ -755,18 +769,22 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	preserveResolvedTypes(fnNode, originalNodeType);
 	state.liftedFunctions.push(fnNode);
 
-	if (state.sharedEnvActive) {
+	if (useShared) {
 		// Shared env: env initialized at function entry, all-refs rewrite already active.
 		// No pendingEnvRewrites needed — setupSharedEnv activated the rewrite.
 		return makeClosurePairOnly(liftedName, envVarName, envStructType, loc);
 	} else {
-		// Per-closure env: each closure gets its own env declaration + init
+		// Per-closure env: each closure gets its own env declaration + init.
+		// If we're here BECAUSE of a loop escape (snapshot mode), outer function
+		// code must keep using the shared env, so mark this rewrite snapshot-only.
+		const snapshotOnly = state.sharedEnvActive;
 		const envPair = makeEnvVarAndClosurePair(envVarName, liftedName, envStructType, captures, state.lastUseCaptures, state.capturedIdents, state.currentParams, state.ss, loc);
 		state.hoistedEnvDecls.push(envPair.envDeclHoisted);
 		state.pendingEnvRewrites.push({
 			envVarName, envStructType,
 			capturedNames: captures,
 			envVarDecl: envPair.envInitStmt,
+			snapshotOnly,
 		});
 		return envPair.closurePair;
 	}
@@ -993,6 +1011,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, loc: SourceLocat
 		envStructType: state.sharedEnvStructType,
 		capturedNames: allCaptures,
 		envVarDecl: null as unknown as Node,
+		snapshotOnly: false,
 	});
 }
 
@@ -1023,9 +1042,24 @@ function drainPendingRewrites(state: LiftState, pendingBefore: number, result: N
 	while (pi < state.pendingEnvRewrites.length) {
 		const rewrite = state.pendingEnvRewrites[pi];
 		if (rewrite.envVarDecl !== null) {
-			result.push(rewrite.envVarDecl);
+			// Apply already-active rewrites to the init statement so that any
+			// captured-var references inside it resolve to the enclosing env
+			// (typically the shared function-scope env). Without this, a
+			// snapshot init `_env1 = { j: j }` would emit a bare `j` ident
+			// that has no C-level declaration when `j` is actually a shared-env
+			// field. Skip self — the newly-pushed rewrite isn't in activeEnvRewrites yet.
+			let decl = rewrite.envVarDecl;
+			if (state.activeEnvRewrites.length > 0) {
+				decl = applyActiveRewrites(decl, state.activeEnvRewrites);
+			}
+			result.push(decl);
 		}
-		state.activeEnvRewrites.push(rewrite);
+		// Snapshot envs (escaping closure inside a loop) only emit the init;
+		// they don't activate an outer-ref rewrite because the outer function
+		// must keep writing to the shared env, not the snapshot.
+		if (!rewrite.snapshotOnly) {
+			state.activeEnvRewrites.push(rewrite);
+		}
 		pi += 1;
 	}
 	// Truncate processed entries

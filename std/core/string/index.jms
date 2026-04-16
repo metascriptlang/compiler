@@ -29,8 +29,9 @@ export function msStringConcat(a: string, b: string): string {
 }
 
 // String concat N parts — rest params (called by lowerStringConcatFlatten for 3+ part +)
-// count param is for C va_list compatibility — ignored in JS, we use ...parts directly
-export function msStringConcatMany(count: number, ...parts: string[]): string {
+// On JS, count is ignored — we iterate ...parts directly. On C, the codegen rewrites
+// the call into `msStringConcatArr(arr, count)` against a stack-local array.
+export function msStringConcatArr(count: number, ...parts: string[]): string {
 	const result: uint8[] = [];
 	let i = 0;
 	while (i < parts.length) {

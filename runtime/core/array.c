@@ -293,13 +293,11 @@ msStringArray msStringArrayNew(int64_t cap) {
 	return arr;
 }
 
-msStringArray msStringArrayFrom(int64_t count, ...) {
+msStringArray msStringArrayFromArr(const msString* src, int64_t count) {
 	if (count <= 0) return MS_EMPTY_STRING_ARRAY;
 	msStringArray arr = msStringArrayNew(count);
-	va_list args;
-	va_start(args, count);
 	for (int64_t i = 0; i < count; i++) {
-		msString s = va_arg(args, msString);
+		msString s = src[i];
 		/* Deep-copy non-literal strings so each element is independently owned.
 		   Prevents double-free when the same string is passed multiple times. */
 		if (s.p != NULL && !msIsLiteral(s)) {
@@ -308,7 +306,6 @@ msStringArray msStringArrayFrom(int64_t count, ...) {
 			arr.p->data[i] = s;
 		}
 	}
-	va_end(args);
 	arr.len = count;
 	return arr;
 }

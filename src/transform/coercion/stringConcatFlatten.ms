@@ -39,11 +39,11 @@ function flattenConcat(node: Node): Node {
 		} else if (p.nodeType !== null && isStringLike(p.nodeType)) {
 			hasString = true;
 		} else if (p.kind === NodeKind.CallExpr) {
-			// Already-flattened msStringConcatMany call is a string
+			// Already-flattened msStringConcatArr call is a string
 			const cd = p.data as CallExprData;
 			if (cd.callee.kind === NodeKind.Identifier) {
 				const cn = (cd.callee.data as IdentifierData).name;
-				if (cn === "msStringConcatMany" || cn === "msStringConcat") hasString = true;
+				if (cn === "msStringConcatArr" || cn === "msStringConcat") hasString = true;
 			}
 		}
 		if (needsCoercion(p)) hasNonString = true;
@@ -61,13 +61,15 @@ function flattenConcat(node: Node): Node {
 		return call2;
 	}
 
-	// 3+ parts: msStringConcatMany(N, a, b, c, ...)
+	// 3+ parts: msStringConcatArr(N, a, b, c, ...) — codegen rewrites to
+	// stack-local array + msStringConcatArr(arr, N) to avoid the variadic
+	// 16-byte struct ABI bug on aarch64-windows-gnu (LLVM #89615).
 	const countNode = makeNumber(parts.length, loc);
 	const allArgs: Node[] = [countNode];
 	for (const p of parts) {
 		allArgs.push(coerceToString(p, loc));
 	}
-	const callN = makeCall(makeIdent("msStringConcatMany", loc), allArgs, loc);
+	const callN = makeCall(makeIdent("msStringConcatArr", loc), allArgs, loc);
 	callN.nodeType = stringType();
 	return callN;
 }
@@ -93,7 +95,7 @@ function coerceToString(node: Node, loc: SourceLocation): Node {
 		const cd = node.data as CallExprData;
 		if (cd.callee.kind === NodeKind.Identifier) {
 			const cn = (cd.callee.data as IdentifierData).name;
-			if (cn === "msStringConcatMany" || cn === "msStringConcat") return node;
+			if (cn === "msStringConcatArr" || cn === "msStringConcat") return node;
 		}
 	}
 	// Emit obj.toString() — pipeline resolves: builtinLower(primitives/enum) → extensionMethodLower(user ext)

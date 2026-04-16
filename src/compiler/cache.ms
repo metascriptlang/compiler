@@ -13,12 +13,12 @@
 //   writeJsonBuildInstructions   → writeProjectCache
 //   BuildCache                   → project cache file (key=value format)
 
-import { exec } from "std/process";
-import { exists, readFile, writeFile } from "std/fs";
-import { readFile } from "std/fs";
+import { exec, getEnv, clockMs } from "std/process";
+import { exists, readFile, writeFile, rename, copyFile, fileSize, remove, readDir } from "std/fs";
 import { ensureDir } from "./io";
 import { getCompilerName, modeFlags } from "./cc";
 import { djb2, fingerprint, hashToHex } from "std/hash";
+import { VERSION } from "./usage";
 
 // ===== Hash Functions =====
 
@@ -66,10 +66,12 @@ function sanitizePath(path: string): string {
 	let i = 0;
 	while (i < path.length) {
 		const ch = path.charAt(i);
-		if (ch === "/") { result = result + "_d_"; }
-		else if (ch === ".") { result = result + "_x_"; }
-		else if (ch === " ") { result = result + "_s_"; }
-		else { result = result + ch; }
+		result = result + match (ch) {
+			"/" => "_d_",
+			"." => "_x_",
+			" " => "_s_",
+			_ => ch,
+		};
 		i = i + 1;
 	}
 	return result;
@@ -85,12 +87,119 @@ export function fullCompileCmd(ccOption: number, mode: number, extraFlags: strin
 	return `${getCompilerName(ccOption, "")} -std=c11${modeFlags(mode)} ${extraFlags}`;
 }
 
-function computeFingerprint(srcPath: string, compileCmd: string): string {
+// Fingerprint folds in VERSION so that any msc release that changes runtime/*.h
+// (but not the .c bytes) still invalidates every entry — otherwise stale .o with
+// old header layout would be served. Also makes the global cache safe across upgrades.
+// Exported so parallel compile workers can compute per-item fingerprints explicitly
+// (avoids any shared module-state read-after-write races).
+export function computeFingerprint(srcPath: string, compileCmd: string): string {
 	const src = try readFile(srcPath) catch "";
-	return `${hashContent(src)}:${src.byteLength}:${compileCmd}`;
+	return `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}`;
 }
 
-let _lastFingerprint = "";
+// ===== Global Content-Addressed Cache =====
+//
+// Stores .o files keyed by fingerprint under ~/.metascript/cache/objects/.
+// Transparent wrapper around the local cache: second-chance lookup on local miss,
+// publish on successful compile. Safe across concurrent msc instances because
+// .o content is deterministic for a given fingerprint (tmp+rename atomic publish).
+
+// Return global cache dir, or "" if disabled (opt-out) or HOME unknown.
+function globalObjectsDir(): string {
+	if (getEnv("MSC_NO_GLOBAL_CACHE") !== "") return "";
+	const home = getEnv("HOME");
+	const base = home !== "" ? home : getEnv("USERPROFILE");
+	if (base === "") return "";
+	return `${base}/.metascript/cache/objects`;
+}
+
+// Convert a fingerprint string into a flat filename hash (stable, collision-safe).
+function fingerprintKey(fp: string): string {
+	return hashContent(fp);
+}
+
+// Path for an entry in the global cache. Empty string means "cache disabled".
+function globalOPath(fp: string): string {
+	const dir = globalObjectsDir();
+	if (dir === "") return "";
+	return `${dir}/${fingerprintKey(fp)}.o`;
+}
+
+// On local miss, try to restore from global. Returns true if a valid entry was copied in.
+// Best-effort: any failure (permission, corrupt entry, disk error) falls through silently.
+function tryRestoreFromGlobal(oFile: string, fp: string): boolean {
+	const src = globalOPath(fp);
+	if (src === "" || !exists(src)) return false;
+	// Size sanity: any real .o is >100 bytes. Truncated or empty = corrupt.
+	const size = fileSize(src);
+	if (size < 100) {
+		// Best-effort cleanup; ignore failure.
+		remove(src);
+		return false;
+	}
+	const copied = copyFile(src, oFile);
+	if (!copied.ok) return false;
+	// Verify local size matches what we copied from.
+	if (fileSize(oFile) !== size) {
+		remove(oFile);
+		return false;
+	}
+	// Write the local .fp sentinel so future runs hit the fast path.
+	writeFile(oFile + ".fp", fp);
+	return true;
+}
+
+// After a successful local compile, publish the .o to the global cache.
+// Atomic: write to a per-process tmp path + rename. The tmp suffix includes
+// clockMs() so two concurrent msc invocations compiling the same file never
+// share a tmp file (which would interleave bytes under "wb" truncate+write).
+// Best-effort: failures don't propagate; local cache still works.
+function populateGlobal(oFile: string, fp: string): void {
+	const dir = globalObjectsDir();
+	if (dir === "") return;
+	const dst = `${dir}/${fingerprintKey(fp)}.o`;
+	// If already populated by another process, skip.
+	if (exists(dst)) return;
+	ensureDir(dir);
+	const tmp = `${dst}.tmp.${clockMs()}`;
+	const copied = copyFile(oFile, tmp);
+	if (!copied.ok) return;
+	// Atomic swap. If it fails, clean up tmp.
+	const renamed = rename(tmp, dst);
+	if (!renamed.ok) remove(tmp);
+}
+
+// Called at msc startup: if the cache was populated by a different VERSION,
+// wipe the dir. Guards against stale entries after any upgrade path (msc upgrade,
+// brew, manual cp, downgrade). Also sweeps orphan .tmp.<ts> files left by
+// populateGlobal if an msc process was killed mid-copy. Idempotent, ~1ms.
+export function ensureVersionMarker(): void {
+	const dir = globalObjectsDir();
+	if (dir === "") return;
+	ensureDir(dir);
+	const marker = `${dir}/.version`;
+	const stored = try readFile(marker) catch "";
+	const entries = readDir(dir);
+	if (stored !== VERSION) {
+		// Mismatch — wipe .o entries and any orphan tmp files. Preserve .version
+		// itself so we don't need a second write; it will be overwritten below.
+		for (const e of entries) {
+			if (e.length === 0) continue;
+			if (e === ".version") continue;
+			if (e.charAt(e.length - 1) === "/") continue;
+			remove(`${dir}/${e}`);
+		}
+		writeFile(marker, VERSION);
+		return;
+	}
+	// Version matches — still sweep orphan .tmp.<ts> leftovers from crashed runs.
+	for (const e of entries) {
+		if (e.length === 0) continue;
+		// Match "<hash>.o.tmp.<ts>" — contains ".tmp." substring.
+		if (e.indexOf(".tmp.", 0) < 0) continue;
+		remove(`${dir}/${e}`);
+	}
+}
 
 // Remove a file if it exists (reference-aligned: tryRemoveFile).
 function tryRemoveFile(path: string): void {
@@ -101,23 +210,31 @@ function tryRemoveFile(path: string): void {
 
 // Check if cached .o is up-to-date.
 // Reference-aligned: addExternalFileToCompile — force bypass + tryRemoveFile on miss.
-export function isCompileCached(srcPath: string, oFile: string, compileCmd: string): boolean {
-	_lastFingerprint = computeFingerprint(srcPath, compileCmd);
-	if (_forceRebuild) {
-		tryRemoveFile(oFile);
-		return false;
-	}
+// Second-chance lookup in the global content-addressed cache on local miss.
+// The global cache is content-addressed (hermetic fingerprint), so it's safe to
+// consult even under _forceRebuild — reading a byte-identical .o out of the
+// global cache is semantically equivalent to recompiling. Users who want a
+// truly-from-scratch clang run can set MSC_NO_GLOBAL_CACHE=1.
+// Caller is responsible for passing the exact same fingerprint to writeCompileCache
+// on the miss path — compute it once via computeFingerprint and thread it through.
+export function isCompileCached(oFile: string, fp: string): boolean {
 	const fpFile = oFile + ".fp";
-	if (!exists(oFile) || !exists(fpFile)) return false;
-	const stored = try readFile(fpFile) catch "";
-	if (stored === _lastFingerprint) return true;
+	if (!_forceRebuild && exists(oFile) && exists(fpFile)) {
+		const stored = try readFile(fpFile) catch "";
+		if (stored === fp) return true;
+	}
+	// Local miss (or forceRebuild bypass of local) — try the global cache.
+	if (tryRestoreFromGlobal(oFile, fp)) return true;
 	tryRemoveFile(oFile);
 	return false;
 }
 
-// Write the fingerprint computed by the last isCompileCached call.
-export function writeCompileCache(oFile: string): void {
-	writeFile(oFile + ".fp", _lastFingerprint);
+// Write the fingerprint for a compiled .o. Also publishes to the global cache
+// (best-effort, silent on failure). Takes fingerprint explicitly so it's safe
+// to call from parallel workers without shared module state.
+export function writeCompileCache(oFile: string, fp: string): void {
+	writeFile(oFile + ".fp", fp);
+	populateGlobal(oFile, fp);
 }
 
 // ===== Project-Level Cache (Layer 2) =====
@@ -147,7 +264,7 @@ function getCompilerHash(ccOption: number): string {
 	if (_compilerHash !== "") return _compilerHash;
 	const name = getCompilerName(ccOption, "");
 	const tmpFile = getCacheDir() + "/_cc_version";
-	exec(name + " --version > " + tmpFile + " 2>&1");
+	exec(`${name} --version > ${tmpFile} 2>&1`);
 	const version = try readFile(tmpFile) catch "";
 	if (version.length > 0) {
 		_compilerHash = hashContent(version);

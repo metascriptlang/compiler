@@ -18,6 +18,7 @@ import { join } from "std/fs/path";
 // from OTHER files in the working tree are pre-existing, not caused by this import.
 import { cmdAdd, cmdRemove, cmdInstall, cmdLogin, cmdLogout, cmdWhoami, cmdPublish, cmdOrg } from "./compiler/package/index";
 import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compiler/upgrade";
+import { ensureVersionMarker } from "./compiler/cache";
 
 function requireFile(opts: CliOptions): void {
 	if (opts.inputFile === "") {
@@ -31,6 +32,11 @@ export function main(): number {
 	// Windows-only: delete stale msc.exe.bak-* files left by previous upgrades.
 	// No-op on Unix. Must run before any network/heavy work.
 	sweepUpgradeBackups();
+
+	// Global object-cache version check: wipes ~/.metascript/cache/objects/ if
+	// it was populated by a different msc VERSION. Guards against stale runtime
+	// .o entries after any upgrade path (msc upgrade, brew, manual cp). ~1ms.
+	ensureVersionMarker();
 
 	const opts = parseArgs();
 	const cmd = opts.command;

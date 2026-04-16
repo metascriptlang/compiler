@@ -44,7 +44,7 @@ import { CliOptions, Target } from "./options";
 import { writeOutput, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileCFile, linkObjects, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker } from "./cc";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
+import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
@@ -428,11 +428,35 @@ function registerIncludePaths(flags: string, paths: Set<string>): void {
 	}
 }
 
+// One work item for the parallel compile phase. All fields captured by the
+// spawn closure via per-closure env snapshot (lambda lifting allocates a fresh
+// env per iteration inside a loop — see project_lambda_lifting_loop_escape).
+interface CompileJob {
+	fullPath: string;
+	oFile: string;
+	cPath: string;         // original spec, used for error reporting
+	fileFlags: string;
+	fp: string;            // precomputed fingerprint; written post-compile
+}
+
 // Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
 // Returns space-separated .o file paths to add to the link list.
+//
+// Parallel architecture:
+//   1. GATHER (serial) — parse directives, dedup via _compiledOFiles, filter
+//      cache hits, precompute fingerprints.
+//   2. DISPATCH (parallel) — spawn one worker per cache miss. Each worker calls
+//      compileCFile() on its own thread. Under C backend this is real thread-
+//      level parallelism; under Bun-hosted bootstrap the spawn polyfill
+//      serializes (no speedup, still correct).
+//   3. COLLECT (serial, main thread) — waitFor each future in input order, check
+//      exit codes, publish cache entries, emit oFiles deterministically.
 function processCompileDirectives(directives: string, moduleDir: string, includePaths: Set<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, osTarget: string): string {
 	if (directives === "") return "";
-	let oFiles = "";
+
+	// === 1. GATHER ===
+	const jobs: CompileJob[] = [];
+	const hitOFiles: string[] = [];
 	let start = 0;
 	let idx = 0;
 	while (idx <= directives.length) {
@@ -468,39 +492,59 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 					exit(1);
 				}
 				const oFile = stableOFile(fullPath);
-				// Deduplicate: each .o compiled/linked once (@compile parity)
 				if (!_compiledOFiles.has(oFile)) {
-				_compiledOFiles.add(oFile);
-				// Merge global flags with per-file custom flags
-				let fileFlags = allFlags;
-				if (customFlags !== "") fileFlags = appendFlag(fileFlags, customFlags);
-				// Full compile command for fingerprint (includes compiler, -std, mode flags)
-				const cmdKey = fullCompileCmd(ccOption, mode, fileFlags);
-				// Fingerprint cache: skip recompilation if source + full command unchanged
-				let compileOk = true;
-				if (isCompileCached(fullPath, oFile, cmdKey)) {
-					if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile} ${dim("(cached)")}`);
-				} else {
-					if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile}`);
-					const ccCode = compileCFile(fullPath, oFile, fileFlags, mode, ccOption, ccBinary);
-					if (ccCode !== 0) {
-						if (osTarget === "solana") {
-							console.log(`  ${dim("skip")} @compile ${cPath} ${dim("(BPF unsupported)")}`);
-							compileOk = false;
-						} else {
-							console.log(`${error("error")}: @compile failed for ${fullPath} ${dim(`(exit ${ccCode})`)}`);
-							exit(1);
-						}
+					_compiledOFiles.add(oFile);
+					let fileFlags = allFlags;
+					if (customFlags !== "") fileFlags = appendFlag(fileFlags, customFlags);
+					const cmdKey = fullCompileCmd(ccOption, mode, fileFlags);
+					const fp = computeFingerprint(fullPath, cmdKey);
+					if (isCompileCached(oFile, fp)) {
+						if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile} ${dim("(cached)")}`);
+						hitOFiles.push(oFile);
 					} else {
-						writeCompileCache(oFile);
+						jobs.push({ fullPath, oFile, cPath, fileFlags, fp });
 					}
 				}
-				if (compileOk) oFiles = appendFlag(oFiles, oFile);
-			} // if (!_compiledOFiles.has)
 			}
 			start = idx + 1;
 		}
 		idx = idx + 1;
+	}
+
+	// === 2. DISPATCH (parallel) ===
+	if (verbose) {
+		for (const j of jobs) {
+			verboseLog(`  @compile ${j.fullPath} → ${j.oFile}`);
+		}
+	}
+	const futures: Promise<number>[] = [];
+	for (const j of jobs) {
+		futures.push(spawn(() => {
+			return compileCFile(j.fullPath, j.oFile, j.fileFlags, mode, ccOption, ccBinary);
+		}));
+	}
+	const exitCodes: number[] = [];
+	for (const f of futures) exitCodes.push(waitFor(f));
+
+	// === 3. COLLECT (serial from main thread) ===
+	let oFiles = "";
+	for (const o of hitOFiles) oFiles = appendFlag(oFiles, o);
+	let ci = 0;
+	while (ci < jobs.length) {
+		const j = jobs[ci];
+		const code = exitCodes[ci];
+		if (code !== 0) {
+			if (osTarget === "solana") {
+				console.log(`  ${dim("skip")} @compile ${j.cPath} ${dim("(BPF unsupported)")}`);
+				ci = ci + 1;
+				continue;
+			}
+			console.log(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
+			exit(1);
+		}
+		writeCompileCache(j.oFile, j.fp);
+		oFiles = appendFlag(oFiles, j.oFile);
+		ci = ci + 1;
 	}
 	return oFiles;
 }

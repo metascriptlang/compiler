@@ -132,7 +132,7 @@ void msNumberArraySetLenUninit(msNumberArray* arr, int64_t newLen);
 /* ===== String Array ===== */
 
 msStringArray msStringArrayNew(int64_t cap);
-msStringArray msStringArrayFrom(int64_t count, ...);
+msStringArray msStringArrayFromArr(const msString* arr, int64_t count);
 void msStringArrayDestroy(msStringArray* arr);
 void msStringArrayPush(msStringArray* arr, msString value);
 msString msStringArrayPop(msStringArray* arr);
