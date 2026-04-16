@@ -1,4 +1,3 @@
-@passC("-I.");
 // Platform-specific @compile (dispatch, pool, selectors) moved to src/compiler/compile.ms
 // — the compiler knows osTarget and picks only the right files.
 @compile("runtime/promise/combinator.c");

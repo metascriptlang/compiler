@@ -368,8 +368,15 @@ msStringArray msStringArraySlice(msStringArray* arr, int64_t start, int64_t end)
 	int64_t newLen = end - start;
 	msStringArray result = msStringArrayNew(newLen);
 	for (int64_t i = 0; i < newLen; i++) {
-		/* Copy strings (they may be literals — just copy the struct) */
-		result.p->data[i] = arr->p->data[start + i];
+		/* Deep-copy non-literal strings so result owns its elements independently.
+		   Without this, destroying either array would free the shared payload and
+		   corrupt the other (use-after-free). Same rule as msStringArrayPush/From. */
+		msString s = arr->p->data[start + i];
+		if (s.p != NULL && !msIsLiteral(s)) {
+			result.p->data[i] = msStringNew(s.p->data, s.len);
+		} else {
+			result.p->data[i] = s;
+		}
 	}
 	result.len = newLen;
 	return result;
@@ -379,11 +386,14 @@ msStringArray msStringArrayConcat(msStringArray* a, msStringArray b) {
 	int64_t totalLen = a->len + b.len;
 	if (totalLen == 0) return MS_EMPTY_STRING_ARRAY;
 	msStringArray result = msStringArrayNew(totalLen);
+	/* Deep-copy non-literal strings — same rule as Slice/Push/From. */
 	for (int64_t i = 0; i < a->len; i++) {
-		result.p->data[i] = a->p->data[i];
+		msString s = a->p->data[i];
+		result.p->data[i] = (s.p != NULL && !msIsLiteral(s)) ? msStringNew(s.p->data, s.len) : s;
 	}
 	for (int64_t i = 0; i < b.len; i++) {
-		result.p->data[a->len + i] = b.p->data[i];
+		msString s = b.p->data[i];
+		result.p->data[a->len + i] = (s.p != NULL && !msIsLiteral(s)) ? msStringNew(s.p->data, s.len) : s;
 	}
 	result.len = totalLen;
 	return result;
