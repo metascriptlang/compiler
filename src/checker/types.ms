@@ -5,6 +5,52 @@ import { bareAfterDelim, splitTopLevel } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { Type, TypeKind, TypeFlag, CallingConvention, AttachedOp } from "../ast/node";
 
+// =====================================================================
+// Type Storage Schema — what each Type field means per TypeKind
+// =====================================================================
+// The Type struct is intentionally flat (one shape, all fields present).
+// Field meaning is TypeKind-dependent. This schema is the single source
+// of truth for storage access. **Do not bypass it.**
+//
+//   kind           — the TypeKind enum value
+//   typeName       — nominal name (e.g. "Promise", "SpawnHandle", "Result", struct name)
+//   typeNames      — field/variant names (Struct fields, Union variants, Result ["ok","value","error"])
+//   typeChildren   — type args, field types, variant types, parameter types
+//   typeReturn     — function return type; alias target; alternate uninstantiated body
+//   typeExtra      — second companion slot (DiscriminatedUnion enum, Result's err for GI)
+//   typeFlags      — bitset of TypeFlag (IsStruct, HasAsgn, AwaitableAffine, AwaitableScopeBound, ...)
+//
+// ----- Awaitable types (Promise, @awaitable-annotated) -----
+// Represented as: kind = GenericInstance, typeName = "Promise" | <user>,
+//                 typeChildren[0] = inner T.
+// All awaitables share a single surface type: `Promise<T>`. Origin is tracked
+// on `typeFlags` via AwaitableAffine + AwaitableScopeBound bits (set by spawn
+// and @affineAwaitable decorators). Semantic queries (isAwaitable,
+// isAffineAwaitable) abstract over both representations.
+//
+// **DO NOT READ `.typeReturn` for awaitable unwrap.** Use `awaitedType(t)`.
+// **DO NOT index `.typeChildren[0]` for awaitable unwrap.** Use `awaitedType(t)`.
+// **DO NOT check `.typeName` for affine rules.** Use `isAffineAwaitable(t)`.
+//
+// The semantic query layer below (`peelThrough`, `isAwaitable`, `awaitedType`,
+// `isAffineAwaitable`) is the ONLY supported interface. Adding a new
+// awaitable-related question? Add a function here; never peek at storage from
+// outside this file.
+//
+// ----- Other notable TypeKinds -----
+//   Alias          — typeName = alias name, typeReturn = aliased target
+//   Distinct       — typeName = distinct name, typeChildren[0] = base type
+//   GenericInstance— typeName = base name, typeChildren = type args, typeReturn = instantiated body
+//   Function       — typeChildren = param types, typeReturn = return type, typeNames = param names
+//   Struct         — typeName = struct name, typeNames = field names, typeChildren = field types
+//   Union          — typeChildren = variant types, typeNames[0] = discriminant (if DU)
+//   Result         — typeChildren = [ok, err] (GI form also), typeReturn/typeExtra = ok/err fallbacks
+//   Ref/Ptr/Borrow — typeReturn = referent type
+//   Array/Span     — typeReturn = element type
+//   SizedArray     — typeReturn = element, typeFlags upper bits = size
+//
+// =====================================================================
+
 // ===== Target Configuration (Implementation parity) =====
 // Module-level state set once at startup. Defaults to 64-bit.
 
@@ -195,46 +241,24 @@ export function createPromise(innerType: Type): Type {
 	return createGenericInstance(base, [innerType]);
 }
 
-// PARALOCK Phase 1: SpawnHandle<T> is a distinct affine type produced by spawn(...).
-// Structurally identical to Promise<T> at the runtime/transform level (same GenericInstance
-// shape, same typeChildren[0] = inner type), so isPromise() accepts it and downstream
-// transform passes (spawnLower, asyncBridge, builtinLower, pointerParam) work unchanged.
-// The nominal distinction lives in isSpawnHandle() + the compat.ms upcast rule.
+// Affine, scope-bound `Promise<T>` produced by `spawn(...)`. Surface type is
+// plain `Promise<T>` — developers never learn a second name. The affine and
+// scope-bound semantics ride entirely on typeFlags (AwaitableAffine +
+// AwaitableScopeBound), propagated through createGenericInstance onto every
+// instance. PARALOCK R1-R6 rules read these via isAffineAwaitable; compat.ms
+// implements the implicit upcast to a plain Promise (strips the flags).
 export function createSpawnHandle(innerType: Type): Type {
 	const base = emptyType();
 	base.kind = TypeKind.Struct;
-	base.typeName = "SpawnHandle";
+	base.typeName = "Promise";
 	base.typeNames = [];
 	base.typeChildren = [];
+	// Flag bits = source of truth for affine + scope-bound semantics.
+	// createGenericInstance propagates base.typeFlags onto the produced
+	// GenericInstance so isAffineAwaitable(t) can detect spawn-origin Promises
+	// anywhere they flow.
+	base.typeFlags = (TypeFlag.AwaitableAffine | TypeFlag.AwaitableScopeBound) as int32;
 	return createGenericInstance(base, [innerType]);
-}
-
-// Permissive: matches both Promise<T> and SpawnHandle<T>.
-// Load-bearing for transform passes that detect spawn results by type.
-// Callers that need the strict nominal distinction must use isSpawnHandle() instead.
-export function isPromise(t: Type): boolean {
-	if (t === null) return false;
-	if (t.kind !== TypeKind.GenericInstance) return false;
-	return t.typeName === "Promise" || t.typeName === "SpawnHandle";
-}
-
-// Strict: matches only SpawnHandle<T>. Used by the affine checker.
-export function isSpawnHandle(t: Type): boolean {
-	if (t === null) return false;
-	return t.kind === TypeKind.GenericInstance && t.typeName === "SpawnHandle";
-}
-
-// Strict: matches only Promise<T>, NOT SpawnHandle. Used by opt-out warning
-// when users explicitly annotate a spawn binding as Promise<T> to strip affinity.
-export function isStrictPromise(t: Type): boolean {
-	if (t === null) return false;
-	return t.kind === TypeKind.GenericInstance && t.typeName === "Promise";
-}
-
-export function getPromiseInner(t: Type): Type {
-	if (t === null) return null;
-	if (t.kind === TypeKind.GenericInstance && t.typeChildren.length > 0) return t.typeChildren[0];
-	return t.typeReturn;
 }
 
 // Iterator<T> — return type of function* generators. Wraps yield type T.
@@ -293,10 +317,88 @@ export function getResultErrType(t: Type): Type {
 	return t.typeExtra;
 }
 
-export function isPromiseResult(t: Type): boolean {
-	if (!isPromise(t)) return false;
-	const inner = getPromiseInner(t);
-	return inner !== null && isResult(inner);
+// =====================================================================
+// REPROMISE T1 — Semantic query layer for awaitable types
+// =====================================================================
+// Single gateway for every question about Promise<T> / SpawnHandle<T> /
+// @awaitable-annotated types. Callers never peek at raw storage.
+//
+// Key design points:
+//   - `peelThrough` handles Alias/Distinct wrappers but NOT GenericInstance
+//     (for awaitable shape queries, GenericInstance IS the answer).
+//   - The nominal check ("Promise" / "SpawnHandle") is the permanent source
+//     of truth for these two stdlib awaitables. Flag bits flag affinity.
+//   - Future @awaitable-annotated types from stdlib plug in via the registry
+//     (T2.6 — currently a stub awaiting collect-pass wiring).
+// =====================================================================
+
+// PeelFlag — bitmask controlling which Type wrappers `peelThrough` unwraps.
+// Matches the reference `skipTypes` peel mask semantics.
+export enum PeelFlag {
+	Alias = 1,       // bit 0 — peel TypeKind.Alias
+	Distinct = 2,    // bit 1 — peel TypeKind.Distinct
+}
+
+export const PEEL_ALIAS: int32 = 1;
+export const PEEL_DISTINCT: int32 = 2;
+export const PEEL_ALL: int32 = 3;
+
+// Universal peeler: strip transparent wrappers per the mask.
+// Does NOT peel GenericInstance — for shape queries, GenericInstance IS the answer
+// (e.g. Promise<T> is a GenericInstance we want to inspect, not peel past).
+// Returns the input unchanged if no layer matches the mask.
+export function peelThrough(t: Type, mask: int32): Type {
+	if (t === null) return null;
+	let cur = t;
+	// Fixed-point loop — keep peeling until no layer matches the mask.
+	while (true) {
+		let next: Type = cur;
+		if (cur.kind === TypeKind.Alias && (mask & PEEL_ALIAS) !== 0
+			&& cur.typeReturn !== null) {
+			next = cur.typeReturn;
+		} else if (cur.kind === TypeKind.Distinct && (mask & PEEL_DISTINCT) !== 0
+			&& cur.typeChildren !== null && cur.typeChildren.length > 0
+			&& cur.typeChildren[0] !== null) {
+			next = cur.typeChildren[0];
+		}
+		if (next === cur) return cur;
+		cur = next;
+	}
+}
+
+// isAwaitable — the canonical "can we await this?" question.
+// Returns true for Promise<T>, SpawnHandle<T>, and future @affineAwaitable types
+// (detected by the AwaitableAffine flag bit set by `createGenericInstance`).
+// Peels through Alias wrappers so `type P = Promise<int>; P` still answers true.
+export function isAwaitable(t: Type): boolean {
+	if (t === null) return false;
+	const p = peelThrough(t, PEEL_ALIAS);
+	if (p === null || p.kind !== TypeKind.GenericInstance) return false;
+	if (p.typeName === "Promise") return true;
+	// REPROMISE T2 Stage A: @affineAwaitable-annotated types carry both bits.
+	if ((p.typeFlags & (TypeFlag.AwaitableAffine as int32)) !== 0) return true;
+	return false;
+}
+
+// awaitedType — the T inside an Awaitable<T>. Returns null for non-awaitables
+// or shape-degenerate awaitables (e.g. typeChildren empty).
+export function awaitedType(t: Type): Type {
+	if (t === null) return null;
+	const p = peelThrough(t, PEEL_ALIAS);
+	if (!isAwaitable(p)) return null;
+	if (p.typeChildren !== null && p.typeChildren.length > 0) return p.typeChildren[0];
+	// Fallback for edge cases where a stub awaitable has no type arg recorded yet.
+	return p.typeReturn;
+}
+
+// isAffineAwaitable — an awaitable carrying affine consumption semantics
+// (SpawnHandle, @affineAwaitable types). Reads the flag bit set by T2.
+// Used by PARALOCK R1-R6 affine checker rules.
+export function isAffineAwaitable(t: Type): boolean {
+	if (t === null) return false;
+	const p = peelThrough(t, PEEL_ALIAS);
+	if (p === null) return false;
+	return (p.typeFlags & (TypeFlag.AwaitableAffine as int32)) !== 0;
 }
 
 export function createTypeRef(name: string): Type {
@@ -1272,11 +1374,9 @@ function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): 
 	// Map<K,V> (formal, with GenericParam children) vs Map<string,string> (concrete)
 	// Base type must match: Map<K,V> unifies with Map<string,string> but NOT Set<string>
 	if (formal.kind === TypeKind.GenericInstance && concrete.kind === TypeKind.GenericInstance) {
-		// PARALOCK: SpawnHandle<T> is structurally identical to Promise<T> for generic inference.
-		// The nominal distinction (affine tracking) is preserved — only unification is relaxed.
-		const namesMatch = formal.typeName === concrete.typeName
-			|| (formal.typeName === "Promise" && concrete.typeName === "SpawnHandle")
-			|| (formal.typeName === "SpawnHandle" && concrete.typeName === "Promise");
+		// Affine and plain Promises share typeName "Promise" — their distinction
+		// is in flag bits, not in the name. Simple equality covers both.
+		const namesMatch = formal.typeName === concrete.typeName;
 		if (!namesMatch) return;
 		const limit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
 		for (let gi = 0; gi < limit; gi += 1) {

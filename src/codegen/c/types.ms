@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType, substituteType, createStruct, needsRC } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, substituteType, createStruct, needsRC } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
 import { Node, CallExprData, Type, TypeKind, SymbolKind } from "../../ast/node";
@@ -336,7 +336,7 @@ export function ccgIntroducedPtr(t: Type): boolean {
 		TypeKind.Tuple => getTypeSize(inner) > PTR_THRESHOLD,
 		TypeKind.Array => true,  // arrays always by pointer: mutable by default, realloc invalidates caller copy
 		TypeKind.Union | TypeKind.Span => true,
-		TypeKind.GenericInstance => !isPromise(inner),
+		TypeKind.GenericInstance => !isAwaitable(inner),
 		_ => false,
 	};
 }
@@ -573,7 +573,7 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		return ptrType;
 	}
 	if (isResult(t)) return genResultType(g, t);
-	if (isPromise(t)) return genFutureType(g, t);
+	if (isAwaitable(t)) return genFutureType(g, t);
 	if (k === TypeKind.Union) return genUnionType(g, t);
 	if (k === TypeKind.Tuple) return genTupleType(g, t);
 	if (k === TypeKind.Unknown) return "void*";
@@ -1108,7 +1108,7 @@ export function genResultType(g: CGen, t: Type): string {
 // ===== Future Type Generation =====
 
 export function genFutureType(g: CGen, t: Type): string {
-	const innerType = getPromiseInner(t);
+	const innerType = awaitedType(t);
 	const key = typeKey(t);
 
 	// Promise<void> → msFuture_void* (typedef of msFutureBase, predefined in future.h)

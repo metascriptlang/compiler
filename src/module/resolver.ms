@@ -9,7 +9,7 @@
 //
 // Pure function — no filesystem access. The loader tries candidates in order.
 
-import { dirname, join, normalize } from "std/fs/path";
+import { dirname, join, normalize, isAbsolute } from "std/fs/path";
 // (utils/string imports removed — using native .slice)
 
 // ===== Backend Enum =====
@@ -98,7 +98,7 @@ export function resolveImportWithConfig(specifier: string, fromFile: string, con
 	}
 
 	// Classify and resolve
-	if (spec.length > 0 && spec.charAt(0) === "/") {
+	if (isAbsolute(spec)) {
 		// Absolute path (e.g. from alias rewriting for cached packages)
 		result = addExtensionCandidates(result, spec, config.extensions);
 	} else if (isRelative(spec)) {

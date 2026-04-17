@@ -1,4 +1,4 @@
-import { unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity, isPromiseResult } from "./types";
+import { unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable } from "./compat";
 import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag } from "./symbol";
 import { IdentCache } from "./idents";
@@ -822,16 +822,6 @@ export function createModuleContextWithCache(graph: ModuleGraph, mod: Module, ca
 	const ctx = createModuleContext(graph, mod);
 	ctx.table.identCache = cache;
 	return ctx;
-}
-
-// ===== Promise<Result<T,E>> Context Check =====
-
-export function isInAsyncPromiseResult(ctx: CheckerContext): boolean {
-	return ctx.currentFunction !== null
-		&& hasFlag(ctx.currentFunction, SymbolFlag.Async)
-		&& ctx.currentFunction.symbolType !== null
-		&& ctx.currentFunction.symbolType.kind === TypeKind.Function
-		&& isPromiseResult(ctx.currentFunction.symbolType.typeReturn);
 }
 
 // ===== Error Collection =====

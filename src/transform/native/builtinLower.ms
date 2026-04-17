@@ -13,7 +13,7 @@
 // (generateJsonParseInstance/generateJsonStringifyInstance). Transform handles untyped + primitives.
 
 import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, NewExprData, Type, TypeKind } from "../../ast/node";
-import { isNumeric, createResult, createArray, createPrimitive, stringType, unknownType, unwrapRef, typeNameOf, isResult, isPromise, getPromiseInner, getResultOkType, getResultErrType } from "../../checker/types";
+import { isNumeric, createResult, createArray, createPrimitive, stringType, unknownType, unwrapRef, typeNameOf, isResult, isAwaitable, awaitedType, getResultOkType, getResultErrType } from "../../checker/types";
 import { findExtension } from "../../checker/context";
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
@@ -298,7 +298,7 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	if (builtinKind === "PromiseThen" || builtinKind === "PromiseCatch" || builtinKind === "PromiseFinally") {
 		if (cd.callee.kind === NodeKind.MemberExpr && cd.arguments.length >= 1) {
 			const me = cd.callee.data as MemberExprData;
-			const innerType = getPromiseInner(me.object.nodeType);
+			const innerType = awaitedType(me.object.nodeType);
 			const cb = cd.arguments[0];
 			return match (builtinKind) {
 				"PromiseThen" => {
@@ -342,7 +342,7 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 		// Worker memcpys the boxed result into the typed-inline fut, frees box.
 		// Downstream waitFor/await reads via msWaitForStruct (typed inline read).
 		// Primitive/void returns: spawn(fn) → msSpawn(fn) (legacy boxed path).
-		const innerType = getPromiseInner(node.nodeType);
+		const innerType = awaitedType(node.nodeType);
 		if (isStructLikeType(innerType)) {
 			const futAlloc = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
 			futAlloc.nodeType = innerType;  // codegen reads arg[0].nodeType for sizeof(T)
@@ -608,7 +608,7 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 // Rewrites new Promise(executor) → msPromiseNew(executor)
 
 function lowerNewPromise(node: Node): Node {
-	if (node.nodeType !== null && isPromise(node.nodeType)) {
+	if (node.nodeType !== null && isAwaitable(node.nodeType)) {
 		const d = node.data as NewExprData;
 		if (d.newArguments.length === 1) {
 			const loc = node.location;

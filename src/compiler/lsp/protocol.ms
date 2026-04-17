@@ -268,10 +268,16 @@ export function lspErrorResponse(id: string, code: number, message: string): str
 
 export function lspUriToPath(uri: string): string {
 	// "file:///Users/foo/bar.ms" → "/Users/foo/bar.ms"
+	// "file:///C:/Users/foo.ms" → "C:/Users/foo.ms" (drop leading slash before drive)
 	const prefix = "file://";
 	if (uri.byteLength > prefix.byteLength) {
 		if (uri.slice(0, prefix.byteLength) === prefix) {
-			return uri.slice(prefix.byteLength, uri.byteLength);
+			const stripped = uri.slice(prefix.byteLength, uri.byteLength);
+			// Windows: "/C:/..." → "C:/..." (RFC 8089 file URIs)
+			if (stripped.length >= 3 && stripped.charAt(0) === "/" && stripped.charAt(2) === ":") {
+				return stripped.slice(1, stripped.length);
+			}
+			return stripped;
 		}
 	}
 	return uri;

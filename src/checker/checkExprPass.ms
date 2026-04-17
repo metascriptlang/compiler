@@ -3,9 +3,9 @@
 
 import { Node, NodeKind, NodeData, createNode, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isPromise, isSpawnHandle, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, createEnumLiteral } from "./types";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, createEnumLiteral } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult, findExportedSymbol } from "./context";
+import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol } from "./context";
 import {
 	isAssignable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -205,7 +205,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			// Reuse check is keyed by symbolConsumeKey (name + declaration site) so
 			// shadowed bindings don't false-positive. First-await is OK because the
 			// AwaitExpr handler marks the key AFTER its inner checkExpr returns.
-			if (sym.symbolType !== null && isSpawnHandle(sym.symbolType)
+			if (sym.symbolType !== null && isAffineAwaitable(sym.symbolType)
 				&& isConsumedName(ctx.affineTracker, symbolConsumeKey(sym))
 				&& ctx.initTracker.leftPartOfAsgn <= 0) {
 				addError(ctx,
@@ -794,11 +794,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 				}
 			} else {
 				checkExpr(ctx, d.elements[0], elemExpected);
-				const elemType = d.elements[0].nodeType;
+				let elemType = d.elements[0].nodeType;
 				let i = 1;
 				while (i < d.elements.length) { checkExpr(ctx, d.elements[i], elemExpected); i += 1; }
-				// PARALOCK Phase 1: an array literal with SpawnHandle-typed identifier
-				// elements consumes those handles — the array is the new owner (typically
+				// PARALOCK: an array literal with affine-Promise identifier elements
+				// consumes those handles — the array is the new owner (typically
 				// passed to Promise.all or similar homogeneous consumer). The individual
 				// handles cannot be awaited again because the array itself will be.
 				// This covers the `await Promise.all([h1, h2])` pattern.
@@ -806,7 +806,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 				while (ei < d.elements.length) {
 					const el = d.elements[ei];
 					const elType = el.nodeType;
-					if (elType !== null && isSpawnHandle(elType) && el.kind === NodeKind.Identifier) {
+					if (elType !== null && isAffineAwaitable(elType) && el.kind === NodeKind.Identifier) {
 						const elSym = el.resolvedSym;
 						if (elSym !== null) {
 							markConsumedName(ctx.affineTracker, symbolConsumeKey(elSym));
@@ -814,6 +814,34 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 						}
 					}
 					ei = ei + 1;
+				}
+				// PARALOCK §5.4 — mixed awaitable elements: if the first element is an
+				// affine Promise (from spawn) but any other element is a plain Promise
+				// (from async function, actor CALL, etc.), unify the element type to the
+				// plain Promise — strip affine flags via implicit upcast. Without this,
+				// downstream lowering treats the array as affine-homogeneous and
+				// misinterprets the plain-Promise element (runtime misaligned-address
+				// crash observed in `[spawn(f), fetchData()]`). Only applies when no
+				// contextual element type is forcing a specific shape.
+				if (elemExpected === null && elemType !== null && isAwaitable(elemType)) {
+					const inner0 = awaitedType(elemType);
+					let hasAffine = isAffineAwaitable(elemType);
+					let hasPlain = isAwaitable(elemType) && !hasAffine;
+					let ej = 1;
+					while (ej < d.elements.length) {
+						const ejType = d.elements[ej].nodeType;
+						if (ejType !== null && isAwaitable(ejType)) {
+							if (isAffineAwaitable(ejType)) hasAffine = true;
+							else hasPlain = true;
+						}
+						ej = ej + 1;
+					}
+					if (hasAffine && hasPlain && inner0 !== null) {
+						elemType = createPromise(inner0);
+						addWarning(ctx,
+							"affine Promise flags stripped in mixed array — affine tracking dropped (PARALOCK §5.4)",
+							node.location.line, node.location.column);
+					}
 				}
 				// Reference parity (semArrayConstr): error only on too-many elements.
 				// Too-few is allowed at literal level; type compatibility catches mismatches.
@@ -842,10 +870,15 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 		},
 		NodeKind.TypeAssertion => {
 			let d = node.data as TypeAssertionData;
-			checkExpr(ctx, d.asExpr, null);
-			let srcType = d.asExpr.nodeType;
 			const asLoc = node.typeExpr !== null ? node.typeExpr.location : node.location;
 			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx, asLoc.line, asLoc.column) : unknownType();
+			// TS parity: `expr as T` propagates T as contextual type to expr.
+			// Critical for object literals: `{ a: 1 } as Foo` must construct a Foo
+			// (not an anonymous struct that codegen then can't cast to Foo).
+			// `as unknown` is a type-system escape hatch — don't use it as context.
+			const innerExpected = (targetType.kind !== TypeKind.Unknown) ? targetType : null;
+			checkExpr(ctx, d.asExpr, innerExpected);
+			let srcType = d.asExpr.nodeType;
 			// Record type annotation position for LSP
 			resolveTypeExpr(node.typeExpr, ctx);
 			// General rule: `expr as unknown as T` → collapse to `expr as T`.
@@ -901,10 +934,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			const d = node.data as AwaitExprData;
 			checkExpr(ctx, d.awaitArg, null);
 			const argType = d.awaitArg.nodeType;
-			if (argType !== null && isPromise(argType)) {
-				const promiseInner = getPromiseInner(argType);
+			if (argType !== null && isAwaitable(argType)) {
+				const promiseInner = awaitedType(argType);
 				node.nodeType = promiseInner !== null ? promiseInner : unknownType();
-				// PARALOCK Phase 1: consuming a SpawnHandle-typed identifier records on
+				// PARALOCK Phase 1: consuming an affine-awaitable identifier records on
 				// TWO channels:
 				//   1. Branch-aware tracker (markConsumedName) — drives reuse detection
 				//      (R2/E3) path-sensitively, so `if { await h; return; } await h`
@@ -912,23 +945,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 				//   2. Monotonic symbol flag (markConsumed) — ensures scope-exit check
 				//      passes for handles consumed on any branch, including exiting
 				//      branches whose tracker state gets rolled back by the merge.
-				if (isSpawnHandle(argType) && d.awaitArg.kind === NodeKind.Identifier) {
+				if (isAffineAwaitable(argType) && d.awaitArg.kind === NodeKind.Identifier) {
 					const idSym = d.awaitArg.resolvedSym;
 					if (idSym !== null) {
 						markConsumedName(ctx.affineTracker, symbolConsumeKey(idSym));
 						markConsumed(idSym);
-					}
-				}
-				// V2: in async fn returning Promise<Result<T,E>>, bare await on non-Result promise is error.
-				// Use getPromiseInner (not the raw typeReturn field) so that GenericInstance
-				// promise-likes — both Promise<T> and SpawnHandle<T> — are checked via their
-				// typeChildren[0] inner type. Reaching into typeReturn directly misses the
-				// inner Result on any generic-instance promise built via createPromise /
-				// createSpawnHandle, causing a false-positive rule fire.
-				if (!ctx.inTryExpr && isInAsyncPromiseResult(ctx)) {
-					const awaitedInner = getPromiseInner(argType);
-					if (awaitedInner === null || !isResult(awaitedInner)) {
-						addError(ctx, "await on non-Result Promise must be guarded with 'try await ... catch ...' in function returning Promise<Result<T,E>>", node.location.line, node.location.column);
 					}
 				}
 				return node.nodeType;
@@ -954,7 +975,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			// Ownership transfers out of the current scope, so the binding must
 			// not be awaited again — same consumption semantics as `await h`.
 			const moveArgType = d.moveArg.nodeType;
-			if (moveArgType !== null && isSpawnHandle(moveArgType) && d.moveArg.kind === NodeKind.Identifier) {
+			if (moveArgType !== null && isAffineAwaitable(moveArgType) && d.moveArg.kind === NodeKind.Identifier) {
 				const idSym = d.moveArg.resolvedSym;
 				if (idSym !== null) {
 					markConsumedName(ctx.affineTracker, symbolConsumeKey(idSym));
@@ -1680,7 +1701,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		// PARALOCK Phase 1: passing a SpawnHandle identifier as a function argument
 		// counts as consumption. For overloaded calls this happens inside the
 		// overload resolver's commit step instead (see resolveOverloadCall).
-		if (argType !== null && isSpawnHandle(argType) && d.arguments[ai].kind === NodeKind.Identifier) {
+		if (argType !== null && isAffineAwaitable(argType) && d.arguments[ai].kind === NodeKind.Identifier) {
 			const argSym = d.arguments[ai].resolvedSym;
 			if (argSym !== null) {
 				markConsumedName(ctx.affineTracker, symbolConsumeKey(argSym));
@@ -1751,7 +1772,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 	// PARALOCK Phase 1: spawn now produces the distinct SpawnHandle<T> type.
 	// SpawnHandle<T> is nominally distinct from Promise<T> (for affine tracking) but
 	// structurally identical (typeChildren[0] = inner type), so downstream transforms
-	// that call isPromise() still recognize it, and compat.ms upcasts it to Promise<T>
+	// that call isAwaitable() still recognize it, and compat.ms upcasts it to Promise<T>
 	// for assignability so existing code (Promise.all, explicit Promise<T> annotations) works.
 	if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "PromiseSpawn"
 		&& argTypes.length >= 1 && argTypes[0] !== null && argTypes[0].kind === TypeKind.Function) {
@@ -2242,7 +2263,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node): 
 	// Done AFTER Pass 2 so we only consume once (not once per pass).
 	for (const arg of args) {
 		const at = arg.nodeType;
-		if (at !== null && isSpawnHandle(at) && arg.kind === NodeKind.Identifier) {
+		if (at !== null && isAffineAwaitable(at) && arg.kind === NodeKind.Identifier) {
 			const argSym = arg.resolvedSym;
 			if (argSym !== null) {
 				markConsumedName(ctx.affineTracker, symbolConsumeKey(argSym));

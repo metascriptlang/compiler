@@ -27,7 +27,7 @@ import {
 	makeAssign, makeBinary, makeTryCatch, makeContinue, syntheticToken, extractBodyStmts, collectDeclNames,
 } from "../util";
 import { NameSet, createNameSet, nameSetAdd } from "../context";
-import { createPromise, createFunction, createPtr, createPrimitive, voidType, unknownType, booleanType, numberType, isPromise, getPromiseInner } from "../../checker/types";
+import { createPromise, createFunction, createPtr, createPrimitive, voidType, unknownType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
 import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, makeStateAssign } from "./generatorLower";
 import { stmtCountAfter } from "../testUtil";
 
@@ -308,7 +308,7 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 			const varName = sc.items[prevIdx].yieldVarName;
 			let varType = sc.items[prevIdx].yieldVarType;
 			// Defensive: if yieldVarType is still a Promise wrapper, extract inner type
-			if (varType !== null && isPromise(varType)) varType = getPromiseInner(varType);
+			if (varType !== null && isAwaitable(varType)) varType = awaitedType(varType);
 			const prevYfType = promiseTypeFor(varType);
 			const readFn = readFnForAwait(varType);
 			let readExpr: Node = null as unknown as Node;
@@ -475,7 +475,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type): Node {
 			const collected = findVarType(varTypes, sc.items[si].yieldVarName);
 			if (collected !== null) {
 				// Collected type may be Promise<T> from async call return type — extract T
-				sc.items[si].yieldVarType = isPromise(collected) ? getPromiseInner(collected) : collected;
+				sc.items[si].yieldVarType = isAwaitable(collected) ? awaitedType(collected) : collected;
 			}
 		}
 	}
@@ -693,7 +693,7 @@ function getFnReturnInner(fnNode: Node): Type {
 	if (fnNode === null || fnNode.nodeType === null) return null as unknown as Type;
 	const fnType = fnNode.nodeType;
 	if (fnType.kind !== TypeKind.Function || fnType.typeReturn === null) return null as unknown as Type;
-	if (isPromise(fnType.typeReturn)) return getPromiseInner(fnType.typeReturn);
+	if (isAwaitable(fnType.typeReturn)) return awaitedType(fnType.typeReturn);
 	return null as unknown as Type;
 }
 

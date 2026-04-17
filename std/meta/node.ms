@@ -22,6 +22,9 @@ export enum TypeKind {
 	StringLiteral,
 	EnumLiteral,
 	Conditional,
+	// Added by the peelThrough work in src/checker/types.ms — transparent type
+	// alias wrapper that peelThrough strips when PEEL_ALIAS mask is set.
+	Alias,
 }
 
 // ===== Calling Convention =====

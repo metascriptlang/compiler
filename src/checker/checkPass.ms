@@ -4,14 +4,17 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { unknownType, charType, float64Type, voidType, createFunction, typeNameOf, isPromise, isSpawnHandle, isStrictPromise, getPromiseInner, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
+import { unknownType, charType, float64Type, voidType, createFunction, createPromise, typeNameOf, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
-import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
+import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/fs";
+import { getEnv } from "std/process";
+import { resolveRuntimeDir } from "../utils/path";
+import { join } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { globalImports } from "./prelude";
@@ -62,7 +65,7 @@ function formatTypeBrief(t: Type): string {
 // the pass that owns the scope lifecycle.
 function checkAffineConsumption(ctx: CheckerContext, scope: Ptr<Scope>, tracker: AffineTracker): void {
 	for (const sym of scope.symbols) {
-		if (sym !== null && sym.symbolType !== null && isSpawnHandle(sym.symbolType)) {
+		if (sym !== null && sym.symbolType !== null && isAffineAwaitable(sym.symbolType)) {
 			const key = symbolConsumeKey(sym);
 			const consumed = hasFlag(sym, SymbolFlag.Consumed) || isConsumedName(tracker, key);
 			if (!consumed) {
@@ -95,7 +98,7 @@ function collectVisibleSpawnKeys(scope: Ptr<Scope>): string[] {
 	let s = scope;
 	while (s !== null) {
 		for (const sym of s.symbols) {
-			if (sym !== null && sym.symbolType !== null && isSpawnHandle(sym.symbolType)) {
+			if (sym !== null && sym.symbolType !== null && isAffineAwaitable(sym.symbolType)) {
 				result.push(symbolConsumeKey(sym));
 			}
 		}
@@ -170,10 +173,6 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.ThrowStmt => {
 			const d = node.data as ThrowStmtData;
 			checkExpr(ctx, d.throwArg, null);
-			// V1: throw forbidden in async functions returning Promise<Result<T,E>>
-			if (isInAsyncPromiseResult(ctx)) {
-				addError(ctx, "throw is forbidden in async function returning Promise<Result<T,E>> — use Result.err() instead", node.location.line, node.location.column);
-			}
 		},
 		NodeKind.TryCatchStmt => checkTryCatch(ctx, node),
 		NodeKind.SwitchStmt => checkSwitchStmt(ctx, node),
@@ -225,7 +224,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	// PARALOCK Phase 1: explicit `: Promise<T>` annotation on a SpawnHandle-producing
 	// initializer strips affine tracking. Warn so the opt-out is deliberate, not accidental.
 	if (declType !== null && initType !== null
-		&& isStrictPromise(declType) && isSpawnHandle(initType)) {
+		&& isAwaitable(declType) && !isAffineAwaitable(declType) && isAffineAwaitable(initType)) {
 		addWarning(ctx,
 			`explicit 'Promise<T>' annotation on a spawn result strips PARALOCK affine tracking — '${d.declName}' will not be lifetime-checked. Remove the annotation to enable affine checking, or keep it as an opt-out`,
 			d.nameLocation.line, d.nameLocation.column);
@@ -293,6 +292,26 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 		setFlag(sym, SymbolFlag.Async);
 	}
 
+	// TS-strict: async functions must declare Promise<T> as return type
+	// (or leave it unannotated, which infers to void). An explicit bare type T
+	// produces a C signature / body type mismatch in codegen — catch it at the
+	// declaration site with a clear, actionable error. async_generator is exempt
+	// because it returns AsyncIterator<T>, not Promise<T>.
+	if (d.fnFlags === "async"
+		&& fnType !== null
+		&& fnType.kind === TypeKind.Function
+		&& fnType.typeReturn !== null
+		&& fnType.typeReturn.kind !== TypeKind.Unknown
+		&& fnType.typeReturn.kind !== TypeKind.Void
+		&& !isAwaitable(fnType.typeReturn)) {
+		const got = formatTypeBrief(fnType.typeReturn);
+		addError(ctx,
+			"async function '" + d.fnName + "' must declare return type as Promise<" + got
+				+ ">, not bare '" + got + "'. Change the signature to: async function "
+				+ d.fnName + "(...): Promise<" + got + ">",
+			d.nameLocation.line, d.nameLocation.column);
+	}
+
 	// Reference parity (semProcAux): generic function bodies are NOT checked at declaration time.
 	// They're stored as raw AST and only checked when instantiated with concrete types
 	// (via instantiateGenericFunction → checkFunctionBody). This prevents creating
@@ -315,6 +334,22 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 		&& sym.symbolType.typeReturn.kind === TypeKind.Unknown
 		&& ctx.inferredReturn.kind !== TypeKind.Unknown) {
 		sym.symbolType.typeReturn = ctx.inferredReturn;
+	}
+
+	// Async functions: ensure the effective return type is Promise<T>.
+	// The TS-strict check above errors on an *explicit* bare `T` return annotation.
+	// This block handles the two remaining cases via auto-wrap (TypeScript parity):
+	//   - No annotation + body returns T → wrap inferred T into Promise<T>
+	//   - No annotation + empty body    → default to Promise<void>
+	// Excludes async_generator (returns AsyncIterator<T>).
+	if (hasFlag(sym, SymbolFlag.Async)
+		&& d.fnFlags !== "async_generator"
+		&& sym.symbolType.kind === TypeKind.Function
+		&& sym.symbolType.typeReturn !== null
+		&& !isAwaitable(sym.symbolType.typeReturn)) {
+		let inner = sym.symbolType.typeReturn;
+		if (inner.kind === TypeKind.Unknown) inner = voidType();
+		sym.symbolType.typeReturn = createPromise(inner);
 	}
 
 	// @pure effect check: warn on impure calls inside pure functions
@@ -830,8 +865,15 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		return;
 	}
 
-	// Pass declared return type as expectedType (Implementation parity)
-	// Inside match expression block arms, return targets the match — not the function
+	// Compute the effective expected return type once, use everywhere below.
+	// Rules:
+	//   - Inside a match expression block arm, `return` targets the match result
+	//     (not the enclosing function) — no contextual type flows from the function.
+	//   - For async functions, declared return is Promise<T> but `return X` returns T.
+	//     Unwrap one Awaitable layer so contextual typing (checkExpr), node fitting
+	//     (fitNode), and assignability checking all agree on T — without this, an
+	//     object literal returned from an async function would be matched against
+	//     Promise's fields, not T's.
 	let returnExpected: Type = null;
 	if (ctx.matchExprDepth === 0
 		&& ctx.currentFunction !== null
@@ -839,6 +881,10 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		&& ctx.currentFunction.symbolType.typeReturn !== null
 		&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown) {
 		returnExpected = ctx.currentFunction.symbolType.typeReturn;
+		if (hasFlag(ctx.currentFunction, SymbolFlag.Async)) {
+			const unwrapped = awaitedType(returnExpected);
+			if (unwrapped !== null) returnExpected = unwrapped;
+		}
 	}
 	checkExpr(ctx, d.argument, returnExpected);
 	const retType = d.argument !== null ? d.argument.nodeType : null;
@@ -847,7 +893,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	// which breaks the borrow-safety guarantee that spawn children stay pinned to
 	// their parent's frame. Existing callers that need to pass around a promise
 	// should explicitly upcast: `return spawn(...) as Promise<T>` (Phase 2+ may forbid).
-	if (retType !== null && isSpawnHandle(retType)) {
+	if (retType !== null && isAffineAwaitable(retType)) {
 		addError(ctx,
 			"SpawnHandle cannot be returned from a function; every spawn result must be awaited in its creating scope (PARALOCK R3/E4)",
 			d.argument.location.line, d.argument.location.column);
@@ -860,27 +906,15 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	if (ctx.matchExprDepth === 0 && ctx.inferredReturn !== null && ctx.inferredReturn.kind === TypeKind.Unknown) {
 		ctx.inferredReturn = retType;
 	}
-	// Check against declared return type (skip inside match expression block arms —
-	// return targets the match result, not the enclosing function)
-	if (ctx.matchExprDepth === 0
-		&& ctx.currentFunction !== null
-		&& ctx.currentFunction.symbolType.kind === TypeKind.Function
-		&& ctx.currentFunction.symbolType.typeReturn !== null
-		&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown
+	// Assignability check against the (already-unwrapped) expected return type.
+	if (returnExpected !== null
+		&& retType !== null
 		&& retType.kind !== TypeKind.Unknown
-		&& retType.kind !== TypeKind.Error) {
-		// Async functions: declared return is Promise<T>, actual return is T — unwrap for comparison.
-		// Only unwrap for async functions (flagged via SymbolFlag) to avoid false accept on non-async Promise returns.
-		let declaredReturn = ctx.currentFunction.symbolType.typeReturn;
-		if (isPromise(declaredReturn) && getPromiseInner(declaredReturn) !== null
-			&& hasFlag(ctx.currentFunction, SymbolFlag.Async)) {
-			declaredReturn = getPromiseInner(declaredReturn);
-		}
-		if (!isAssignable(retType, declaredReturn)) {
-			const got = formatTypeBrief(retType);
-			const expected = formatTypeBrief(declaredReturn);
-			addError(ctx, "Return type mismatch in '" + ctx.currentFunction.name + "': expected " + expected + ", got " + got, node.location.line, node.location.column);
-		}
+		&& retType.kind !== TypeKind.Error
+		&& !isAssignable(retType, returnExpected)) {
+		const got = formatTypeBrief(retType);
+		const expected = formatTypeBrief(returnExpected);
+		addError(ctx, "Return type mismatch in '" + ctx.currentFunction.name + "': expected " + expected + ", got " + got, node.location.line, node.location.column);
 	}
 }
 
@@ -1649,7 +1683,11 @@ function checkProgramCore(
 // Convenience wrapper — creates empty registry. For inline tests and CLI tools
 // that don't need cross-module resolution.
 export function checkProgram(program: Node): CheckerContext {
-	const preludeCtx = buildPreludeContext("");
+	// Discover the stdPath from the compiler's install location so prelude
+	// (console, print, Result, etc.) loads for `msc check` regardless of cwd.
+	const root = resolveRuntimeDir();
+	const stdPath = root !== "" ? join(root, "std") : "";
+	const preludeCtx = buildPreludeContext(stdPath);
 	return checkProgramCore(program, preludeCtx, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, null as unknown as CancelCtx, 0);
 }
 

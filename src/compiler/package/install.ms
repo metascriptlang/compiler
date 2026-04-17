@@ -4,7 +4,7 @@
 // For registry/git deps, verifies cache entry exists (download is future work).
 
 import { exists } from "std/fs";
-import { join } from "std/fs/path";
+import { join, isAbsolute } from "std/fs/path";
 import { loadBuildConfig } from "../buildConfig";
 import { readLockfile, entryName } from "./lockfile";
 import { registrySrcPath, isCached } from "./cache";
@@ -42,7 +42,7 @@ export function cmdInstall(projectRoot: string): boolean {
 		const ver = cfg.deps.values[di];
 		if (ver.length > 5 && ver.slice(0, 5) === "file:") {
 			const relPath = ver.slice(5, ver.length);
-			const absPath = relPath.charAt(0) === "/" ? relPath : join(projectRoot, relPath);
+			const absPath = isAbsolute(relPath) ? relPath : join(projectRoot, relPath);
 			if (exists(absPath)) {
 				installed = installed + 1;
 			} else {
@@ -61,7 +61,7 @@ export function cmdInstall(projectRoot: string): boolean {
 		const ver = cfg.devDeps.values[ddi];
 		if (ver.length > 5 && ver.slice(0, 5) === "file:") {
 			const relPath = ver.slice(5, ver.length);
-			const absPath = relPath.charAt(0) === "/" ? relPath : join(projectRoot, relPath);
+			const absPath = isAbsolute(relPath) ? relPath : join(projectRoot, relPath);
 			if (exists(absPath)) {
 				installed = installed + 1;
 			} else {

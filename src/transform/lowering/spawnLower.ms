@@ -6,7 +6,7 @@
 // C runtime can store them as void* in msFuture.value.
 
 import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, Type, TypeKind, createNode } from "../../ast/node";
-import { unknownType, isPromise, getPromiseInner } from "../../checker/types";
+import { unknownType, isAwaitable, awaitedType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeNull, makeObjectLiteral, syntheticToken } from "../util";
@@ -112,8 +112,8 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 		}
 		// Get return type from Promise<T> on the CallExpr (set by checker's Spawn inference)
 		let closureRetType: Type = null;
-		if (node.nodeType !== null && isPromise(node.nodeType)) {
-			closureRetType = getPromiseInner(node.nodeType);
+		if (node.nodeType !== null && isAwaitable(node.nodeType)) {
+			closureRetType = awaitedType(node.nodeType);
 		} else if (closureArg.nodeType !== null && closureArg.nodeType.kind === TypeKind.Function) {
 			closureRetType = closureArg.nodeType.typeReturn;
 		}

@@ -22,7 +22,7 @@ import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { getSimpleTypeDesc } from "../codegen/c/types";
-import { setTargetSizes, isPromise } from "../checker/types";
+import { setTargetSizes, isAwaitable } from "../checker/types";
 import { lookupSymbol } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
@@ -47,7 +47,7 @@ import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "
 import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
-import { join } from "std/fs/path";
+import { join, isAbsolute } from "std/fs/path";
 import { clockMs } from "std/process";
 
 // ===== Build Helpers =====
@@ -66,7 +66,7 @@ function addFileDepAliases(deps: DepsSection, baseDir: string, config: ResolverC
 		const ver = deps.values[i];
 		if (ver.length > 5 && ver.slice(0, 5) === "file:") {
 			const relPath = ver.slice(5, ver.length);
-			const absPath = relPath.charAt(0) === "/" ? relPath : join(baseDir, relPath);
+			const absPath = isAbsolute(relPath) ? relPath : join(baseDir, relPath);
 			// Skip if already registered (cycle prevention)
 			let alreadyVisited = false;
 			for (const v of visited) { if (v === absPath) alreadyVisited = true; }
@@ -388,7 +388,7 @@ function initCBuildState(opts: CliOptions): CBuildState {
 // Mirrors @compile path resolution (processCompileDirectives): try CWD first,
 // then search registered include paths (which contain compilerRoot).
 function resolveIncludeDir(dir: string, includePaths: Set<string>): string {
-	if (dir === "" || dir.charAt(0) === "/") return dir;
+	if (dir === "" || isAbsolute(dir)) return dir;
 	if (exists(dir)) return dir;
 	for (const ip of includePaths) {
 		const candidate = `${ip}/${dir}`;
@@ -886,7 +886,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			hasUserMain = mainSym !== null;
 			if (mainSym !== null && mainSym.symbolType !== null && mainSym.symbolType.typeReturn !== null) {
 				const retT = mainSym.symbolType.typeReturn;
-				if (isPromise(retT)) {
+				if (isAwaitable(retT)) {
 					mainRetType = "msFuture_void*";
 				} else {
 					const ret = getSimpleTypeDesc(retT);

@@ -30,7 +30,7 @@ import {
 import { createStruct, isIterator, getIteratorYieldType, getIteratorNextFnType, createPrimitive, hasGenericParams } from "../../checker/types";
 import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
 import {
-	makeIdent, makeTypedIdent, makeNull, makeNumber, makeBool,
+	makeIdent, makeIdentResolved, makeTypedIdent, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
@@ -383,10 +383,14 @@ export function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, loc: 
 			const vd = stmt.data as VariableDeclData;
 			if (nameSetContains(liftedNames, vd.declName) && vd.initializer !== null) {
 				// Convert: const/let x = init → x = init (assignment)
-				stmts[i] = makeExprStmt(
-					makeAssign(makeIdent(vd.declName, loc), vd.initializer, loc),
-					loc,
-				);
+				// Preserve the VarDecl's resolvedSym on the LHS Identifier so downstream
+				// passes (lambdaLifting capture resolution, codegen) identify this as the
+				// original local binding — not a fall-through to an outer/global with the
+				// same name. Critical for shadow-safe rewriting of async state machines.
+				const lhs = (stmt.resolvedSym !== null)
+					? makeIdentResolved(stmt.resolvedSym, loc)
+					: makeIdent(vd.declName, loc);
+				stmts[i] = makeExprStmt(makeAssign(lhs, vd.initializer, loc), loc);
 			}
 		}
 	}

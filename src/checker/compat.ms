@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isSpawnHandle, isPromise } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable } from "./types";
 
 
 // ===== Assignability =====
@@ -57,7 +57,7 @@ function isAssignableInner(source: Type, target: Type): boolean {
 				// opt-out path that strips affinity. Element type compatibility is
 				// already verified by the loop above.
 				// REPROMISE T2: flag read, not nominal typeName comparison.
-				if (isSpawnHandle(source) && isPromise(target) && !isSpawnHandle(target)) return true;
+				if (isAffineAwaitable(source) && isAwaitable(target) && !isAffineAwaitable(target)) return true;
 				return source.typeName === target.typeName;
 			},
 			_ => true,

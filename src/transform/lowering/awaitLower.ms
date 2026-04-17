@@ -35,7 +35,7 @@ import {
 import { TransformContext, freshTempSym } from "../context";
 import { walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeString, makeIf, makeBinary } from "../util";
-import { createPtr, createPrimitive, getPromiseInner, booleanType } from "../../checker/types";
+import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
 import { typedFutureReadFn } from "../native/builtinLower";
 import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
 import { injectCancelSafePoints } from "./cancelSafePoints";
@@ -90,7 +90,7 @@ export function makeUnboxCall(voidPtrExpr: Node, innerType: Type, loc: SourceLoc
 // extract T. Otherwise returns null (let C handle it as void*).
 function getAwaitInnerType(awaitArgExpr: Node): Type {
 	if (awaitArgExpr === null || awaitArgExpr.nodeType === null) return null;
-	return getPromiseInner(awaitArgExpr.nodeType);
+	return awaitedType(awaitArgExpr.nodeType);
 }
 
 // ===== Spawn Detection =====

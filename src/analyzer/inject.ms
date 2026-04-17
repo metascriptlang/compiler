@@ -1365,13 +1365,24 @@ function processCallArgs(callExpr: Node, idx: number, stmts: Node[], dctx: DrcCo
 	return pre;
 }
 
+// Resolve the call's function symbol. Prefers the checker-resolved winner
+// (callee.resolvedSym) to get the correct overload for extension methods like
+// `slice` that have multiple type-dispatched definitions; falls back to a
+// name-based lookup only when resolvedSym isn't set.
+function resolveCallSym(callExpr: Node, dctx: DrcContext): Symbol {
+	const cd = callExpr.data as CallExprData;
+	if (cd.callee.kind !== NodeKind.Identifier) return null as unknown as Symbol;
+	const resolved = cd.callee.resolvedSym;
+	if (resolved !== null) return resolved;
+	if (dctx.ctx.checkerCtx === null) return null as unknown as Symbol;
+	const calleeName = (cd.callee.data as IdentifierData).name;
+	return lookupSymbol(dctx.ctx.checkerCtx.table, calleeName);
+}
+
 // Classify the return type of a nested call expression
 function classifyNestedCallReturn(callExpr: Node, dctx: DrcContext): RcInfo {
 	if (dctx.ctx.checkerCtx === null) return noRcInfo();
-	const cd = callExpr.data as CallExprData;
-	if (cd.callee.kind !== NodeKind.Identifier) return noRcInfo();
-	const calleeName = (cd.callee.data as IdentifierData).name;
-	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, calleeName);
+	const sym = resolveCallSym(callExpr, dctx);
 	if (sym === null || sym.symbolType === null) return noRcInfo();
 	if (sym.symbolType.kind !== TypeKind.Function) return noRcInfo();
 	if (sym.symbolType.typeReturn === null) return noRcInfo();
@@ -1381,10 +1392,7 @@ function classifyNestedCallReturn(callExpr: Node, dctx: DrcContext): RcInfo {
 // Get the return Type of a nested call expression (Blocker 27: typed sinks)
 function getCallReturnType(callExpr: Node, dctx: DrcContext): Type {
 	if (dctx.ctx.checkerCtx === null) return null;
-	const cd = callExpr.data as CallExprData;
-	if (cd.callee.kind !== NodeKind.Identifier) return null;
-	const calleeName = (cd.callee.data as IdentifierData).name;
-	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, calleeName);
+	const sym = resolveCallSym(callExpr, dctx);
 	if (sym === null || sym.symbolType === null) return null;
 	if (sym.symbolType.kind !== TypeKind.Function) return null;
 	return sym.symbolType.typeReturn;

@@ -28,6 +28,7 @@ import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../
 import { readFile } from "std/fs";
 import { translateCHeader } from "./cimport/emit";
 import { resolveRuntimeDir } from "../utils/path";
+import { isAbsolute } from "std/fs/path";
 // (utils/string imports removed — using native .slice)
 
 // ===== Source Provider =====
@@ -156,7 +157,7 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 		// rewriting `headerPath` (which downstream code uses to derive companion .c
 		// paths and @include directives — must stay consistent).
 		let headerSource = provideSource(provider, headerPath);
-		if (!headerSource.ok && headerPath.charAt(0) !== "/") {
+		if (!headerSource.ok && !isAbsolute(headerPath)) {
 			const root = resolveRuntimeDir();
 			if (root !== "") headerSource = provideSource(provider, `${root}/${headerPath}`);
 		}

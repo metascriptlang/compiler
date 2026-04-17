@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, hasAsgnFlag, isPromise, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
+import { isPrimitiveKind, hasAsgnFlag, isAwaitable, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
@@ -150,7 +150,7 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.GenericInstance => {
 			// Futures (Promise<T>, SpawnHandle<T>) are exempt from DRC — their lifecycle
 			// is managed by the await transform (create → wait → explicit destroy).
-			if (isPromise(t)) return noRcInfo();
+			if (isAwaitable(t)) return noRcInfo();
 			// GenericInstance value types (SetEntry<T>, Result<T,E>, etc.): noRcInfo.
 			// Their containers (Array, env struct) handle ownership. Individual elements
 			// are borrowed — raw struct copy is correct. Hook name mangling (bare typeName
