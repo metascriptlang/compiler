@@ -148,7 +148,7 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 			return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
 		},
 		TypeKind.GenericInstance => {
-			// Futures (Promise<T>, SpawnHandle<T>) are exempt from DRC — their lifecycle
+			// Awaitables (`Promise<T>`, plain or affine) are exempt from DRC — their lifecycle
 			// is managed by the await transform (create → wait → explicit destroy).
 			if (isAwaitable(t)) return noRcInfo();
 			// GenericInstance value types (SetEntry<T>, Result<T,E>, etc.): noRcInfo.

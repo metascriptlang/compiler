@@ -50,7 +50,7 @@ function formatTypeBrief(t: Type): string {
 // ===== PARALOCK Phase 1: Scope-Exit Affine Check =====
 
 // Called before each closeScope(). Walks all symbols in the scope, and for
-// every binding whose static type is a SpawnHandle<T>, verifies it has been
+// every binding whose static type is a affine Promise<T>, verifies it has been
 // consumed. Unconsumed bindings produce an R1/E2 error.
 //
 // Consumption is recorded in two channels:
@@ -73,7 +73,7 @@ function checkAffineConsumption(ctx: CheckerContext, scope: Ptr<Scope>, tracker:
 				const line = loc !== null ? loc.line : 0;
 				const col = loc !== null ? loc.column : 0;
 				addError(ctx,
-					`SpawnHandle '${sym.name}' is never awaited; every spawn result must be consumed before its scope exits (PARALOCK R1/E2)`,
+					`affine Promise '${sym.name}' from spawn(...) is never awaited; every spawn result must be consumed before its scope exits (PARALOCK R1/E2)`,
 					line, col);
 			} else {
 				// Promote tracker evidence to symbol flag for cross-scope visibility
@@ -90,7 +90,7 @@ function checkAffineConsumption(ctx: CheckerContext, scope: Ptr<Scope>, tracker:
 // ===== PARALOCK Phase 1: Loop Reuse Detection =====
 
 // Walks the parent scope chain to collect consume keys of every currently-visible
-// SpawnHandle binding. Used by loop reuse detection to identify handles declared
+// affine-Promise binding. Used by loop reuse detection to identify handles declared
 // OUTSIDE a loop body — consuming such a handle inside the body would reuse an
 // already-awaited value on iteration N+1.
 function collectVisibleSpawnKeys(scope: Ptr<Scope>): string[] {
@@ -127,7 +127,7 @@ function detectLoopReuse(ctx: CheckerContext, outerKeys: string[], bodyStartStat
 		for (const outerKey of outerKeys) {
 			if (key === outerKey) {
 				addError(ctx,
-					`SpawnHandle '${consumeKeyName(key)}' is consumed inside a loop body; iteration N+1 would reuse an already-awaited handle. Move the spawn inside the loop, or await outside it (PARALOCK R1/E3)`,
+					`affine Promise '${consumeKeyName(key)}' from spawn(...) is consumed inside a loop body; iteration N+1 would reuse an already-awaited handle. Move the spawn inside the loop, or await outside it (PARALOCK R1/E3)`,
 					line, col);
 				break;
 			}
@@ -160,14 +160,14 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
 			checkExpr(ctx, d.expr, null);
-			// PARALOCK Phase 1 R1/E1: a discarded SpawnHandle (bare spawn(...) expression
+			// PARALOCK Phase 1 R1/E1: a discarded affine Promise (bare spawn(...) expression
 			// with no binding and no await) is a compile error. Borrowed captures would
 			// dangle and the result would be silently dropped. For fire-and-forget,
 			// users should bind and await. For fire-and-forget, use actor SEND.
 			// Suppress inside loops: legacy fire-and-forget pattern (to be migrated later).
 			if (d.expr.kind === NodeKind.CallExpr && d.expr.resolvedSym !== null
 				&& d.expr.resolvedSym.builtinKind === "PromiseSpawn" && !ctx.inLoop) {
-				addError(ctx, "spawn result is discarded — every SpawnHandle must be awaited before its scope exits (PARALOCK R1/E1)", d.expr.location.line, d.expr.location.column);
+				addError(ctx, "spawn result is discarded — every affine Promise must be awaited before its scope exits (PARALOCK R1/E1)", d.expr.location.line, d.expr.location.column);
 			}
 		},
 		NodeKind.ThrowStmt => {
@@ -221,7 +221,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	}
 	checkExpr(ctx, d.initializer, declType);
 	const initType = d.initializer !== null ? d.initializer.nodeType : null;
-	// PARALOCK Phase 1: explicit `: Promise<T>` annotation on a SpawnHandle-producing
+	// PARALOCK Phase 1: explicit `: Promise<T>` annotation on a affine Promise-producing
 	// initializer strips affine tracking. Warn so the opt-out is deliberate, not accidental.
 	if (declType !== null && initType !== null
 		&& isAwaitable(declType) && !isAffineAwaitable(declType) && isAffineAwaitable(initType)) {
@@ -659,7 +659,7 @@ function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as WhileStmtData;
 	checkExpr(ctx, d.whileCondition, null);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
-	// PARALOCK Phase 1: snapshot affine state + outer SpawnHandle keys before the body
+	// PARALOCK Phase 1: snapshot affine state + outer affine Promise keys before the body
 	const affineSnap = saveConsumeState(ctx.affineTracker);
 	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
 	// Ref parity (sempass2 lines 1346-1360): while(true) propagates, others conservative
@@ -843,7 +843,7 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 		checkStmt(ctx, d.statements[i]);
 		i = i + 1;
 	}
-	// PARALOCK Phase 1: verify every SpawnHandle declared in this block was consumed
+	// PARALOCK Phase 1: verify every affine Promise declared in this block was consumed
 	checkAffineConsumption(ctx, ctx.table.current, ctx.affineTracker);
 	closeScope(ctx.table);
 }
@@ -888,14 +888,14 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	}
 	checkExpr(ctx, d.argument, returnExpected);
 	const retType = d.argument !== null ? d.argument.nodeType : null;
-	// PARALOCK Phase 1 R3/E4: SpawnHandle<T> cannot escape its creating scope.
-	// Returning a SpawnHandle from a function lets its lifetime leak past the await,
+	// PARALOCK Phase 1 R3/E4: affine Promise<T> cannot escape its creating scope.
+	// Returning a affine Promise from a function lets its lifetime leak past the await,
 	// which breaks the borrow-safety guarantee that spawn children stay pinned to
 	// their parent's frame. Existing callers that need to pass around a promise
 	// should explicitly upcast: `return spawn(...) as Promise<T>` (Phase 2+ may forbid).
 	if (retType !== null && isAffineAwaitable(retType)) {
 		addError(ctx,
-			"SpawnHandle cannot be returned from a function; every spawn result must be awaited in its creating scope (PARALOCK R3/E4)",
+			"affine Promise cannot be returned from a function; every spawn result must be awaited in its creating scope (PARALOCK R3/E4)",
 			d.argument.location.line, d.argument.location.column);
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return
@@ -946,7 +946,7 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 		branchBreaks.push(breaksBlock(d.catchBody));
-		// PARALOCK Phase 1: verify SpawnHandles in the catch binding scope are consumed
+		// PARALOCK Phase 1: verify affine Promises in the catch binding scope are consumed
 		checkAffineConsumption(ctx, ctx.table.current, ctx.affineTracker);
 		closeScope(ctx.table);
 	}
@@ -1126,7 +1126,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	const savedBlock = ctx.initTracker.currentBlock;
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
 	const initSnap = saveInitState(ctx.initTracker);
-	// PARALOCK Phase 1: snapshot affine tracker so SpawnHandle consumption state
+	// PARALOCK Phase 1: snapshot affine tracker so affine Promise consumption state
 	// doesn't leak across function body boundaries.
 	const affineSnap = saveConsumeState(ctx.affineTracker);
 	openScope(ctx.table, ScopeKind.Function);
@@ -1186,7 +1186,7 @@ function enterLoopScope(ctx: CheckerContext): boolean {
 }
 
 function exitLoopScope(ctx: CheckerContext, saved: boolean): void {
-	// PARALOCK Phase 1: verify SpawnHandles in loop scope are consumed
+	// PARALOCK Phase 1: verify affine Promises in loop scope are consumed
 	checkAffineConsumption(ctx, ctx.table.current, ctx.affineTracker);
 	closeScope(ctx.table);
 	ctx.inLoop = saved;

@@ -41,7 +41,7 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 				// Plain @awaitable — non-affine, like Promise. No flag bits.
 			} else if (md.macroName === "affineAwaitable") {
 				awAnnotated = true;
-				// Affine + scope-bound, like SpawnHandle. Both bits.
+				// Affine + scope-bound, like spawn-origin Promise. Both bits.
 				awFlags = (TypeFlag.AwaitableAffine | TypeFlag.AwaitableScopeBound) as int32;
 			}
 		}

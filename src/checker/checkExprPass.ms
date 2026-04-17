@@ -201,7 +201,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
 			markUsed(sym);
-			// PARALOCK Phase 1 R2/E3: SpawnHandle bindings are single-use.
+			// PARALOCK Phase 1 R2/E3: affine-Promise bindings are single-use.
 			// Reuse check is keyed by symbolConsumeKey (name + declaration site) so
 			// shadowed bindings don't false-positive. First-await is OK because the
 			// AwaitExpr handler marks the key AFTER its inner checkExpr returns.
@@ -209,7 +209,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 				&& isConsumedName(ctx.affineTracker, symbolConsumeKey(sym))
 				&& ctx.initTracker.leftPartOfAsgn <= 0) {
 				addError(ctx,
-					"SpawnHandle '" + d.name + "' has already been awaited and cannot be reused (PARALOCK R2/E3)",
+					"affine Promise '" + d.name + "' has already been awaited and cannot be reused (PARALOCK R2/E3)",
 					node.location.line, node.location.column);
 			}
 			// Ref parity: useVar — only check vars declared in current scope (getDeclBlock >= 0).
@@ -971,7 +971,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 				addError(ctx, "invalid 'move' operand: expected identifier, field access, array access, or call expression", node.location.line, node.location.column);
 			}
 			checkExpr(ctx, d.moveArg, null);
-			// PARALOCK Phase 1: `move h` on a SpawnHandle counts as consumption.
+			// PARALOCK Phase 1: `move h` on an affine Promise counts as consumption.
 			// Ownership transfers out of the current scope, so the binding must
 			// not be awaited again — same consumption semantics as `await h`.
 			const moveArgType = d.moveArg.nodeType;
@@ -1672,7 +1672,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 	}
 	// Overloaded direct calls — delegate arg checking to resolveOverloadCall
 	// which re-checks per candidate with speculative rollback (Phase 5).
-	// SpawnHandle consumption also happens inside, during the commit step.
+	// Affine-Promise consumption also happens inside, during the commit step.
 	if (needsOverloadScoring) {
 		return resolveOverloadCall(ctx, overloadSym, node);
 	}
@@ -1698,7 +1698,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			}
 		}
 		argTypes.push(argType);
-		// PARALOCK Phase 1: passing a SpawnHandle identifier as a function argument
+		// PARALOCK Phase 1: passing an affine-Promise identifier as a function argument
 		// counts as consumption. For overloaded calls this happens inside the
 		// overload resolver's commit step instead (see resolveOverloadCall).
 		if (argType !== null && isAffineAwaitable(argType) && d.arguments[ai].kind === NodeKind.Identifier) {
@@ -1768,9 +1768,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		const result = generateJsonStringifyInstance(ctx, node, d, node.location);
 		if (result !== null) return result;
 	}
-	// @builtin("PromiseSpawn"): infer SpawnHandle<T> from closure's return type.
-	// PARALOCK Phase 1: spawn now produces the distinct SpawnHandle<T> type.
-	// SpawnHandle<T> is nominally distinct from Promise<T> (for affine tracking) but
+	// @builtin("PromiseSpawn"): infer affine `Promise<T>` from closure's return type.
+	// PARALOCK: spawn produces `Promise<T>` tagged with AwaitableAffine +
+	// AwaitableScopeBound flags. Same surface type as a plain Promise, with
 	// structurally identical (typeChildren[0] = inner type), so downstream transforms
 	// that call isAwaitable() still recognize it, and compat.ms upcasts it to Promise<T>
 	// for assignability so existing code (Promise.all, explicit Promise<T> annotations) works.
@@ -2259,7 +2259,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node): 
 		}
 	}
 
-	// Consume SpawnHandle arguments now that arg checking has settled.
+	// Consume affine-Promise arguments now that arg checking has settled.
 	// Done AFTER Pass 2 so we only consume once (not once per pass).
 	for (const arg of args) {
 		const at = arg.nodeType;

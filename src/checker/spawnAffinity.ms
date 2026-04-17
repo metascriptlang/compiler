@@ -1,6 +1,6 @@
 // Affine Tracking — PARALOCK Phase 1
 //
-// Tracks consumption of SpawnHandle<T> bindings through scopes, with branch
+// Tracks consumption of affine `Promise<T>` bindings (spawn-origin) through scopes, with branch
 // awareness for R6 (must-consume on all paths).
 //
 // Uses a "symbol key" — name concatenated with declaration line:column — as
@@ -26,7 +26,7 @@ export function symbolConsumeKey(sym: Symbol): string {
 
 // Reference shape: effects.consumed flat list (mirror of InitTracker.initialized)
 export interface AffineTracker {
-	consumed: string[];   // append-only list of consumed SpawnHandle binding keys
+	consumed: string[];   // append-only list of consumed affine Promise binding keys
 }
 
 // ===== Constructors =====
@@ -37,7 +37,7 @@ export function createAffineTracker(): AffineTracker {
 
 // ===== Core Operations (delegate to branchSet) =====
 
-// Mark a SpawnHandle binding as consumed by key (idempotent).
+// Mark a affine Promise binding as consumed by key (idempotent).
 export function markConsumedName(t: AffineTracker, name: string): void {
 	addName(t.consumed, name);
 }

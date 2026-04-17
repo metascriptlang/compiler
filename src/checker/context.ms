@@ -752,7 +752,7 @@ export class CheckerContext {
 	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (reference suggest parity)
 	matchExprDepth: number;      // >0 when inside match expression block arm (return targets match, not function)
 	initTracker: InitTracker;    // ref parity: TEffects.init — definite assignment tracking
-	affineTracker: AffineTracker; // PARALOCK Phase 1 — SpawnHandle consumption tracking
+	affineTracker: AffineTracker; // PARALOCK Phase 1 — affine-Promise consumption tracking
 	strictDefs: boolean;         // ref parity: strictDefs — warn on all uninit var use
 	strictNullChecks: boolean;   // ref parity: strictNotNil — warn on unguarded class deref
 	inTryExpr: boolean;          // true when checking tryArg of TryExpr or body of TryCatchStmt (V2 await guard)

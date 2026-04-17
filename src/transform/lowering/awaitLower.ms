@@ -86,7 +86,7 @@ export function makeUnboxCall(voidPtrExpr: Node, innerType: Type, loc: SourceLoc
 }
 
 // Get the inner type that an await expression should produce.
-// Uses the T1/T2 semantic layer: if the expression type is Promise<T>/SpawnHandle<T>,
+// Uses the T1/T2 semantic layer: if the expression type is `Promise<T>` (plain or affine),
 // extract T. Otherwise returns null (let C handle it as void*).
 function getAwaitInnerType(awaitArgExpr: Node): Type {
 	if (awaitArgExpr === null || awaitArgExpr.nodeType === null) return null;
@@ -359,7 +359,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 			// Scoped deferred detection: `const h = spawn(fn);` with no timeout
 			// → rewrite to msAwaitSlotCreate + msSpawnSlotSubmit, register for later await.
 			// Only matches builtin spawn() (builtinKind=PromiseSpawn), not raw msSpawn FFI.
-			// spawn() handles are SpawnHandle used exclusively with await, safe to eliminate.
+			// spawn() handles are affine Promises used exclusively with await, safe to eliminate.
 			if (d.declKind === DeclKind.Const && d.initializer !== null) {
 				const si = getSpawnInfo(d.initializer);
 				const initSym = d.initializer.resolvedSym !== null ? d.initializer.resolvedSym

@@ -52,11 +52,10 @@ function isAssignableInner(source: Type, target: Type): boolean {
 				for (let gi = 0; gi < limit; gi += 1) {
 					if (!isAssignable(source.typeChildren[gi], target.typeChildren[gi])) return false;
 				}
-				// PARALOCK Phase 1: an affine awaitable (SpawnHandle) upcasts to any
-				// non-affine awaitable (Promise) with compatible inner — this is the
+				// PARALOCK: an affine `Promise<T>` (spawn-origin, AwaitableAffine bit set)
+				// upcasts to a plain `Promise<T>` with compatible inner — this is the
 				// opt-out path that strips affinity. Element type compatibility is
 				// already verified by the loop above.
-				// REPROMISE T2: flag read, not nominal typeName comparison.
 				if (isAffineAwaitable(source) && isAwaitable(target) && !isAffineAwaitable(target)) return true;
 				return source.typeName === target.typeName;
 			},

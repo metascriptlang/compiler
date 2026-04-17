@@ -36,7 +36,7 @@ export enum SymbolFlag {
 	NativeMethod = 131072, // method from extern class — don't set ExtCall, keep as native member call
 	GeneratedOp = 262144, // generated lifecycle hook (=destroy/=copy/=sink/=wasMoved) — skip DRC injection (reference parity: sfGeneratedOp)
 	Nonisolated = 524288, // @nonisolated — actor field/method readable from outside (Swift parity)
-	Consumed = 1048576, // PARALOCK Phase 1: SpawnHandle binding has been awaited (affine consumption)
+	Consumed = 1048576, // PARALOCK Phase 1: affine-Promise binding (spawn-origin) has been awaited (affine consumption)
 	OverloadSig = 2097152, // Tier 1: body-less overload signature — typecheck-only, codegen skips emission
 	OverloadValidated = 4194304, // Tier 1: overload set already validated (return-type compatibility check)
 }
@@ -59,7 +59,7 @@ export function markUsed(sym: Symbol): void {
 	}
 }
 
-// PARALOCK Phase 1: mark a SpawnHandle binding as consumed (awaited).
+// PARALOCK Phase 1: mark an affine-Promise binding as consumed (awaited).
 // Also implies Used — a consumed binding has been referenced.
 export function markConsumed(sym: Symbol): void {
 	sym.symFlags = sym.symFlags | SymbolFlag.Consumed | SymbolFlag.Used;

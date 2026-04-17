@@ -13,7 +13,7 @@ import { Type, TypeKind, TypeFlag, CallingConvention, AttachedOp } from "../ast/
 // of truth for storage access. **Do not bypass it.**
 //
 //   kind           — the TypeKind enum value
-//   typeName       — nominal name (e.g. "Promise", "SpawnHandle", "Result", struct name)
+//   typeName       — nominal name (e.g. "Promise", "Result", struct name)
 //   typeNames      — field/variant names (Struct fields, Union variants, Result ["ok","value","error"])
 //   typeChildren   — type args, field types, variant types, parameter types
 //   typeReturn     — function return type; alias target; alternate uninstantiated body
@@ -320,14 +320,15 @@ export function getResultErrType(t: Type): Type {
 // =====================================================================
 // REPROMISE T1 — Semantic query layer for awaitable types
 // =====================================================================
-// Single gateway for every question about Promise<T> / SpawnHandle<T> /
+// Single gateway for every question about `Promise<T>` and
 // @awaitable-annotated types. Callers never peek at raw storage.
 //
 // Key design points:
 //   - `peelThrough` handles Alias/Distinct wrappers but NOT GenericInstance
 //     (for awaitable shape queries, GenericInstance IS the answer).
-//   - The nominal check ("Promise" / "SpawnHandle") is the permanent source
-//     of truth for these two stdlib awaitables. Flag bits flag affinity.
+//   - Surface is a single type name: "Promise". Origin (plain async vs
+//     spawn-affine) is distinguished by AwaitableAffine + AwaitableScopeBound
+//     flag bits on `typeFlags`.
 //   - Future @awaitable-annotated types from stdlib plug in via the registry
 //     (T2.6 — currently a stub awaiting collect-pass wiring).
 // =====================================================================
@@ -367,7 +368,7 @@ export function peelThrough(t: Type, mask: int32): Type {
 }
 
 // isAwaitable — the canonical "can we await this?" question.
-// Returns true for Promise<T>, SpawnHandle<T>, and future @affineAwaitable types
+// Returns true for `Promise<T>` (plain or affine) and @awaitable-annotated types
 // (detected by the AwaitableAffine flag bit set by `createGenericInstance`).
 // Peels through Alias wrappers so `type P = Promise<int>; P` still answers true.
 export function isAwaitable(t: Type): boolean {
@@ -392,7 +393,7 @@ export function awaitedType(t: Type): Type {
 }
 
 // isAffineAwaitable — an awaitable carrying affine consumption semantics
-// (SpawnHandle, @affineAwaitable types). Reads the flag bit set by T2.
+// (spawn-origin Promises, @affineAwaitable types). Reads the flag bit set by T2.
 // Used by PARALOCK R1-R6 affine checker rules.
 export function isAffineAwaitable(t: Type): boolean {
 	if (t === null) return false;

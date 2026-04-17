@@ -1,6 +1,6 @@
 // Branch-aware append-only name set — shared primitives for dataflow trackers.
 //
-// Both initTracker (definite assignment) and spawnAffinity (SpawnHandle
+// Both initTracker (definite assignment) and spawnAffinity (affine-Promise
 // consumption) need the same machinery: an append-only string[] with
 // save/restore/merge semantics keyed by BreakState exhaustiveness. This
 // module owns that machinery so the two trackers stay in sync and neither

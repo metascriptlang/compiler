@@ -567,9 +567,9 @@ export function sgFormatHover(suggest: SgSuggest): string {
 // Hover documentation section — doc comments only (TS-Go: no file paths in hover)
 export function sgFormatHoverDoc(suggest: SgSuggest, docComment: string): string {
 	if (suggest === null) return "";
-	// PARALOCK Phase 9: affine awaitable hint for SpawnHandle-typed bindings
+	// PARALOCK Phase 9: affine hint for spawn-origin `Promise<T>`
 	if (suggest.symType !== null && isAffineAwaitable(suggest.symType)) {
-		const hint = "SpawnHandle — affine handle, must be awaited before scope exits (PARALOCK R1)";
+		const hint = "Promise (affine, scope-bound) — from spawn(), must be awaited before scope exits (PARALOCK R1)";
 		if (docComment !== "") return docComment + "\n\n" + hint;
 		return hint;
 	}
