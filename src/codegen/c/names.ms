@@ -4,8 +4,9 @@
 // Character classification, core mangling, C keyword avoidance,
 // module-qualified proc names, field/local manglers.
 
-import { Symbol } from "../../ast/node";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { Symbol, SymbolKind } from "../../ast/node";
+import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../../checker/symbol";
+import { unknownType } from "../../checker/types";
 
 
 // ===== C Keywords — identifiers that need escaping =====
@@ -161,12 +162,24 @@ export function mangleModuleName(modulePath: string): string {
 	return result;
 }
 
-// ===== Proc Name Mangling (module-qualified) =====
+// ===== Qualified Identifier — module-scoped C name =====
+// Pattern: <mangledName>__<moduleName>
+//
+// Canonical composition used by every code path that needs a module-qualified
+// global identifier in C: procs append their overload ID to this, globals use
+// it as-is, future type-wrappers compose on top. Keeping the pattern in one
+// helper prevents drift across codegen sites (reference parity: Nim's
+// `fillBackendName` consolidates the same pattern behind one proc).
+
+export function mangleQualified(name: string, moduleName: string): string {
+	return `${mangle(name)}__${moduleName}`;
+}
+
+// ===== Proc Name Mangling (module-qualified + overload disambig) =====
 // Pattern: <mangledName>__<moduleName>_u<id>
 
 export function mangleProcName(name: string, moduleName: string, id: number): string {
-	const mangled = mangle(name);
-	return `${mangled}__${moduleName}_u${id}`;
+	return `${mangleQualified(name, moduleName)}_u${id}`;
 }
 
 // Static field global name: "Counter.total" → "Counter__total"
@@ -178,27 +191,71 @@ export function staticFieldCName(qualifiedName: string): string {
 	return mangle(qualifiedName);
 }
 
+// ===== Symbol-aware C name: shared early-exit =====
+// Every Symbol-aware wrapper (function, global, future type) first checks
+// whether the symbol bypasses mangling: extern symbols (sym.nativeName set
+// from `from "c_name"` clause) and ImportC symbols (runtime/C FFI) use their
+// raw C name directly. Returns "" to signal the caller should fall through
+// to its own rule (proc vs global vs type).
+function symExternOrImportName(sym: Symbol, name: string): string {
+	if (sym !== null && sym.nativeName !== "") return sym.nativeName;
+	if (sym !== null && hasFlag(sym, SymbolFlag.ImportC)) return safeName(name);
+	return "";
+}
+
 // ===== Symbol → C Name (Standard reference parity) =====
 // Single source of truth for function C names. Reads sym.modulePath.
 // extern functions use nativeName. main() stays main_. Others get module-qualified.
 
 export function mangledFunctionName(sym: Symbol, name: string, overloadIdx: number): string {
-	if (sym !== null && sym.nativeName !== "") return sym.nativeName;
 	if (name === "main") return safeName(name);
-	if (sym !== null && hasFlag(sym, SymbolFlag.ImportC)) return safeName(name);
+	const early = symExternOrImportName(sym, name);
+	if (early !== "") return early;
 	// Use original declared name for mangling, not import alias
-	const mangledName = (sym !== null && sym.originalName !== "") ? sym.originalName : name;
+	const baseName = (sym !== null && sym.originalName !== "") ? sym.originalName : name;
 	if (sym !== null && sym.modulePath !== "") {
-		return mangleProcName(mangledName, mangleModuleName(sym.modulePath), overloadIdx);
+		return mangleProcName(baseName, mangleModuleName(sym.modulePath), overloadIdx);
 	}
-	if (overloadIdx > 0) return `${safeName(mangledName)}__${overloadIdx}`;
-	return safeName(mangledName);
+	if (overloadIdx > 0) return `${safeName(baseName)}__${overloadIdx}`;
+	return safeName(baseName);
 }
 
-// ===== Type Name Mangling =====
+// ===== Symbol-aware classification — is this a module-level global variable? =====
+// Single source of truth for the condition that differentiates module-level `const`/`let`
+// from locals and other SymbolKind.Variable cases. Used by multiple codegen emission sites
+// (global decl, cross-module extern, identifier reference) — extracting prevents drift if
+// the definition changes (e.g. future static class fields).
+//
+// Criteria: Symbol is a Variable, has Global flag (set by collectPass on module-level
+// declarations), and has a known defining module.
 
-export function mangleTypeName(name: string, moduleName: string): string {
-	return `${mangle(name)}__${moduleName}`;
+export function isModuleGlobalVar(sym: Symbol): boolean {
+	if (sym === null) return false;
+	if (sym.symbolKind !== SymbolKind.Variable) return false;
+	// Flag set in two places: (1) collectPass for own-module top-level VariableDecl,
+	// (2) importSymFromRegistry for imported Variable syms (exports can only be
+	// module-level). Distinguishes module-level globals from locals — both have
+	// modulePath set (defineOrError stamps it), only globals carry this flag.
+	if (!hasFlag(sym, SymbolFlag.Global)) return false;
+	if (sym.modulePath === null || sym.modulePath === "") return false;
+	return true;
+}
+
+// ===== Symbol → C Name for module-level globals =====
+// Mirrors mangledFunctionName for `const`/`let` at module scope. Fixes latent
+// cross-module C linker collision when two modules declare same-named constants
+// (e.g. `MAX_TIME` in cursors.ms and varpartitions.ms). Same extern/ImportC
+// early-exit as functions; same module-qualifier pattern minus the overload ID
+// (module globals have no overloads).
+
+export function mangledGlobalName(sym: Symbol, name: string): string {
+	const early = symExternOrImportName(sym, name);
+	if (early !== "") return early;
+	const baseName = (sym !== null && sym.originalName !== "") ? sym.originalName : name;
+	if (sym !== null && sym.modulePath !== "") {
+		return mangleQualified(baseName, mangleModuleName(sym.modulePath));
+	}
+	return safeName(baseName);
 }
 
 // ===== Field Name — minimal mangling (no module prefix) =====
@@ -209,15 +266,9 @@ export function mangleFieldName(name: string): string {
 	return mangled;
 }
 
-// ===== Local Variable Name =====
-
-export function mangleLocalName(name: string, scopeDepth: number): string {
-	const mangled = mangle(name);
-	if (scopeDepth > 0 || isCKeyword(mangled)) {
-		return `${mangled}_${scopeDepth}`;
-	}
-	return mangled;
-}
+// Note: local variable unique naming happens in `fillLocalName` (statements.ms),
+// which tracks occurrences per CProc and appends a scope-aware suffix. Nothing
+// in codegen needs a standalone `mangleLocalName(name, depth)` helper.
 
 // ===== C Standard Library Collision Check =====
 // Names that conflict with C stdlib/POSIX functions and must be mangled.
@@ -278,9 +329,88 @@ test "non-keywords pass" {
 	assert !isCKeyword("myVar");
 }
 
+test "mangleQualified basic" { assert mangleQualified("foo", "mymod") === "foo__mymod"; }
+
+test "mangleQualified with special char" { assert mangleQualified("a+b", "mymod") === "aplusb___mymod"; }
+
 test "mangleProcName" { assert mangleProcName("myFunc", "mymod", 42) === "myFunc__mymod_u42"; }
 
 test "mangleProcName with special" { assert mangleProcName("a+b", "ops", 1) === "aplusb___ops_u1"; }
+
+test "mangledGlobalName no sym falls through to safeName" {
+	assert mangledGlobalName(null as unknown as Symbol, "FOO") === "FOO";
+}
+
+test "mangledGlobalName no modulePath falls through to safeName" {
+	const sym = makeSymbol("FOO", SymbolKind.Variable, unknownType(), false);
+	assert mangledGlobalName(sym, "FOO") === "FOO";
+}
+
+test "mangledGlobalName extern nativeName bypass" {
+	const sym = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
+	sym.nativeName = "my_c_sym";
+	sym.modulePath = "src/foo.ms";
+	assert mangledGlobalName(sym, "FOO") === "my_c_sym";
+}
+
+test "mangledGlobalName module-qualified" {
+	const sym = makeSymbol("MAX", SymbolKind.Variable, unknownType(), false);
+	sym.modulePath = "src/foo.ms";
+	assert mangledGlobalName(sym, "MAX") === "MAX__srcZfooOms";
+}
+
+test "mangledGlobalName prefers originalName over import alias" {
+	const sym = makeSymbol("aliased", SymbolKind.Variable, unknownType(), false);
+	sym.modulePath = "src/foo.ms";
+	sym.originalName = "ORIG";
+	assert mangledGlobalName(sym, "aliased") === "ORIG__srcZfooOms";
+}
+
+test "mangledFunctionName main stays safe" {
+	assert mangledFunctionName(null as unknown as Symbol, "main", 0) === "main_";
+}
+
+test "mangledFunctionName plain name no sym" {
+	assert mangledFunctionName(null as unknown as Symbol, "foo", 0) === "foo";
+}
+
+test "mangledFunctionName module-qualified" {
+	const sym = makeSymbol("bar", SymbolKind.Function, unknownType(), false);
+	sym.modulePath = "src/foo.ms";
+	assert mangledFunctionName(sym, "bar", 0) === "bar__srcZfooOms_u0";
+}
+
+test "mangledFunctionName nativeName bypass (extern)" {
+	const sym = makeSymbol("printf", SymbolKind.Function, unknownType(), false);
+	sym.nativeName = "printf";
+	sym.modulePath = "std/io.ms";
+	assert mangledFunctionName(sym, "printf", 0) === "printf";
+}
+
+test "mangledFunctionName ImportC bypass" {
+	const sym = makeSymbol("malloc", SymbolKind.Function, unknownType(), false);
+	sym.modulePath = "std/core.ms";
+	setFlag(sym, SymbolFlag.ImportC);
+	// malloc is in isCStdlibName → safeName adds trailing underscore
+	assert mangledFunctionName(sym, "malloc", 0) === "malloc_";
+}
+
+test "mangledFunctionName overloadIdx disambiguates" {
+	const sym = makeSymbol("foo", SymbolKind.Function, unknownType(), false);
+	sym.modulePath = "src/bar.ms";
+	assert mangledFunctionName(sym, "foo", 2) === "foo__srcZbarOms_u2";
+}
+
+test "mangledFunctionName prefers originalName over import alias" {
+	const sym = makeSymbol("aliasedFn", SymbolKind.Function, unknownType(), false);
+	sym.modulePath = "src/bar.ms";
+	sym.originalName = "realFn";
+	assert mangledFunctionName(sym, "aliasedFn", 0) === "realFn__srcZbarOms_u0";
+}
+
+test "mangledFunctionName no modulePath with overloadIdx" {
+	assert mangledFunctionName(null as unknown as Symbol, "foo", 3) === "foo__3";
+}
 
 test "normal field" {
 	assert mangleFieldName("x") === "x";
@@ -291,18 +421,6 @@ test "keyword field" {
 	assert mangleFieldName("int") === "int_0";
 	assert mangleFieldName("return") === "return_0";
 }
-
-test "top scope" {
-	assert mangleLocalName("x", 0) === "x";
-	assert mangleLocalName("foo", 0) === "foo";
-}
-
-test "nested scope" {
-	assert mangleLocalName("x", 1) === "x_1";
-	assert mangleLocalName("x", 3) === "x_3";
-}
-
-test "keyword at top scope" { assert mangleLocalName("int", 0) === "int_0"; }
 
 test "normal name" { assert safeName("foo") === "foo"; }
 

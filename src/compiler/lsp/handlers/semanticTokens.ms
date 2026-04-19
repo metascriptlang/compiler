@@ -31,8 +31,8 @@ function encodeSemanticTokenDeltas(tokens: SgSemanticToken[]): string {
 }
 
 // Revision-based cache: if Trans-Am revision unchanged, tokens are identical.
-let _semTokenCache: Map<string, string> = new Map<string, string>();
-let _semTokenRevision: Map<string, number> = new Map<string, number>();
+let _semTokenCache: HashMap<string, string> = new HashMap<string, string>();
+let _semTokenRevision: HashMap<string, number> = new HashMap<string, number>();
 
 export function handleSemanticTokensFull(id: string, params: string, db: TransAmDb): string {
 	const textDoc = lspGetObjectField(params, "textDocument");

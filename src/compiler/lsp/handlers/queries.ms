@@ -274,7 +274,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	if (suggest === null) return lspResponse(id, "[]");
 
 	const items: string[] = [];
-	const seen: Set<string> = new Set<string>();
+	const seen: HashSet<string> = new HashSet<string>();
 
 	// Search current file via symbol identity (no false positives from shadowing)
 	const refs = sgQueryBySym(ctx, suggest.sym);

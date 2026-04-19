@@ -85,18 +85,23 @@ function promiseTypeFor(inner: Type): Type {
 	return inner !== null ? createPromise(inner) : createPromise(voidType());
 }
 
-import { isStructLikeType } from "../native/builtinLower";
+import { isStructLikeType } from "../util";
 
 // Build the right allocation call for an async function's $retFut:
 // - struct/tuple/generic-instance → msFutureCreateInline (typed-sized)
 // - primitives and pointers → msFutureCreate (generic 16-byte slot)
+// Tags the call's nodeType with Promise<T> (the true result type of the
+// allocator) so DRC's cross-pass contract is preserved. Codegen extracts T via
+// awaitedType when emitting sizeof(msFuture_<T>).
 function makeRetFutAlloc(innerType: Type, loc: SourceLocation): Node {
 	if (isStructLikeType(innerType)) {
 		const call = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
-		call.nodeType = innerType;  // codegen reads nodeType to emit sizeof(msFuture_<T>)
+		call.nodeType = promiseTypeFor(innerType);
 		return call;
 	}
-	return makeCall(makeIdent("msFutureCreate", loc), [], loc);
+	const call = makeCall(makeIdent("msFutureCreate", loc), [], loc);
+	call.nodeType = promiseTypeFor(innerType);
+	return call;
 }
 
 // Zero value for a type — used as fallback in msFutureReadT(f, zeroval) when future failed
@@ -162,11 +167,13 @@ function makeFutureCompleteStmts(valueExpr: Node, isVoid: boolean, promiseType: 
 	}
 	// Arrays: box into void* (heap-allocate), then store pointer in future.
 	// msSinkBoxStruct is a multi-statement codegen expansion — can't nest inside
-	// another call. Use separate VarDecl + complete call.
+	// another call. Use separate VarDecl + complete call. The box call's result
+	// is void* (heap pointer); codegen reads T from the argument's nodeType for
+	// sizeof — nodeType on the call itself stays as its true result type.
 	if (fnReturnInner !== null && fnReturnInner.kind === TypeKind.Array) {
-		const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [valueExpr], loc);
-		boxCall.nodeType = fnReturnInner;  // codegen reads this for sizeof(T)
 		const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
+		const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [valueExpr], loc);
+		boxCall.nodeType = voidPtrType;
 		const boxDecl = makeVarDecl("$boxed", boxCall, DeclKind.Const, loc);
 		boxDecl.nodeType = voidPtrType;  // variable holds void* (the boxed pointer)
 		const completeStmt = makeExprStmt(makeCall(
@@ -314,6 +321,7 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 			let readExpr: Node = null as unknown as Node;
 			if (readFn !== "") {
 				readExpr = makeCall(makeIdent(readFn, loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
+				readExpr.nodeType = varType;
 			} else {
 				// Session 3b: struct/tuple/generic-instance types spawned via
 				// msSpawnInto have their result stored inline (memcpy'd by worker,
@@ -596,9 +604,11 @@ function rewriteReturns(node: Node, promiseType: Type, fnReturnInner: Type): voi
 					} else if (fnReturnInner !== null && fnReturnInner.kind === TypeKind.Array) {
 						// Arrays: box into void* via separate VarDecl (msSinkBoxStruct is a
 						// multi-statement codegen expansion — nesting it corrupts the result stack).
-						const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [rd.argument], loc);
-						boxCall.nodeType = fnReturnInner;
+						// The box call's result type is void* (heap pointer); codegen reads T
+						// from the argument's nodeType for sizeof — no nodeType-as-hint abuse.
 						const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
+						const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [rd.argument], loc);
+						boxCall.nodeType = voidPtrType;
 						const boxDecl = makeVarDecl("$boxed", boxCall, DeclKind.Const, loc);
 						boxDecl.nodeType = voidPtrType;
 						newStmts.push(boxDecl);

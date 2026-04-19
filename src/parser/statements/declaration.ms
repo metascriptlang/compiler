@@ -2025,6 +2025,6 @@ test "generic class" { assert programOk("class Container<T> { value: T; }"); }
 
 test "generic extends" { assert programOk("class List<T> extends Base<T> {}"); }
 
-test "multi generic" { assert programOk("class Map<K, V> { lookup(k: K): V {} }"); }
+test "multi generic" { assert programOk("class HashMap<K, V> { lookup(k: K): V {} }"); }
 
 test "implements" { assert programOk("class Foo implements Bar {}"); }

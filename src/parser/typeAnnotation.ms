@@ -263,7 +263,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		// Index signature: [name: K]: V
-		// This is syntactic sugar for Map<K, V> — the checker normalizes both to the
+		// This is syntactic sugar for HashMap<K, V> — the checker normalizes both to the
 		// same internal Type. See docs/PACKAGE.md (open design) and the impl plan.
 		if (current(state).kind === TokenKind.LBracket) {
 			if (hasIndexSig) {
@@ -453,17 +453,17 @@ test "void keyword" { assert skipsType("void"); }
 
 test "single generic" { assert skipsType("Array<number>"); }
 
-test "two generics" { assert skipsType("Map<string, number>"); }
+test "two generics" { assert skipsType("HashMap<string, number>"); }
 
 test "nested generics" { assert skipsType("Result<Array<number>, string>"); }
 
 test "nested generics no space" { assert skipsType("Result<Array<number>>"); }
 
-test "triple nested generics" { assert skipsType("Map<string, Result<Array<number>>>"); }
+test "triple nested generics" { assert skipsType("HashMap<string, Result<Array<number>>>"); }
 
 test "array in generic arg" { assert skipsType("Result<Node[], string>"); }
 
-test "array in both generic args" { assert skipsType("Map<string[], number[]>"); }
+test "array in both generic args" { assert skipsType("HashMap<string[], number[]>"); }
 
 test "single array" { assert skipsType("number[]"); }
 
@@ -503,7 +503,7 @@ test "generic with array suffix" { assert skipsType("Result<Node, string>[]"); }
 
 test "union of generics" { assert skipsType("Result<A, B> | Error"); }
 
-test "optional generic array" { assert skipsType("Map<string, number>[]?"); }
+test "optional generic array" { assert skipsType("HashMap<string, number>[]?"); }
 
 // ===== TypeAnnotation Node Tests =====
 
@@ -600,8 +600,8 @@ test "typeExpr generic has positioned base" {
 }
 
 // ===== Index Signature Tests =====
-// `{ [key: K]: V }` is syntactic sugar for `Map<K, V>`. The parser captures
-// the key/value types on the TypeObject node; the checker normalizes to Map<K,V>.
+// `{ [key: K]: V }` is syntactic sugar for `HashMap<K, V>`. The parser captures
+// the key/value types on the TypeObject node; the checker normalizes to HashMap<K,V>.
 
 test "index signature basic" {
 	assert skipsType("{ [key: string]: number }");

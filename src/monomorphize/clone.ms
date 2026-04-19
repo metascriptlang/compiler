@@ -66,7 +66,7 @@ function cloneStringArray(strs: string[]): string[] {
 //   - Copies nodeType (downstream passes need resolved type info; replaceTypeVars
 //     substitutes it before re-check via substNodeLocal).
 //   - Copies typeArg (explicit `<K, V>` strings on NewExpr/CallExpr). Without this,
-//     `new Map<K, V>()` inside a cloned generic wrapper would lose its type args
+//     `new HashMap<K, V>()` inside a cloned generic wrapper would lose its type args
 //     and fall back to a location-keyed side channel holding the original strings,
 //     defeating substitution. replaceTypeVars substitutes this field too.
 //   - Skips resolvedSym (name rewriting path, re-resolved via shared IdentCache).
@@ -86,15 +86,15 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 	// Clear Sem flag on mono clones so monoCheckInstantiatedBody can actually
 	// re-check the cloned body. Without this, the Sem flag from the original
 	// (set during the first check pass) makes checkExpr early-return and nested
-	// generic method calls — e.g. `m.set(...)` where m had type Map<K,V> but
-	// now has concrete Map<string,number> — never get re-resolved to their
+	// generic method calls — e.g. `m.set(...)` where m had type HashMap<K,V> but
+	// now has concrete HashMap<string,number> — never get re-resolved to their
 	// concrete instantiations. On-demand instantiation (callInstantiateGeneric)
 	// at checkExprPass.ms only fires during the re-check. This unlocks that.
 	dst.flags = src.flags & ~NodeFlag.Sem;
 	if (currentCloneMode === CloneMode.Mono) {
 		dst.nodeType = src.nodeType;
 		// Preserve explicit generic type args so they survive monomorphize cloning.
-		// Without this, `new Map<K, V>()` inside a cloned generic wrapper would
+		// Without this, `new HashMap<K, V>()` inside a cloned generic wrapper would
 		// lose its type args — the checker would fall back to a location-keyed
 		// side channel that still holds the original "K, V" strings, defeating
 		// substitution. replaceTypeVars substitutes this field in substNodeLocal.

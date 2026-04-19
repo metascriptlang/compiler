@@ -1,7 +1,17 @@
-// MetaScript Structure Prelude — Iterator<T>, Map<K,V> and Set<T>
+// MetaScript Structure Prelude — Iterator<T>, Map<K,V>, Set<T>, HashMap<K,V>, HashSet<T>
 // Pure MetaScript implementation — monomorphized by the compiler.
 // No C runtime, no type erasure, no boxing.
 // All code in one file (prelude system loads a single file per module).
+//
+// Four data structures, all standalone (not wrapped):
+//   Map<K,V>                — insertion-ordered hash map (JS/TS spec parity). Default choice.
+//   Set<T>                  — insertion-ordered hash set. Entry stores only a key (no value slot).
+//   HashMap<K,V>            — unordered open-addressing hash map (Rust/Java/C++ parity).
+//   HashSet<T>              — unordered open-addressing hash set. Entry stores only a key.
+//
+// Design note: Set is NOT "Map<T, T>"; it has its own entry type with no value
+// slot, matching reference-compiler stdlib layout. This keeps memory cost minimal
+// and keeps each type independently optimizable.
 
 // ===== Iterator<T> =====
 // Return type for function* generators. Matches generatorLower's output shape.
@@ -39,19 +49,6 @@ export function* toItems<T>(this arr: T[]): Iterator<T> {
 	}
 }
 
-// ===== Map<K, V> =====
-
-export struct MapEntry<K, V> {
-	hcode: int64;
-	key: K;
-	value: V;
-}
-
-export class Map<K, V> {
-	data: MapEntry<K, V>[];
-	counter: int32;
-}
-
 // ===== Hash Functions =====
 // DJB2 algorithm matches std/hash.hashString, except:
 // - Returns 314159265 for empty strings (Map/Set "empty slot" sentinel)
@@ -80,13 +77,54 @@ export function hashNumber(n: number): int64 {
 	return h;
 }
 
-
 // Overloaded hash — type-dispatched hash(x: int) and hash(x: string).
 // Extension methods: monomorphization resolves via UFCS based on K's concrete type.
+// int32 needs its own entry because UFCS matches `this` exactly — int32 does
+// not transparently widen to number during extension-method lookup. Without
+// this, `Map<int32, V>`'s `key.hash()` fails to resolve and codegen emits raw
+// member access on a primitive int (invalid C).
 export function hash(this s: string): int64 { return hashString(s); }
 export function hash(this n: number): int64 { return hashNumber(n); }
+export function hash(this i: int32): int64 { return hashNumber(i as number); }
 
-function mapRawGet<K, V>(m: Map<K, V>, key: K): int32 {
+// ===== DRY note =====
+// The four implementations below (HashMap, HashSet, Map, Set) share ~350 lines
+// of near-identical probe/enlarge/compact logic. This duplication is intentional
+// for now — MS lacks a shared-impl mechanism (Nim-style `include hashcommon.nim`
+// with dirty templates). See docs/GAP.md #7 for the plan. Until that lands,
+// keep the four implementations visually parallel so future extraction is mechanical.
+
+// ===== Sizing & Load-Factor Constants =====
+// Shared across all four map/set implementations (HashMap, HashSet, Map, Set).
+//
+// INITIAL_CAPACITY — slot-array size on first insert (must be power of two for
+//   mask-based index arithmetic `hc & (len - 1)`).
+// MIN_EMPTY_SLOTS — minimum unused slots we preserve in the slot array. When
+//   falling below this we grow; keeps probe chains short (expected ~1 lookup hop).
+// REHASH_NUMERATOR/DENOMINATOR — the `slots < counter * 1.5` load-factor test:
+//   encoded as `slots < counter + counter/2` in int32 arithmetic to avoid float.
+// COMPACT_MIN_TOMBSTONES — ordered Map/Set compact when tombstones exceed counter,
+//   but only past this floor so tiny tables don't thrash between compactions.
+
+const INITIAL_CAPACITY: int32 = 32;
+const MIN_EMPTY_SLOTS: int32 = 4;
+const COMPACT_MIN_TOMBSTONES: int32 = 8;
+
+// ===== HashMap<K, V> — unordered open-addressing hash table =====
+
+export struct HashMapEntry<K, V> {
+	hcode: int64;
+	key: K;
+	value: V;
+}
+
+@builtin("IndexableMap")
+export class HashMap<K, V> {
+	data: HashMapEntry<K, V>[];
+	size: int32;
+}
+
+function hashMapRawGet<K, V>(m: HashMap<K, V>, key: K): int32 {
 	if (m.data.length === 0) return -1;
 	const hc = key.hash();
 	const mask: int32 = m.data.length - 1;
@@ -100,10 +138,10 @@ function mapRawGet<K, V>(m: Map<K, V>, key: K): int32 {
 	return -1 - h;
 }
 
-function mapEnlarge<K, V>(m: Map<K, V>): void {
+function hashMapEnlarge<K, V>(m: HashMap<K, V>): void {
 	const oldData = m.data;
 	const newCap = oldData.length * 2;
-	const newData: MapEntry<K, V>[] = new Array(newCap);
+	const newData: HashMapEntry<K, V>[] = new Array(newCap);
 	m.data = newData;
 	let i: int32 = 0;
 	while (i < oldData.length) {
@@ -119,46 +157,44 @@ function mapEnlarge<K, V>(m: Map<K, V>): void {
 	}
 }
 
-export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
+export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
 	if (m.data.length === 0) {
-		const init: MapEntry<K, V>[] = new Array(32);
+		const init: HashMapEntry<K, V>[] = new Array(INITIAL_CAPACITY);
 		m.data = init;
 	}
 	const hc = key.hash();
-	const idx = mapRawGet(m, key);
+	const idx = hashMapRawGet(m, key);
 	if (idx >= 0) {
 		m.data[idx].value = value;
 	} else {
-		// Check rehash: size < 1.5 * count OR empty_slots < 4
-		if (m.data.length < (m.counter + m.counter / 2) || (m.data.length - m.counter) < 4) {
-			mapEnlarge(m);
+		if (m.data.length < (m.size + m.size / 2) || (m.data.length - m.size) < MIN_EMPTY_SLOTS) {
+			hashMapEnlarge(m);
 		}
-		// Re-probe after potential enlarge
 		const mask: int32 = m.data.length - 1;
 		let h: int32 = (hc & (mask as int64)) as int32;
 		while (m.data[h].hcode !== 0) { h = (h + 1) & mask; }
 		m.data[h].hcode = hc;
 		m.data[h].key = key;
 		m.data[h].value = value;
-		m.counter = m.counter + 1;
+		m.size = m.size + 1;
 	}
 }
 
-export function get<K, V>(this m: Map<K, V>, key: K): V {
-	const idx = mapRawGet(m, key);
+export function get<K, V>(this m: HashMap<K, V>, key: K): V {
+	const idx = hashMapRawGet(m, key);
 	if (idx >= 0) return m.data[idx].value;
 	return null as unknown as V;
 }
 
-export function has<K, V>(this m: Map<K, V>, key: K): boolean {
-	return mapRawGet(m, key) >= 0;
+export function has<K, V>(this m: HashMap<K, V>, key: K): boolean {
+	return hashMapRawGet(m, key) >= 0;
 }
 
-export function delete<K, V>(this m: Map<K, V>, key: K): boolean {
-	let i = mapRawGet(m, key);
+export function delete<K, V>(this m: HashMap<K, V>, key: K): boolean {
+	let i = hashMapRawGet(m, key);
 	if (i < 0) return false;
 	const mask: int32 = m.data.length - 1;
-	m.counter = m.counter - 1;
+	m.size = m.size - 1;
 	// Back-shift deletion (Knuth V3 Algo 6.4R)
 	while (true) {
 		m.data[i].hcode = 0;
@@ -179,17 +215,13 @@ export function delete<K, V>(this m: Map<K, V>, key: K): boolean {
 	return true;
 }
 
-export function size<K, V>(this m: Map<K, V>): int32 {
-	return m.counter;
-}
-
-export function clear<K, V>(this m: Map<K, V>): void {
+export function clear<K, V>(this m: HashMap<K, V>): void {
 	let i: int32 = 0;
 	while (i < m.data.length) { m.data[i].hcode = 0; i = i + 1; }
-	m.counter = 0;
+	m.size = 0;
 }
 
-export function keys<K, V>(this m: Map<K, V>): K[] {
+export function keys<K, V>(this m: HashMap<K, V>): K[] {
 	const result: K[] = [];
 	let i: int32 = 0;
 	while (i < m.data.length) {
@@ -199,7 +231,7 @@ export function keys<K, V>(this m: Map<K, V>): K[] {
 	return result;
 }
 
-export function values<K, V>(this m: Map<K, V>): V[] {
+export function values<K, V>(this m: HashMap<K, V>): V[] {
 	const result: V[] = [];
 	let i: int32 = 0;
 	while (i < m.data.length) {
@@ -209,20 +241,16 @@ export function values<K, V>(this m: Map<K, V>): V[] {
 	return result;
 }
 
-// Iterator protocol: toItems() makes Map iterable with for...of.
-// Yields keys by default (consistent with Object.keys). Use .values() or .keys() for explicit choice.
-export function* toItems<K, V>(this m: Map<K, V>): Iterator<K> {
+// Iterator protocol: toItems() makes HashMap iterable with for...of.
+export function* toItems<K, V>(this m: HashMap<K, V>): Iterator<K> {
 	for (const entry of m.data) {
 		if (entry.hcode !== 0) yield entry.key;
 	}
 }
 
-// Construct a Map from parallel arrays of keys and values.
-// Used by the index-signature literal lowering — `{ "k": v, ... }` assigned
-// to a Map<K,V> target is rewritten to mapFromPairs([keys], [values]).
-// See docs/PACKAGE.md for the index signature design.
-export function mapFromPairs<K, V>(keys: K[], values: V[]): Map<K, V> {
-	const m = new Map<K, V>();
+// Bulk-construction helper for HashMap (unordered counterpart of mapFromPairs).
+export function hashMapFromPairs<K, V>(keys: K[], values: V[]): HashMap<K, V> {
+	const m = new HashMap<K, V>();
 	let i: int32 = 0;
 	while (i < keys.length) {
 		if (i < values.length) {
@@ -233,22 +261,22 @@ export function mapFromPairs<K, V>(keys: K[], values: V[]): Map<K, V> {
 	return m;
 }
 
-// ===== Set<T> =====
+// ===== HashSet<T> — unordered open-addressing hash table =====
+// Own entry type: key-only (no value slot). Independent implementation from Set<T>.
 
-export struct SetEntry<T> {
+export struct HashSetEntry<T> {
 	hcode: int64;
 	key: T;
 }
 
-export class Set<T> {
-	data: SetEntry<T>[];
-	counter: int32;
+export class HashSet<T> {
+	data: HashSetEntry<T>[];
+	size: int32;
 
 	constructor(items: T[] = []) {
 		if (items.length > 0) {
-			// Pre-allocate: nextPowerOfTwo(count * 1.5 + 4) to avoid rehash during bulk insert
-			let cap = 32;
-			const needed = items.length + (items.length >> 1) + 4;
+			let cap = INITIAL_CAPACITY;
+			const needed = items.length + (items.length >> 1) + MIN_EMPTY_SLOTS;
 			while (cap < needed) { cap = cap * 2; }
 			this.data = new Array(cap);
 		}
@@ -258,7 +286,7 @@ export class Set<T> {
 	}
 }
 
-function setRawGet<T>(s: Set<T>, key: T): int32 {
+function hashSetRawGet<T>(s: HashSet<T>, key: T): int32 {
 	if (s.data.length === 0) return -1;
 	const hc = key.hash();
 	const mask: int32 = s.data.length - 1;
@@ -272,10 +300,10 @@ function setRawGet<T>(s: Set<T>, key: T): int32 {
 	return -1 - h;
 }
 
-function setEnlarge<T>(s: Set<T>): void {
+function hashSetEnlarge<T>(s: HashSet<T>): void {
 	const oldData = s.data;
 	const newCap = oldData.length * 2;
-	const newData: SetEntry<T>[] = new Array(newCap);
+	const newData: HashSetEntry<T>[] = new Array(newCap);
 	s.data = newData;
 	let i: int32 = 0;
 	while (i < oldData.length) {
@@ -290,31 +318,31 @@ function setEnlarge<T>(s: Set<T>): void {
 	}
 }
 
-export function add<T>(this s: Set<T>, value: T): void {
-	if (s.data.length === 0) { s.data = new Array(32); }
-	const idx = setRawGet(s, value);
+export function add<T>(this s: HashSet<T>, value: T): void {
+	if (s.data.length === 0) { s.data = new Array(INITIAL_CAPACITY); }
+	const idx = hashSetRawGet(s, value);
 	if (idx >= 0) return;
 	const hc = value.hash();
-	if (s.data.length < (s.counter + s.counter / 2) || (s.data.length - s.counter) < 4) {
-		setEnlarge(s);
+	if (s.data.length < (s.size + s.size / 2) || (s.data.length - s.size) < MIN_EMPTY_SLOTS) {
+		hashSetEnlarge(s);
 	}
 	const mask: int32 = s.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (s.data[h].hcode !== 0) { h = (h + 1) & mask; }
 	s.data[h].hcode = hc;
 	s.data[h].key = value;
-	s.counter = s.counter + 1;
+	s.size = s.size + 1;
 }
 
-export function has<T>(this s: Set<T>, value: T): boolean {
-	return setRawGet(s, value) >= 0;
+export function has<T>(this s: HashSet<T>, value: T): boolean {
+	return hashSetRawGet(s, value) >= 0;
 }
 
-export function delete<T>(this s: Set<T>, value: T): boolean {
-	let i = setRawGet(s, value);
+export function delete<T>(this s: HashSet<T>, value: T): boolean {
+	let i = hashSetRawGet(s, value);
 	if (i < 0) return false;
 	const mask: int32 = s.data.length - 1;
-	s.counter = s.counter - 1;
+	s.size = s.size - 1;
 	while (true) {
 		s.data[i].hcode = 0;
 		const j = i;
@@ -331,24 +359,400 @@ export function delete<T>(this s: Set<T>, value: T): boolean {
 	return true;
 }
 
-export function size<T>(this s: Set<T>): int32 {
-	return s.counter;
-}
-
-export function clear<T>(this s: Set<T>): void {
+export function clear<T>(this s: HashSet<T>): void {
 	let i: int32 = 0;
 	while (i < s.data.length) { s.data[i].hcode = 0; i = i + 1; }
-	s.counter = 0;
+	s.size = 0;
 }
 
-// Iterator protocol: toItems() makes Set iterable with for...of.
-// function* yields lazily — O(1) allocation (state machine only, no array).
-export function* toItems<T>(this s: Set<T>): Iterator<T> {
+export function* toItems<T>(this s: HashSet<T>): Iterator<T> {
 	for (const entry of s.data) {
 		if (entry.hcode !== 0) yield entry.key;
 	}
 }
 
-// Tests for Set/Map are in external test files (monomorphized constructors
-// can't be tested inline — they emit in the defining module, causing typeInfo conflicts).
+// ===== Map<K, V> — insertion-ordered (IndexMap pattern) =====
+//
+// Layout:
+//   entries[]  — insertion-ordered log. Tombstones kept in place (hcode === 0) until compaction.
+//   indices[]  — hash slot table of int32 indices into entries. Sentinels:
+//                  -1 = empty slot  (probe terminates lookup)
+//                  -2 = tombstone   (probe continues past it for both insert and lookup)
+//   counter    — live entries (excludes tombstones).
+//   tombstones — count of dead entries still in entries[].
+//
+// Divergence from reference compiler stdlib: Nim's OrderedTable stores order
+// via a `next: int` field per entry + `first`/`last` on the object (intrusive
+// linked list through the slot array). We chose the IndexMap layout (separate
+// entries[] + indices[]) used by Python 3.7+ dict and Rust's indexmap crate.
+// Trade-off: two arrays vs one, but iteration walks a dense array (cache-friendly)
+// instead of pointer-chasing through slots. Both are valid; we favor modern
+// IndexMap ergonomics over reference parity here.
 
+export struct OrderedMapEntry<K, V> {
+	hcode: int64;
+	key: K;
+	value: V;
+}
+
+@builtin("IndexableMap")
+export class Map<K, V> {
+	entries: OrderedMapEntry<K, V>[];
+	indices: int32[];
+	size: int32;
+	tombstones: int32;
+}
+
+function orderedMapInitIndices<K, V>(m: Map<K, V>, cap: int32): void {
+	m.indices = new Array(cap);
+	let k: int32 = 0;
+	while (k < cap) { m.indices[k] = -1; k = k + 1; }
+}
+
+function orderedMapRawGet<K, V>(m: Map<K, V>, key: K, hc: int64): int32 {
+	if (m.indices.length === 0) return -1;
+	const mask: int32 = m.indices.length - 1;
+	let h: int32 = (hc & (mask as int64)) as int32;
+	let firstOpen: int32 = -1;
+	while (true) {
+		const slot = m.indices[h];
+		if (slot === -1) {
+			if (firstOpen >= 0) return -1 - firstOpen;
+			return -1 - h;
+		}
+		if (slot === -2) {
+			if (firstOpen < 0) firstOpen = h;
+		} else {
+			const e = m.entries[slot];
+			if (e.hcode === hc && e.key === key) return h;
+		}
+		h = (h + 1) & mask;
+	}
+	return -1;
+}
+
+function orderedMapEnlarge<K, V>(m: Map<K, V>): void {
+	const newCap = m.indices.length === 0 ? 32 : m.indices.length * 2;
+	orderedMapInitIndices(m, newCap);
+	const mask: int32 = newCap - 1;
+	let i: int32 = 0;
+	while (i < m.entries.length) {
+		const e = m.entries[i];
+		if (e.hcode !== 0) {
+			let h: int32 = (e.hcode & (mask as int64)) as int32;
+			while (m.indices[h] !== -1) { h = (h + 1) & mask; }
+			m.indices[h] = i;
+		}
+		i = i + 1;
+	}
+}
+
+function orderedMapCompact<K, V>(m: Map<K, V>): void {
+	const oldEntries = m.entries;
+	const newEntries: OrderedMapEntry<K, V>[] = [];
+	let i: int32 = 0;
+	while (i < oldEntries.length) {
+		if (oldEntries[i].hcode !== 0) {
+			newEntries.push(oldEntries[i]);
+		}
+		i = i + 1;
+	}
+	m.entries = newEntries;
+	m.tombstones = 0;
+	let cap = INITIAL_CAPACITY;
+	const needed = m.size + (m.size >> 1) + MIN_EMPTY_SLOTS;
+	while (cap < needed) { cap = cap * 2; }
+	orderedMapInitIndices(m, cap);
+	const mask: int32 = cap - 1;
+	let j: int32 = 0;
+	while (j < m.entries.length) {
+		let h: int32 = (m.entries[j].hcode & (mask as int64)) as int32;
+		while (m.indices[h] !== -1) { h = (h + 1) & mask; }
+		m.indices[h] = j;
+		j = j + 1;
+	}
+}
+
+export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
+	if (m.indices.length === 0) { orderedMapInitIndices(m, INITIAL_CAPACITY); }
+	const hc = key.hash();
+	const slot = orderedMapRawGet(m, key, hc);
+	if (slot >= 0) {
+		const entryIdx = m.indices[slot];
+		m.entries[entryIdx].value = value;
+		return;
+	}
+	if (m.indices.length < (m.size + m.size / 2) || (m.indices.length - m.size - m.tombstones) < MIN_EMPTY_SLOTS) {
+		orderedMapEnlarge(m);
+	}
+	const mask: int32 = m.indices.length - 1;
+	let h: int32 = (hc & (mask as int64)) as int32;
+	let firstOpen: int32 = -1;
+	while (true) {
+		const cur = m.indices[h];
+		if (cur === -1) {
+			if (firstOpen >= 0) { h = firstOpen; }
+			break;
+		}
+		if (cur === -2 && firstOpen < 0) { firstOpen = h; }
+		h = (h + 1) & mask;
+	}
+	const newEntry: OrderedMapEntry<K, V> = { hcode: hc, key: key, value: value };
+	m.entries.push(newEntry);
+	m.indices[h] = m.entries.length - 1;
+	m.size = m.size + 1;
+}
+
+export function get<K, V>(this m: Map<K, V>, key: K): V {
+	if (m.indices.length === 0) return null as unknown as V;
+	const hc = key.hash();
+	const slot = orderedMapRawGet(m, key, hc);
+	if (slot >= 0) return m.entries[m.indices[slot]].value;
+	return null as unknown as V;
+}
+
+export function has<K, V>(this m: Map<K, V>, key: K): boolean {
+	if (m.indices.length === 0) return false;
+	const hc = key.hash();
+	return orderedMapRawGet(m, key, hc) >= 0;
+}
+
+export function delete<K, V>(this m: Map<K, V>, key: K): boolean {
+	if (m.indices.length === 0) return false;
+	const hc = key.hash();
+	const slot = orderedMapRawGet(m, key, hc);
+	if (slot < 0) return false;
+	const entryIdx = m.indices[slot];
+	m.entries[entryIdx].hcode = 0;
+	m.indices[slot] = -2;
+	m.size = m.size - 1;
+	m.tombstones = m.tombstones + 1;
+	if (m.tombstones > m.size && m.tombstones > COMPACT_MIN_TOMBSTONES) {
+		orderedMapCompact(m);
+	}
+	return true;
+}
+
+export function clear<K, V>(this m: Map<K, V>): void {
+	const empty: OrderedMapEntry<K, V>[] = [];
+	m.entries = empty;
+	let i: int32 = 0;
+	while (i < m.indices.length) { m.indices[i] = -1; i = i + 1; }
+	m.size = 0;
+	m.tombstones = 0;
+}
+
+export function keys<K, V>(this m: Map<K, V>): K[] {
+	const result: K[] = [];
+	let i: int32 = 0;
+	while (i < m.entries.length) {
+		if (m.entries[i].hcode !== 0) result.push(m.entries[i].key);
+		i = i + 1;
+	}
+	return result;
+}
+
+export function values<K, V>(this m: Map<K, V>): V[] {
+	const result: V[] = [];
+	let i: int32 = 0;
+	while (i < m.entries.length) {
+		if (m.entries[i].hcode !== 0) result.push(m.entries[i].value);
+		i = i + 1;
+	}
+	return result;
+}
+
+export function* toItems<K, V>(this m: Map<K, V>): Iterator<K> {
+	for (const entry of m.entries) {
+		if (entry.hcode !== 0) yield entry.key;
+	}
+}
+
+// Used by the index-signature literal lowering — `{ "k": v, ... }` assigned
+// to a Map<K,V> target is rewritten to mapFromPairs([keys], [values]).
+// Returns the ordered Map so the lowering preserves the JS object literal's key order.
+export function mapFromPairs<K, V>(keys: K[], values: V[]): Map<K, V> {
+	const m = new Map<K, V>();
+	let i: int32 = 0;
+	while (i < keys.length) {
+		if (i < values.length) {
+			m.set(keys[i], values[i]);
+		}
+		i = i + 1;
+	}
+	return m;
+}
+
+// ===== Set<T> — insertion-ordered (IndexMap pattern, key-only entries) =====
+//
+// Same layout as Map but entries carry only `key` (no value slot).
+// Reference-compiler parity: Set / HashSet have their own key-only entry type
+// for memory efficiency, independent of Map / Table.
+
+export struct OrderedSetEntry<T> {
+	hcode: int64;
+	key: T;
+}
+
+export class Set<T> {
+	entries: OrderedSetEntry<T>[];
+	indices: int32[];
+	size: int32;
+	tombstones: int32;
+
+	constructor(items: T[] = []) {
+		if (items.length > 0) {
+			let cap = INITIAL_CAPACITY;
+			const needed = items.length + (items.length >> 1) + MIN_EMPTY_SLOTS;
+			while (cap < needed) { cap = cap * 2; }
+			this.indices = new Array(cap);
+			let k: int32 = 0;
+			while (k < cap) { this.indices[k] = -1; k = k + 1; }
+		}
+		for (const item of items) {
+			this.add(item);
+		}
+	}
+}
+
+function orderedSetInitIndices<T>(s: Set<T>, cap: int32): void {
+	s.indices = new Array(cap);
+	let k: int32 = 0;
+	while (k < cap) { s.indices[k] = -1; k = k + 1; }
+}
+
+function orderedSetRawGet<T>(s: Set<T>, key: T, hc: int64): int32 {
+	if (s.indices.length === 0) return -1;
+	const mask: int32 = s.indices.length - 1;
+	let h: int32 = (hc & (mask as int64)) as int32;
+	let firstOpen: int32 = -1;
+	while (true) {
+		const slot = s.indices[h];
+		if (slot === -1) {
+			if (firstOpen >= 0) return -1 - firstOpen;
+			return -1 - h;
+		}
+		if (slot === -2) {
+			if (firstOpen < 0) firstOpen = h;
+		} else {
+			const e = s.entries[slot];
+			if (e.hcode === hc && e.key === key) return h;
+		}
+		h = (h + 1) & mask;
+	}
+	return -1;
+}
+
+function orderedSetEnlarge<T>(s: Set<T>): void {
+	const newCap = s.indices.length === 0 ? 32 : s.indices.length * 2;
+	orderedSetInitIndices(s, newCap);
+	const mask: int32 = newCap - 1;
+	let i: int32 = 0;
+	while (i < s.entries.length) {
+		const e = s.entries[i];
+		if (e.hcode !== 0) {
+			let h: int32 = (e.hcode & (mask as int64)) as int32;
+			while (s.indices[h] !== -1) { h = (h + 1) & mask; }
+			s.indices[h] = i;
+		}
+		i = i + 1;
+	}
+}
+
+function orderedSetCompact<T>(s: Set<T>): void {
+	const oldEntries = s.entries;
+	const newEntries: OrderedSetEntry<T>[] = [];
+	let i: int32 = 0;
+	while (i < oldEntries.length) {
+		if (oldEntries[i].hcode !== 0) {
+			// See orderedMapCompact comment: explicit field copy so DRC incref correctly.
+			const e: OrderedSetEntry<T> = {
+				hcode: oldEntries[i].hcode,
+				key: oldEntries[i].key,
+			};
+			newEntries.push(e);
+		}
+		i = i + 1;
+	}
+	s.entries = newEntries;
+	s.tombstones = 0;
+	let cap = INITIAL_CAPACITY;
+	const needed = s.size + (s.size >> 1) + MIN_EMPTY_SLOTS;
+	while (cap < needed) { cap = cap * 2; }
+	orderedSetInitIndices(s, cap);
+	const mask: int32 = cap - 1;
+	let j: int32 = 0;
+	while (j < s.entries.length) {
+		let h: int32 = (s.entries[j].hcode & (mask as int64)) as int32;
+		while (s.indices[h] !== -1) { h = (h + 1) & mask; }
+		s.indices[h] = j;
+		j = j + 1;
+	}
+}
+
+export function add<T>(this s: Set<T>, value: T): void {
+	if (s.indices.length === 0) { orderedSetInitIndices(s, INITIAL_CAPACITY); }
+	const hc = value.hash();
+	const slot = orderedSetRawGet(s, value, hc);
+	if (slot >= 0) return;
+	if (s.indices.length < (s.size + s.size / 2) || (s.indices.length - s.size - s.tombstones) < MIN_EMPTY_SLOTS) {
+		orderedSetEnlarge(s);
+	}
+	const mask: int32 = s.indices.length - 1;
+	let h: int32 = (hc & (mask as int64)) as int32;
+	let firstOpen: int32 = -1;
+	while (true) {
+		const cur = s.indices[h];
+		if (cur === -1) {
+			if (firstOpen >= 0) { h = firstOpen; }
+			break;
+		}
+		if (cur === -2 && firstOpen < 0) { firstOpen = h; }
+		h = (h + 1) & mask;
+	}
+	const newEntry: OrderedSetEntry<T> = { hcode: hc, key: value };
+	s.entries.push(newEntry);
+	s.indices[h] = s.entries.length - 1;
+	s.size = s.size + 1;
+}
+
+export function has<T>(this s: Set<T>, value: T): boolean {
+	if (s.indices.length === 0) return false;
+	const hc = value.hash();
+	return orderedSetRawGet(s, value, hc) >= 0;
+}
+
+export function delete<T>(this s: Set<T>, value: T): boolean {
+	if (s.indices.length === 0) return false;
+	const hc = value.hash();
+	const slot = orderedSetRawGet(s, value, hc);
+	if (slot < 0) return false;
+	const entryIdx = s.indices[slot];
+	s.entries[entryIdx].hcode = 0;
+	s.indices[slot] = -2;
+	s.size = s.size - 1;
+	s.tombstones = s.tombstones + 1;
+	if (s.tombstones > s.size && s.tombstones > COMPACT_MIN_TOMBSTONES) {
+		orderedSetCompact(s);
+	}
+	return true;
+}
+
+export function clear<T>(this s: Set<T>): void {
+	const empty: OrderedSetEntry<T>[] = [];
+	s.entries = empty;
+	let i: int32 = 0;
+	while (i < s.indices.length) { s.indices[i] = -1; i = i + 1; }
+	s.size = 0;
+	s.tombstones = 0;
+}
+
+export function* toItems<T>(this s: Set<T>): Iterator<T> {
+	for (const entry of s.entries) {
+		if (entry.hcode !== 0) yield entry.key;
+	}
+}
+
+// Tests for Set/Map/HashSet/HashMap are in external test files (monomorphized
+// constructors can't be tested inline — they emit in the defining module,
+// causing typeInfo conflicts).

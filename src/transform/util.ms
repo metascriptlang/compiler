@@ -11,6 +11,17 @@ export function syntheticToken(loc: SourceLocation): Token {
 	return createToken(TokenKind.Ident, "", loc.line);
 }
 
+// Value type needing typed-sized future allocation (msFutureCreateInline) and
+// typed inline read (msWaitForStruct). Includes msString (16 bytes > sizeof(void*)).
+// Lives here — not in builtinLower or promiseLower — because three sibling modules
+// (builtinLower, promiseLower, asyncBridge) all need it; keeping it in any one of
+// them creates a circular import with the others.
+export function isStructLikeType(t: Type): boolean {
+	if (t === null) return false;
+	return t.kind === TypeKind.Struct || t.kind === TypeKind.GenericInstance
+		|| t.kind === TypeKind.Tuple || t.kind === TypeKind.String;
+}
+
 // ===== Naming Conventions =====
 
 // Canonical name for auto-generated enum-to-string function (e.g., "Color_toString").

@@ -30,8 +30,8 @@ import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
 import { createTransformContextWithChecker, createNameSet } from "../transform/context";
 import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
-import { findModule, hasModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
-import { createFileSystemProvider, loadModuleGraphWithConfig, loadModule, provideSource, SourceProvider } from "../module/loader";
+import { createModuleGraph, findModule, hasModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
+import { createFileSystemProvider, loadModule, provideSource, SourceProvider } from "../module/loader";
 import { ResolverConfig, createDefaultConfig, Backend, resolveImportWithConfig } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
@@ -279,10 +279,10 @@ let graphPreludeCtx: CheckerContext = null as unknown as CheckerContext;
 
 // Global set of compiled .o file paths — deduplicates @compile directives across modules.
 // Reference parity: @compile directive processes each unique file path exactly once.
-let _compiledOFiles: Set<string> = new Set<string>();
+let _compiledOFiles: HashSet<string> = new HashSet<string>();
 
 function resetCompiledOFiles(): void {
-	_compiledOFiles = new Set<string>();
+	_compiledOFiles = new HashSet<string>();
 }
 
 // Apply --gc flag: set GcMode on the shared prelude context so all modules inherit it.
@@ -298,14 +298,17 @@ export function applyGcMode(opts: CliOptions): void {
 function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig): ModuleGraph {
 	if (verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const provider = createFileSystemProvider();
-	const graph = loadModuleGraphWithConfig(entryPath, provider, config);
 
-	// Load pure .ms prelude modules into the graph so they get codegen'd.
-	// .cms preludes are extern-only (C headers); .ms preludes contain real MetaScript
-	// that must be compiled. This matches the standard compileSystemModule pattern.
+	// Load preludes FIRST so they end up at the start of graph.loadOrder.
+	// loadOrder is the init order (see genProjectDispatcher in codegen/c/index.ms);
+	// preludes are implicit deps of every user module, so their module-level
+	// globals (e.g. INITIAL_CAPACITY in std/core/struct.ms) must be ready
+	// before any user-module __Init000 touches them.
+	const graph = createModuleGraph();
 	if (config.stdPath !== "") {
 		loadPreludeModules(graph, provider, config);
 	}
+	const _r = loadModule(graph, entryPath, provider, config, 1);
 
 	reportGraphErrors(graph);
 	exitOnModuleErrors(graph, "error");
@@ -356,12 +359,12 @@ interface ProcessedModule {
 // Build state for C compilation: flags + include path registry.
 interface CBuildState {
 	allFlags: string;
-	includePaths: Set<string>;
+	includePaths: HashSet<string>;
 }
 
 function initCBuildState(opts: CliOptions): CBuildState {
 	let allFlags = cliCompileFlags(opts);
-	const includePaths: Set<string> = new Set<string>();
+	const includePaths: HashSet<string> = new HashSet<string>();
 	// Always register compiler root (std lib @compile paths resolve here).
 	const compilerRoot = resolveRuntimeDir();
 	if (compilerRoot !== "") {
@@ -387,7 +390,7 @@ function initCBuildState(opts: CliOptions): CBuildState {
 // Resolve a relative directory path against the include search list.
 // Mirrors @compile path resolution (processCompileDirectives): try CWD first,
 // then search registered include paths (which contain compilerRoot).
-function resolveIncludeDir(dir: string, includePaths: Set<string>): string {
+function resolveIncludeDir(dir: string, includePaths: HashSet<string>): string {
 	if (dir === "" || isAbsolute(dir)) return dir;
 	if (exists(dir)) return dir;
 	for (const ip of includePaths) {
@@ -400,7 +403,7 @@ function resolveIncludeDir(dir: string, includePaths: Set<string>): string {
 // Resolve relative -I/-iquote/-isystem paths in a flags string using the
 // same rule as @compile: try CWD, then search includePaths. Lets std @passC
 // directives work from any CWD when the compiler is installed elsewhere.
-function resolveIncludeFlags(flags: string, includePaths: Set<string>): string {
+function resolveIncludeFlags(flags: string, includePaths: HashSet<string>): string {
 	if (flags === "") return flags;
 	const parts = flags.split(" ");
 	let result = "";
@@ -419,7 +422,7 @@ function resolveIncludeFlags(flags: string, includePaths: Set<string>): string {
 }
 
 // Register -I/-iquote paths from a module's compiler flags into the include path set.
-function registerIncludePaths(flags: string, paths: Set<string>): void {
+function registerIncludePaths(flags: string, paths: HashSet<string>): void {
 	if (flags === "") return;
 	const parts = flags.split(" ");
 	for (const p of parts) {
@@ -451,7 +454,7 @@ interface CompileJob {
 //      serializes (no speedup, still correct).
 //   3. COLLECT (serial, main thread) — waitFor each future in input order, check
 //      exit codes, publish cache entries, emit oFiles deterministically.
-function processCompileDirectives(directives: string, moduleDir: string, includePaths: Set<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, osTarget: string): string {
+function processCompileDirectives(directives: string, moduleDir: string, includePaths: HashSet<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, osTarget: string): string {
 	if (directives === "") return "";
 
 	// === 1. GATHER ===
@@ -798,6 +801,16 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const sharedHookOwners = createNameSet();
 	setGlobalHookOwners(sharedHookOwners);
 
+	// PROFILE: sub-phase timings summed across all modules.
+	let tParse: number = 0;
+	let tCheck: number = 0;
+	let tMono: number = 0;
+	let tMacro: number = 0;
+	let tXform: number = 0;
+	let tRefine: number = 0;
+	let tNative: number = 0;
+	let tAnalyze: number = 0;
+	let tLower: number = 0;
 
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
@@ -806,8 +819,12 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const modT0 = clockMs();
 		if (opts.verbose) verboseLog(`transforming ${modPath}`);
 
+		const _tp0 = clockMs();
 		const program = parseOrExit(mod.source, modPath);
+		tParse = tParse + (clockMs() - _tp0);
+		const _tc0 = clockMs();
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
+		tCheck = tCheck + (clockMs() - _tc0);
 		ctx.strictDefs = opts.strictDefs;
 		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
@@ -837,8 +854,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 				instPd.programStmts.push(instNode);
 			}
 		}
+		const _tm0 = clockMs();
 		const monoed = monomorphizeProgram(program, ctx);
 		validateTypedAST(ctx, monoed);
+		tMono = tMono + (clockMs() - _tm0);
 		if (hasErrors(ctx)) {
 			for (const e of ctx.errors) {
 				renderModuleError(modPath, mod.source, {
@@ -851,19 +870,31 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			ctx.errors = [];
 		}
 
+		const _tmc0 = clockMs();
 		const macroExpanded = expandMacros(monoed, ctx);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
+		tMacro = tMacro + (clockMs() - _tmc0);
+		const _tx0 = clockMs();
 		const transformed = transformProgram(comptimeResolved, ctx, false);
+		tXform = tXform + (clockMs() - _tx0);
 		const nativeCtx = createTransformContextWithChecker(ctx);
+		const _tr0 = clockMs();
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
+		tRefine = tRefine + (clockMs() - _tr0);
+		const _tn0 = clockMs();
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
+		tNative = tNative + (clockMs() - _tn0);
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
 		if (opts.gcMode === "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode === "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode === "orc") ctx.gcMode = GcMode.Orc;
 		if (opts.osTarget !== "") ctx.osTarget = opts.osTarget;
+		const _ta0 = clockMs();
 		const analyzed = analyzeProgram(hcrResult, ctx);
+		tAnalyze = tAnalyze + (clockMs() - _ta0);
+		const _tl0 = clockMs();
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
+		tLower = tLower + (clockMs() - _tl0);
 		const modT1 = clockMs();
 		if (opts.showTime && (modT1 - modT0) > 50) {
 			printTiming(modPath, modT0);
@@ -897,6 +928,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	}
 
 	if (opts.showTime) printTiming("phase A (parse+check+transform)", tA);
+	if (opts.showTime) {
+		console.log(`    parse=${tParse}ms check=${tCheck}ms mono=${tMono}ms macro=${tMacro}ms xform=${tXform}ms refine=${tRefine}ms native=${tNative}ms analyze=${tAnalyze}ms lower=${tLower}ms`);
+	}
 
 	// Gate: stop before codegen if any type errors (standard compiler parity).
 	// All three reference compilers NEVER proceed to codegen with type errors.

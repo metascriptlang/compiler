@@ -124,7 +124,7 @@ export class TransAmDb {
 	stdPath: string;
 	resolverConfig: ResolverConfig;
 	preludeCtx: CheckerContext;
-	preprocessCache: Map<number, string>;  // fileId → preprocessed source
+	preprocessCache: HashMap<number, string>;  // fileId → preprocessed source
 }
 
 export function createTransAmDb(cacheCapacity: number): TransAmDb {
@@ -140,7 +140,7 @@ export function createTransAmDb(cacheCapacity: number): TransAmDb {
 		stdPath: "",
 		resolverConfig: createDefaultConfig(Backend.C, ""),
 		preludeCtx: null as unknown as CheckerContext,
-		preprocessCache: new Map<number, string>(),
+		preprocessCache: new HashMap<number, string>(),
 	};
 }
 
@@ -370,7 +370,7 @@ function dbRecordDepImports(db: TransAmDb, depPath: string, depProgram: Node): v
 
 // Lazily ensure all files imported by `filePath` have their exports in the registry.
 // Depth-first: processes transitive deps before current (compileModule pattern).
-function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Set<string>, startVersion: number): void {
+function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: HashSet<string>, startVersion: number): void {
 	// Cycle protection — O(1) Set lookup
 	if (visited.has(filePath)) return;
 	visited.add(filePath);
@@ -493,7 +493,7 @@ function hashCheckerResult(ctx: CheckerContext): number {
 	let h: number = errorCount;
 	if (ctx.table !== null && ctx.table.current !== null) {
 		const scope = ctx.table.current;
-		for (const sym of scope.symbols) {
+		for (const sym of scope.symbols.values()) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
 				// Hash name + type kind so type changes invalidate dependents
 				const typeKind = sym.symbolType !== null ? sym.symbolType.kind : 0;
@@ -529,7 +529,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const startVersion = getCancelVersion(db.cancelCtx);
 
 	// Ensure cross-module exports are registered for all dependencies
-	const visitedPaths: Set<string> = new Set<string>();
+	const visitedPaths: HashSet<string> = new HashSet<string>();
 	dbEnsureExportsRegistered(db, filePath, visitedPaths, startVersion);
 
 	pushFrame(db.depStack, key);
@@ -1028,7 +1028,7 @@ test "cross-module interface field resolution" {
 	const bId = getFileId(db.fileInput, "/test/b.ms");
 	recordModuleImport(db.moduleDeps, aId, bId);
 
-	const visited: Set<string> = new Set<string>();
+	const visited: HashSet<string> = new HashSet<string>();
 	dbEnsureExportsRegistered(db, "/test/a.ms", visited, 0);
 
 	// Foo should be registered with resolved fields

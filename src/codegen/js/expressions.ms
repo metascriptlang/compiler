@@ -85,8 +85,8 @@ export function emitRegexLiteral(gen: JSGenerator, node: Node): void {
 
 // ===== Identifier =====
 
-// JS reserved words — Set<string> for O(1) lookup.
-const JS_RESERVED: Set<string> = new Set<string>([
+// JS reserved words — HashSet<string> for O(1) lookup.
+const JS_RESERVED: HashSet<string> = new HashSet<string>([
 	"abstract", "arguments", "await", "boolean", "break", "byte",
 	"case", "catch", "char", "class", "const", "continue", "debugger",
 	"default", "delete", "do", "double", "else", "enum", "eval", "export", "extends",

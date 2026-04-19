@@ -16,7 +16,7 @@ export class TaCacheStore {
 	accessCounters: number[];   // parallel: last-access time per entry
 	accessClock: number;            // monotonic clock, incremented on each access
 	capacity: number;
-	fileIndex: Map<number, TaCacheEntry[]>;  // fileId → entries for O(1) invalidation
+	fileIndex: HashMap<number, TaCacheEntry[]>;  // fileId → entries for O(1) invalidation
 }
 
 export function createCacheStore(capacity: number): TaCacheStore {
@@ -25,7 +25,7 @@ export function createCacheStore(capacity: number): TaCacheStore {
 		accessCounters: [],
 		accessClock: 0,
 		capacity,
-		fileIndex: new Map<number, TaCacheEntry[]>(),
+		fileIndex: new HashMap<number, TaCacheEntry[]>(),
 	};
 }
 

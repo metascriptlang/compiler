@@ -8,7 +8,7 @@
 // This guarantees the + chain is string concatenation (JS/TS coercion rules).
 // Chains of length 2 are left as binary (no benefit from flattening).
 
-import { Node, NodeKind, SourceLocation, BinaryExprData, CallExprData, IdentifierData, collectConcatParts } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, BinaryExprData, CallExprData, IdentifierData } from "../../ast/node";
 import { stringType, isStringLike } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -22,13 +22,59 @@ export function lowerStringConcatFlatten(program: Node, ctx: TransformContext): 
 	return program;
 }
 
+// Collect parts of a + chain, unpacking inner CallExpr nodes that are already
+// flattened msStringConcat / msStringConcatArr calls. Needed because the
+// walker is bottom-up: inner BinaryExprs get flattened first, so the outer
+// level would otherwise see a CallExpr + StringLiteral as just 2 parts. Deep
+// collection lets the outer level re-absorb inner flattened chains into a
+// single msStringConcatArr call, and keeps stringOpLower's post-flatten
+// self-append detection working for chains like `x = x + a + b + c`.
+function collectConcatPartsDeep(node: Node): Node[] {
+	const result: Node[] = [];
+	const stack: Node[] = [node];
+	while (stack.length > 0) {
+		const cur = stack.pop();
+		if (cur.kind === NodeKind.BinaryExpr) {
+			const bd = cur.data as BinaryExprData;
+			if (bd.operator === "+") {
+				stack.push(bd.right);
+				stack.push(bd.left);
+				continue;
+			}
+		}
+		if (cur.kind === NodeKind.CallExpr) {
+			const cd = cur.data as CallExprData;
+			if (cd.callee.kind === NodeKind.Identifier) {
+				const cn = (cd.callee.data as IdentifierData).name;
+				if (cn === "msStringConcat" && cd.arguments.length === 2) {
+					stack.push(cd.arguments[1]);
+					stack.push(cd.arguments[0]);
+					continue;
+				}
+				if (cn === "msStringConcatArr" && cd.arguments.length >= 1) {
+					// args[0] is the count; skip it, push parts in reverse so stack pops in order.
+					let i = cd.arguments.length - 1;
+					while (i >= 1) {
+						stack.push(cd.arguments[i]);
+						i -= 1;
+					}
+					continue;
+				}
+			}
+		}
+		result.push(cur);
+	}
+	return result;
+}
+
 function flattenConcat(node: Node): Node {
 	if (node.kind !== NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	if (d.operator !== "+") return node;
 
-	// Collect all parts of the + chain
-	const parts = collectConcatParts(node);
+	// Deep collect — unpacks inner already-flattened concat calls so the
+	// outer level can merge them into one msStringConcatArr.
+	const parts = collectConcatPartsDeep(node);
 
 	// Only flatten if at least one part is a string literal or has string type
 	let hasString = false;

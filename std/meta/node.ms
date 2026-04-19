@@ -57,7 +57,36 @@ export enum AttachedOp {
 }
 
 // ===== Type =====
-
+//
+// Name fields carry MULTIPLE roles — read carefully:
+//   typeName       — (1) identity key for attachedOps lookup and hook-name derivation,
+//                    (2) C struct name at codegen, (3) display/error-message text.
+//                    Empty for anonymous/primitive types. Shared across specializations
+//                    of the same generic body (e.g. Map<int,X> and Map<str,Y> both have
+//                    typeName="Map") — callers that need per-specialization uniqueness
+//                    must use typeChildren alongside.
+//   typeNames      — member/child NAMES (field, parameter, variant, tuple-element names).
+//                    Parallel to typeChildren. Plural spelling despite proximity to the
+//                    singular typeName — treat as an independent array, not a list of
+//                    typeName values.
+//   typeChildren   — member/child TYPES, parallel to typeNames. Semantics per TypeKind:
+//                    Struct/Interface → field types; Function → param types;
+//                    Union → variant types; Tuple → element types; GenericInstance → type args.
+//   typeReturn     — inner/wrapped type. Semantics per TypeKind:
+//                    Ref/Ptr/Borrow/Var/Sink/Lent → pointee type;
+//                    Array/SizedArray/Span → element type;
+//                    Function → return type; Distinct → underlying type.
+//                    NOT restricted to function returns — name is historical.
+//   typeExtra      — catch-all secondary type slot. Used for:
+//                    Struct with generic params → generic body; Array → element (legacy);
+//                    GenericInstance → monomorphized concrete body; TypeAlias → aliased type.
+//                    Consult per-TypeKind documentation before use.
+//   typeFlags      — bitset (TypeFlag.HasAsgn, IsStruct, AwaitableAffine, ...) — propagated
+//                    bottom-up by propagateToOwner when building parent types.
+//   attachedOps    — hook function names (index = AttachedOp enum: Destroy/Copy/Sink/...).
+//                    Populated by destructorLifting. Inline per-Type; see setAttachedOp /
+//                    getAttachedOp in src/checker/types.ms.
+//   sym            — back-pointer to the declaring Symbol (Class/Interface/Enum decls).
 export class Type {
 	kind: TypeKind;
 	typeName: string;

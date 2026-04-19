@@ -9,13 +9,23 @@
 //   s + t        →  msStringConcat(s, t)  (2-part; 3+ already handled by stringConcatFlatten)
 //   s[i] = ch    →  msStringPrepareMutation(&s), msStringSetChar(&s, i, ch)
 //
-// Only runs for C backend (JS handles string ops natively).
+// Self-append fast paths (route to in-place amortized append):
+//   x = x + y                         → msStringAppend(&x, y)
+//   x += y                            → msStringAppend(&x, y)
+//   x = msStringConcat(x, p)          → msStringAppend(&x, p)
+//   x = msStringConcatArr(N, x, ...)  → msStringAppendArr(&x, N-1, ...)
+//                                       (covers `x + a + b + c` chains and
+//                                        `` `${x}${a}${b}` `` templates that
+//                                        stringConcatFlatten already flattened)
+//
+// isSameIdent handles Identifier, MemberExpr, ArrayAccess, NumberLiteral —
+// conservative syntactic match. Side-effecting indexes (arr[i++]) fall through.
 
-import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, StringLiteralData, IdentifierData, MemberExprData, TypeKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, StringLiteralData, IdentifierData, MemberExprData, NumberLiteralData, CallExprData, HiddenDerefData, TypeKind } from "../../ast/node";
 import { isNumeric, isStringLike } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeUnary } from "../util";
+import { makeCall, makeIdent, makeUnary, makeNumber } from "../util";
 
 // ===== Main Entry Point =====
 
@@ -50,6 +60,44 @@ function rewriteStringOp(node: Node): Node {
 			const result = makeCall(makeIdent("msStringAppend", loc), [addrOf, right], loc);
 			result.nodeType = node.nodeType;
 			return result;
+		}
+	}
+
+	// Post-flatten self-append: stringConcatFlatten (runs before this pass) turned
+	// `x = x + a + b + c` and `x = `${x}${a}${b}`` into `x = msStringConcatArr(N, x, ...)`
+	// or the 2-part coerced form `x = msStringConcat(x, p)`. Detect those shapes
+	// AFTER flattening so the fast path still fires for chains and templates.
+	if (d.operator === "=" && isStringTyped(d.left) && d.right.kind === NodeKind.CallExpr) {
+		const cd = d.right.data as CallExprData;
+		if (cd.callee.kind === NodeKind.Identifier) {
+			const calleeName = (cd.callee.data as IdentifierData).name;
+			const loc = node.location;
+			// msStringConcat(x, p) — 2-part with self-first → msStringAppend(&x, p)
+			if (calleeName === "msStringConcat" && cd.arguments.length === 2
+					&& isSameIdent(d.left, cd.arguments[0])) {
+				const addrOf = makeUnary("&", d.left, loc);
+				const result = makeCall(makeIdent("msStringAppend", loc),
+						[addrOf, cd.arguments[1]], loc);
+				result.nodeType = node.nodeType;
+				return result;
+			}
+
+			// msStringConcatArr(count, x, a, b, ...) — N-part with self-first
+			// → msStringAppendArr(&x, N-1, a, b, ...)
+			if (calleeName === "msStringConcatArr" && cd.arguments.length >= 3
+					&& isSameIdent(d.left, cd.arguments[1])) {
+				const newCount = cd.arguments.length - 2;
+				const addrOf = makeUnary("&", d.left, loc);
+				const newArgs: Node[] = [addrOf, makeNumber(newCount, loc)];
+				let i = 2;
+				while (i < cd.arguments.length) {
+					newArgs.push(cd.arguments[i]);
+					i += 1;
+				}
+				const result = makeCall(makeIdent("msStringAppendArr", loc), newArgs, loc);
+				result.nodeType = node.nodeType;
+				return result;
+			}
 		}
 	}
 
@@ -127,8 +175,23 @@ function isStringTyped(node: Node): boolean {
 	return isStringLike(node.nodeType);
 }
 
-// Check if two nodes refer to the same identifier (by name) or same member access chain.
+// Check if two nodes refer to the same lvalue path (syntactic equality).
+// Handles Identifier, MemberExpr, ArrayAccess, NumberLiteral — the shapes
+// that appear in lvalue chains without side effects. Side-effecting forms
+// (CallExpr, UpdateExpr like i++, assignment-as-expression) return false
+// so the caller never rewrites something with a hidden side effect.
+//
+// HiddenDeref / HiddenAddr are transparent wrappers the checker inserts for
+// Ref<Struct> field access (e.g. on interface[]). Unwrap them at the start
+// so `arr[0].buf` on both sides compares as equal even when one side has
+// the hidden node and the other has been freshly synthesized.
 function isSameIdent(a: Node, b: Node): boolean {
+	while (a !== null && (a.kind === NodeKind.HiddenDeref || a.kind === NodeKind.HiddenAddr)) {
+		a = (a.data as HiddenDerefData).expr;
+	}
+	while (b !== null && (b.kind === NodeKind.HiddenDeref || b.kind === NodeKind.HiddenAddr)) {
+		b = (b.data as HiddenDerefData).expr;
+	}
 	if (a === null || b === null) return false;
 	if (a.kind !== b.kind) return false;
 	if (a.kind === NodeKind.Identifier) {
@@ -138,6 +201,16 @@ function isSameIdent(a: Node, b: Node): boolean {
 		const ad = a.data as MemberExprData;
 		const bd = b.data as MemberExprData;
 		return ad.property === bd.property && isSameIdent(ad.object, bd.object);
+	}
+	if (a.kind === NodeKind.ArrayAccess) {
+		const ad = a.data as ArrayAccessData;
+		const bd = b.data as ArrayAccessData;
+		return isSameIdent(ad.array, bd.array) && isSameIdent(ad.index, bd.index);
+	}
+	if (a.kind === NodeKind.NumberLiteral) {
+		const ad = a.data as NumberLiteralData;
+		const bd = b.data as NumberLiteralData;
+		return ad.value === bd.value;
 	}
 	return false;
 }

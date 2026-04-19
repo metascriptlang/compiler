@@ -122,7 +122,7 @@ export function getDirectImporters(deps: TaModuleDepGraph, fileId: number): numb
 export function getTransitiveDependents(deps: TaModuleDepGraph, fileId: number): number[] {
 	const result: number[] = [];
 	const queue: number[] = [];
-	const visited: Set<number> = new Set<number>();
+	const visited: HashSet<number> = new HashSet<number>();
 	visited.add(fileId);  // don't include seed in results
 	queue.push(fileId);
 

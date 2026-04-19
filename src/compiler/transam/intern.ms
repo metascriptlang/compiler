@@ -15,14 +15,14 @@ export interface TaInternEntry {
 export class TaStringInterner {
 	entries: TaInternEntry[];
 	nextId: number;
-	index: Map<string, number>;  // string → id (O(1) dedup lookup)
+	index: HashMap<string, number>;  // string → id (O(1) dedup lookup)
 }
 
 export function createStringInterner(): TaStringInterner {
 	return {
 		entries: [],
 		nextId: 0,
-		index: new Map<string, number>(),
+		index: new HashMap<string, number>(),
 	};
 }
 

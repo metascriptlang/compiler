@@ -114,7 +114,7 @@ export function createStruct(name: string, propNames: string[], propTypes: Type[
 	t.typeChildren = propTypes;
 	if (isInterface) { t.typeFlags = TypeFlag.IsStruct as int32; }
 	// Propagate HasAsgn from any managed field (Reference parity: bottom-up flag propagation)
-	for (const pt of propTypes) { propagateHasAsgn(t, pt); }
+	for (const pt of propTypes) { propagateToOwner(t, pt); }
 	return t;
 }
 
@@ -413,7 +413,7 @@ export function createUnion(types: Type[]): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Union;
 	t.typeChildren = types;
-	for (const ut of types) { propagateHasAsgn(t, ut); }
+	for (const ut of types) { propagateToOwner(t, ut); }
 	return t;
 }
 
@@ -695,7 +695,7 @@ export function createMaybeType(inner: Type): Type {
 	t.typeChildren = [inner, booleanType()];
 	t.typeFlags = (TypeFlag.IsStruct | TypeFlag.IsMaybe) as int32;
 	t.typeReturn = inner;    // store inner type for unwrapping
-	propagateHasAsgn(t, inner);
+	propagateToOwner(t, inner);
 	_maybeCache.push(t);
 	_maybeCacheNames.push(name);
 	return t;
@@ -735,7 +735,7 @@ export function createTuple(elementTypes: Type[]): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Tuple;
 	t.typeChildren = elementTypes;
-	for (const et of elementTypes) { propagateHasAsgn(t, et); }
+	for (const et of elementTypes) { propagateToOwner(t, et); }
 	return t;
 }
 
@@ -745,7 +745,7 @@ export function createDistinct(inner: Type): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Distinct;
 	t.typeReturn = inner;
-	propagateHasAsgn(t, inner);
+	propagateToOwner(t, inner);
 	return t;
 }
 
@@ -759,7 +759,7 @@ export function createGenericParam(name: string): Type {
 // GenericInstance: preserves type args structurally after instantiation.
 // typeChildren = type arguments, typeExtra = base type (struct/interface).
 // typeReturn = EAGERLY INSTANTIATED body (concrete body after substitution).
-// Enables structural unification: Map<K,V> vs Map<string,string> → K=string, V=string.
+// Enables structural unification: HashMap<K,V> vs HashMap<string,string> → K=string, V=string.
 // For Ref<Struct> (interface types), unwrap to inner struct for name and flags.
 export function unwrapRefBase(t: Type): Type {
 	return (t !== null && t.kind === TypeKind.Ref && t.typeReturn !== null) ? t.typeReturn : t;
@@ -1093,7 +1093,7 @@ export function hasAsgnFlag(t: Type): boolean {
 	return (t.typeFlags & TypeFlag.HasAsgn) !== 0;
 }
 
-export function propagateHasAsgn(parent: Type, child: Type): void {
+export function propagateToOwner(parent: Type, child: Type): void {
 	if (child !== null && (child.typeFlags & TypeFlag.HasAsgn) !== 0) {
 		parent.typeFlags = parent.typeFlags | TypeFlag.HasAsgn;
 	}
@@ -1372,8 +1372,8 @@ function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): 
 		return;
 	}
 	// GenericInstance: structural unification of type arguments
-	// Map<K,V> (formal, with GenericParam children) vs Map<string,string> (concrete)
-	// Base type must match: Map<K,V> unifies with Map<string,string> but NOT Set<string>
+	// HashMap<K,V> (formal, with GenericParam children) vs HashMap<string,string> (concrete)
+	// Base type must match: HashMap<K,V> unifies with HashMap<string,string> but NOT HashSet<string>
 	if (formal.kind === TypeKind.GenericInstance && concrete.kind === TypeKind.GenericInstance) {
 		// Affine and plain Promises share typeName "Promise" — their distinction
 		// is in flag bits, not in the name. Simple equality covers both.
@@ -1447,7 +1447,7 @@ export function hasGenericParams(t: Type): boolean {
 }
 
 function hasGenericParamsInner(t: Type): boolean {
-	// GenericInstance: check type args for GenericParam (e.g., Map<K,V> has GenericParam children)
+	// GenericInstance: check type args for GenericParam (e.g., HashMap<K,V> has GenericParam children)
 	if (t.kind === TypeKind.GenericInstance) {
 		for (let gi = 0; gi < t.typeChildren.length; gi += 1) {
 			if (hasGenericParams(t.typeChildren[gi])) return true;
@@ -1526,9 +1526,10 @@ export function getReturnType(t: Type): Type {
 
 export function getElementType(t: Type): Type {
 	if (t.kind === TypeKind.Array || t.kind === TypeKind.SizedArray || t.kind === TypeKind.Span || t.kind === TypeKind.Ptr) return t.typeReturn;
-	// Map<K, V> subscript: `m[k]` returns V. Makes `{ [key: K]: V }` work at
-	// runtime via Map.get() after the lowering in transform/native/nativeLower.ms.
-	if (t.kind === TypeKind.GenericInstance && t.typeName === "Map" && t.typeChildren !== null && t.typeChildren.length === 2) {
+	// @builtin("IndexableMap") subscript: `m[k]` returns V. Makes `{ [key: K]: V }`
+	// work at runtime via .get() after the lowering in transform/native/nativeLower.ms.
+	if (t.kind === TypeKind.GenericInstance && isIndexableMapType(t)
+		&& t.typeChildren !== null && t.typeChildren.length === 2) {
 		return t.typeChildren[1];
 	}
 	return unknownType();
@@ -1720,6 +1721,33 @@ export function typeNameOf(t: Type): string {
 		},
 		_ => "",
 	};
+}
+
+// getBuiltinKind — read the @builtin("...") tag from a type's underlying class Symbol.
+// Returns "" if the type has no builtin annotation. Walks transparent wrappers
+// (Sink/Lent/Var/Distinct/Ref/Ptr) and GenericInstance → base class, mirroring
+// typeNameOf's unwrap policy so `sink m: Map<K,V>` still registers as IndexableMap.
+export function getBuiltinKind(t: Type): string {
+	if (t === null) return "";
+	if (t.sym !== null && t.sym.builtinKind !== "") return t.sym.builtinKind;
+	if (t.kind === TypeKind.GenericInstance && t.typeExtra !== null) {
+		return getBuiltinKind(t.typeExtra);
+	}
+	// Transparent wrappers — unwrap to inner type before looking up the tag.
+	if ((t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr
+			|| t.kind === TypeKind.Sink || t.kind === TypeKind.Lent
+			|| t.kind === TypeKind.Var || t.kind === TypeKind.Distinct)
+			&& t.typeReturn !== null) {
+		return getBuiltinKind(t.typeReturn);
+	}
+	return "";
+}
+
+// isIndexableMapType — true when t is a class tagged @builtin("IndexableMap").
+// Used by subscript lowering (m[k] → m.get(k) / m.set(k, v)) and m[k] element typing.
+// Both Map<K,V> and HashMap<K,V> in std/core/struct.ms carry this tag.
+export function isIndexableMapType(t: Type): boolean {
+	return getBuiltinKind(t) === "IndexableMap";
 }
 
 // alignTo — round up offset to alignment boundary

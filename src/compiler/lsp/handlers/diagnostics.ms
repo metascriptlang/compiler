@@ -322,7 +322,7 @@ export function recordImportsForFile(db: TransAmDb, path: string, program: Node)
 // transitively depend on the changed file. Concatenated Content-Length messages.
 // Cache last diagnostics per file — skip publish if unchanged (output-hash gate).
 // Prevents redundant re-checks on comment edits that don't change semantics.
-let _lastDiagCache: Map<string, string> = new Map<string, string>();
+let _lastDiagCache: HashMap<string, string> = new HashMap<string, string>();
 
 export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): string {
 	const fileId = getFileId(db.fileInput, path);

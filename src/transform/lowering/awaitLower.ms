@@ -36,7 +36,7 @@ import { TransformContext, freshTempSym } from "../context";
 import { walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeString, makeIf, makeBinary } from "../util";
 import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
-import { typedFutureReadFn } from "../native/builtinLower";
+import { typedFutureReadFn } from "./promiseLower";
 import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
 import { injectCancelSafePoints } from "./cancelSafePoints";
 
@@ -45,7 +45,7 @@ import { injectCancelSafePoints } from "./cancelSafePoints";
 // in the same scope, rewrites to zero-alloc msAwaitSlot path instead of
 // heap-allocated msFuture. Cleared at function boundaries.
 struct SpawnSlotEntry { slotIdent: Node; closureArg: Node; innerType: Type; }
-let _spawnSlotMap: Map<string, SpawnSlotEntry> = new Map<string, SpawnSlotEntry>();
+let _spawnSlotMap: HashMap<string, SpawnSlotEntry> = new HashMap<string, SpawnSlotEntry>();
 
 // Opaque pointer type → void* in C codegen. Used for AwaitGroup and result temps.
 export const VOID_PTR_TYPE: Type = createPtr(createPrimitive(TypeKind.Void));
@@ -457,9 +457,9 @@ function hoistNestedAwait(expr: Node, loc: SourceLocation, ctx: TransformContext
 // ===== Entry Point =====
 
 export function lowerAwait(program: Node, ctx: TransformContext): Node {
-	_spawnSlotMap = new Map<string, SpawnSlotEntry>();
+	_spawnSlotMap = new HashMap<string, SpawnSlotEntry>();
 	walkExpandBlocksHooked(program, expandStmt, ctx,
-		(_fn: Node): void => { _spawnSlotMap = new Map<string, SpawnSlotEntry>(); },
-		(_fn: Node): void => { _spawnSlotMap = new Map<string, SpawnSlotEntry>(); });
+		(_fn: Node): void => { _spawnSlotMap = new HashMap<string, SpawnSlotEntry>(); },
+		(_fn: Node): void => { _spawnSlotMap = new HashMap<string, SpawnSlotEntry>(); });
 	return program;
 }

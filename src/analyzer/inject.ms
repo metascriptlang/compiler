@@ -179,6 +179,13 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
 	// Implementation parity: only sink params get Consumed mode, borrowed params get Normal.
 	// Use resolvedSym to find callee's function type signature.
+	// Fallback chain for synthetic calls emitted post-check: Ident may lack resolvedSym
+	// on both the CallExpr node and its callee. If the Ident name matches a declared MS
+	// function (e.g. an `extern function foo(...)` in a prelude), look it up so the
+	// parameter annotations (sink, ownership modifiers inferred by ownershipInference)
+	// reach DRC. Synthetic intrinsics emitted only by transforms — like msFutureCompleteT
+	// — have no MS declaration (MS has no explicit `sink T` syntax; sink is inferred
+	// from body), so their sink positions are hardcoded below.
 	const sym = node.resolvedSym;
 	const fnType = (sym !== null && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Function) ? sym.symbolType : null;
 
@@ -193,6 +200,20 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		}
 	}
 
+	// `msFutureCompleteT(fut, value)` — future takes ownership of the struct value.
+	// Synthetic call emitted by asyncBridge for async struct returns. MS parser has no
+	// explicit `sink T` annotation syntax (sink is inferred from body, and externs have
+	// no body), so we hardcode the sink position here — same precedent as msArrayPush
+	// above. Without this, DRC wraps a fresh-call RHS in a scope-exit $tmp that
+	// double-frees the strings the future has just taken ownership of (observed on
+	// cross-module async struct returns; same-module worked only by accident because
+	// struct literals lower away the CallExpr wrapping before DRC sees it).
+	let isFutureCompleteSink = false;
+	if (cd.callee.kind === NodeKind.Identifier) {
+		const calleeName = (cd.callee.data as IdentifierData).name;
+		if (calleeName === "msFutureCompleteT") isFutureCompleteSink = true;
+	}
+
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
 		if (fnType !== null && i < fnType.typeChildren.length && isSinkType(fnType.typeChildren[i])) {
@@ -200,6 +221,8 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		}
 		// Push value arg (index 1, after receiver) is sink
 		if (isArrayPush && i === 1) argMode = DrcMode.Consumed;
+		// msFutureCompleteT value arg (index 1, after the future) is sink
+		if (isFutureCompleteSink && i === 1) argMode = DrcMode.Consumed;
 		cd.arguments[i] = processNode(cd.arguments[i], dctx, argMode);
 
 		// Reference parity (passCopyToSink): when a borrow expression (ArrayAccess/MemberExpr)
@@ -334,8 +357,12 @@ function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node
 	const t = node.nodeType;
 	// tyRef (interface/class), named struct, union (NodeData), or untyped → always sink fields.
 	// Only stack-allocated anonymous value types in Normal context use Normal.
+	// GenericInstance (monomorphized generic struct, e.g. Entry<int32, Box>) is treated as
+	// a named struct: its fields must sink so Ref field values transfer ownership to the
+	// struct instead of being decref'd at caller scope exit.
 	const isRefConstr = t === null || t.kind === TypeKind.Ref
 		|| (t.kind === TypeKind.Struct && t.typeName !== "")
+		|| t.kind === TypeKind.GenericInstance
 		|| t.kind === TypeKind.Union;
 	const fieldDefault = isRefConstr ? DrcMode.SinkArg
 		: (mode === DrcMode.Normal) ? DrcMode.Normal : DrcMode.SinkArg;

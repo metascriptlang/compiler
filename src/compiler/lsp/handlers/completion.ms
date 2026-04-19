@@ -36,7 +36,7 @@ import {
 
 // Pre-built completion items: per-file cache (Map with capacity 10).
 // Prevents cache thrashing when jumping between open files.
-let _prebuiltCache: Map<string, string[]> = new Map<string, string[]>();
+let _prebuiltCache: HashMap<string, string[]> = new HashMap<string, string[]>();
 const PREBUILT_CAPACITY = 10;
 
 export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string): void {
@@ -56,7 +56,7 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 	}
 	// Cross-module candidates (also minimal — just label + kind)
 	if (db.exportRegistry !== null) {
-		const inScopeSet: Set<string> = new Set<string>();
+		const inScopeSet: HashSet<string> = new HashSet<string>();
 		for (const c of candidates) { inScopeSet.add(c.name); }
 		for (const entry of db.exportRegistry.entries) {
 			if (entry.modulePath === path) continue;
@@ -69,8 +69,8 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 		}
 	}
 	// Evict oldest if at capacity (simple: clear all — LRU is overkill for 10 entries)
-	if (_prebuiltCache.counter >= PREBUILT_CAPACITY) {
-		_prebuiltCache = new Map<string, string[]>();
+	if (_prebuiltCache.size >= PREBUILT_CAPACITY) {
+		_prebuiltCache = new HashMap<string, string[]>();
 	}
 	_prebuiltCache.set(uri, items);
 }
@@ -219,7 +219,7 @@ function lspModulePathToImportSpec(db: TransAmDb, currentPath: string, targetPat
 // Search ExportRegistry for cross-module auto-import candidates.
 function lspCrossModuleCandidates(
 	db: TransAmDb, prefix: string, currentPath: string,
-	program: Node, source: string, kind: SgCompletionKind, inScopeSet: Set<string>
+	program: Node, source: string, kind: SgCompletionKind, inScopeSet: HashSet<string>
 ): string[] {
 	const items: string[] = [];
 	if (db.exportRegistry === null) return items;
@@ -261,15 +261,13 @@ function lspCrossModuleCandidates(
 	// These are always in scope via globalImports — suggest with auto-import if not already imported.
 	if (db.preludeCtx !== null && db.preludeCtx.table !== null && db.preludeCtx.table.current !== null) {
 		// Build extension name set to filter prelude extensions from standalone suggestions
-		const preludeExtNames: Set<string> = new Set<string>();
+		const preludeExtNames: HashSet<string> = new HashSet<string>();
 		if (db.preludeCtx.extensionRegistry !== null) {
 			for (const m of db.preludeCtx.extensionRegistry.methods) {
 				preludeExtNames.add(m.methodName);
 			}
 		}
-		const preludeSyms = db.preludeCtx.table.current.symbols;
-		for (let pi = 0; pi < preludeSyms.length; pi = pi + 1) {
-			const sym = preludeSyms[pi];
+		for (const sym of db.preludeCtx.table.current.symbols.values()) {
 			if (sym.name.length === 0) continue;
 			if (!hasFlag(sym, SymbolFlag.Exported)) continue;
 			// Skip extension methods — they only appear via member access
@@ -375,7 +373,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	if (ctx === null) {
 		// Type check failed (incomplete code) — still try cross-module/prelude suggestions
 		if (kind === SgCompletionKind.Identifier || kind === SgCompletionKind.TypeAnnotation) {
-			const emptyScope: Set<string> = new Set<string>();
+			const emptyScope: HashSet<string> = new HashSet<string>();
 			const fallbackItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, emptyScope);
 			if (fallbackItems.length > 0) return lspResponse(id, joinJsonItems(fallbackItems));
 		}
@@ -433,7 +431,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 
 	// Cross-module auto-import candidates
 	if (kind === SgCompletionKind.Identifier || kind === SgCompletionKind.TypeAnnotation || kind === SgCompletionKind.ImportName) {
-		const inScopeSet: Set<string> = new Set<string>();
+		const inScopeSet: HashSet<string> = new HashSet<string>();
 		for (let ci = 0; ci < candidates.length; ci = ci + 1) {
 			inScopeSet.add(candidates[ci].name);
 		}

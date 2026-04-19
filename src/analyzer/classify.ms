@@ -5,10 +5,11 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, hasAsgnFlag, isAwaitable, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
+import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isResult, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { mangleMonoName } from "../monomorphize/registry";
 
 // ===== RC Classification Kind =====
 
@@ -84,8 +85,15 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	}
 	if ((structElem.kind === TypeKind.Struct) && structElem.typeName !== "") {
 		if (hasAsgnFlag(structElem)) {
-			// Use the ELEMENT's typeName (not the base struct) for the mangled hook name
-			const elemName = elem.typeName !== "" ? elem.typeName : structElem.typeName;
+			// Use mangled name for GenericInstance elements so array hook names match
+			// destructorLifting's emitted per-element hooks (unwrapGenericInstance) and
+			// codegen's struct name (types.ms:582-588).
+			let elemName = "";
+			if (elem.kind === TypeKind.GenericInstance) {
+				elemName = mangleMonoName(elem.typeName, elem.typeChildren);
+			} else {
+				elemName = elem.typeName !== "" ? elem.typeName : structElem.typeName;
+			}
 			const n = elemName + "Array";
 			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
 		}
@@ -151,10 +159,26 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 			// Awaitables (`Promise<T>`, plain or affine) are exempt from DRC — their lifecycle
 			// is managed by the await transform (create → wait → explicit destroy).
 			if (isAwaitable(t)) return noRcInfo();
-			// GenericInstance value types (SetEntry<T>, Result<T,E>, etc.): noRcInfo.
-			// Their containers (Array, env struct) handle ownership. Individual elements
-			// are borrowed — raw struct copy is correct. Hook name mangling (bare typeName
-			// vs C-mangled name) would need resolution before DRC can manage these directly.
+			// Result has bespoke codegen (msResult_<ok>_<err> — codegen/types.ms:1083).
+			// destructorLifting also skips these; using mangleMonoName here would produce
+			// hook names pointing to a type codegen never emits → link error.
+			if (isResult(t)) return noRcInfo();
+			// Monomorphized struct instance: build hook names via `mangleMonoName` so they match
+			// codegen's struct naming (src/codegen/c/types.ms:582-588) and destructorLifting's
+			// hook emission (unwrapGenericInstance).
+			//
+			// hasAsgn check: the GenericInstance wrapper's typeFlags inherit from the generic
+			// BASE (e.g. `Entry<K,V>`) where K/V are GenericParam (no hasAsgn). Only after
+			// `instantiateGenericBody` populates `typeReturn` with concrete fields do we know
+			// whether the substituted body has managed fields. Check both the wrapper AND the
+			// instantiated body.
+			if (t.typeName !== "") {
+				const bodyHasAsgn = t.typeReturn !== null && hasAsgnFlag(t.typeReturn);
+				if (hasAsgnFlag(t) || bodyHasAsgn) {
+					const mangled = mangleMonoName(t.typeName, t.typeChildren);
+					return makeRcInfo(RcKind.Named, mangled, mangled + "Destroy", mangled + "Copy", mangled + "WasMoved", mangled + "Sink", false);
+				}
+			}
 			return noRcInfo();
 		},
 		TypeKind.Ptr => {

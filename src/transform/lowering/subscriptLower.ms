@@ -6,38 +6,43 @@
 // Reference compiler: subscript_lower.zig.
 //
 // Detection: checks ExtensionRegistry for "[]"/"[]=" operators on receiver type.
-// Builtin indexable types (Array, string, Map) are never rewritten.
+// Builtin indexable types (Array, string, @builtin("IndexableMap") classes) are never rewritten.
 
 import { Node, NodeKind, ArrayAccessData, BinaryExprData, IdentifierData, Symbol, SymbolKind } from "../../ast/node";
+import { Type } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";
 import { lookupSymbol, defineSymbol, makeSymbol } from "../../checker/symbol";
-import { unknownType, createStruct, createFunction, createArray, typeNameOf } from "../../checker/types";
+import { unknownType, createStruct, createFunction, createArray, typeNameOf, isIndexableMapType } from "../../checker/types";
 import { ExtensionMethod, createContext, registerExtension, findExtension } from "../../checker/context";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
 import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testUtil";
 
 // ===== Helpers =====
 
-// Get the type name of a node — tries nodeType, resolvedSym, then symbol table.
-function getTypeName(ctx: TransformContext, node: Node): string {
-	if (node.nodeType !== null) return typeNameOf(node.nodeType);
+// Get the receiver type of a node — tries nodeType, resolvedSym, then symbol table.
+function getReceiverType(ctx: TransformContext, node: Node): Type {
+	if (node.nodeType !== null) return node.nodeType;
 	if (node.resolvedSym !== null && node.resolvedSym.symbolType !== null) {
-		return typeNameOf(node.resolvedSym.symbolType);
+		return node.resolvedSym.symbolType;
 	}
-	if (ctx.checkerCtx === null) return "";
-	if (node.kind !== NodeKind.Identifier) return "";
+	if (ctx.checkerCtx === null) return null as unknown as Type;
+	if (node.kind !== NodeKind.Identifier) return null as unknown as Type;
 	const d = node.data as IdentifierData;
 	const sym = lookupSymbol(ctx.checkerCtx.table, d.name);
-	if (sym === null) return "";
-	return typeNameOf(sym.symbolType);
+	if (sym === null) return null as unknown as Type;
+	return sym.symbolType;
 }
 
 // Builtin types that use native [] — never rewrite these.
-function isBuiltinIndexable(typeName: string): boolean {
-	return match (typeName) {
-		"Array" | "string" | "Map" => true,
+// Covers primitive "Array"/"string" plus any class tagged @builtin("IndexableMap").
+function isBuiltinIndexable(t: Type): boolean {
+	if (t === null) return false;
+	if (isIndexableMapType(t)) return true;
+	const n = typeNameOf(t);
+	return match (n) {
+		"Array" | "string" => true,
 		_ => false,
 	};
 }
@@ -52,9 +57,11 @@ function lowerSubscriptNode(node: Node, ctx: TransformContext): Node {
 	// Case 1: Getter — obj[idx] → `[]`(obj, idx)
 	if (node.kind === NodeKind.ArrayAccess) {
 		const d = node.data as ArrayAccessData;
-		const typeName = getTypeName(ctx, d.array);
+		const recvType = getReceiverType(ctx, d.array);
+		if (recvType === null) return node;
+		if (isBuiltinIndexable(recvType)) return node;
+		const typeName = typeNameOf(recvType);
 		if (typeName === "") return node;
-		if (isBuiltinIndexable(typeName)) return node;
 		if (findExtension(registry, typeName, "[]") === null) return node;
 		const loc = node.location;
 		const args: Node[] = [];
@@ -69,9 +76,11 @@ function lowerSubscriptNode(node: Node, ctx: TransformContext): Node {
 		if (d.operator !== "=") return node;
 		if (d.left.kind !== NodeKind.ArrayAccess) return node;
 		const ad = d.left.data as ArrayAccessData;
-		const typeName = getTypeName(ctx, ad.array);
+		const recvType = getReceiverType(ctx, ad.array);
+		if (recvType === null) return node;
+		if (isBuiltinIndexable(recvType)) return node;
+		const typeName = typeNameOf(recvType);
 		if (typeName === "") return node;
-		if (isBuiltinIndexable(typeName)) return node;
 		if (findExtension(registry, typeName, "[]=") === null) return node;
 		const loc = node.location;
 		const args: Node[] = [];

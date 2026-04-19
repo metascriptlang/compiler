@@ -857,6 +857,10 @@ msString msStringConcatArr(const msString* arr, int64_t count) {
 	return result;
 }
 
+void msStringAppendArr(msString* dest, const msString* arr, int64_t count) {
+	for (int64_t i = 0; i < count; i++) msStringAppend(dest, arr[i]);
+}
+
 void msStringSetChar(msString* s, int64_t idx, msString ch) {
 	if (idx < 0 || idx >= s->len || s->p == NULL) return;
 	msStringPrepareMutation(s);

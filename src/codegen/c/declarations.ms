@@ -4,7 +4,7 @@
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
 import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, TypeKind } from "../../ast/node";
-import { hasGenericParams } from "../../checker/types";
+import { hasGenericParams, isIntegerType } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import {
 	CGen, CProc, CSection,
@@ -13,7 +13,7 @@ import {
 } from "./context";
 import { genExpr } from "./expressions";
 import { genStmt, resolveEmitArgs } from "./statements";
-import { mangle, mangleFieldName, mangledFunctionName, safeName, staticFieldCName } from "./names";
+import { mangle, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
 import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfoDef } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumber, cBoolLiteral, cStringLiteral } from "./literals";
@@ -25,10 +25,10 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 // ===== Generic Instance Deduplication =====
 // Across all modules in Phase C, each generic instance is emitted ONCE.
 // First module to codegen it emits the body; other modules get forward decls only.
-let _emittedInstances: Set<string> = new Set<string>();
+let _emittedInstances: HashSet<string> = new HashSet<string>();
 
 export function resetEmittedInstances(): void {
-	_emittedInstances = new Set<string>();
+	_emittedInstances = new HashSet<string>();
 }
 
 function isInstanceEmitted(name: string): boolean {
@@ -571,11 +571,36 @@ function genTopLevelStmt(g: CGen, node: Node): void {
 
 function genGlobalVar(g: CGen, node: Node): void {
 	const d = node.data as VariableDeclData;
-	const varName = safeName(d.declName);
+	// Mangling policy for module-level `const`/`let`:
+	//
+	// - Regular vars: emit with module-qualified C name (`NAME__<moduleName>Oms`) so
+	//   two modules declaring same-named constants (e.g. `MAX_TIME` in cursors.ms and
+	//   varpartitions.ms) don't produce duplicate C globals at link time. Matches
+	//   what cross-module extern emission (`expressions.ms`) + identifier references
+	//   emit, so one mangled symbol per binary.
+	//
+	// - TypeInfo vars (name ending in "TypeInfo"): INTENTIONALLY bypass mangling and
+	//   use the raw `safeName`. These are emitted as `__attribute__((weak))` (see
+	//   `genTypeInfoVar`) so when module A defines `PointTypeInfo` and module B also
+	//   needs it (e.g. typeof lookup), the linker collapses the two weak definitions
+	//   into one symbol. Cross-module type identity relies on matching the raw name —
+	//   mangling would break that invariant.
+	//
+	// Detection is NAME-based (suffix match). Risk: a user-declared variable named
+	// e.g. `MyCustomTypeInfo` would also bypass mangling. Rare in practice (the suffix
+	// convention is ORC-internal); revisit if collision reports surface.
+	const nameLen = d.declName.length;
+	const isTypeInfo = nameLen > 8 && d.declName.slice(nameLen - 8, nameLen) === "TypeInfo";
+	const varName = isTypeInfo ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
+	// Identifier references recompute the mangled name on demand via mangledGlobalName
+	// (see expressions.ms isModuleGlobalVar branch). We deliberately DO NOT write to
+	// sym.nativeName here: that field is an extern/FFI marker — codegen uses
+	// `sym.nativeName !== ""` to route CallExpr through the native direct-call path
+	// (discoverCallExpr short-circuit), which would break closure calls on any
+	// module-level `let fn: (..) => T` variable.
 
 	// Detect TypeInfo vars from destructorLifting (ORC runtime RTTI)
-	const nameLen = d.declName.length;
-	if (nameLen > 8 && d.declName.slice(nameLen - 8, nameLen) === "TypeInfo") {
+	if (isTypeInfo) {
 		// TypeInfo is DRC metadata — skip under --gc=manual (write-only, never read)
 		if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) return;
 		genTypeInfoVar(g, d, varName);
@@ -583,10 +608,36 @@ function genGlobalVar(g: CGen, node: Node): void {
 	}
 
 	const cType = getTypeDesc(g, node.nodeType);
+	// Literal initializers → fold to C global initializer. This makes the global
+	// READY at program load time instead of waiting for Init000 dispatch order.
+	// Critical for things like `const INITIAL_CAPACITY: int32 = 32;` — if left to
+	// Init000 and another module's Init000 runs first and reads INITIAL_CAPACITY
+	// (e.g. via HashSet constructor), it reads 0 and loops forever.
+	if (d.initializer !== null) {
+		const init = d.initializer;
+		if (init.kind === NodeKind.NumberLiteral) {
+			const nd = init.data as NumberLiteralData;
+			const litStr = formatCNumber(nd.value);
+			// Integer types: cast to suppress -Wimplicit-int-float-conversion.
+			const castedLit = (node.nodeType !== null && isIntegerType(node.nodeType))
+				? `(${cType})${litStr}`
+				: litStr;
+			addLine(sec(g, CSection.GlobalVars), `${cType} ${varName} = ${castedLit};`);
+			nameSetAdd(g.declaredGlobals, varName);
+			return;
+		}
+		if (init.kind === NodeKind.BooleanLiteral) {
+			const bd = init.data as BooleanLiteralData;
+			addLine(sec(g, CSection.GlobalVars), `${cType} ${varName} = ${cBoolLiteral(bd.boolValue)};`);
+			nameSetAdd(g.declaredGlobals, varName);
+			return;
+		}
+	}
 	// Always emit uninitialized declaration to GlobalVars
 	addLine(sec(g, CSection.GlobalVars), `${cType} ${varName};`);
-	// Track as module-local global (for cross-module extern detection)
-	nameSetAdd(g.declaredGlobals, d.declName);
+	// Track the mangled name (must match what cross-module extern emission
+	// produces) so dedup works across decl + extern paths.
+	nameSetAdd(g.declaredGlobals, varName);
 
 	// Non-trivial initializers go to ModuleInit (not valid as C global initializers)
 	if (d.initializer !== null) {

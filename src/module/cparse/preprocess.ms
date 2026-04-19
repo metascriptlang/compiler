@@ -49,10 +49,10 @@ interface CondIncl {
 
 // Preprocessing context (replaces chibicc's globals)
 interface PPContext {
-	macros: Map<string, Macro>;
+	macros: HashMap<string, Macro>;
 	condStack: CondIncl;      // null as CondIncl at top level
-	pragmaOnce: Map<string, boolean>;
-	includeStack: Map<string, boolean>;  // files currently being processed (circular include guard)
+	pragmaOnce: HashMap<string, boolean>;
+	includeStack: HashMap<string, boolean>;  // files currently being processed (circular include guard)
 	includePaths: string[];
 	target: TargetInfo;
 	diags: Diagnostic[];
@@ -1155,10 +1155,10 @@ export function preprocess(
 	includePaths: string[]
 ): PreprocessResult {
 	const ctx: PPContext = {
-		macros: new Map<string, Macro>(),
+		macros: new HashMap<string, Macro>(),
 		condStack: null as unknown as CondIncl,
-		pragmaOnce: new Map<string, boolean>(),
-		includeStack: new Map<string, boolean>(),
+		pragmaOnce: new HashMap<string, boolean>(),
+		includeStack: new HashMap<string, boolean>(),
 		includePaths,
 		target,
 		diags: [],

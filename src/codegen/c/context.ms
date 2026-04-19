@@ -485,10 +485,10 @@ export function internString(pool: StringPool, value: string): string {
 
 // ===== NameSet — tracks already-declared names =====
 
-export type NameSet = Set<string>;
+export type NameSet = HashSet<string>;
 
 export function createNameSet(): NameSet {
-	return new Set<string>();
+	return new HashSet<string>();
 }
 
 export function nameSetHas(ns: NameSet, name: string): boolean {
@@ -503,12 +503,12 @@ export function nameSetAdd(ns: NameSet, name: string): void {
 
 export class AliveSet {
 	entries: string[];       // "modulePath:symbolName" keys
-	_set: Set<string>;       // O(1) lookup mirror
-	_modules: Set<string>;   // O(1) module-level lookup
+	_set: HashSet<string>;       // O(1) lookup mirror
+	_modules: HashSet<string>;   // O(1) module-level lookup
 }
 
 export function createAliveSet(): AliveSet {
-	return { entries: [], _set: new Set<string>(), _modules: new Set<string>() };
+	return { entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>() };
 }
 
 export function aliveSetAdd(aliveSet: AliveSet, modulePath: string, name: string): void {

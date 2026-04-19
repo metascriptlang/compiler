@@ -7,7 +7,7 @@ import {
 	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
 	collectExports, registerExtension,
 } from "./context";
-import { ScopeKind, openScope, hasFlag, SymbolFlag } from "./symbol";
+import { ScopeKind, openScope, addSymbolToScope, hasFlag, SymbolFlag } from "./symbol";
 import { ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { runThreePasses, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude } from "./checkPass";
 import { collectTopLevelLocal } from "./collectPass";
@@ -66,16 +66,12 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		// Temporary context for Phase 1 (discarded after) — shared IdentCache
 		const p1ctx = createModuleContextWithCache(graph, mod, sharedCache);
 		p1ctx.exportRegistry = registry;
-		// NOTE: while loops (not for-of) so DRC properly increfs shared symbols.
 		// With shared IdentCache, nameIds already match — no re-interning needed.
-		const baseSyms = baseCtx.table.current.symbols;
-		let bsi = 0;
-		while (bsi < baseSyms.length) {
-			const sym = baseSyms[bsi];
+		// Map iteration preserves insertion order (matches old array iteration).
+		for (const sym of baseCtx.table.current.symbols.values()) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
-				p1ctx.table.current.symbols.push(sym);
+				addSymbolToScope(p1ctx.table.current, sym);
 			}
-			bsi = bsi + 1;
 		}
 		if (baseCtx.extensionRegistry !== null && p1ctx.extensionRegistry !== null) {
 			const baseExts = baseCtx.extensionRegistry.methods;
@@ -95,7 +91,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 
 		// Register early exports (names + kinds, placeholder types)
 		const earlyExports: ExportedSymInfo[] = [];
-		for (const sym of p1ctx.table.current.symbols) {
+		for (const sym of p1ctx.table.current.symbols.values()) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
 				let memberLocs: SourceLocation[] = [];
 				if (sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl) {

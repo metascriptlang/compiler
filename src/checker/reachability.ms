@@ -27,10 +27,10 @@ let _progCacheVals: Node[] = [];
 // Pre-built name→modulePath index for O(1) cross-module lookup.
 // Replaces the O(n*m) linear scan of all modules for unresolved identifiers.
 // Built once at the start of computeAliveSet.
-let _nameIndex: Map<string, string> = new Map<string, string>();
+let _nameIndex: HashMap<string, string> = new HashMap<string, string>();
 
 function nameIndexBuild(idx: ModuleIndex): void {
-	_nameIndex = new Map<string, string>();
+	_nameIndex = new HashMap<string, string>();
 	for (let m = 0; m < idx.programs.length; m += 1) {
 		const prog = idx.programs[m];
 		if (prog === null) continue;
@@ -118,7 +118,7 @@ function resolveSpecifier(specifier: string, modIdx: ModuleIndex): string {
 
 // ===== Visited Set (Set-based for O(1) lookup) =====
 
-let _visitedSet: Set<string> = new Set<string>();
+let _visitedSet: HashSet<string> = new HashSet<string>();
 
 function visitedHas(key: string): boolean {
 	return _visitedSet.has(key);
@@ -336,7 +336,7 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 	// Initialize module-level state
 	_aliveSet = createAliveSet();
 	_modIdx = { paths, programs };
-	_visitedSet = new Set<string>();
+	_visitedSet = new HashSet<string>();
 	_importCacheKeys = [];
 	_importCacheVals = [];
 	_progCacheKeys = [];
@@ -433,10 +433,10 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 	// Clear module-level state
 	_aliveSet = createAliveSet();
 	_modIdx = { paths: [], programs: [] };
-	_visitedSet = new Set<string>();
+	_visitedSet = new HashSet<string>();
 	_progCacheKeys = [];
 	_progCacheVals = [];
-	_nameIndex = new Map<string, string>();
+	_nameIndex = new HashMap<string, string>();
 	return result;
 }
 

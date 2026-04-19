@@ -7,18 +7,18 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, isFloatType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType, isStringLike } from "../../checker/types";
+import { isIntegerType, isFloatType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType, isStringLike, awaitedType } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
 	emitProcLocalsLine, lookupLocalName,
 } from "./context";
-import { mangle, mangleFieldName, mangledFunctionName, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType } from "./types";
+import { mangle, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, safeName, staticFieldCName } from "./names";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType, ensurePromiseAllInstance } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { findChar } from "../../utils/string";
-import { ensureDrcProto, ensureCrossModuleProto } from "./forward";
+import { ensureDrcProto, ensureCrossModuleProto, isDrcLifecycleName } from "./forward";
 import { useHeader } from "./context";
 import { GcMode } from "../../checker/context";
 
@@ -411,6 +411,23 @@ function truncResults(ctx: ExprEvalCtx, count: number): void {
 	}
 }
 
+// Emit `msString _tmp[n];` + `_tmp[i] = <arg>;` fills for a stack-local string
+// array from child results [partsStart..cc). Returns the tmp var name.
+// Shared by msStringConcatArr / msStringArrayFromArr / msStringAppendArr intercepts.
+function emitStringArrayLocal(g: CGen, p: CProc, ctx: ExprEvalCtx, cc: number, partsStart: number, prefix: string): string {
+	const n = cc - partsStart;
+	g.labels += 1;
+	const tmpName = `${prefix}${g.labels}_`;
+	emitProcLocalsLine(p, `msString ${tmpName}[${n}];`);
+	let ai = 0;
+	while (ai < n) {
+		const argStr = peekResult(ctx, cc, ai + partsStart);
+		emitStmtsLine(p, `${tmpName}[${ai}] = ${argStr};`);
+		ai += 1;
+	}
+	return tmpName;
+}
+
 // Comma-join top N results from the stack, then remove them.
 function joinChildResults(ctx: ExprEvalCtx, count: number): string {
 	let s = "";
@@ -516,6 +533,15 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	}
 	if (kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
+		// DRC lifecycle hook reference (TypeInfo literal's destroyFn/traceFn fields).
+		// When the defining module's TypeInfo references hooks that live in another
+		// TU (consumer claimed hook ownership first via split-ownership design),
+		// emit extern forward prototypes so the linker resolves them.
+		// Filter by resolvedSym===null to skip enum members like `TokenKind_Eq`
+		// that happen to match the "Eq" suffix.
+		if (node.resolvedSym === null && isDrcLifecycleName(d.name)) {
+			ensureDrcProto(g, d.name);
+		}
 		// Built-in numeric constants → C99 macros
 		if (d.name === "NaN") { ctx.results.push("NAN"); return; }
 		if (d.name === "Infinity") { ctx.results.push("INFINITY"); return; }
@@ -543,21 +569,20 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Enum) {
 			getTypeDesc(g, node.nodeType);
 		}
-		// Cross-module global variable: emit extern declaration (Reference: standard reference global variable emission)
-		// Standard reference implementation checks symbol ownership — we check modulePath (set on imported symbols)
-		// Reference parity: enum fields are folded to int constants (#define), never get extern.
-		// Our enum members are SymbolKind.Variable with TypeKind.Enum — skip them.
+		// Cross-module global variable: emit extern declaration.
+		// isModuleGlobalVar already excludes enum members (SymbolKind.EnumMember).
 		const idSym = node.resolvedSym;
-		if (idSym !== null && idSym.symbolKind === SymbolKind.Variable
-			&& idSym.modulePath !== null && idSym.modulePath !== ""
+		if (isModuleGlobalVar(idSym)
 			&& idSym.modulePath !== g.modulePath
-			&& !nameSetHas(g.declaredGlobals, d.name)
-			&& node.nodeType !== null
-			&& node.nodeType.kind !== TypeKind.Enum) {
-			const cType = getTypeDesc(g, node.nodeType);
-			const sName = safeName(d.name);
-			addLine(sec(g, CSection.GlobalVars), `extern ${cType} ${sName};`);
-			nameSetAdd(g.declaredGlobals, d.name);
+			&& node.nodeType !== null) {
+			// Use the module-qualified name so the extern matches the defining
+			// module's declaration at link time (both sides emit the same C symbol).
+			const sName = mangledGlobalName(idSym, d.name);
+			if (!nameSetHas(g.declaredGlobals, sName)) {
+				const cType = getTypeDesc(g, node.nodeType);
+				addLine(sec(g, CSection.GlobalVars), `extern ${cType} ${sName};`);
+				nameSetAdd(g.declaredGlobals, sName);
+			}
 		}
 		// Module-qualified name for function references (Standard reference parity)
 		// nativeName takes priority — used by extern functions and actor dispatch
@@ -578,6 +603,13 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			let cName = "";
 			if (idSym !== null && idSym.nativeName !== "") {
 				cName = idSym.nativeName;
+			} else if (isModuleGlobalVar(idSym)) {
+				// Module-level variable: compute module-qualified C name on demand.
+				// Matches what genGlobalVar emits in the defining module and what the
+				// cross-module extern block emits. isModuleGlobalVar already excludes
+				// enum members (they are SymbolKind.EnumMember, not Variable), so we
+				// don't need a nodeType-based guard here.
+				cName = mangledGlobalName(idSym, d.name);
 			} else {
 				const mapped = lookupLocalName(p, safe);
 				cName = mapped !== "" ? mapped : safe;
@@ -1048,9 +1080,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				ensureCrossModuleProto(g, fnName, nsSym.symbolType, nsSym);
 				ctx.results.push(fnName);
 			} else if (nsSym !== null) {
-				// Constants/variables: use safeName (matching how normal cross-module vars are emitted)
-				const varName = nsSym.originalName !== "" ? nsSym.originalName : d.property;
-				const sName = safeName(varName);
+				// Constants/variables: module-qualified name so the extern matches
+				// the defining module's declaration. Property name is the original
+				// identifier post-alias-unwrap (handled inside mangledGlobalName).
+				const sName = mangledGlobalName(nsSym, d.property);
 				if (node.nodeType !== null && !nameSetHas(g.declaredGlobals, sName)) {
 					const cType = getTypeDesc(g, node.nodeType);
 					addLine(sec(g, CSection.GlobalVars), `extern ${cType} ${sName};`);
@@ -1697,25 +1730,27 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// Direct or closure: first child is callee, rest are args
 	const callee = peekResult(ctx, cc, 0);
 
-	// msStringConcatArr(count, a, b, c) / msStringArrayFromArr(count, a, b, c)
-	// — emit stack-local array + call to avoid the variadic 16-byte struct ABI
-	// bug on aarch64-windows-gnu (LLVM #89615). A fixed-size local array is
-	// ABI-neutral. Joins the existing family of name-matched runtime intrinsics
-	// below (msBoxStruct, msSpawnInto, etc.).
-	if ((callee === "msStringConcatArr" || callee === "msStringArrayFromArr") && cc >= 3) {
-		const countStr = peekResult(ctx, cc, 1);
-		const n = cc - 2;
-		g.labels += 1;
-		const tmpName = `_mscc${g.labels}_`;
-		emitProcLocalsLine(p, `msString ${tmpName}[${n}];`);
-		let ai = 0;
-		while (ai < n) {
-			const argStr = peekResult(ctx, cc, ai + 2);
-			emitStmtsLine(p, `${tmpName}[${ai}] = ${argStr};`);
-			ai += 1;
+	// Stack-local array calls (ABI-portable, avoids aarch64-windows-gnu variadic
+	// 16-byte struct ABI bug — LLVM #89615):
+	//   msStringConcatArr(count, a, b, c)       → msStringConcatArr(arr, count)
+	//   msStringArrayFromArr(count, a, b, c)    → msStringArrayFromArr(arr, count)
+	//   msStringAppendArr(dest, count, a, b, c) → msStringAppendArr(dest, arr, count)
+	// Each variant shares the stack-array fill; differs only in the surrounding
+	// call shape.
+	if (callee === "msStringConcatArr" || callee === "msStringArrayFromArr") {
+		if (cc >= 3) {
+			const countStr = peekResult(ctx, cc, 1);
+			const tmpName = emitStringArrayLocal(g, p, ctx, cc, 2, "_mscc");
+			truncResults(ctx, cc);
+			ctx.results.push(`${callee}(${tmpName}, ${countStr})`);
+			return;
 		}
+	} else if (callee === "msStringAppendArr" && cc >= 4) {
+		const destStr = peekResult(ctx, cc, 1);
+		const countStr = peekResult(ctx, cc, 2);
+		const tmpName = emitStringArrayLocal(g, p, ctx, cc, 3, "_msap");
 		truncResults(ctx, cc);
-		ctx.results.push(`${callee}(${tmpName}, ${countStr})`);
+		ctx.results.push(`msStringAppendArr(${destStr}, ${tmpName}, ${countStr})`);
 		return;
 	}
 
@@ -1770,11 +1805,13 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	}
 
 	// msSinkBoxStruct(val) → malloc + memcpy + memset (DRC-aware boxing)
-	// spawnLower emits this for struct returns. nodeType carries the type.
+	// spawnLower emits this for struct returns. The boxed value's type is the
+	// argument's nodeType (the value being boxed) — the call's own nodeType is
+	// void* (heap pointer). Reading T from args[0] keeps `nodeType` = result type
+	// throughout, preserving DRC's cross-pass contract.
 	// After memcpy, zeros source so DRC destroy is no-op on ref-counted fields.
-	// memset(&val, 0, sizeof(T)) is equivalent to wasMoved for all types.
-	if (callee === "msSinkBoxStruct" && node.nodeType !== null) {
-		const sinkType = getTypeDesc(g, node.nodeType);
+	if (callee === "msSinkBoxStruct" && cd.arguments.length >= 1 && cd.arguments[0].nodeType !== null) {
+		const sinkType = getTypeDesc(g, cd.arguments[0].nodeType);
 		const boxTmp = getTemp(p, "void*");
 		const addrArg = argsStr.length > 0 && argsStr.charAt(0) === "&" ? argsStr : "&(" + argsStr + ")";
 		emitStmtsLine(p, `${boxTmp.snippet} = malloc(sizeof(${sinkType}));`);
@@ -1800,25 +1837,32 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 
 	// msFutureCreateInline() → typed-sized future allocation for inline struct storage.
 	// asyncBridge emits this when an async function returns a struct type that would
-	// overflow the generic msFutureCreate() 16-byte value slot. nodeType carries the
-	// inner type T. Emits the MS_FUTURE_STRUCT typedef (idempotent) and an
-	// msAlloc(sizeof(msFuture_<T>)) call.
+	// overflow the generic msFutureCreate() 16-byte value slot. The call's own nodeType
+	// is Promise<T> (its true result type); T is extracted via awaitedType so DRC's
+	// cross-pass contract (`nodeType = result type`) is preserved.
 	if (callee === "msFutureCreateInline" && node.nodeType !== null) {
-		const innerC = getTypeDesc(g, node.nodeType);
-		const futStructName = "msFuture_" + mangle(innerC);
-		addLine(sec(g, CSection.Types), `#ifndef ${futStructName}_DEFINED`);
-		addLine(sec(g, CSection.Types), `#define ${futStructName}_DEFINED`);
-		addLine(sec(g, CSection.Types), `MS_FUTURE_STRUCT(${futStructName}, ${innerC});`);
-		addLine(sec(g, CSection.Types), `#endif`);
-		ctx.results.push(`(${futStructName}*)msAlloc(sizeof(${futStructName}))`);
-		return;
+		const innerT = awaitedType(node.nodeType);
+		if (innerT !== null) {
+			const innerC = getTypeDesc(g, innerT);
+			const futStructName = "msFuture_" + mangle(innerC);
+			addLine(sec(g, CSection.Types), `#ifndef ${futStructName}_DEFINED`);
+			addLine(sec(g, CSection.Types), `#define ${futStructName}_DEFINED`);
+			addLine(sec(g, CSection.Types), `MS_FUTURE_STRUCT(${futStructName}, ${innerC});`);
+			addLine(sec(g, CSection.Types), `#endif`);
+			ctx.results.push(`(${futStructName}*)msAlloc(sizeof(${futStructName}))`);
+			return;
+		}
 	}
 
-	// msSpawnInto(fut, closure, sizeof_T, offsetof_value) → codegen reads T from
-	// the first arg's nodeType. Emits sizeof(T) + offsetof(msFuture_<T>, value) so
-	// the worker memcpys to the correct offset (differs on 32-bit WASM due to alignment).
+	// msSpawnInto(fut, closure, sizeof_T, offsetof_value) → T is read from the first
+	// arg's nodeType. Post cleanup: args[0] is the msFutureCreateInline call whose
+	// nodeType is Promise<T>, so we extract T via awaitedType. sizeof + offsetof are
+	// needed because the worker memcpys into the typed inline value slot, whose offset
+	// differs from msFuture_ptr.value on 32-bit WASM due to alignment.
 	if (callee === "msSpawnInto" && cd.arguments.length >= 1 && cd.arguments[0].nodeType !== null) {
-		const innerC = getTypeDesc(g, cd.arguments[0].nodeType);
+		const arg0T = cd.arguments[0].nodeType;
+		const innerT = awaitedType(arg0T) !== null ? awaitedType(arg0T) : arg0T;
+		const innerC = getTypeDesc(g, innerT);
 		const futStructName = "msFuture_" + mangle(innerC);
 		addLine(sec(g, CSection.Types), `#ifndef ${futStructName}_DEFINED`);
 		addLine(sec(g, CSection.Types), `#define ${futStructName}_DEFINED`);
@@ -1849,6 +1893,23 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		emitStmtsLine(p, `${valTmp.snippet} = ((${futStructName}*)${futTmp.snippet})->value;`);
 		ctx.results.push(valTmp.snippet);
 		return;
+	}
+
+	// Lazy MS_PROMISE_ALL_FOR emission — side-effect only, falls through to normal
+	// call emission. When the transform dispatched Promise.all to the typed variant
+	// `msPromiseAllFor_msFuture_<T>`, ensure the matching runtime instance is emitted
+	// in this translation unit. The #ifndef guard inside emitPromiseAllInstance
+	// dedups across repeat calls. The element type T is recovered from the argument's
+	// nodeType (`Promise<T>[]`) via its `typeReturn` (the element Promise<T>) and
+	// awaitedType.
+	if (cd.arguments.length >= 1 && cd.arguments[0].nodeType !== null
+		&& callee.startsWith("msPromiseAllFor_msFuture_")) {
+		const argArrType = cd.arguments[0].nodeType;
+		const elementPromise = argArrType.typeReturn;
+		if (elementPromise !== null) {
+			const innerT = awaitedType(elementPromise);
+			if (innerT !== null) ensurePromiseAllInstance(g, innerT);
+		}
 	}
 
 	const calleeStr = callee;

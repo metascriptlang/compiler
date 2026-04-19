@@ -6,13 +6,12 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { unknownType, charType, float64Type, voidType, createFunction, createPromise, typeNameOf, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
+import { Scope, ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/fs";
-import { getEnv } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
@@ -21,7 +20,10 @@ import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
 import { setConditionalAssignFn } from "./types";
 setConditionalAssignFn(isAssignable);
-import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, ensureShaped } from "./resolvePass";
+import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
+import { registerModuleCtx } from "./instantiate";
+import { getGenericDecl } from "../parser/context";
+import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference } from "./flow";
 import { inferOwnership } from "./ownershipInference";
@@ -64,7 +66,7 @@ function formatTypeBrief(t: Type): string {
 // spawnAffinity stays pure data/logic; the checker-facing glue belongs in
 // the pass that owns the scope lifecycle.
 function checkAffineConsumption(ctx: CheckerContext, scope: Ptr<Scope>, tracker: AffineTracker): void {
-	for (const sym of scope.symbols) {
+	for (const sym of scope.symbols.values()) {
 		if (sym !== null && sym.symbolType !== null && isAffineAwaitable(sym.symbolType)) {
 			const key = symbolConsumeKey(sym);
 			const consumed = hasFlag(sym, SymbolFlag.Consumed) || isConsumedName(tracker, key);
@@ -97,7 +99,7 @@ function collectVisibleSpawnKeys(scope: Ptr<Scope>): string[] {
 	const result: string[] = [];
 	let s = scope;
 	while (s !== null) {
-		for (const sym of s.symbols) {
+		for (const sym of s.symbols.values()) {
 			if (sym !== null && sym.symbolType !== null && isAffineAwaitable(sym.symbolType)) {
 				result.push(symbolConsumeKey(sym));
 			}
@@ -375,9 +377,26 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	sym.state = SymbolState.Checking;
 
 	openScope(ctx.table, ScopeKind.Class);
+	// Register the class's generic parameters (e.g. T in `class Set<T>`) so member
+	// bodies — notably the constructor — can resolve them. Without this, a body
+	// expression like `new Map<T, T>()` inside the constructor fails lookupSymbol("T"),
+	// falls back to unknown, and monomorphizes to `Map<unknown, unknown>`.
+	// Mirrors resolveClass (resolvePass.ms): opens a separate ScopeKind.Block nested
+	// inside the Class scope so generic-param symbols don't pollute the Class scope.
+	const genericStr = getGenericDecl(d.className);
+	const hasGenerics = genericStr !== "";
+	if (hasGenerics) {
+		openScope(ctx.table, ScopeKind.Block);
+		const genericNames = splitTopLevel(genericStr, ",");
+		for (const gp of genericNames) {
+			const trimGp = gp.trim();
+			if (trimGp !== "") defineGenericParam(ctx, trimGp);
+		}
+	}
 	for (const member of d.classBody) {
 		checkClassMember(ctx, member, d.className, sym.symbolType);
 	}
+	if (hasGenerics) closeScope(ctx.table);
 	closeScope(ctx.table);
 
 	sym.state = SymbolState.Checked;
@@ -1255,7 +1274,7 @@ function reportUnusedSymbols(ctx: CheckerContext, program: Node): void {
 
 	// Phase A: local symbols (non-imported)
 	const scope = ctx.table.current;
-	for (const sym of scope.symbols) {
+	for (const sym of scope.symbols.values()) {
 		if (hasFlag(sym, SymbolFlag.Used)) continue;
 		if (hasFlag(sym, SymbolFlag.Exported)) continue;
 		if (sym.name.length === 0) continue;
@@ -1382,7 +1401,7 @@ export function collectDirectives(ctx: CheckerContext, program: Node): void {
 export function stampHeaderPaths(ctx: CheckerContext): void {
 	if (ctx.includeDirectives === "") return;
 	const scope = ctx.table.current;
-	for (const sym of scope.symbols) {
+	for (const sym of scope.symbols.values()) {
 		if (hasFlag(sym, SymbolFlag.ImportC) && sym.headerPath === "") {
 			sym.headerPath = ctx.includeDirectives;
 		}
@@ -1394,7 +1413,7 @@ export function stampHeaderPaths(ctx: CheckerContext): void {
 export function stampJsModulePaths(ctx: CheckerContext): void {
 	if (ctx.jsImportRegistry.length === 0) return;
 	const scope = ctx.table.current;
-	for (const sym of scope.symbols) {
+	for (const sym of scope.symbols.values()) {
 		if (hasFlag(sym, SymbolFlag.ImportC) && sym.jsModulePath === "") {
 			// Look up the extern's nativeName (or declared name) in the registry
 			const lookupName = sym.nativeName !== "" ? sym.nativeName : sym.name;
@@ -1466,7 +1485,7 @@ function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string,
 			stampHeaderPaths(ctx);
 			stampJsModulePaths(ctx);
 			const scope = ctx.table.current;
-			for (const sym of scope.symbols) {
+			for (const sym of scope.symbols.values()) {
 				ensureShaped(sym, ctx);
 				for (const ov of sym.overloads) {
 					ensureShaped(ov, ctx);
@@ -1527,8 +1546,8 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		subCtx.extensionRegistry = createExtensionRegistry();
 		subCtx.exportRegistry = ctx.exportRegistry;
 		// Inject prelude symbols so sub-module can reference them
-		for (const sym of ctx.table.current.symbols) {
-			subCtx.table.current.symbols.push(sym);
+		for (const sym of ctx.table.current.symbols.values()) {
+			addSymbolToScope(subCtx.table.current, sym);
 		}
 		// Copy parent extensions so sub-module can use string/array methods
 		if (ctx.extensionRegistry !== null) {
@@ -1543,7 +1562,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		// Stamp headerPath on .h-translated symbols so C codegen emits #include
 		const subScope = subCtx.table.current;
 		if (subResolved.endsWith(".h")) {
-			for (const sym of subScope.symbols) {
+			for (const sym of subScope.symbols.values()) {
 				if (hasFlag(sym, SymbolFlag.ImportC) && sym.headerPath === "") {
 					sym.headerPath = subResolved;
 				}
@@ -1552,7 +1571,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 
 		// Register sub-module's exported symbols in ExportRegistry
 		const subExports: ExportedSymInfo[] = [];
-		for (const sym of subScope.symbols) {
+		for (const sym of subScope.symbols.values()) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
 				subExports.push(buildExportInfo(sym, subCtx.extensionRegistry, subResolved, subCtx));
 			}
@@ -1599,16 +1618,12 @@ export function getSharedIdentCache(ctx: CheckerContext): IdentCache {
 // for-of creates cursor bindings that skip RC — pushing cursors into another
 // container creates dangling pointers when the source is destroyed.
 export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): void {
-	const preludeSyms = preludeCtx.table.current.symbols;
-	let si = 0;
-	while (si < preludeSyms.length) {
-		const sym = preludeSyms[si];
+	// With shared IdentCache, nameIds are already consistent across all contexts
+	// in the same compilation. Map iteration preserves insertion order.
+	for (const sym of preludeCtx.table.current.symbols.values()) {
 		if (hasFlag(sym, SymbolFlag.Exported)) {
-			// With shared IdentCache, nameIds are already consistent
-			// across all contexts in the same compilation. No re-interning needed.
-			ctx.table.current.symbols.push(sym);
+			addSymbolToScope(ctx.table.current, sym);
 		}
-		si = si + 1;
 	}
 	if (preludeCtx.extensionRegistry !== null && ctx.extensionRegistry !== null) {
 		const preludeExts = preludeCtx.extensionRegistry.methods;
@@ -1675,6 +1690,10 @@ function checkProgramCore(
 	inferOwnership(ctx, program);
 	analyzeParamMutations(ctx, program);
 	sgSortRecords(ctx.symRecords);
+	// Register this module's ctx so later cross-module generic instantiation can
+	// re-check cloned bodies in THIS module's scope (resolving private consts,
+	// helper functions, etc.). Reference parity: Nim's graph.ifaces[module].
+	registerModuleCtx(ctx.modulePath, ctx);
 	return ctx;
 }
 
@@ -2422,7 +2441,7 @@ test "string default" { assert checkOk("function f6(x: string = \"hi\") { return
 test "boolean default" { assert checkOk("function f7(x: boolean = true) { return x; } f7();"); }
 
 // ===== Index Signature Tests =====
-// `{ [key: K]: V }` is syntactic sugar for Map<K, V>. The checker should
+// `{ [key: K]: V }` is syntactic sugar for HashMap<K, V>. The checker should
 // normalize both syntaxes to the same internal Type.
 
 test "index signature declaration parses and checks" {
@@ -2436,10 +2455,10 @@ test "index signature with number key" {
 test "index signature normalizes to Map type — structural equivalence" {
 	// The core property: both syntaxes produce identical resolved types.
 	// We don't assert specific TypeKind or typeName values (those can evolve);
-	// we assert that `{ [k: K]: V }` and `Map<K, V>` produce structurally
+	// we assert that `{ [k: K]: V }` and `HashMap<K, V>` produce structurally
 	// identical symbol types. This is the whole point of the feature.
 	const ctxA = checkSource("let a: { [key: string]: number };");
-	const ctxB = checkSource("let b: Map<string, number>;");
+	const ctxB = checkSource("let b: HashMap<string, number>;");
 	const symA = lookupSymbol(ctxA.table, "a");
 	const symB = lookupSymbol(ctxB.table, "b");
 	assert symA !== null;
@@ -2465,8 +2484,8 @@ test "map literal via index signature target" {
 	assert checkOk("const m: { [key: string]: number } = { \"foo\": 1, \"bar\": 2 };");
 }
 
-test "map literal via Map<K,V> target" {
-	assert checkOk("const m: Map<string, number> = { \"foo\": 1, \"bar\": 2 };");
+test "map literal via HashMap<K,V> target" {
+	assert checkOk("const m: HashMap<string, number> = { \"foo\": 1, \"bar\": 2 };");
 }
 
 test "map literal rejects wrong value type" {
@@ -2481,11 +2500,11 @@ test "empty map literal" {
 // --- Additional index signature edge case tests ---
 
 test "map subscript with variable key" {
-	assert checkOk("const m: Map<string, number> = new Map<string, number>(); m.set(\"a\", 1); const k = \"a\"; const v = m[k];");
+	assert checkOk("const m: HashMap<string, number> = new HashMap<string, number>(); m.set(\"a\", 1); const k = \"a\"; const v = m[k];");
 }
 
 test "map subscript write with variable key" {
-	assert checkOk("const m: Map<string, number> = new Map<string, number>(); const k = \"a\"; m[k] = 42;");
+	assert checkOk("const m: HashMap<string, number> = new HashMap<string, number>(); const k = \"a\"; m[k] = 42;");
 }
 
 test "index sig in function parameter" {

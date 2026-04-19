@@ -311,6 +311,12 @@ MS_DEFINE_FUTURE_CATCH(msFutureCatch_int64,    msFuture_int64)
 MS_DEFINE_FUTURE_CATCH(msFutureCatch_bool,     msFuture_bool)
 MS_DEFINE_FUTURE_CATCH(msFutureCatch_ptr,      msFuture_ptr)
 MS_DEFINE_FUTURE_CATCH(msFutureCatch_msString, msFuture_msString)
+
+/* Per-T Promise.all — msString variant. Input values are msString structs (16B inline);
+ * output is msStringArray holding msString slots populated via msStringCopy
+ * (ownership-correct — increments underlying string refcount). */
+#define MS_COPY_STRING(dst, src) msStringCopy((dst), *(src))
+MS_PROMISE_ALL_FOR(msString, msFuture_msString, msString, msStringArray, msStringPayload, MS_COPY_STRING)
 #endif
 
 /* Per-type read for msString. All futures now store values inline. */

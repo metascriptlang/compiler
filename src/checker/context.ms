@@ -62,12 +62,12 @@ export interface ModuleExports {
 
 export interface ExportRegistry {
 	entries: ModuleExports[];
-	nameIndex: Map<string, ExportedSymInfo[]>;  // name → all exports with that name (cross-module)
-	moduleIndex: Map<string, number>;  // modulePath → index in entries[]
+	nameIndex: HashMap<string, ExportedSymInfo[]>;  // name → all exports with that name (cross-module)
+	moduleIndex: HashMap<string, number>;  // modulePath → index in entries[]
 }
 
 export function createExportRegistry(): ExportRegistry {
-	return { entries: [], nameIndex: new Map<string, ExportedSymInfo[]>(), moduleIndex: new Map<string, number>() };
+	return { entries: [], nameIndex: new HashMap<string, ExportedSymInfo[]>(), moduleIndex: new HashMap<string, number>() };
 }
 
 function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
@@ -255,7 +255,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 // Single source of truth — used by orchestrator (multi-module) and TransAm (LSP).
 export function collectExports(ctx: CheckerContext, modulePath: string): ExportedSymInfo[] {
 	const exports: ExportedSymInfo[] = [];
-	for (const sym of ctx.table.current.symbols) {
+	for (const sym of ctx.table.current.symbols.values()) {
 		if (hasFlag(sym, SymbolFlag.Exported)) {
 			exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx));
 		}
@@ -535,7 +535,7 @@ export function getExtReceiverType(flags: string): string {
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
 	const fullType = rest.slice(colonPos + 1, rest.length);
-	// Strip generic params: "Map<K, V>" or "Map < K , V >" → "Map" for receiver matching
+	// Strip generic params: "HashMap<K, V>" or "Map < K , V >" → "Map" for receiver matching
 	const ltPos = findChar(fullType, "<");
 	if (ltPos > 0) return fullType.slice(0, ltPos).trim();
 	return fullType.trim();
@@ -738,8 +738,8 @@ export class CheckerContext {
 	currentModule: Module;
 	exportRegistry: ExportRegistry;
 	extensionRegistry: ExtensionRegistry;
-	macroBodyRegistry: Map<string, Node>;       // Phase B: macroName → macroDeclBody
-	macroParamsRegistry: Map<string, string[]>; // Phase B: macroName → param names
+	macroBodyRegistry: HashMap<string, Node>;       // Phase B: macroName → macroDeclBody
+	macroParamsRegistry: HashMap<string, string[]>; // Phase B: macroName → param names
 	macroExpansionDepth: int32;                  // Phase B+ eager: recursion limit for macros that produce macros
 	inferredReturn: Type;  // tracks inferred return type during function body checking
 	includeDirectives: string; // accumulated @include args, newline-separated
@@ -778,8 +778,8 @@ export function createContext(): CheckerContext {
 		currentModule: null as unknown as Module,
 		exportRegistry: createExportRegistry(),
 		extensionRegistry: createExtensionRegistry(),
-		macroBodyRegistry: new Map<string, Node>(),
-		macroParamsRegistry: new Map<string, string[]>(),
+		macroBodyRegistry: new HashMap<string, Node>(),
+		macroParamsRegistry: new HashMap<string, string[]>(),
 		macroExpansionDepth: 0,
 		inferredReturn: unknownType(),
 		includeDirectives: "",

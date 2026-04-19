@@ -16,7 +16,7 @@
 
 import { Node, NodeKind, IdentifierData, VariableDeclData, FunctionDeclData, MemberExprData, ArrayAccessData, CallExprData, BinaryExprData, UnaryExprData, NumberLiteralData, ConditionalExprData, TypeAssertionData, ForOfStmtData, ArrowFunctionData, ReturnStmtData, Type, TypeKind } from "../ast/node";
 import { isNumeric, numberType, int32Type, booleanType, stringType, charType, isResult, getResultOkType, getResultErrType } from "../checker/types";
-import { ExportRegistry, ModuleExports } from "../checker/context";
+import { ExportRegistry, ExportedSymInfo } from "../checker/context";
 import { TransformContext } from "./context";
 import { mapChildren } from "./walker";
 
@@ -289,7 +289,11 @@ function deriveConditionalExprType(node: Node): void {
 
 // ===== Main Refiner =====
 
-let _registryEntries: ModuleExports[] = null as unknown as ModuleExports[];
+// Cached name → [ExportedSymInfo] index for O(1) cross-module lookup.
+// Populated from registry.nameIndex (built during checkModuleGraph's addToNameIndex).
+// Old design scanned all modules × all symbols per lookup — quadratic hot path
+// measured at 51% of Phase A. Now single Map.get() per lookup.
+let _registryNameIndex: HashMap<string, ExportedSymInfo[]> = null as unknown as HashMap<string, ExportedSymInfo[]>;
 
 // Module-level scopes — avoids closure capture of value-type array.
 // Under C, closures copy value types into env structs. Array push/pop inside
@@ -298,57 +302,44 @@ let _registryEntries: ModuleExports[] = null as unknown as ModuleExports[];
 let _scopes: TypeScope[] = [];
 
 export function refineTypes(program: Node, ctx: TransformContext, registry: ExportRegistry): Node {
-	if (registry !== null && registry.entries !== null) {
-		_registryEntries = registry.entries;
+	if (registry !== null && registry.nameIndex !== null) {
+		_registryNameIndex = registry.nameIndex;
 	} else {
-		_registryEntries = null as unknown as ModuleExports[];
+		_registryNameIndex = null as unknown as HashMap<string, ExportedSymInfo[]>;
 	}
 	_scopes = [];
 	_scopes.push(createScope());
 
 	refineNode(program);
-	_registryEntries = null as unknown as ModuleExports[];
+	_registryNameIndex = null as unknown as HashMap<string, ExportedSymInfo[]>;
 	return program;
 }
 
-// Registry Bridge: look up cross-module symbol by name
+// Registry Bridge: look up cross-module symbol by name (first match).
+// Uses pre-built name index from ExportRegistry → O(1) avg instead of linear scan.
 function registryLookup(name: string): Type {
-	if (_registryEntries === null) return null;
-	let ei = 0;
-	while (ei < _registryEntries.length) {
-		const entry = _registryEntries[ei];
-		let si = 0;
-		while (si < entry.symbols.length) {
-			const sym = entry.symbols[si];
-			if (sym.name === name) return sym.symType;
-			si = si + 1;
-		}
-		ei = ei + 1;
-	}
-	return null;
+	if (_registryNameIndex === null) return null;
+	if (!_registryNameIndex.has(name)) return null;
+	const list = _registryNameIndex.get(name);
+	if (list.length === 0) return null;
+	return list[0].symType;
 }
 
-// Registry Bridge: look up type by name (for TypeAssertion "x as Foo" and enum member access)
-// Searches registry symbols for types (interfaces, classes, enums, type aliases)
+// Registry Bridge: look up type by name (for TypeAssertion "x as Foo" and enum member access).
+// Searches only homonymous exports for matching TypeKind (struct/enum/alias).
 function registryTypeLookup(name: string): Type {
-	if (_registryEntries === null) return null;
-	let ei = 0;
-	while (ei < _registryEntries.length) {
-		const entry = _registryEntries[ei];
-		let si = 0;
-		while (si < entry.symbols.length) {
-			const sym = entry.symbols[si];
-			if (sym.name === name && sym.symType !== null) {
-				const k = sym.symType.kind;
-				if (k === TypeKind.Struct || k === TypeKind.Enum || k === TypeKind.Array ||
-					k === TypeKind.GenericInstance || k === TypeKind.Span || k === TypeKind.Tuple ||
-					k === TypeKind.Function || k === TypeKind.Ref || k === TypeKind.Ptr) {
-					return sym.symType;
-				}
+	if (_registryNameIndex === null) return null;
+	if (!_registryNameIndex.has(name)) return null;
+	const list = _registryNameIndex.get(name);
+	for (const sym of list) {
+		if (sym.symType !== null) {
+			const k = sym.symType.kind;
+			if (k === TypeKind.Struct || k === TypeKind.Enum || k === TypeKind.Array ||
+				k === TypeKind.GenericInstance || k === TypeKind.Span || k === TypeKind.Tuple ||
+				k === TypeKind.Function || k === TypeKind.Ref || k === TypeKind.Ptr) {
+				return sym.symType;
 			}
-			si = si + 1;
 		}
-		ei = ei + 1;
 	}
 	return null;
 }

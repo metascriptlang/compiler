@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, substituteType, createStruct, needsRC } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, substituteType, createStruct, createArray, needsRC, hasAsgnFlag } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
 import { Node, CallExprData, Type, TypeKind, SymbolKind } from "../../ast/node";
@@ -1107,6 +1107,90 @@ export function genResultType(g: CGen, t: Type): string {
 
 // ===== Future Type Generation =====
 
+// Lazy-emit entry: called from expressions.ms when it sees a call to
+// msPromiseAllFor_msFuture_<T>. Resolves the element type T to its
+// (SrcT, DstT, arrType, payloadType, copyStmt) tuple and ensures the
+// instance is emitted once per module (via the #ifndef guard inside
+// emitPromiseAllInstance). Pre-instantiated types (double / bool / ptr
+// in combinator.h, msString in system.h) short-circuit — caller skips.
+// Returns true if handled (either emitted now or pre-instantiated),
+// false if innerType is an unsupported shape (void, nested array).
+export function ensurePromiseAllInstance(g: CGen, innerType: Type): boolean {
+	if (innerType === null || innerType.kind === TypeKind.Void) return false;
+	const innerDesc = getTypeDesc(g, innerType);
+
+	// Pre-instantiated in runtime (combinator.h / system.h) — no emission needed.
+	if (innerDesc === "double" || innerDesc === "bool" || innerDesc === "MS_BOOL"
+		|| innerDesc === "msString" || innerDesc.endsWith("*")) {
+		return true;
+	}
+
+	// int32 / int64 — array types are custom (int32_tArray / int64_tArray). Force-emit
+	// the array typedef so the payload struct is complete for sizeof() inside the macro.
+	if (innerDesc === "int32_t") {
+		genArrayType(g, createArray(innerType));
+		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME");
+		return true;
+	}
+	if (innerDesc === "int64_t") {
+		genArrayType(g, createArray(innerType));
+		emitPromiseAllInstance(g, "msFuture_int64", "int64_t", "int64_t", "int64_tArray", "int64_tArray__Content", "MS_COPY_SAME");
+		return true;
+	}
+
+	// Arrays-of-arrays: Promise<T[]>[] → Promise<T[][]> — not a common use case.
+	// Caller falls back to generic msPromiseAll.
+	if (innerDesc.endsWith("Array")) return false;
+
+	// Structs and other named value types. When the struct has RC fields (signaled
+	// by `hasAsgnFlag`), use its generated `<T>Copy` hook for a DRC-correct deep
+	// copy — a shallow memcpy would silently duplicate RC pointers and cause leaks
+	// or double-frees. `<T>Copy` is defined in CSection.Procs by destructorLifting;
+	// emit a forward decl in ProcHeaders so the static-inline macro body (emitted
+	// into GlobalVars, which renders before Procs) can reference it.
+	genArrayType(g, createArray(innerType));
+	const futName = "msFuture_" + mangle(innerDesc);
+	const arrName = getArrayTypeName(innerDesc);
+	const payloadName = getArrayContentType(arrName);
+	let copyStmt = "MS_COPY_SAME";
+	// destructorLifting generates `<typeName>Copy` only for named structs with
+	// RC fields (`hasAsgnFlag`). Anonymous structs (typeName === "") are skipped
+	// by destructorLifting at `lookupSymbol(...) === null`, so using the hook
+	// there would produce an undefined reference at link. Match its filter.
+	if (innerType.kind === TypeKind.Struct && innerType.typeName !== "" && hasAsgnFlag(innerType)) {
+		const hookName = innerDesc + "Copy";
+		// Dedup the forward decl across repeat calls for the same T — multiple
+		// Promise.all sites in the same module otherwise emit N copies. Harmless
+		// in C but noisy; cache via g.forwTypeCache.
+		const fwdKey = "copyhookfwd:" + hookName;
+		if (!typeCacheHas(g.forwTypeCache, fwdKey)) {
+			typeCacheSet(g.forwTypeCache, fwdKey, hookName);
+			addLine(sec(g, CSection.ProcHeaders), "void " + hookName + "(" + innerDesc + "* dest, " + innerDesc + "* src);");
+		}
+		copyStmt = hookName;
+	}
+	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, copyStmt);
+	return true;
+}
+
+// Emit an MS_PROMISE_ALL_FOR instance for element-future-type `futName` whose
+// MetaScript source type is T[] (array type `arrName`, payload `payloadName`,
+// storage element `dstElem`). Guarded by #ifndef — idempotent across modules.
+// Pre-instantiated types (msFuture_double / msFuture_bool / msFuture_ptr in
+// combinator.h, msFuture_msString in system.h) are skipped at call sites.
+function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem: string, arrName: string, payloadName: string, copyStmt: string): void {
+	const guard = "msPromiseAllFor_" + futName + "_DEFINED";
+	// Emit into GlobalVars (runs after Types + SeqTypes) so the array payload's
+	// full struct definition is visible to sizeof(payloadType) inside the macro
+	// body — Types/SeqTypes ordering would otherwise produce incomplete-type errors.
+	const b = sec(g, CSection.GlobalVars);
+	addLine(b, "#ifndef " + guard);
+	addLine(b, "#define " + guard);
+	addLine(b, "MS_PROMISE_ALL_FOR(" + srcT + ", " + futName + ", " + dstElem + ", " + arrName + ", " + payloadName + ", " + copyStmt + ");");
+	addLine(b, "#endif");
+	addNewline(b);
+}
+
 export function genFutureType(g: CGen, t: Type): string {
 	const innerType = awaitedType(t);
 	const key = typeKey(t);
@@ -1119,7 +1203,7 @@ export function genFutureType(g: CGen, t: Type): string {
 
 	const innerDesc = getTypeDesc(g, innerType);
 
-	// Map to predefined typed futures (avoid re-emitting structs already in future.h)
+	// Map to predefined typed futures (avoid re-emitting structs already in future.h).
 	if (innerDesc === "double") { typeCacheSet(g.typeCache, key, "msFuture_double*"); return "msFuture_double*"; }
 	if (innerDesc === "int32_t") { typeCacheSet(g.typeCache, key, "msFuture_int32*"); return "msFuture_int32*"; }
 	if (innerDesc === "int64_t") { typeCacheSet(g.typeCache, key, "msFuture_int64*"); return "msFuture_int64*"; }
@@ -1136,7 +1220,11 @@ export function genFutureType(g: CGen, t: Type): string {
 	const name = "msFuture_" + mangle(innerDesc);
 	typeCacheSet(g.typeCache, key, name + "*");
 
-	// Emit struct (guarded for cross-module safety, same pattern as genResultType)
+	// Emit the future struct (guarded for cross-module safety, same pattern as
+	// genResultType). The matching MS_PROMISE_ALL_FOR instance is NOT auto-emitted
+	// here — it's emitted on-demand from expressions.ms when a Promise.all call
+	// site references `msPromiseAllFor_msFuture_<T>`, avoiding dead inline code
+	// for Promise<T> types that are never Promise.all'd.
 	ensureForwardDecl(g, name);
 	const b = sec(g, CSection.Types);
 	addLine(b, "#ifndef " + name + "_DEFINED");

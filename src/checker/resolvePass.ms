@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateHasAsgn, createConditionalType, evaluateConditionalType, typeNameOf, emptyType } from "./types";
+import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeNameOf, emptyType } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -175,12 +175,14 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 	}
 
 	// Object literal type: { field: Type; ... } or { field: Type, ... }
-	// Also handles index signature: { [key: K]: V } → normalized to Map<K, V>
+	// Also handles index signature: { [key: K]: V } → normalized to Map<K, V>.
+	// Ordered `Map` is the target (not HashMap) because JS object literals preserve
+	// insertion order — the semantic match for `{ [key: K]: V }` sugar.
 	if (trimmed.charAt(0) === "{" && trimmed.endsWith("}")) {
 		const inner = trimmed.slice(1, trimmed.length - 1).trim();
 		if (inner === "") return createStruct("", [], [], true);
 
-		// Index signature: { [name: K]: V } is syntactic sugar for Map<K, V>.
+		// Index signature: { [name: K]: V } is syntactic sugar for Map<K, V> (ordered).
 		// After normalization, both syntaxes produce identical Type structs.
 		// See docs/PACKAGE.md and the index signature impl plan.
 		if (inner.charAt(0) === "[") {
@@ -213,7 +215,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 					if (afterBracket.length > 0 && afterBracket.charAt(0) === ":") {
 						const valueType = afterBracket.slice(1, afterBracket.length).trim();
 						if (keyType !== "" && valueType !== "") {
-							// Rewrite to Map<K, V> and recurse — reuses all generic resolution.
+							// Rewrite to Map<K, V> (ordered) and recurse — reuses all generic resolution.
 							const mapAnnotation = "Map<" + keyType + ", " + valueType + ">";
 							return resolveAnnotation(mapAnnotation, ctx, line, col);
 						}
@@ -303,7 +305,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		if (genericParams !== "") {
 			// Check if ALL args are generic params of the enclosing function.
 			// If so, preserve as generic type (don't instantiate).
-			// e.g. inside set<K,V>(this m: Map<K,V>), Map<K,V> stays generic.
+			// e.g. inside set<K,V>(this m: HashMap<K,V>), HashMap<K,V> stays generic.
 			let allGenericParams = true;
 			const resolvedArgs: Type[] = [];
 			for (const arg of args) {
@@ -735,7 +737,7 @@ function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerConte
 
 // Extract generic param names from fnFlags: "gen:T,U" or "async|gen:T,U" -> ["T", "U"]
 // Define a generic param symbol, handling optional constraint: "T" or "T:Comparable"
-function defineGenericParam(ctx: CheckerContext, paramStr: string): void {
+export function defineGenericParam(ctx: CheckerContext, paramStr: string): void {
 	const colonPos = findChar(paramStr, ":");
 	if (colonPos > 0) {
 		// Has constraint: "T:Comparable" -> name="T", constraint="Comparable"
@@ -1023,7 +1025,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.typeNames = d.interfaceFields;
 	target.typeChildren = fieldTypes;
 	target.typeFlags = TypeFlag.IsStruct as int32;
-	for (const pt of fieldTypes) { propagateHasAsgn(target, pt); }
+	for (const pt of fieldTypes) { propagateToOwner(target, pt); }
 	node.nodeType = sym.symbolType;
 	// Record each interface field DEF for symbol graph.
 	// Parser stores per-field source locations in node.paramLocations (repurposed field).
@@ -1335,7 +1337,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		}
 	}
 	// Propagate HasAsgn from any managed field
-	for (const pt of memberTypes) { propagateHasAsgn(inner, pt); }
+	for (const pt of memberTypes) { propagateToOwner(inner, pt); }
 	node.nodeType = sym.symbolType;
 }
 
@@ -1427,7 +1429,7 @@ function resolveActor(ctx: CheckerContext, node: Node): void {
 	inner.typeNames = memberNames;
 	inner.typeChildren = memberTypes;
 	inner.typeFlags = TypeFlag.IsStruct as int32;
-	for (const pt of memberTypes) { propagateHasAsgn(inner, pt); }
+	for (const pt of memberTypes) { propagateToOwner(inner, pt); }
 	node.nodeType = sym.symbolType;
 }
 

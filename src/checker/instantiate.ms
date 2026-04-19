@@ -8,8 +8,8 @@ import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, Functi
 import { forEachChild } from "../ast/visitor";
 import { instantiateGeneric, substituteType, createFunction } from "./types";
 import { resolveAnnotation } from "./resolvePass";
-import { lookupSymbol, makeSymbol, SymbolFlag, hasFlag } from "./symbol";
-import { CheckerContext, stripGenFlag } from "./context";
+import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
@@ -19,7 +19,49 @@ import { getIdentId } from "./idents";
 // Module-level pending list — all instantiated ASTs go here.
 // compile.ms drains this after each module's check.
 let _pendingInstances: Node[] = [];
-let _pendingNames: Set<string> = new Set<string>();
+let _pendingNames: HashSet<string> = new HashSet<string>();
+
+// ===== Module-Path → CheckerContext Registry =====
+// When a generic body (function or class constructor) is cloned and re-checked
+// during monomorphization, private module-level symbols in the defining module
+// (e.g. `const INITIAL_CAPACITY` in std/core/struct.ms) must resolve. They live
+// in the defining module's scope, not the caller's. This registry maps modulePath
+// → ctx so the body re-check can target the correct scope.
+//
+// Reference parity: Nim's `graph.ifaces[itemId.module]` serves the same role.
+//
+// Populated by checkProgramCore (checkPass.ms) at the end of each module's check.
+// Looked up by instantiateGenericFunction / instantiateClassConstructor.
+let _moduleCtxMap: HashMap<string, CheckerContext> = new HashMap<string, CheckerContext>();
+
+export function registerModuleCtx(modulePath: string, ctx: CheckerContext): void {
+	if (modulePath === "") return;
+	_moduleCtxMap.set(modulePath, ctx);
+}
+
+export function lookupModuleCtx(modulePath: string): CheckerContext {
+	if (modulePath === "") return null as unknown as CheckerContext;
+	if (!_moduleCtxMap.has(modulePath)) return null as unknown as CheckerContext;
+	return _moduleCtxMap.get(modulePath);
+}
+
+// Pick the right ctx for re-checking a body defined in `definingModulePath`:
+//   1. Self-module (caller is also the defining module) — use ctx directly. The
+//      module is currently being checked, so its scope is live but not yet in
+//      the registry (registration happens at end of checkProgramCore).
+//   2. Registry — another user module that has already finished checking.
+//   3. preludeCtx — stdlib/prelude modules share a single ctx, not registered
+//      via checkProgramCore. This fallback covers them.
+//   4. Caller's ctx — last resort when all lookups miss.
+// Reference parity: Nim's `graph.ifaces[module]` via the `symMap` for generic
+// instantiation body re-check.
+function pickBodyCtx(definingModulePath: string, ctx: CheckerContext): CheckerContext {
+	if (definingModulePath === "" || definingModulePath === ctx.modulePath) return ctx;
+	const defining = lookupModuleCtx(definingModulePath);
+	if (defining !== null) return defining;
+	if (ctx.preludeCtx !== null) return ctx.preludeCtx;
+	return ctx;
+}
 
 // ===== Constructor Default Registry =====
 // Cross-module registry for constructor function types + defaults.
@@ -63,13 +105,13 @@ export function addPendingInstance(node: Node): void {
 export function drainPendingInstances(): Node[] {
 	const result = _pendingInstances;
 	_pendingInstances = [];
-	_pendingNames = new Set<string>();
+	_pendingNames = new HashSet<string>();
 	return result;
 }
 
 // ===== Helpers =====
 
-// Deduplicate unify bindings (K=string may appear twice from Map<K,V> + K params)
+// Deduplicate unify bindings (K=string may appear twice from HashMap<K,V> + K params)
 function deduplicateBindings(names: string[], types: Type[]): { names: string[], types: Type[] } {
 	const outNames: string[] = [];
 	const outTypes: Type[] = [];
@@ -93,7 +135,7 @@ function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext,
 	const symType = callerSym !== null ? callerSym.symbolType : fallbackType;
 	const sym = makeSymbol(name, SymbolKind.TypeAlias, symType, false);
 	sym.nameId = getIdentId(ctx.table.identCache, name);
-	ctx.table.current.symbols.push(sym);
+	addSymbolToScope(ctx.table.current, sym);
 	injected.push(sym);
 }
 
@@ -126,14 +168,10 @@ function injectConcreteTypeSyms(t: Type, ctx: CheckerContext, callerCtx: Checker
 
 function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
 	for (const sym of injected) {
-		let i = 0;
-		while (i < ctx.table.current.symbols.length) {
-			if (ctx.table.current.symbols[i] === sym) {
-				ctx.table.current.symbols[i] = ctx.table.current.symbols[ctx.table.current.symbols.length - 1];
-				ctx.table.current.symbols.pop();
-				break;
-			}
-			i = i + 1;
+		// Each injected sym has a real nameId (set in injectConcreteTypeSyms before push);
+		// O(1) removal by key instead of linear-scan-swap-pop.
+		if (sym.nameId !== 0) {
+			ctx.table.current.symbols.delete(sym.nameId);
 		}
 	}
 }
@@ -252,10 +290,10 @@ function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[])
 			}
 		}
 	}
-	// Substitute explicit type args on the node (e.g. "K, V" in new Map<K, V>()).
+	// Substitute explicit type args on the node (e.g. "K, V" in new HashMap<K, V>()).
 	// Without this, the checker's NewExpr/CallExpr generic resolution falls back
 	// to a location-keyed side channel that still holds the original (unsubstituted)
-	// strings, producing Map<Unknown, Unknown> during re-check of cloned bodies.
+	// strings, producing HashMap<Unknown, Unknown> during re-check of cloned bodies.
 	if (node.typeArg !== null && node.typeArg !== "") {
 		node.typeArg = substAnnotationAll(node.typeArg, paramNames, concreteTypes);
 	}
@@ -301,7 +339,20 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	ctx.genericInstDepth = ctx.genericInstDepth + 1;
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
-	const mangledName = mangleMonoName(sym.name, dedup.types);
+	// Extension method disambiguation: two overloads with the same function name and
+	// generic arity (e.g. `set<K,V>(this Map<K,V>)` and `set<K,V>(this HashMap<K,V>)`)
+	// produce distinct mangled names. Without this prefix, `set__string_int32` collides
+	// across Map and HashMap, and the later instantiation overwrites the earlier one.
+	// Prefix with the receiver class name (e.g. `Map_set__string_int32`).
+	let mangleBase = sym.name;
+	if (sym.declNode !== null && sym.declNode.kind === NodeKind.FunctionDecl) {
+		const fd = sym.declNode.data as FunctionDeclData;
+		if (isExtensionFlag(fd.fnFlags)) {
+			const recv = getExtReceiverType(fd.fnFlags);
+			if (recv !== "") mangleBase = recv + "_" + sym.name;
+		}
+	}
+	const mangledName = mangleMonoName(mangleBase, dedup.types);
 
 	// Cache check — skip if already instantiated.
 	// Reference parity (genericCacheGet + findPendingModule): return cached symbol only.
@@ -348,22 +399,22 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	let rootScope = ctx.table.current;
 	while (rootScope.parent !== null) rootScope = rootScope.parent;
 	instSym.nameId = getIdentId(ctx.table.identCache, mangledName);
-	rootScope.symbols.push(instSym);
+	addSymbolToScope(rootScope, instSym);
 	cloned.resolvedSym = instSym;
 
 	// Reference parity (semProcBody): check body in the DEFINING module's scope
 	// (for private helpers like mapRawGet), but with concrete type symbols injected so
 	// user types (Item, Foo, etc.) are visible during type annotation resolution.
 	if (cd.fnBody !== null) {
-		const bodyCtx = ctx.preludeCtx !== null ? ctx.preludeCtx : ctx;
+		const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
 		// Register instance in body-check scope so recursive lookups find it
 		instSym.nameId = getIdentId(bodyCtx.table.identCache, mangledName);
-		bodyCtx.table.current.symbols.push(instSym);
+		addSymbolToScope(bodyCtx.table.current, instSym);
 		const savedModulePath = bodyCtx.modulePath;
 		bodyCtx.modulePath = ctx.modulePath;
 		// Reference parity (instantiateGenericParamList): inject concrete type
 		// symbols into scope so resolveAnnotation("Item") finds the user type during re-check.
-		// Without this, Map<string, Item[]> methods resolve "Item" to Unknown.
+		// Without this, HashMap<string, Item[]> methods resolve "Item" to Unknown.
 		const injectedSyms: Symbol[] = [];
 		for (const ct of dedup.types) {
 			injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
@@ -450,12 +501,22 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	}
 	ctorDeclNode.nodeType = createFunction(resolvedParamTypes, fnParams, null as unknown as Type);
 
-	// Re-check constructor body with concrete types.
-	// Strip HiddenDeref/HiddenAddr wrappers first — re-check regenerates them correctly.
+	// Re-check constructor body with concrete types in the class's DEFINING module ctx
+	// (from _moduleCtxMap registry). This resolves private module-level symbols
+	// referenced by the body — e.g. `let cap = INITIAL_CAPACITY;` in `HashSet.constructor`.
+	// Fallback chain: registry → preludeCtx → caller's ctx. Reference parity: Nim's
+	// `graph.ifaces[module]` lookup. Inject concrete type symbols so user types in type
+	// args (e.g. Item in `new HashSet<Item>(...)`) are visible during resolveAnnotation.
 	if (clonedBody !== null) {
-		const savedModulePath = ctx.modulePath;
-		if (classSym.modulePath !== "") ctx.modulePath = classSym.modulePath;
+		const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
+		const savedModulePath = bodyCtx.modulePath;
+		bodyCtx.modulePath = classSym.modulePath !== "" ? classSym.modulePath : ctx.modulePath;
 		clearCheckerState(clonedBody);
+		// Inject concrete type symbols (parity with instantiateGenericFunction).
+		const injectedSyms: Symbol[] = [];
+		for (const ct of dedup.types) {
+			injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
+		}
 		// Replicate checkPass.ms:264-284: prepend `this` with concrete class type
 		const ctorParams: string[] = ["this"];
 		for (const p of fnParams) { ctorParams.push(p); }
@@ -465,8 +526,9 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		const ctorFnType = createFunction(ctorChildren, ctorParams, null as unknown as Type);
 		const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorFnType, false);
 		ctorSym.state = SymbolState.Checked;
-		callCheckFunctionBody(ctx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
-		ctx.modulePath = savedModulePath;
+		callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
+		bodyCtx.modulePath = savedModulePath;
+		removeInjectedSyms(bodyCtx, injectedSyms);
 	}
 
 	// Store constructor type + defaults for cross-module default-fill lookup.

@@ -110,7 +110,7 @@ function isBuiltinName(name: string): boolean {
 		"console" | "Result" | "true" | "false" | "null" | "undefined" |
 		"NaN" | "Infinity" | "Math" | "JSON" | "parseInt" | "parseFloat" |
 		"String" | "Number" | "Boolean" | "Array" | "Object" | "Error" |
-		"Promise" | "Map" | "Set" | "require" | "module" | "exports" |
+		"Promise" | "Map" | "Set" | "HashMap" | "HashSet" | "require" | "module" | "exports" |
 		"globalThis" | "check" | "test" | "testGroup" => true,
 		_ => false,
 	};

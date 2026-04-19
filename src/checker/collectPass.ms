@@ -562,6 +562,12 @@ export function importSymFromRegistry(
 	if ((exportInfo.primaryFlags & SymbolFlag.OverloadSig) !== 0) {
 		setFlag(sym, SymbolFlag.OverloadSig);
 	}
+	// Exported Variables are always module-level — locals can't be exported.
+	// Carry the Global flag so codegen's isModuleGlobalVar correctly routes cross-module
+	// var references through mangledGlobalName (matching the defining module's C name).
+	if (exportInfo.kind === SymbolKind.Variable) {
+		setFlag(sym, SymbolFlag.Global);
+	}
 	defineOrError(ctx, sym, defNode);
 	sgRecordSym(ctx, nameLoc.line, nameLoc.column, nameLoc.column + alias.length, sym, exportInfo.symType, exportInfo.kind, alias, "", false);
 	return sym;

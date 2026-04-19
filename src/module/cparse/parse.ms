@@ -37,10 +37,10 @@ interface ParseCtx {
 	diags: Diagnostic[];
 	objs: Obj[];
 	// Scope: typedef names and struct/union/enum tags
-	typedefs: Map<string, CType>;
-	tags: Map<string, CType>;
+	typedefs: HashMap<string, CType>;
+	tags: HashMap<string, CType>;
 	// Enum constant values for const expr evaluation (e.g., B = A | 2)
-	enumConstants: Map<string, int64>;
+	enumConstants: HashMap<string, int64>;
 }
 
 // ===== Token Consumption Helpers =====
@@ -670,9 +670,9 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 		target,
 		diags: [],
 		objs: [],
-		typedefs: new Map<string, CType>(),
-		tags: new Map<string, CType>(),
-		enumConstants: new Map<string, int64>(),
+		typedefs: new HashMap<string, CType>(),
+		tags: new HashMap<string, CType>(),
+		enumConstants: new HashMap<string, int64>(),
 	};
 
 	while (!isEnd(ctx)) {

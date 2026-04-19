@@ -26,7 +26,7 @@ export class CompletionCache {
 
 // Resolve cache: maps label to additionalTextEdits JSON for completionItem/resolve.
 // nvim-cmp strips additionalTextEdits from initial response and expects them on resolve.
-let _resolveCache: Map<string, string> = new Map<string, string>();
+let _resolveCache: HashMap<string, string> = new HashMap<string, string>();
 
 export function cacheResolveEdit(label: string, detail: string, editsJson: string): void {
 	_resolveCache.set(label, editsJson);
@@ -47,7 +47,7 @@ let _changedUris: string[] = [];
 
 export function markFileChanged(path: string, uri: string): void {
 	// Clear resolve cache on edit — stale textEdits from previous content
-	_resolveCache = new Map<string, string>();
+	_resolveCache = new HashMap<string, string>();
 	let found = false;
 	for (let ci = 0; ci < _changedFiles.length; ci += 1) {
 		if (_changedFiles[ci] === path) { found = true; break; }

@@ -243,6 +243,13 @@ msString msStringConcat(msString a, msString b);
 /* Concatenate N strings from an array — ABI-portable (no variadic struct passing) */
 msString msStringConcatArr(const msString* arr, int64_t count);
 
+/* Append N strings from an array to dest in place — single prepareAdd sized
+ * exactly to total addition, then loop memcpy. Used by stringOpLower to lower
+ * self-append chains (`x = x + a + b + c` or `x = `${x}${y}${z}``) to one
+ * amortized in-place call instead of allocating a fresh buffer via
+ * msStringConcatArr. */
+void msStringAppendArr(msString* dest, const msString* arr, int64_t count);
+
 /* Set character at index (mutating) — requires prior msStringPrepareMutation */
 void msStringSetChar(msString* s, int64_t idx, msString ch);
 

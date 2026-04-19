@@ -44,6 +44,14 @@ export function msStringConcatArr(count: number, ...parts: string[]): string {
 	return result.asString();
 }
 
+// Self-append N parts — called by stringOpLower for `x = x + a + b + ...`
+// and `x = `${x}${a}${b}``. Thin loop over msStringAppend (same pattern as
+// the C runtime wrapper).
+export function msStringAppendArr(dest: string, count: number, ...parts: string[]): void {
+	let i = 0;
+	while (i < parts.length) { msStringAppend(dest, parts[i]); i = i + 1; }
+}
+
 // ===== Operators =====
 // Primitive operators (implementation)
 export function `==`(this a: string, b: string): boolean {

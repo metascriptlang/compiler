@@ -3,8 +3,8 @@
 
 import { Node, NodeKind, NodeData, createNode, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, createEnumLiteral } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, createEnumLiteral } from "./types";
+import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol } from "./context";
 import {
 	isAssignable, needsStdConv, findFirstMismatch,
@@ -302,7 +302,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			if (d.operator === "=" && leftType !== null) {
 				d.right = fitNode(ctx, d.right, leftType, rightType);
 			}
-			// Map<K,V> subscript write: `m[k] = v` → `m.set(k, v)`. Mutate the
+			// HashMap<K,V> subscript write: `m[k] = v` → `m.set(k, v)`. Mutate the
 			// whole BinaryExpr into a method call so the existing extension
 			// resolution + lowering path handles it. Counterpart of the read-case
 			// mutation in the ArrayAccess arm above.
@@ -312,7 +312,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 				if (setObjType !== null && setObjType.kind === TypeKind.Ref && setObjType.typeReturn !== null) {
 					setObjType = setObjType.typeReturn;
 				}
-				if (setObjType !== null && setObjType.kind === TypeKind.GenericInstance && setObjType.typeName === "Map") {
+				if (setObjType !== null && setObjType.kind === TypeKind.GenericInstance
+					&& isIndexableMapType(setObjType)) {
 					const wloc = node.location;
 					const wtok = createToken(TokenKind.Ident, "", wloc.line);
 					const wmember: MemberExprData = { object: ad.array, property: "set", isOptional: false };
@@ -419,11 +420,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			checkExpr(ctx, d.array, null);
 			const arrType = d.array.nodeType;
 			checkExpr(ctx, d.index, null);
-			// Map<K,V> subscript: mutate `m[k]` into the method-call form `m.get(k)`
+			// HashMap<K,V> subscript: mutate `m[k]` into the method-call form `m.get(k)`
 			// so the existing extension resolution (checkMemberExpr → checkCallExpr)
 			// sets up NodeFlag.ExtCall + resolvedSym, and extensionMethodLower later
 			// rewrites it to the flat UFCS form. This makes `{ [key: K]: V }` and
-			// Map<K,V> subscripts work transparently at runtime.
+			// HashMap<K,V> subscripts work transparently at runtime.
 			//
 			// Only handles READ here. Write case (`m[k] = v`) is handled in the
 			// BinaryExpr assignment check — see below — because we need to know if
@@ -434,7 +435,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 				mapObjType = mapObjType.typeReturn;
 			}
 			if (mapObjType !== null && mapObjType.kind === TypeKind.GenericInstance
-				&& mapObjType.typeName === "Map"
+				&& isIndexableMapType(mapObjType)
 				&& ctx.initTracker.leftPartOfAsgn === 0) {
 				const loc = node.location;
 				const memberTok = createToken(TokenKind.Ident, "", loc.line);
@@ -490,16 +491,20 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			if (objExpected !== null && objExpected.kind === TypeKind.Ref && objExpected.typeReturn !== null) {
 				objExpected = objExpected.typeReturn;
 			}
-			// Map<K,V> literal: `{ "foo": 1 }` assigned to a Map target is rewritten
+			// Map<K,V> literal (the insertion-ordered one — matches JS object literal
+			// key order): `{ "foo": 1 }` assigned to an ordered Map target is rewritten
 			// in-place to `mapFromPairs<K,V>([keys], [values])` — a call to a std
 			// helper that constructs a populated Map. The rewrite happens DURING
 			// checking so monomorphization (which runs after checking) sees the
 			// call with typed arguments and properly specializes it.
 			//
-			// This covers both `Map<K,V>` and `{ [key: K]: V }` — the index
-			// signature is normalized to Map<K,V> during resolveAnnotation.
+			// This covers both `Map<K,V>` and `{ [key: K]: V }` — the index signature
+			// is normalized to Map<K,V> during resolveAnnotation. Also supports an
+			// explicit `HashMap<K,V>` target: the object literal provides keys/values
+			// in declared order; HashMap simply drops the ordering guarantee. The
+			// only difference is which builder we emit (mapFromPairs vs hashMapFromPairs).
 			if (objExpected !== null && objExpected.kind === TypeKind.GenericInstance
-				&& objExpected.typeName === "Map"
+				&& isIndexableMapType(objExpected)
 				&& objExpected.typeChildren !== null && objExpected.typeChildren.length === 2) {
 				const mapKeyType = objExpected.typeChildren[0];
 				const mapValType = objExpected.typeChildren[1];
@@ -538,8 +543,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 				const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, mtok);
 				valsArr.nodeType = createArray(mapValType);
 				valsArr.flags = valsArr.flags | NodeFlag.Sem;
-				// 4. Build the mapFromPairs callee + mutate this node into the call.
-				const calleeIdent = createNode(NodeKind.Identifier, { name: "mapFromPairs" }, mtok);
+				// 4. Build the builder callee (mapFromPairs for ordered Map,
+				// hashMapFromPairs for HashMap) + mutate this node into the call.
+				const builderName = objExpected.typeName === "HashMap" ? "hashMapFromPairs" : "mapFromPairs";
+				const calleeIdent = createNode(NodeKind.Identifier, { name: builderName }, mtok);
 				const mCallArgs: Node[] = [];
 				mCallArgs.push(keysArr);
 				mCallArgs.push(valsArr);
@@ -1364,7 +1371,7 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 	// new BuiltinType<...>() — construct value types (Map, Set) and Promise
 	if (d.newCallee.kind === NodeKind.Identifier) {
 		const id = d.newCallee.data as IdentifierData;
-		// Interface/value type: new Map() / new Array(32) with type from variable annotation
+		// Interface/value type: new HashMap() / new Array(32) with type from variable annotation
 		// Also handle Ref<Struct> and Ref<GenericInstance> (interface types are Ref-wrapped)
 		if (expected !== null && (expected.kind === TypeKind.Struct || expected.kind === TypeKind.GenericInstance)) {
 			node.nodeType = expected;
@@ -3661,7 +3668,7 @@ function registerJsonInstance(
 	instSym.nameId = getIdentId(ctx.table.identCache, helperName);
 	let rootScope = ctx.table.current;
 	while (rootScope.parent !== null) rootScope = rootScope.parent;
-	rootScope.symbols.push(instSym);
+	addSymbolToScope(rootScope, instSym);
 	fnNode.resolvedSym = instSym;
 	fnNode.nodeType = fnType;
 

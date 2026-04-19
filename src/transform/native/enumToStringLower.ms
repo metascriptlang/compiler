@@ -131,7 +131,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		const toStringFns: Node[] = [];
 		let scope = ctx.checkerCtx.table.current;
 		while (scope !== null) {
-			for (const sym of scope.symbols) {
+			for (const sym of scope.symbols.values()) {
 				if (sym.symbolKind === SymbolKind.Enum && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Enum) {
 					const t = sym.symbolType;
 					toStringFns.push(makeEnumToString(t.typeName, t.typeNames, sym.location));

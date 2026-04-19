@@ -28,7 +28,7 @@ export function makeCacheKey(path: string, target: TargetInfo, defines: string[]
 }
 
 export actor HeaderCache {
-	private entries: Map<string, CachedTokens> = new Map<string, CachedTokens>();
+	private entries: HashMap<string, CachedTokens> = new HashMap<string, CachedTokens>();
 	private hits: number = 0;
 	private misses: number = 0;
 
@@ -59,7 +59,7 @@ export actor HeaderCache {
 
 	// SEND — invalidate on file change (used by LSP integration later).
 	clear(): void {
-		this.entries = new Map<string, CachedTokens>();
+		this.entries = new HashMap<string, CachedTokens>();
 		this.hits = 0;
 		this.misses = 0;
 	}

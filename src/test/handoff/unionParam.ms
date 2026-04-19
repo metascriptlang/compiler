@@ -18,7 +18,7 @@ test "union type alias resolves to TypeKind.Union in checker" {
 		}
 	`);
 	let found = false;
-	for (const sym of ctx.table.current.symbols) {
+	for (const sym of ctx.table.current.symbols.values()) {
 		if (sym.name === "makeItem") {
 			const ft = sym.symbolType;
 			assert ft.typeChildren.length === 2;

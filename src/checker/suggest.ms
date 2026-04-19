@@ -473,8 +473,8 @@ function sgFormatStructFields(t: Type): string {
 
 // Build a Set of extension method names from the ExtensionRegistry.
 // Used to filter prelude extensions from global completion (they only appear via member access).
-function sgBuildExtensionNameSet(ctx: CheckerContext): Set<string> {
-	const names: Set<string> = new Set<string>();
+function sgBuildExtensionNameSet(ctx: CheckerContext): HashSet<string> {
+	const names: HashSet<string> = new HashSet<string>();
 	if (ctx.extensionRegistry !== null) {
 		for (const m of ctx.extensionRegistry.methods) {
 			names.add(m.methodName);
@@ -1838,8 +1838,7 @@ export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletio
 	let scope = ctx.table.current;
 	let depth = 0;
 	while (scope !== null) {
-		for (let i = 0; i < scope.symbols.length; i = i + 1) {
-			const sym = scope.symbols[i];
+		for (const sym of scope.symbols.values()) {
 			const ps = sgPrefixMatch(prefix, sym.name);
 			if (ps > 0) {
 				// Skip prelude extension methods at Global scope — they only appear via member access.

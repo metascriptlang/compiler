@@ -24,14 +24,14 @@ export class TaFileEntry {
 export class TaFileInputStore {
 	files: TaFileEntry[];
 	nextFileId: number;
-	pathIndex: Map<string, number>;  // filePath → array index (O(1) lookup)
+	pathIndex: HashMap<string, number>;  // filePath → array index (O(1) lookup)
 }
 
 export function createFileInputStore(): TaFileInputStore {
 	return {
 		files: [],
 		nextFileId: 0,
-		pathIndex: new Map<string, number>(),
+		pathIndex: new HashMap<string, number>(),
 	};
 }
 

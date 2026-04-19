@@ -20,7 +20,7 @@ export interface EvalResult {
 
 interface CConstEvalState {
 	tok: CToken;
-	constants: Map<string, int64>;
+	constants: HashMap<string, int64>;
 	error: string;
 }
 
@@ -210,7 +210,7 @@ function evalPrimary(es: CConstEvalState): int32 {
 // B=A|2 resolve). Returns the result with `tok` advanced past the expression.
 export function evalConstExpr(
 	tok: CToken,
-	constants: Map<string, int64>
+	constants: HashMap<string, int64>
 ): EvalResult {
 	const es: CConstEvalState = {
 		tok,
@@ -231,10 +231,10 @@ import { tokenizeFile, convertPPTokens } from "./tokenize";
 function evalStr(source: string): EvalResult {
 	const r = tokenizeFile(source, "eval.h");
 	convertPPTokens(r.head, r.diagnostics);
-	return evalConstExpr(r.head, new Map<string, int64>());
+	return evalConstExpr(r.head, new HashMap<string, int64>());
 }
 
-function evalWithConstants(source: string, constants: Map<string, int64>): EvalResult {
+function evalWithConstants(source: string, constants: HashMap<string, int64>): EvalResult {
 	const r = tokenizeFile(source, "eval.h");
 	convertPPTokens(r.head, r.diagnostics);
 	return evalConstExpr(r.head, constants);
@@ -319,7 +319,7 @@ test "eval equality" {
 }
 
 test "eval enum constant lookup" {
-	const constants = new Map<string, int64>();
+	const constants = new HashMap<string, int64>();
 	constants.set("FLAG_A", 1 as int64);
 	constants.set("FLAG_B", 2 as int64);
 	const r = evalWithConstants("FLAG_A | FLAG_B", constants);

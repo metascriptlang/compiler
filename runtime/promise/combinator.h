@@ -274,4 +274,131 @@ MS_DEFINE_FUTURE_FINALLY(msFutureFinally_ptr,    msFuture_ptr)
  * are defined in system.h where msString is available. msFutureCatch_<primitive>
  * variants are also defined there (msString is needed for the error handler). */
 
+/* ===== Typed Promise.all — per-element-type monomorphization (Session post-refactor) =====
+ *
+ * Generic msPromiseAll(msRefArray) treats every input's f->value as void*.
+ * Post typed-inline-storage refactor (2026-04-11), f->value for msFuture_msString,
+ * msFuture_double, etc. is the T struct inline, NOT a pointer — reading as void*
+ * truncates struct values and produces garbage.
+ *
+ * This macro instantiates a typed Promise.all per element-future-type:
+ *   SrcT         — input value type read from futures (double, int32_t, msString, ...)
+ *   elemFutType  — typed input future struct (msFuture_double, msFuture_msString, ...)
+ *   DstT         — storage type in the output array payload (double for number-family
+ *                  inputs since MetaScript number[] = msNumberArray; msString for
+ *                  string-family; void* for ref-family)
+ *   arrType      — output array struct (msNumberArray / msStringArray / msRefArray)
+ *   payloadType  — output array payload (msNumberPayload / msStringPayload / msRefPayload)
+ *   copyStmt     — per-slot copy expression: copyStmt(dstPtr, srcPtr) where dstPtr is
+ *                  DstT* and srcPtr is SrcT*.
+ *                  For same-type primitives:       *(dst) = *(src)
+ *                  For widening primitives:        *(dst) = (DstT)*(src)
+ *                  For RC types (msString):       msStringCopy(dst, *(src))
+ *
+ * Result future is msFuture_ptr* (generic) whose value field holds a heap-allocated
+ * arrType* pointer. Callers that expect msFuture_<arrType>* (from the transform's
+ * declared type for Promise.all result) receive the right payload layout because the
+ * downstream await path reads value as void* and dereferences via (arrType*)cast. */
+#define MS_PROMISE_ALL_FOR(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt) \
+    typedef struct elemFutType##_allState { \
+        msFuture* result; \
+        elemFutType** inputs; \
+        arrType* arr;                   /* heap-allocated output array; ownership transfers to future */ \
+        int count; \
+        _Atomic(int32_t) remaining;    /* decremented per completion; last decrementer runs cleanup */ \
+        _Atomic(bool) failed;           /* first-failure wins; prevents double-fail */ \
+    } elemFutType##_allState; \
+    \
+    typedef struct { \
+        elemFutType##_allState* state; \
+        int index; \
+    } elemFutType##_allCbEnv; \
+    \
+    static void elemFutType##_allCb(void* env) { \
+        elemFutType##_allCbEnv* e = (elemFutType##_allCbEnv*)env; \
+        elemFutType##_allState* s = e->state; \
+        int idx = e->index; \
+        free(e); \
+        /* Early-out for completions that arrive after a sibling already failed.
+         * Acquire so we observe the write from the failing thread. */ \
+        bool alreadyFailed = atomic_load_explicit(&s->failed, memory_order_acquire); \
+        if (!alreadyFailed) { \
+            elemFutType* f = s->inputs[idx]; \
+            if (f->base.failed || f->base.cancelled) { \
+                /* Exchange: only the first caller to see `failed == false` runs msFutureFail. */ \
+                bool prev = atomic_exchange_explicit(&s->failed, true, memory_order_acq_rel); \
+                if (!prev) msFutureFail(s->result, f->base.error); \
+            } else { \
+                copyStmt((&s->arr->p->data[idx]), (&f->value)); \
+            } \
+        } \
+        /* Decrement remaining and let the final decrementer (rem == 1 before sub) run cleanup.
+         * acq_rel: acquire the copy-writes from peer threads; release our own writes. */ \
+        int32_t rem = atomic_fetch_sub_explicit(&s->remaining, 1, memory_order_acq_rel); \
+        if (rem == 1) { \
+            if (!atomic_load_explicit(&s->failed, memory_order_acquire)) { \
+                msFutureComplete(s->result, s->arr); \
+            } else { \
+                free(s->arr->p); \
+                free(s->arr); \
+            } \
+            free(s->inputs); \
+            free(s); \
+        } \
+    } \
+    \
+    static inline void* msPromiseAllFor_##elemFutType(msRefArray arr) { \
+        int count = (int)arr.len; \
+        elemFutType** futures = (arr.p != NULL) ? (elemFutType**)arr.p->data : NULL; \
+        msFuture* result = (msFuture*)msFutureCreate(); \
+        arrType* resultArr = (arrType*)malloc(sizeof(arrType)); \
+        resultArr->len = count; \
+        resultArr->p = NULL; \
+        if (count == 0 || futures == NULL) { \
+            msFutureComplete(result, resultArr); \
+            return result; \
+        } \
+        /* calloc (not malloc) so the per-slot DstT storage starts zeroed. When the
+         * copyStmt is a DRC `T_copy` hook (used for structs with RC fields), the hook
+         * decrements-the-old-value before writing — a zeroed slot has NULL refcounted
+         * payloads, so the "old-value decref" is a no-op and we avoid reading garbage. */ \
+        payloadType* payload = (payloadType*)calloc(1, sizeof(payloadType) + (size_t)count * sizeof(DstT)); \
+        payload->cap = count; \
+        resultArr->p = payload; \
+        elemFutType** inputsCopy = (elemFutType**)malloc((size_t)count * sizeof(elemFutType*)); \
+        for (int i = 0; i < count; i++) inputsCopy[i] = futures[i]; \
+        elemFutType##_allState* state = (elemFutType##_allState*)calloc(1, sizeof(elemFutType##_allState)); \
+        state->result = result; \
+        state->inputs = inputsCopy; \
+        state->arr = resultArr; \
+        state->count = count; \
+        atomic_store_explicit(&state->remaining, count, memory_order_relaxed); \
+        atomic_store_explicit(&state->failed, false, memory_order_relaxed); \
+        for (int i = 0; i < count; i++) { \
+            elemFutType##_allCbEnv* cbEnv = (elemFutType##_allCbEnv*)malloc(sizeof(elemFutType##_allCbEnv)); \
+            cbEnv->state = state; \
+            cbEnv->index = i; \
+            msFutureAddCallback((msFuture*)futures[i], (msClosure){ \
+                .fn = (msClosureFn)elemFutType##_allCb, \
+                .env = cbEnv \
+            }); \
+        } \
+        return result; \
+    }
+
+/* Per-pair copy helpers. dst/src are pointers; *src is SrcT, *dst is DstT. */
+#define MS_COPY_SAME(dst, src)     (*(dst) = *(src))          /* same-type primitive / ptr */
+#define MS_COPY_TO_DOUBLE(dst, src) (*(dst) = (double)*(src))  /* widen int/bool → double */
+
+/* Pre-instances for element types whose array mapping is stable across codegen:
+ *   number[]  → msNumberArray (double element storage)
+ *   boolean[] → msNumberArray (codegen stores boolean[] as msNumberArray)
+ *   Ref<T>[]  → msRefArray    (all reference/pointer arrays collapse to void*[])
+ * int32[] / int64[] / user-struct[] map to per-type codegen-emitted array typedefs
+ * (int32_tArray / int64_tArray / T##Array) — the matching MS_PROMISE_ALL_FOR
+ * instance is emitted by codegen at the msFuture_<T> struct site. */
+MS_PROMISE_ALL_FOR(double, msFuture_double, double, msNumberArray, msNumberPayload, MS_COPY_SAME)
+MS_PROMISE_ALL_FOR(bool,   msFuture_bool,   double, msNumberArray, msNumberPayload, MS_COPY_TO_DOUBLE)
+MS_PROMISE_ALL_FOR(void*,  msFuture_ptr,    void*,  msRefArray,    msRefPayload,    MS_COPY_SAME)
+
 #endif /* MS_COMBINATOR_H */

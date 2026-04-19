@@ -68,7 +68,8 @@ export function markConsumed(sym: Symbol): void {
 // ===== Scope =====
 
 export class Scope {
-	symbols: Symbol[];
+	// Ordered Map keyed by nameId — insertion order preserved, O(1) lookup.
+	symbols: Map<int32, Symbol>;
 	scopeKind: ScopeKind;
 	parent: Ptr<Scope>;   // borrowed — allScopes owns all scopes
 }
@@ -84,7 +85,7 @@ export class SymbolTable {
 // ===== Constructors =====
 
 export function createSymbolTable(): SymbolTable {
-	const global: Scope = { symbols: [], scopeKind: ScopeKind.Global, parent: null as unknown as Scope };
+	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null as unknown as Scope };
 	return { current: global, allScopes: [global], identCache: createIdentCache() };
 }
 
@@ -92,16 +93,27 @@ export function createSymbolTable(): SymbolTable {
 // All contexts sharing a cache get identical nameIds for the same string,
 // eliminating cross-context nameId mismatch during generic instantiation.
 export function createSymbolTableWithCache(cache: IdentCache): SymbolTable {
-	const global: Scope = { symbols: [], scopeKind: ScopeKind.Global, parent: null as unknown as Scope };
+	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null as unknown as Scope };
 	return { current: global, allScopes: [global], identCache: cache };
 }
 
 // ===== Scope Operations =====
 
 export function openScope(table: SymbolTable, kind: ScopeKind): void {
-	const scope: Scope = { symbols: [], scopeKind: kind, parent: table.current };
+	const scope: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: kind, parent: table.current };
 	table.allScopes.push(scope);
 	table.current = scope;
+}
+
+// Add a Symbol to a Scope. First-insertion-wins: subsequent calls with the same
+// nameId are no-ops (matches the prior linear-scan "first match" semantics of
+// lookupSymbol). Caller must ensure sym.nameId is set (via getIdentId or
+// defineSymbol which interns lazily).
+export function addSymbolToScope(scope: Scope, sym: Symbol): void {
+	if (sym.nameId === 0) return;
+	if (!scope.symbols.has(sym.nameId)) {
+		scope.symbols.set(sym.nameId, sym);
+	}
 }
 
 export function closeScope(table: SymbolTable): void {
@@ -117,48 +129,45 @@ export function defineSymbol(table: SymbolTable, sym: Symbol): Result<boolean, s
 		sym.nameId = getIdentId(table.identCache, sym.name);
 	}
 	const nameId = sym.nameId;
-	for (const existing of table.current.symbols) {
-		if (existing.nameId === nameId) {
-			// Allow function overloads: same name, both functions
-			if (existing.symbolKind === SymbolKind.Function && sym.symbolKind === SymbolKind.Function) {
-				// overloadIdx only disambiguates same-MODULE functions (module path handles cross-module).
-				if (existing.modulePath === sym.modulePath) {
-					sym.overloadIdx = existing.overloads.length + 1;
-				}
-				existing.overloads.push(sym);
-				return Result.ok(true);
+	if (table.current.symbols.has(nameId)) {
+		const existing = table.current.symbols.get(nameId);
+		// Allow function overloads: same name, both functions
+		if (existing.symbolKind === SymbolKind.Function && sym.symbolKind === SymbolKind.Function) {
+			// overloadIdx only disambiguates same-MODULE functions (module path handles cross-module).
+			if (existing.modulePath === sym.modulePath) {
+				sym.overloadIdx = existing.overloads.length + 1;
 			}
-			return Result.err(`Duplicate symbol '${sym.name}'`);
+			existing.overloads.push(sym);
+			return Result.ok(true);
 		}
+		return Result.err(`Duplicate symbol '${sym.name}'`);
 	}
-	table.current.symbols.push(sym);
+	addSymbolToScope(table.current, sym);
 	return Result.ok(true);
 }
 
 // ===== Symbol Lookup =====
 
-// Walk scope chain, return Symbol or null
+// Walk scope chain, O(1) per scope via symbols index (populated by
+// addSymbolToScope + defineSymbol). First-insertion-wins semantics match the
+// prior linear-scan behavior.
 export function lookupSymbol(table: SymbolTable, name: string): Symbol {
 	const nameId = getIdentId(table.identCache, name);
 	let scope = table.current;
 	while (scope !== null) {
-		for (const sym of scope.symbols) {
-			if (sym.nameId === nameId) {
-				return sym;
-			}
+		if (scope.symbols.has(nameId)) {
+			return scope.symbols.get(nameId);
 		}
 		scope = scope.parent;
 	}
 	return null as unknown as Symbol;
 }
 
-// Check current scope only, return Symbol or null
+// Check current scope only, O(1) via symbols.
 export function lookupLocal(table: SymbolTable, name: string): Symbol {
 	const nameId = getIdentId(table.identCache, name);
-	for (const sym of table.current.symbols) {
-		if (sym.nameId === nameId) {
-			return sym;
-		}
+	if (table.current.symbols.has(nameId)) {
+		return table.current.symbols.get(nameId);
 	}
 	return null as unknown as Symbol;
 }
@@ -198,14 +207,18 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type, m
 	return sym;
 }
 
-// Look up an exported symbol in the table (searches Module and Global scopes)
+// Look up an exported symbol in Module / Global scopes. Uses symbols for
+// O(1) per-scope lookup; verifies Exported flag on the found symbol (the map
+// stores the first-inserted symbol per nameId, same as the prior linear scan
+// would have returned first).
 export function lookupExport(table: SymbolTable, name: string): Symbol {
 	const nameId = getIdentId(table.identCache, name);
 	let scope = table.current;
 	while (scope !== null) {
 		if (scope.scopeKind === ScopeKind.Module || scope.scopeKind === ScopeKind.Global) {
-			for (const sym of scope.symbols) {
-				if (sym.nameId === nameId && hasFlag(sym, SymbolFlag.Exported)) return sym;
+			if (scope.symbols.has(nameId)) {
+				const sym = scope.symbols.get(nameId);
+				if (hasFlag(sym, SymbolFlag.Exported)) return sym;
 			}
 		}
 		scope = scope.parent;
@@ -222,7 +235,7 @@ export function isPointerType(t: Type, table: SymbolTable): boolean {
 test "create table" {
 	const table = createSymbolTable();
 	assert table.current.scopeKind === ScopeKind.Global;
-	assert table.current.symbols.length === 0;
+	assert table.current.symbols.size === 0;
 }
 
 test "define and lookup" {
