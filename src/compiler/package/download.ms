@@ -9,7 +9,6 @@
 
 import { exists, writeFile, ensureDir, chmod } from "std/fs";
 import { join, dirname } from "std/fs/path";
-import { fetch } from "std/http/client";
 import { createHeaders } from "std/http/headers";
 import { sha256 } from "std/crypto";
 import { openZip, zipEntries, zipExtract, zipFindByName, closeZip } from "std/compress/zip";

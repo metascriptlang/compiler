@@ -2,21 +2,24 @@
  * Process — C/POSIX Backend
  *
  * Provides command-line arguments, process exit, working directory,
- * file I/O, shell execution, environment variables, and monotonic clock.
+ * shell execution, and environment variables.
+ *
+ * File I/O lives in `std/fs` (readFile/writeFile/exists/...).
+ * Wall-clock / monotonic time live in the `Date` / `performance` preludes.
  */
 
 @include("runtime/process.h");
+
+import { isExecutable } from "../fs";
 
 extern function msProcessArgc(): number;
 extern function msProcessArgvAt(idx: number): string;
 extern function msProcessExit(code: number): void;
 extern function msProcessCwd(): string;
-extern function msProcessReadFile(path: string): string;
-extern function msProcessWriteFile(path: string, content: string): number;
-extern function msProcessFileExists(path: string): number;
 extern function msProcessExec(command: string): number;
 extern function msProcessGetEnv(name: string): string;
-extern function msProcessClockMs(): number;
+extern function msProcessSetEnv(name: string, value: string): number;
+extern function msProcessUnsetEnv(name: string): number;
 
 // =============================================================================
 // Command-line arguments
@@ -63,14 +66,97 @@ export function exec(command: string): number {
 // Environment variables
 // =============================================================================
 
-export function getEnv(name: string): string {
-	return msProcessGetEnv(name);
+// Namespaced env API — Deno-style.
+export class env {
+	static get(name: string): string {
+		return msProcessGetEnv(name);
+	}
+
+	static set(name: string, value: string): boolean {
+		return msProcessSetEnv(name, value) !== 0.0;
+	}
+
+	static delete(name: string): boolean {
+		return msProcessUnsetEnv(name) !== 0.0;
+	}
 }
 
-// =============================================================================
-// Monotonic clock
-// =============================================================================
+// Time primitives moved to std/core/date (Date.now()) and std/core/time
+// (time.monotonicMs()) — both preludes, no import needed.
 
-export function clockMs(): number {
-	return msProcessClockMs();
+// =============================================================================
+// Executable lookup (PATH search)
+// =============================================================================
+//
+// Portable "find executable on PATH" — matches shutil.which (Python),
+// exec.LookPath (Go), Bun.which, and npm's `which`. Manual walk (no shell
+// subprocess, no OS SearchPathW quirks) with POSIX access(X_OK) and
+// Windows extension fallback (.exe / .cmd / .bat — Bun's minimal list).
+//
+// Semantics:
+//   1. Input with a separator (`/` or `\`) → direct lookup; never probed via
+//      PATH. Windows adds extension fallback if the input lacks a known suffix.
+//      (Security: matches Go/Bun behaviour — avoids accidental PATH shadowing.)
+//   2. Bare name → walks PATH (split on `;` on Windows, `:` elsewhere).
+//      First match wins.
+//   3. Windows per-dir: if input already ends in .exe/.cmd/.bat, exact match;
+//      otherwise try each suffix.
+//   4. POSIX per-dir: exact name, gated by access(X_OK) so the result reflects
+//      "the current user can invoke this file" rather than "file exists".
+//   5. CWD is NOT searched on POSIX (matches Go/Python security-aware default).
+
+const WIN_EXE_EXTS: string[] = [".exe", ".cmd", ".bat"];
+
+function hasWinExeSuffix(cmd: string): boolean {
+	if (cmd.length < 4) return false;
+	const tail = cmd.slice(cmd.length - 4, cmd.length).toLowerCase();
+	for (const ext of WIN_EXE_EXTS) {
+		if (tail === ext) return true;
+	}
+	return false;
+}
+
+export function findOnPath(cmd: string): string {
+	if (cmd === "") return "";
+	const isWin = env.get("OS") === "Windows_NT";
+
+	// Input with separator → direct lookup only; never fall through to PATH.
+	if (cmd.indexOf("/") >= 0 || cmd.indexOf("\\") >= 0) {
+		if (isExecutable(cmd)) return cmd;
+		if (isWin && !hasWinExeSuffix(cmd)) {
+			for (const ext of WIN_EXE_EXTS) {
+				const candidate = cmd + ext;
+				if (isExecutable(candidate)) return candidate;
+			}
+		}
+		return "";
+	}
+
+	// Bare name → walk PATH.
+	const pathEnv = env.get("PATH");
+	if (pathEnv === "") return "";
+	const sep = isWin ? ";" : ":";
+	const alreadyHasExt = isWin && hasWinExeSuffix(cmd);
+	for (const dir of pathEnv.split(sep)) {
+		if (dir === "") continue;
+		if (isWin) {
+			if (alreadyHasExt) {
+				const candidate = dir + "/" + cmd;
+				if (isExecutable(candidate)) return candidate;
+			} else {
+				for (const ext of WIN_EXE_EXTS) {
+					const candidate = dir + "/" + cmd + ext;
+					if (isExecutable(candidate)) return candidate;
+				}
+			}
+		} else {
+			const candidate = dir + "/" + cmd;
+			if (isExecutable(candidate)) return candidate;
+		}
+	}
+	return "";
+}
+
+export function cmdExists(cmd: string): boolean {
+	return findOnPath(cmd) !== "";
 }

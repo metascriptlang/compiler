@@ -3,7 +3,6 @@
 
 import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, getFileId, invalidateFile } from "../../transam/index";
 import { requestCancel } from "../../transam/cancel";
-import { clockMs } from "std/process";
 import { writeStderr } from "std/io";
 import { readFile } from "std/fs";
 import {
@@ -89,24 +88,24 @@ export function handleShutdown(id: string): string {
 // ===== Did Open =====
 
 export function handleDidOpen(params: string, db: TransAmDb): string {
-	const t0 = clockMs();
+	const t0 = performance.now();
 	const textDoc = lspGetObjectField(params, "textDocument");
 	const uri = lspGetField(textDoc, "uri");
 	const text = lspGetField(textDoc, "text");
 	const path = lspUriToPath(uri);
 
 	dbSetFileText(db, path, text);
-	const t1 = clockMs();
+	const t1 = performance.now();
 	const program = dbParse(db, path);
-	const t2 = clockMs();
+	const t2 = performance.now();
 	recordImportsForFile(db, path, program);
-	const t3 = clockMs();
+	const t3 = performance.now();
 	dbTypeCheck(db, path);
-	const t4 = clockMs();
+	const t4 = performance.now();
 	prebuildCompletionCache(db, path, uri);
-	const t5 = clockMs();
+	const t5 = performance.now();
 	const diagParams = buildDiagnosticsJson(uri, db, path);
-	const t6 = clockMs();
+	const t6 = performance.now();
 	writeStderr(`[LSP-OPEN] ${path} parse=${t2 - t1}ms imports=${t3 - t2}ms check=${t4 - t3}ms cache=${t5 - t4}ms diag=${t6 - t5}ms total=${t6 - t0}ms\n`);
 	return lspNotification("textDocument/publishDiagnostics", diagParams);
 }
@@ -745,8 +744,8 @@ test "cancelled type check returns without crash" {
 
 test "type check completes within 200ms" {
 	const db = testDb("file:///test.ms", "function foo(x: number): number { return x + 1; }\nconst y = foo(42);");
-	const t0 = clockMs();
+	const t0 = performance.now();
 	dbTypeCheck(db, lspUriToPath("file:///test.ms"));
-	const elapsed = clockMs() - t0;
+	const elapsed = performance.now() - t0;
 	assert elapsed < 200;
 }

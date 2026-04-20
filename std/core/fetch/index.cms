@@ -1,0 +1,108 @@
+// std/core/fetch — HTTP infrastructure + global fetch().
+//
+// Auto-imported via prelude: `fetch(url, options)` is available globally.
+// URL-dispatches to the plain TCP transport (./client) for http:// or to the
+// TLS transport (./tls) for https://.
+//
+// DCE model: this index file carries NO @compile directives. The transport
+// .cms files (./client, ./tls) carry their own @compile chains. They become
+// alive only when their exports are reachable — either via fetch() (when the
+// user calls it) or via the std/http / std/https barrels (when the user
+// imports them directly).
+//
+// Self-contained: all imports/re-exports are RELATIVE. The prelude loader
+// only pre-loads relative re-exports of a prelude module, so std/core/fetch
+// must not reach across the std tree in its own surface.
+
+// ===== Re-exports — make types/helpers visible at "std/core/fetch" =====
+
+export {
+	HttpMethod, HttpHeaders, HttpRequest, HttpResponse, ServerResponse,
+	RequestOptions, FetchOptions, ParsedUrl,
+	RequestHandler, AsyncRequestHandler,
+	statusText, isSuccess, isRedirect, isClientError, isServerError,
+	methodToString, parseMethod,
+} from "./types";
+
+export {
+	HttpError, HttpErrorKind,
+	httpError, connectionFailed, connectionReset, timeout,
+	invalidRequest, invalidResponse, invalidHeader, socketError,
+	bodyTooLarge, tooManyRedirects,
+	isRetryable, isConnectionError, isProtocolError,
+} from "./errors";
+
+export {
+	createHeaders, addHeader, setHeader, removeHeader, getHeader, hasHeader,
+	getHeaderValues, serializeHeaders,
+	getContentLength, isChunked, isKeepAlive,
+} from "./headers";
+
+export {
+	ParsedRequest, ParsedResponse,
+	parseRequest, parseResponse, parseUrl, splitPathQuery,
+	decodeChunked, encodeChunk, encodeLastChunk,
+} from "./parser";
+
+export {
+	HttpClient, createClient, ResolvedOptions,
+	request, requestWithRedirects,
+	doRequestOver, requestWithRedirectsOver,
+	resolveFetchOptions, urlPath,
+	RECV_CHUNK_SIZE, MAX_HEADER_BYTES,
+} from "./client";
+
+// ===== Internal imports for fetch() body =====
+
+import { HttpResponse, RequestOptions, FetchOptions } from "./types";
+import { HttpError, invalidRequest } from "./errors";
+import { parseUrl } from "./parser";
+import { resolveFetchOptions, urlPath, requestWithRedirectsOver } from "./client";
+import { request as plainRequest } from "./client";
+import { request as tlsRequest } from "./tls";
+
+// Per-hop transport dispatch — protocol is carried on opts.tls and updated
+// by requestWithRedirectsOver when a redirect crosses http ↔ https.
+function fetchDispatch(opts: RequestOptions): Result<HttpResponse, HttpError> {
+	if (opts.tls) return tlsRequest(opts);
+	return plainRequest(opts);
+}
+
+// ===== Global fetch =====
+//
+// URL-dispatched HTTP/HTTPS with redirect following. Mirrors Node's
+// `globalThis.fetch` / WHATWG fetch for the redirect + dispatch parts:
+//   - Follows 3xx redirects by default, up to `options.maxRedirects`
+//     (default 5 hops).
+//   - Cross-protocol redirects (http → https and vice versa) are honored —
+//     the dispatch switches transport per hop.
+//   - `maxRedirects = 0` disables following (manual mode, matches Node's
+//     `redirect: "manual"` — returns the 3xx response as-is).
+//   - Exceeding the budget returns `tooManyRedirects`.
+//
+// Calling fetch() pulls BOTH plain and TLS transports, so the resulting
+// binary contains mbedtls. For a plain-HTTP-only binary, import
+// `{ request }` from "std/http" directly and skip fetch().
+
+export function fetch(url: string, options: FetchOptions = null): Result<HttpResponse, HttpError> {
+	const u = try parseUrl(url);
+	if (u.protocol !== "http" && u.protocol !== "https") {
+		return Result.err(invalidRequest("unsupported URL protocol: " + u.protocol));
+	}
+	const r = resolveFetchOptions(options, 30000, 5);
+	const opts: RequestOptions = {
+		method: r.method,
+		hostname: u.hostname,
+		port: u.port,
+		path: urlPath(u),
+		headers: r.headers,
+		body: r.body,
+		timeout: r.timeout,
+		tls: u.protocol === "https",
+	};
+	if (r.maxRedirects === 0) {
+		// Manual mode — one request, return response even if 3xx.
+		return fetchDispatch(opts);
+	}
+	return requestWithRedirectsOver(opts, r.maxRedirects, fetchDispatch);
+}

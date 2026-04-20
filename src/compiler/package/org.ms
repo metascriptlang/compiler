@@ -8,7 +8,6 @@
 //   msc org members <org>              — list org members
 //   msc org role <org> <user> <role>   — change member role (owner|member)
 
-import { fetch } from "std/http/client";
 import { createHeaders, setHeader } from "std/http/headers";
 import { parseJson, JsonValue, JsonKind } from "std/core/json";
 import { loadToken } from "./login";

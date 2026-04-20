@@ -14,9 +14,7 @@ import { loadToken } from "./login";
 import { collectPublishFiles } from "./walker";
 import { newZipWriter, zipAdd, zipFinalize, closeZipWriter, ZipWriter } from "std/compress/zip";
 import { buildMultipart, MultipartPart, boundaryCollides } from "std/http/multipart";
-import { fetch } from "std/http/client";
 import { createHeaders, setHeader } from "std/http/headers";
-import { clockMs } from "std/process";
 import { error as errStyle, bold, green, cyan, dim } from "../../utils/color";
 import { registryBaseUrl } from "./registry";
 
@@ -275,13 +273,13 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 	}
 
 	// --- Build multipart body ---
-	// Generate a boundary from clockMs + file count + compressed size. Not
+	// Generate a boundary from performance.now() + file count + compressed size. Not
 	// crypto-random — it only needs to not collide with the part bodies, and
 	// the content-dependent mix makes collisions effectively impossible in
 	// practice (any collision would mean the same exact ASCII sequence
 	// appeared inside the zip archive). `boundaryCollides` below is the
 	// safety net regardless.
-	const boundary = "msc-" + clockMs().toString() + "-" + walk.files.length.toString() + "-" + zipBytes.byteLength.toString();
+	const boundary = "msc-" + performance.now().toString() + "-" + walk.files.length.toString() + "-" + zipBytes.byteLength.toString();
 
 	const metadataJson = buildMetadataJson(cfg.package, version);
 	const parts: MultipartPart[] = [

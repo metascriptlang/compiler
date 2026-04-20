@@ -1,6 +1,6 @@
 // Shared path resolution utilities for the MetaScript compiler.
 
-import { argv, cwd, getEnv } from "std/process";
+import { argv, cwd, env } from "std/process";
 import { exists } from "std/fs";
 import { dirname, join, isAbsolute } from "std/fs/path";
 
@@ -45,7 +45,7 @@ function resolveArgv0(arg0: string): string {
 		i = i + 1;
 	}
 	if (arg0.length >= 2 && arg0.charAt(1) === ":") return arg0;  // "C:foo"
-	const pathEnv = getEnv("PATH");
+	const pathEnv = env.get("PATH");
 	if (pathEnv === "") return arg0;
 	// Detect delimiter: ";" if present in PATH (Windows), else ":" (Unix).
 	let hasSemi = false;

@@ -48,7 +48,6 @@ import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCa
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, isAbsolute } from "std/fs/path";
-import { clockMs } from "std/process";
 
 // ===== Build Helpers =====
 
@@ -370,6 +369,15 @@ function initCBuildState(opts: CliOptions): CBuildState {
 	if (compilerRoot !== "") {
 		includePaths.add(compilerRoot);
 		allFlags = appendFlag(allFlags, `-I${compilerRoot}`);
+	}
+	// Register user project root so generated #include directives with
+	// project-root-relative paths resolve. For example, `import {...} from
+	// "./bridge.h"` at `src/dawn/gpu.ms` compiles to `#include "src/dawn/bridge.h"`
+	// in the generated C — clang needs -I pointed at the project root to find
+	// it. Symmetrical with the compiler-root include above.
+	if (opts.projectRoot !== "" && opts.projectRoot !== compilerRoot) {
+		includePaths.add(opts.projectRoot);
+		allFlags = appendFlag(allFlags, `-I${opts.projectRoot}`);
 	}
 	// --os=bare/solana: force-include manual.h before all .c files (runtime .c files need the defines)
 	if ((opts.osTarget === "bare" || opts.osTarget === "solana") && compilerRoot !== "") {
@@ -701,7 +709,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	resetCompiledOFiles();
 	registerCoreParsers();
 	setTargetSizes(8, 8);
-	const t0 = clockMs();
+	const t0 = performance.now();
 	const config = buildResolverConfig(Target.C, defaultResolveSection(), opts.osTarget, opts.projectRoot);
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config);
 	applyGcMode(opts);
@@ -784,7 +792,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules, store results
 	if (opts.showTime) printTiming("graph load+check", t0);
-	const tA = clockMs();
+	const tA = performance.now();
 	const processed: ProcessedModule[] = [];
 	let transformedPrograms: Node[] = [];
 	let transformedPaths: string[] = [];
@@ -816,15 +824,15 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
 
-		const modT0 = clockMs();
+		const modT0 = performance.now();
 		if (opts.verbose) verboseLog(`transforming ${modPath}`);
 
-		const _tp0 = clockMs();
+		const _tp0 = performance.now();
 		const program = parseOrExit(mod.source, modPath);
-		tParse = tParse + (clockMs() - _tp0);
-		const _tc0 = clockMs();
+		tParse = tParse + (performance.now() - _tp0);
+		const _tc0 = performance.now();
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		tCheck = tCheck + (clockMs() - _tc0);
+		tCheck = tCheck + (performance.now() - _tc0);
 		ctx.strictDefs = opts.strictDefs;
 		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
@@ -854,10 +862,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 				instPd.programStmts.push(instNode);
 			}
 		}
-		const _tm0 = clockMs();
+		const _tm0 = performance.now();
 		const monoed = monomorphizeProgram(program, ctx);
 		validateTypedAST(ctx, monoed);
-		tMono = tMono + (clockMs() - _tm0);
+		tMono = tMono + (performance.now() - _tm0);
 		if (hasErrors(ctx)) {
 			for (const e of ctx.errors) {
 				renderModuleError(modPath, mod.source, {
@@ -870,32 +878,32 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			ctx.errors = [];
 		}
 
-		const _tmc0 = clockMs();
+		const _tmc0 = performance.now();
 		const macroExpanded = expandMacros(monoed, ctx);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		tMacro = tMacro + (clockMs() - _tmc0);
-		const _tx0 = clockMs();
+		tMacro = tMacro + (performance.now() - _tmc0);
+		const _tx0 = performance.now();
 		const transformed = transformProgram(comptimeResolved, ctx, false);
-		tXform = tXform + (clockMs() - _tx0);
+		tXform = tXform + (performance.now() - _tx0);
 		const nativeCtx = createTransformContextWithChecker(ctx);
-		const _tr0 = clockMs();
+		const _tr0 = performance.now();
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
-		tRefine = tRefine + (clockMs() - _tr0);
-		const _tn0 = clockMs();
+		tRefine = tRefine + (performance.now() - _tr0);
+		const _tn0 = performance.now();
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
-		tNative = tNative + (clockMs() - _tn0);
+		tNative = tNative + (performance.now() - _tn0);
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
 		if (opts.gcMode === "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode === "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode === "orc") ctx.gcMode = GcMode.Orc;
 		if (opts.osTarget !== "") ctx.osTarget = opts.osTarget;
-		const _ta0 = clockMs();
+		const _ta0 = performance.now();
 		const analyzed = analyzeProgram(hcrResult, ctx);
-		tAnalyze = tAnalyze + (clockMs() - _ta0);
-		const _tl0 = clockMs();
+		tAnalyze = tAnalyze + (performance.now() - _ta0);
+		const _tl0 = performance.now();
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
-		tLower = tLower + (clockMs() - _tl0);
-		const modT1 = clockMs();
+		tLower = tLower + (performance.now() - _tl0);
+		const modT1 = performance.now();
 		if (opts.showTime && (modT1 - modT0) > 50) {
 			printTiming(modPath, modT0);
 		}
@@ -939,7 +947,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		exit(1);
 	}
 
-	const tB = clockMs();
+	const tB = performance.now();
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
@@ -949,7 +957,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	transformedPaths = [];
 
 	if (opts.showTime) printTiming("phase B (DCE)", tB);
-	const tC = clockMs();
+	const tC = performance.now();
 
 	// Compile prelude @compile directives — unconditional.
 	// These are C runtime files, not application code. The linker strips unused sections.
@@ -1008,9 +1016,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		}
 		if (opts.verbose) verboseLog(`codegen ${p.modPath}`);
 
-		const tCg = clockMs();
+		const tCg = performance.now();
 		const cCode = generateCModule(p.program, p.ctx, p.modPath, aliveSet, false, opts.isHcr);
-		codegenTime = codegenTime + (clockMs() - tCg);
+		codegenTime = codegenTime + (performance.now() - tCg);
 
 		// Process @compile("foo.c") directives
 		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.osTarget);
@@ -1037,9 +1045,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 				writeCCodeCache(p.modPath, cCode, compileCmd);
 				const cFile = stableCFile(p.modPath);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
-				const tCl = clockMs();
+				const tCl = performance.now();
 				const ccCode = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
-				clangTime = clangTime + (clockMs() - tCl);
+				clangTime = clangTime + (performance.now() - tCl);
 				if (ccCode !== 0) {
 					if (opts.osTarget !== "solana") {
 						console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccCode})`)}`);
@@ -1119,7 +1127,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		printTiming("phase C (codegen+compile)", tC);
 		console.log(`    codegen: ${codegenTime}ms  clang: ${clangTime}ms`);
 	}
-	const tD = clockMs();
+	const tD = performance.now();
 
 	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module alive)
 	if (opts.osTarget === "emcc" && aliveSet.entries.length > 0) {
@@ -1172,7 +1180,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	resetCompiledOFiles();
 	registerCoreParsers();
 	setTargetSizes(8, 8);
-	const t0 = clockMs();
+	const t0 = performance.now();
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
 
@@ -1323,7 +1331,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	setTargetSizes(8, 8);
-	const t0 = clockMs();
+	const t0 = performance.now();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
 
@@ -1370,7 +1378,7 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 
 export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	setTargetSizes(8, 8);
-	const t0 = clockMs();
+	const t0 = performance.now();
 	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
 

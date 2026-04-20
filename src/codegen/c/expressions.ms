@@ -22,13 +22,34 @@ import { ensureDrcProto, ensureCrossModuleProto, isDrcLifecycleName } from "./fo
 import { useHeader } from "./context";
 import { GcMode } from "../../checker/context";
 
-// Heap allocation expression: msAllocTyped with TypeInfo (DRC) or NULL (manual gc).
-// Under --gc=manual, TypeInfo is not emitted, so we pass NULL.
+// Build a msAllocTyped/msAllocTypedUninit call expression. Under --gc=manual,
+// TypeInfo is not emitted so we pass NULL; otherwise we reference the type's
+// TypeInfo global.
+function genAllocCall(g: CGen, cType: string, fn: string): string {
+	const typeArg = (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) ? "NULL" : `&${cType}TypeInfo`;
+	return `(${cType}*)${fn}(sizeof(${cType}), ${typeArg})`;
+}
+
+// Safe default — header + payload zero-initialised. Matches Nim nimNewObj.
 function genAllocTyped(g: CGen, cType: string): string {
-	if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) {
-		return `(${cType}*)msAllocTyped(sizeof(${cType}), NULL)`;
-	}
-	return `(${cType}*)msAllocTyped(sizeof(${cType}), &${cType}TypeInfo)`;
+	return genAllocCall(g, cType, "msAllocTyped");
+}
+
+// Uninit opt-in: payload stays dirty. Emit ONLY at sites that provably write
+// every payload byte before the next read (e.g. new T(args) with
+// args.length === typeNames.length). Mirrors Nim nimNewObjUninit.
+function genAllocTypedUninit(g: CGen, cType: string): string {
+	return genAllocCall(g, cType, "msAllocTypedUninit");
+}
+
+// Pick safe alloc vs Uninit. Uninit requires both: (1) caller already proved
+// every field is written before the next read, (2) no inherited fields —
+// typeExtra !== null means the class inherits, and inherited fields are NOT
+// in typeNames so coverage can't be proved. Default to safe on any doubt.
+function pickAllocExpr(g: CGen, cType: string, innerType: Type, argsCoverAllFields: boolean): string {
+	const hasBase = innerType !== null && innerType.typeExtra !== null;
+	const safeUninit = !hasBase && argsCoverAllFields;
+	return safeUninit ? genAllocTypedUninit(g, cType) : genAllocTyped(g, cType);
 }
 
 // ===== Reference: argument passing for introduced pointers =====
@@ -895,11 +916,14 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			g.labels += 1;
 			const tmp = `_new${g.labels}_`;
 			emitProcLocalsLine(p, `${calleeName}* ${tmp};`);
-			emitStmtsLine(p, `${tmp} = ${genAllocTyped(g, calleeName)};`);
 			// Get field names from the class type (Ref → unwrap to Struct → typeNames)
 			const classType = node.nodeType;
 			const innerType = (classType !== null && (classType.kind === TypeKind.Ref || classType.kind === TypeKind.Ptr)) ? classType.typeReturn : classType;
 			const fieldNames = (innerType !== null && innerType.typeNames !== null) ? innerType.typeNames : null as unknown as string[];
+			// Positional args cover EVERY declared field → the loop below writes each
+			// explicitly, so Uninit is safe (subject to the no-inheritance guard in pickAllocExpr).
+			const argsCover = fieldNames !== null && d.newArguments.length === fieldNames.length;
+			emitStmtsLine(p, `${tmp} = ${pickAllocExpr(g, calleeName, innerType, argsCover)};`);
 			let fi = 0;
 			while (fi < d.newArguments.length) {
 				const fieldVal = genExpr(g, p, d.newArguments[fi]);
@@ -1205,10 +1229,27 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		truncResults(ctx, cc);
 		const d = node.data as TypeAssertionData;
 
+		// Identity cast — src and target have the same C type. Fires at the top
+		// so it short-circuits every downstream case (Union narrow, Union wrap,
+		// nilable reinterpret, fallback cast). Common after monomorphization and
+		// whenever the checker propagates the target type into the inner
+		// expression (e.g., ObjectLiteral under `{...} as Union` already emits
+		// the outer Union via its own self-wrap path — see ~line 1574).
+		// Reference parity: Nim's ccgexprs.nim:genConv does the same via
+		// `ignoreConv(e) → expr(p, e[1], d)` before calling genSomeCast.
+		const srcType = (d.asExpr !== null) ? d.asExpr.nodeType : null;
+		if (srcType !== null && node.nodeType !== null) {
+			if (getTypeDesc(g, srcType) === getTypeDesc(g, node.nodeType)) {
+				ctx.results.push(expr);
+				return;
+			}
+		}
+
 		// Union handling — two directions:
 		// 1. Narrowing: `unionExpr as { field: T }` → `(expr).vN` (access variant)
-		// 2. Construction: `{ field: val } as UnionType` → `(Union){ .vN = (Union_vN)expr }` (wrap into variant)
-		const srcType = (d.asExpr !== null) ? d.asExpr.nodeType : null;
+		// 2. Construction: `{ field: val } as UnionType` → `(Union){ .vN = *(Union_vN*)&expr }`
+		//    (reinterpret needed for `{...} as unknown as Union` escape-hatch where
+		//    src's C type is anonymous struct, not the named variant struct).
 
 		// Case 1: Source is Union → access variant member
 		// Use getTypeDesc consistency: the type cache (first-write-wins in genUnionType)
@@ -1261,7 +1302,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			}
 			if (varIdx >= 0) {
 				const varName = `${unionName}_v${varIdx}`;
-				// Use pointer-based reinterpret for struct-to-struct (C can't cast between struct types)
+				// Pointer-based reinterpret: `{ ... } as unknown as Union` (the TS
+				// escape-hatch pattern) doesn't propagate target type into the
+				// ObjectLiteral, so `expr`'s C type may be an anonymous struct
+				// with variant-compatible layout but different C type name. Direct
+				// `.vN = expr` would fail C's type check. Reinterpret reads the
+				// bytes. Safe here because Case 0 above already handled the
+				// same-outer-Union case — srcType here is never Union.
 				ctx.results.push(`(${unionName}){ ._tag = ${varIdx}, .v${varIdx} = *(${varName}*)&(${expr}) }`);
 				return;
 			}
@@ -1274,19 +1321,12 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 
 		// Standard reference implementation: generate typed function pointer cast
 		// from nodeType (the callee's Function type). Codegen-only concern.
+		// (Identity short-circuit already fired at top of TypeAssertion.)
 		let targetType = "";
 		if (node.nodeType !== null) {
 			targetType = getTypeDesc(g, node.nodeType);
 		} else {
 			targetType = mangle(d.asType);
-		}
-		// Skip identity cast — source and target are the same C type (common after monomorphization).
-		if (d.asExpr !== null && d.asExpr.nodeType !== null && node.nodeType !== null) {
-			const srcDesc = getTypeDesc(g, d.asExpr.nodeType);
-			if (srcDesc === targetType) {
-				ctx.results.push(expr);
-				return;
-			}
 		}
 		// Value types (structs) can't be directly C-cast. Use pointer reinterpret.
 		if (node.nodeType !== null && isNilableValueType(node.nodeType)
@@ -1386,12 +1426,15 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					// Pre-allocated env: already a heap pointer, use directly
 					ctx.results.push(`(msClosure){ .fn = (void*)${fnExpr}, .env = (void*)${envExpr} }`);
 				} else {
-					// Inline env: heap-allocate, init fields, use pointer
+					// Inline env: heap-allocate, init fields, use pointer.
+					// The `*envTemp = envExpr` below is a full struct copy that overwrites
+					// every byte of the payload (envExpr is always a fully-initialised
+					// stack struct from the ObjectLiteral sibling path). Uninit is safe.
 					const envTypeName = (envNode !== null && envNode.nodeType !== null) ? getTypeDesc(g, envNode.nodeType) : "void";
 					g.labels += 1;
 					const envTemp = `_env${g.labels}_`;
 					emitProcLocalsLine(p, `${envTypeName}* ${envTemp};`);
-					emitStmtsLine(p, `${envTemp} = (${envTypeName}*)msAllocTyped(sizeof(${envTypeName}), NULL);`);
+					emitStmtsLine(p, `${envTemp} = (${envTypeName}*)msAllocTypedUninit(sizeof(${envTypeName}), NULL);`);
 					emitStmtsLine(p, `*${envTemp} = ${envExpr};`);
 					ctx.results.push(`(msClosure){ .fn = (void*)${fnExpr}, .env = (void*)${envTemp} }`);
 				}
@@ -1496,13 +1539,26 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				const tmpName = `_lit${p.labels}_`;
 				const access = isClassObj ? "->" : ".";
 				if (isClassObj) {
-					// Class: heap-allocate (Reference parity: managed object construction)
-					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
+					// Class: heap-allocate (Reference parity: managed object construction).
+					// msAllocTyped now zero-fills payload, so the redundant memset is dropped.
+					// Upgrade to msAllocTypedUninit when the literal writes every declared
+					// field (Nim nimNewObjUninit parity). The NullLiteral-skip logic below
+					// relies on the field already being zero, so we must also require that
+					// no property in this literal is a bare NullLiteral.
 					ensureTypeInfoDef(g, cType);
-					emitStmtsLine(p, `${tmpName} = ${genAllocTyped(g, cType)};`);
-					emitStmtsLine(p, `memset(${tmpName}, 0, sizeof(${cType}));`);
+					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
+					const innerStruct = (node.nodeType !== null && node.nodeType.kind === TypeKind.Ref) ? node.nodeType.typeReturn : node.nodeType;
+					const fieldNames = (innerStruct !== null && innerStruct.typeNames !== null) ? innerStruct.typeNames : null as unknown as string[];
+					// Bare-NullLiteral keys are skipped by the assignment loop below and
+					// rely on the field being pre-zeroed; that's incompatible with Uninit.
+					let hasNullProp = false;
+					for (const prop of d.properties) {
+						if (prop.kind === NodeKind.NullLiteral) { hasNullProp = true; break; }
+					}
+					const keysCover = fieldNames !== null && d.keys.length === fieldNames.length && !hasNullProp;
+					emitStmtsLine(p, `${tmpName} = ${pickAllocExpr(g, cType, innerStruct, keysCover)};`);
 				} else {
-					// Value type: stack-allocate
+					// Value type: stack-allocate (no slab zero available — memset explicitly)
 					emitProcLocalsLine(p, `${cType} ${tmpName};`);
 					emitStmtsLine(p, `memset(&${tmpName}, 0, sizeof(${cType}));`);
 				}

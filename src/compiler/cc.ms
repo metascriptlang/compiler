@@ -2,7 +2,7 @@
 //
 // Invokes clang to compile generated C source into native binaries.
 
-import { exec, getEnv } from "std/process";
+import { exec, env, cmdExists } from "std/process";
 import { join, dirname } from "std/fs/path";
 import { CliOptions } from "./options";
 import { resolveRuntimeDir } from "../utils/path";
@@ -15,7 +15,7 @@ let ccacheChecked = false;
 function getCcachePrefix(): string {
 	if (!ccacheChecked) {
 		ccacheChecked = true;
-		hasCcache = exec("which ccache > /dev/null 2>&1") === 0;
+		hasCcache = cmdExists("ccache");
 	}
 	if (hasCcache) return "ccache ";
 	return "";
@@ -38,7 +38,7 @@ let zigCCChecked = false;
 function checkZigCC(): boolean {
 	if (!zigCCChecked) {
 		zigCCChecked = true;
-		hasZigCC = exec("which zig > /dev/null 2>&1") === 0;
+		hasZigCC = cmdExists("zig");
 	}
 	return hasZigCC;
 }
@@ -80,7 +80,7 @@ export function resolveSbpfLinker(): string {
 		_sbpfLinker = "sbpf-linker";
 	} else {
 		// Try cargo default install location
-		const home = getEnv("HOME");
+		const home = env.get("HOME");
 		if (home !== "") {
 			const cargoPath = `${home}/.cargo/bin/sbpf-linker`;
 			if (exec(`test -x "${cargoPath}"`) === 0) {
@@ -133,9 +133,9 @@ export function getCompilerName(ccOption: number, ccBinary: string): string {
 	if (detectedCC === 0) {
 		if (checkZigCC()) {
 			detectedCC = 4;
-		} else if (exec("which clang > /dev/null 2>&1") === 0) {
+		} else if (cmdExists("clang")) {
 			detectedCC = 1;
-		} else if (exec("which gcc > /dev/null 2>&1") === 0) {
+		} else if (cmdExists("gcc")) {
 			detectedCC = 2;
 		} else {
 			detectedCC = 3;

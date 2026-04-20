@@ -1,0 +1,4 @@
+// std/core/performance — prelude (JS backend).
+// Delegates to the native JS `performance` global.
+
+export extern class performance from "performance";

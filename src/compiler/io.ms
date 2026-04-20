@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — File I/O and shared error helpers
 
-import { exit, exec, clockMs } from "std/process";
+import { exit, exec } from "std/process";
 import { readFile, writeFile } from "std/fs";
 import { CheckerContext } from "../checker/context";
 import { error, red, green, bold, dim } from "../utils/color";
@@ -11,7 +11,7 @@ import { error, red, green, bold, dim } from "../utils/color";
 // inside conditional string concatenation (DRC workaround #21)
 
 export function printTiming(label: string, t0: number): void {
-	const elapsed = clockMs() - t0;
+	const elapsed = performance.now() - t0;
 	const ms = "" + elapsed;
 	const display = ms.slice(0, ms.length < 6 ? ms.length : 6);
 	console.log(dim("  " + label + " in " + display + "ms"));

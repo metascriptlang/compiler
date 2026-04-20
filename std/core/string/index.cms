@@ -103,10 +103,10 @@ export extern function substring(this s: string, start: int64, end: int64): stri
 // ===== Transformation =====
 
 /** Converts all the alphabetic characters in a string to lowercase. */
-export extern function toLower(this s: string): string from "msStringToLower";
+export extern function toLowerCase(this s: string): string from "msStringToLower";
 
 /** Converts all the alphabetic characters in a string to uppercase. */
-export extern function toUpper(this s: string): string from "msStringToUpper";
+export extern function toUpperCase(this s: string): string from "msStringToUpper";
 
 /** Removes the leading and trailing white space and line terminator characters from a string. */
 export extern function trim(this s: string): string from "msStringTrim";

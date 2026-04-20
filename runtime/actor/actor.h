@@ -203,6 +203,11 @@ typedef struct msSchedActors {
     _Atomic(int) count;           /* atomic: CD reads while main thread may register */
     int pollCount;                /* for periodic cycle detection (scheduler 0 only) */
     _Atomic(msActor*) runHead;    /* lock-free run queue: actors with pending messages */
+    _Atomic(bool) wakeAmortized;  /* amortize wakes: true = worker already woken, skip syscall.
+                                   * Removed Apr 8 (5122d20) citing "missed wakes / 500ms stalls" but
+                                   * restored Apr 20 after Pony-design review: the claim conflated
+                                   * two separate flags; the real race is bounded by selector re-poll.
+                                   * Required for O(schedulers) wakes instead of O(actors) at 1M+. */
 } msSchedActors;
 
 static msSchedActors msSchedulers[MS_MAX_SCHEDULERS];
@@ -365,10 +370,21 @@ static inline void msActorSend(msActor* a, msMessage* msg) {
             int sid = a->schedulerID;
             if (sid >= 0 && sid < msSchedulerCount) {
                 msSchedRunPush(&msSchedulers[sid], a);
-                if (sid == 0) {
-                    msActorWakeEventLoop();
-                } else {
-                    msPoolWakeWorker(sid);
+                /* Amortized wake: only issue a wake syscall if this scheduler
+                 * hasn't already been woken since its last drain. Worker clears
+                 * the flag after it fully drains the run queue (msActorPollLocal).
+                 * Turns O(actors) wake syscalls into O(schedulers) — critical
+                 * at 1M+ sends where each wake is ~500ns-1µs of syscall overhead.
+                 * The re-check loop in the worker (drain → clear → re-check)
+                 * bounds any lost-wake window; a skipped wake here is safe
+                 * because the actor is ALREADY on the run queue. */
+                if (!atomic_exchange_explicit(&msSchedulers[sid].wakeAmortized, true,
+                        memory_order_acq_rel)) {
+                    if (sid == 0) {
+                        msActorWakeEventLoop();
+                    } else {
+                        msPoolWakeWorker(sid);
+                    }
                 }
             }
         }
@@ -972,6 +988,12 @@ static inline bool msActorPollLocal(void) {
         if (msActorHasFlag(a, MS_ACTOR_MUTED)) continue;
         int n = msActorProcess(a, MS_ACTOR_BATCH);
         if (n > 0) didWork = true;
+    }
+    /* Clear the amortized-wake flag AFTER fully draining — the next sender
+     * must re-wake us if more work arrives. Placed here (not later) so a
+     * subsequent send between clear and sleep still triggers a wake syscall. */
+    if (!didWork) {
+        atomic_store_explicit(&sched->wakeAmortized, false, memory_order_release);
     }
 
     /* Phase 2: Work stealing — if idle, pop from other schedulers' run queues.

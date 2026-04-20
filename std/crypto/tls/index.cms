@@ -102,7 +102,11 @@
 // PSA ITS stubs (persistent key storage not used)
 @compile("runtime/crypto/tls/psaTlsStubs.c");
 
-import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+// Import from ../index (not ../errors) so std/crypto's @compile directives
+// — specifically psa_util.c — enter the alive-set transitively. Without
+// this the PSA error-conversion helpers referenced by mbedtls's ssl_tls.c
+// and pk_wrap.c are undefined at link time.
+import { CryptoError, CryptoErrorKind, cryptoError } from "../index";
 
 // C bindings
 extern function msTlsConnect(hostname: string, port: int32, caPath: string): int64;

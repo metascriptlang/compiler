@@ -80,6 +80,12 @@ double msFsIsDir(msString path) {
 	return S_ISDIR(st.st_mode) ? 1.0 : 0.0;
 }
 
+double msFsIsExecutable(msString path) {
+	/* POSIX: access(X_OK) checks if current UID/GID has execute permission.
+	 * Matches Bun.which's isExecutableFilePath and shutil.which behaviour. */
+	return (access(msStringToCString(path), X_OK) == 0) ? 1.0 : 0.0;
+}
+
 double msFsFileSize(msString path) {
 	struct stat st;
 	if (stat(msStringToCString(path), &st) != 0) return -1.0;

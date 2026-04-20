@@ -3,7 +3,6 @@
 import {
 	TransAmDb, dbParse
 } from "../../transam/index";
-import { clockMs } from "std/process";
 import { writeStderr } from "std/io";
 import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspUriToPath, lspResponse } from "../protocol";
 import { lspFmtRange, lspFmtTextEdit } from "../format";
@@ -86,24 +85,24 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 }
 
 export function handleFormatting(id: string, params: string, db: TransAmDb): string {
-	const t0 = clockMs();
+	const t0 = performance.now();
 	const textDoc = lspGetObjectField(params, "textDocument");
 	const uri = lspGetField(textDoc, "uri");
 	const path = lspUriToPath(uri);
 	const source = dbGetSource(db, path);
 	if (source === "") return lspResponse(id, "[]");
 
-	const t1 = clockMs();
+	const t1 = performance.now();
 	const program = dbParse(db, path);
 	if (program === null) return lspResponse(id, "[]");
-	const t2 = clockMs();
+	const t2 = performance.now();
 
 	const options = getFormatOptions(db);
 	options.source = source;
 	const doc = printFormattedNode(program, options);
-	const t3 = clockMs();
+	const t3 = performance.now();
 	const formatted = formatDoc(doc, options);
-	const t4 = clockMs();
+	const t4 = performance.now();
 
 	writeStderr(`[LSP-FMT] ${path} parse=${t2 - t1}ms print=${t3 - t2}ms layout=${t4 - t3}ms source=${source.byteLength}b\n`);
 
@@ -116,9 +115,9 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 	}
 	const lastLineLen = source.byteLength - lastNl - 1;
 	const range = lspFmtRange(0, 0, lineCount, lastLineLen);
-	const t5 = clockMs();
+	const t5 = performance.now();
 	const edit = "{\"range\":" + range + ",\"newText\":" + lspJsonString(formatted) + "}";
-	const t6 = clockMs();
+	const t6 = performance.now();
 	writeStderr(`[LSP-FMT] json=${t6 - t5}ms total=${t6 - t0}ms lines=${lineCount} lastLineLen=${lastLineLen} responseLen=${edit.length}\n`);
 	return lspResponse(id, "[" + edit + "]");
 }

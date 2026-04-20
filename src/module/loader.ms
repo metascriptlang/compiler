@@ -180,9 +180,17 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 			: [builtinInclude, headerDir];
 		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths);
 
-		// Auto-compile companion .c file if it exists (e.g., native.h → native.c)
+		// Auto-compile companion .c file if it exists (e.g., native.h → native.c).
+		// Apply the same compiler-root fallback as the .h lookup above — when building
+		// from a directory outside the compiler tree (e.g., an example project), the
+		// bare relative path won't resolve against CWD; retrying under the compiler
+		// root picks up `std` and `runtime` sources bundled with the install.
 		const companionC = headerPath.slice(0, headerPath.length - 2) + ".c";
-		const hasCompanionC = provideSource(provider, companionC).ok;
+		let hasCompanionC = provideSource(provider, companionC).ok;
+		if (!hasCompanionC && !isAbsolute(companionC)) {
+			const root = resolveRuntimeDir();
+			if (root !== "") hasCompanionC = provideSource(provider, `${root}/${companionC}`).ok;
+		}
 		let compileDirective = "";
 		if (hasCompanionC) compileDirective = `@compile("${companionC}");\n`;
 

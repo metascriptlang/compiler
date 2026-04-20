@@ -13,7 +13,7 @@
 //   writeJsonBuildInstructions   → writeProjectCache
 //   BuildCache                   → project cache file (key=value format)
 
-import { exec, getEnv, clockMs } from "std/process";
+import { exec, env } from "std/process";
 import { exists, readFile, writeFile, rename, copyFile, fileSize, remove, readDir } from "std/fs";
 import { ensureDir } from "./io";
 import { getCompilerName, modeFlags } from "./cc";
@@ -57,19 +57,27 @@ function getCacheDir(): string {
 // ===== Per-File Cache (Layer 1) =====
 
 // Sanitize a file path to a safe flat filename.
-// Uses distinct separators to avoid collisions:
-//   / → _d_  (directory)
-//   . → _x_  (extension)
+// Must handle every char that's illegal on ANY target filesystem because the
+// same cache layout is shared across OSes (macOS, Linux, Windows).
+//
+// Distinct multi-char escapes avoid collisions across substitutions:
+//   / \ → _d_  (directory separator; same mapping since both mean "dir")
+//   . → _x_   (extension / dotted segment)
 //   space → _s_
+//   : → _c_   (Windows drive letter / alt data stream separator)
+//   < > " | ? * → _e_  (Windows reserved path chars — any collapses to same
+//                      escape since they should never appear in real module paths)
 function sanitizePath(path: string): string {
 	let result = "";
 	let i = 0;
 	while (i < path.length) {
 		const ch = path.charAt(i);
 		result = result + match (ch) {
-			"/" => "_d_",
+			"/" | "\\" => "_d_",
 			"." => "_x_",
 			" " => "_s_",
+			":" => "_c_",
+			"<" | ">" | "\"" | "|" | "?" | "*" => "_e_",
 			_ => ch,
 		};
 		i = i + 1;
@@ -106,9 +114,9 @@ export function computeFingerprint(srcPath: string, compileCmd: string): string 
 
 // Return global cache dir, or "" if disabled (opt-out) or HOME unknown.
 function globalObjectsDir(): string {
-	if (getEnv("MSC_NO_GLOBAL_CACHE") !== "") return "";
-	const home = getEnv("HOME");
-	const base = home !== "" ? home : getEnv("USERPROFILE");
+	if (env.get("MSC_NO_GLOBAL_CACHE") !== "") return "";
+	const home = env.get("HOME");
+	const base = home !== "" ? home : env.get("USERPROFILE");
 	if (base === "") return "";
 	return `${base}/.metascript/cache/objects`;
 }
@@ -151,7 +159,7 @@ function tryRestoreFromGlobal(oFile: string, fp: string): boolean {
 
 // After a successful local compile, publish the .o to the global cache.
 // Atomic: write to a per-process tmp path + rename. The tmp suffix includes
-// clockMs() so two concurrent msc invocations compiling the same file never
+// performance.now() so two concurrent msc invocations compiling the same file never
 // share a tmp file (which would interleave bytes under "wb" truncate+write).
 // Best-effort: failures don't propagate; local cache still works.
 function populateGlobal(oFile: string, fp: string): void {
@@ -161,7 +169,7 @@ function populateGlobal(oFile: string, fp: string): void {
 	// If already populated by another process, skip.
 	if (exists(dst)) return;
 	ensureDir(dir);
-	const tmp = `${dst}.tmp.${clockMs()}`;
+	const tmp = `${dst}.tmp.${performance.now()}`;
 	const copied = copyFile(oFile, tmp);
 	if (!copied.ok) return;
 	// Atomic swap. If it fails, clean up tmp.

@@ -1,0 +1,4 @@
+// std/core/date — prelude (JS backend).
+// Delegates to the native JS Date global.
+
+export extern class Date from "Date";

@@ -46,7 +46,6 @@ function setupPackageAliases(db: TransAmDb, filePath: string): void {
 
 import { lspDispatch, publishPendingDiagnostics } from "./handlers/lifecycle";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
-import { clockMs } from "std/process";
 import { resolveRuntimeDir } from "../../utils/path";
 
 
@@ -292,7 +291,7 @@ export function processMessage(msg: string, state: LspServerState): string {
 	const _isCompletion = method === "textDocument/completion";
 	// Dispatch with error recovery
 	let json = "";
-	const t0 = clockMs();
+	const t0 = performance.now();
 	try {
 		json = lspDispatch(method, idStr, params, state.db, state.completionCache);
 	} catch (e) {
@@ -302,7 +301,7 @@ export function processMessage(msg: string, state: LspServerState): string {
 			json = lspErrorResponse(idStr, -32603, "internal error: " + errMsg);
 		}
 	}
-	const t1 = clockMs();
+	const t1 = performance.now();
 
 	resetCancel(state.db.cancelCtx);
 

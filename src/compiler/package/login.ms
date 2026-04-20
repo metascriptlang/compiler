@@ -8,20 +8,18 @@
 // 5. Store registry token at ~/.metascript/credentials
 
 import { exists, readFile, writeFile, chmod } from "std/fs";
-import { getEnv } from "std/process";
+import { env } from "std/process";
 import { join } from "std/fs/path";
-import { fetch } from "std/http/client";
 import { HttpResponse } from "std/http/types";
 import { HttpError } from "std/http/errors";
 import { createHeaders, setHeader } from "std/http/headers";
-import { clockMs } from "std/process";
 
 const GITHUB_CLIENT_ID = "Ov23liXkaph4TDPP19yd";
 const REGISTRY_HOST = "api.metascriptlang.org";
 const API_BASE = "https://" + REGISTRY_HOST;
 
 function credentialsPath(): string {
-	const home = getEnv("HOME");
+	const home = env.get("HOME");
 	if (home === "") return "";
 	return join(join(home, ".metascript"), "credentials");
 }
@@ -112,8 +110,8 @@ function httpsPost(host: string, path: string, body: string, contentType: string
 
 // Busy-wait sleep (ms). Works in both Bun and compiled binary.
 function sleepMs(ms: number): void {
-	const start = clockMs();
-	while (clockMs() - start < ms) {
+	const start = performance.now();
+	while (performance.now() - start < ms) {
 		// busy wait
 	}
 }

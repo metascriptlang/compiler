@@ -1,0 +1,21 @@
+// std/core/performance — prelude.
+//
+// `performance` is auto-imported into every program as a prelude object
+// (like JS browser + Node's global `performance`). Provides monotonic
+// high-resolution time for elapsed-time measurement.
+//
+// Matches JS Performance API:
+//   performance.now() → monotonic fractional ms since some arbitrary origin
+//
+// For wall-clock timestamps (Unix epoch), use the `Date.now()` prelude.
+// `performance.now()` must never go backward — safe for measuring durations.
+
+import { msTimeMonotonic } from "runtime/core/datetime.h";
+
+export class performance {
+	// Monotonic milliseconds (fractional). Origin is arbitrary and not
+	// comparable across processes. Matches `performance.now()` in JS/Node.
+	static now(): number {
+		return msTimeMonotonic();
+	}
+}

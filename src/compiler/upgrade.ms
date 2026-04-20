@@ -7,11 +7,10 @@
 // `msc upgrade` re-runs install.sh / install.ps1 — single source of truth
 // for install logic.
 
-import { fetch } from "std/http/client";
 import { FetchOptions } from "std/http/types";
 import { createHeaders, setHeader } from "std/http/headers";
 import { readFile, writeFile, readDir, remove } from "std/fs";
-import { getEnv, clockMs, exec } from "std/process";
+import { env, exec } from "std/process";
 import { VERSION } from "./usage";
 import { compareVersionStrings } from "./package/version";
 import { CliOptions } from "./options";
@@ -38,9 +37,9 @@ function emptyCache(): UpdateCache {
 }
 
 function cacheFilePath(): string {
-	const home = getEnv("HOME");
+	const home = env.get("HOME");
 	// Windows fallback — HOME isn't set by default there.
-	const base = home !== "" ? home : getEnv("USERPROFILE");
+	const base = home !== "" ? home : env.get("USERPROFILE");
 	if (base === "") return "";
 	return base + "/.metascript/.update-check";
 }
@@ -105,9 +104,9 @@ function fetchLatestVersion(): string {
 // ===== Opt-out =====
 
 function shouldSkipCheck(): boolean {
-	if (getEnv("MSC_NO_UPDATE_CHECK") !== "") return true;
-	if (getEnv("CI") !== "") return true;
-	if (getEnv("GITHUB_ACTIONS") !== "") return true;
+	if (env.get("MSC_NO_UPDATE_CHECK") !== "") return true;
+	if (env.get("CI") !== "") return true;
+	if (env.get("GITHUB_ACTIONS") !== "") return true;
 	return false;
 }
 
@@ -117,7 +116,7 @@ function shouldSkipCheck(): boolean {
 export function maybeShowUpdateNotice(): void {
 	if (shouldSkipCheck()) return;
 
-	const now = clockMs();
+	const now = performance.now();
 	let cache = readCache();
 	const age = now - cache.lastCheckMs;
 
@@ -146,7 +145,7 @@ export function maybeShowUpdateNotice(): void {
 // Windows detection via env vars (no std/os dependency — avoids Bun transpiler
 // parse errors on export-extern syntax during stage-1 hosting).
 function isWindows(): boolean {
-	return getEnv("OS") === "Windows_NT" || getEnv("SystemRoot") !== "";
+	return env.get("OS") === "Windows_NT" || env.get("SystemRoot") !== "";
 }
 
 export function cmdUpgrade(opts: CliOptions): number {

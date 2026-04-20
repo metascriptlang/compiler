@@ -1,0 +1,19 @@
+// std/core/date — prelude.
+//
+// `Date` is auto-imported into every program as a prelude class (like
+// `Math`, `JSON`, `Promise`). Currently minimal: only `Date.now()` —
+// wall-clock milliseconds since Unix epoch.
+//
+// Future additions (not in v0.1): `new Date(ms)`, `Date.parse(iso)`,
+// instance methods (toISOString, getFullYear, etc.).
+
+import { msTimeNow } from "runtime/core/datetime.h";
+
+export class Date {
+	// Wall-clock time in milliseconds since Unix epoch (fractional).
+	// Mirrors JS/Node `Date.now()`. Use when comparing to external
+	// timestamps — not for elapsed-time measurement (use `time.monotonicMs()`).
+	static now(): number {
+		return msTimeNow();
+	}
+}

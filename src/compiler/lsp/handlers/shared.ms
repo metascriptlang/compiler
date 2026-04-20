@@ -5,7 +5,6 @@
 
 import { TransAmDb, dbSetFileText, getFileText, getFileId } from "../../transam/index";
 import { readFile } from "std/fs";
-import { clockMs } from "std/process";
 import { translateCHeader } from "../../../module/cimport/emit";
 import { writeStderr } from "std/io";
 import {
@@ -98,7 +97,7 @@ export function dbGetSource(db: TransAmDb, path: string): string {
 // Load a file into the TransAm DB if not already present.
 export function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) < 0) {
-		const t0 = clockMs();
+		const t0 = performance.now();
 		const readResult = readFile(filePath);
 		if (readResult.ok) {
 			let source = readResult.value;
@@ -107,7 +106,7 @@ export function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 			}
 			dbSetFileText(db, filePath, source);
 		}
-		const t1 = clockMs();
+		const t1 = performance.now();
 		writeStderr("[LSP] loadFile " + filePath + " " + (t1 - t0) + "ms\n");
 	}
 }

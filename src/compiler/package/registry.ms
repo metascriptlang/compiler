@@ -6,7 +6,6 @@
 //
 // API reference: ~/metascript/landing/apps/api/src/routes/packages.ts
 
-import { fetch } from "std/http/client";
 import { HttpError, httpError, HttpErrorKind, invalidResponse } from "std/http/errors";
 import { parseJson, JsonValue, JsonKind } from "std/core/json";
 

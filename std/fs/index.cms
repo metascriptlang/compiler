@@ -2,6 +2,7 @@
 
 import {
 	msFsReadFile, msFsWriteFileMode, msFsExists, msFsIsFile, msFsIsDir,
+	msFsIsExecutable,
 	msFsMkdir, msFsRmdir, msFsRemove, msFsRename, msFsLastErrno,
 	msFsChmod, msFsReadDirEntries,
 } from "runtime/fs/header.h";
@@ -81,6 +82,7 @@ export function rename(oldPath: string, newPath: string): Result<void, IoError> 
 export function exists(path: string): boolean { return msFsExists(path) === 1; }
 export function isFile(path: string): boolean { return msFsIsFile(path) === 1; }
 export function isDir(path: string): boolean { return msFsIsDir(path) === 1; }
+export function isExecutable(path: string): boolean { return msFsIsExecutable(path) === 1; }
 export extern function fileSize(path: string): number from "msFsFileSize";
 
 // List directory entries. Directories have a trailing "/" marker.

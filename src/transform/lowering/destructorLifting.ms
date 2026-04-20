@@ -1091,15 +1091,31 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 	const shouldEmitHooks = !hooksOwned;
 	const shouldEmitTypeInfo = emitTypeInfo && isClassOrInterface && !isTypeInfoGloballyOwned(typeName);
 
-	// No RC fields → minimal TypeInfo only (if class/interface + defining module).
+	// No RC fields → minimal TypeInfo only (for class/interface) and skip hooks.
+	// Exception (Nim parity, `produceSym` in liftdestructors.nim:1180): plain
+	// value-type Struct still emits empty-body hooks so container iteration
+	// (e.g. `HashSet__numberDestroy` calling `HashSetEntry__numberDestroy` per
+	// element) links — macOS native `ld -dead_strip` hides the missing symbol
+	// by discarding the unreachable caller on arm64, but `zig cc`'s cross-
+	// compile lld checks undefined references before dead-stripping and fails.
+	// `generateHook` + `fillBody` produce the empty body naturally when no
+	// field needs work (loop over typeChildren adds nothing).
+	//
+	// Class/interface (Ref<Struct>) don't need this exception — msRefHeader
+	// manages lifetime; no per-element loop references them. Unions backed by
+	// primitives (`type X = "a" | "b"` → msString at runtime) must also skip —
+	// emitting tagged-union hooks would access `_tag` on a non-union.
 	if (!typeNeedsHooks(objType, lctx, loc)) {
-		if (shouldEmitTypeInfo) {
-			emitMinimalTypeInfo(typeName, lctx, loc);
-			claimGlobalTypeInfo(typeName);
+		const isPlainValueStruct = !isClassOrInterface && objType.kind === TypeKind.Struct;
+		if (!isPlainValueStruct) {
+			if (shouldEmitTypeInfo) {
+				emitMinimalTypeInfo(typeName, lctx, loc);
+				claimGlobalTypeInfo(typeName);
+			}
+			nameSetAdd(lctx.generated, typeName);
+			if (shouldEmitHooks) claimGlobal(typeName);
+			return;
 		}
-		nameSetAdd(lctx.generated, typeName);
-		if (shouldEmitHooks) claimGlobal(typeName);
-		return;
 	}
 
 	const classType = isClassOrInterface ? refType : null;

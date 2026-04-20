@@ -11,7 +11,7 @@
 // Default global imports. Returns array (module-level const string[] hits DRC bug).
 // Later: merge with build.ms globalImports.
 export function globalImports(): string[] {
-	return ["std/core/system", "std/core/array", "std/core/string", "std/core/json", "std/core/buffer", "std/core/promise", "std/core/struct"];
+	return ["std/core/system", "std/core/array", "std/core/string", "std/core/json", "std/core/buffer", "std/core/promise", "std/core/struct", "std/core/fetch", "std/core/date", "std/core/performance"];
 }
 
 export function isGlobalImport(path: string): boolean {
@@ -22,9 +22,9 @@ export function isGlobalImport(path: string): boolean {
 }
 
 // ===== Tests =====
-test "globalImports has system, string, array, json, buffer, promise, structure" {
+test "globalImports has system, string, array, json, buffer, promise, struct, fetch, date, performance" {
 	const imports = globalImports();
-	assert imports.length === 7;
+	assert imports.length === 10;
 	assert imports[0] === "std/core/system";
 	assert imports[1] === "std/core/array";
 	assert imports[2] === "std/core/string";
@@ -32,6 +32,9 @@ test "globalImports has system, string, array, json, buffer, promise, structure"
 	assert imports[4] === "std/core/buffer";
 	assert imports[5] === "std/core/promise";
 	assert imports[6] === "std/core/struct";
+	assert imports[7] === "std/core/fetch";
+	assert imports[8] === "std/core/date";
+	assert imports[9] === "std/core/performance";
 }
 
 test "isGlobalImport matches" {

@@ -4,7 +4,7 @@
 // Composable: bold(red("fatal")) → "\x1b[1m\x1b[31mfatal\x1b[0m\x1b[0m"
 // Honors NO_COLOR env var (https://no-color.org) and --colors flag
 
-import { getEnv } from "std/process";
+import { env } from "std/process";
 
 
 // ===== Color enable/disable =====
@@ -21,7 +21,7 @@ function isEnabled(): boolean {
 	if (!state.initialized) {
 		state.initialized = true;
 		// Respect NO_COLOR (https://no-color.org)
-		const noColor = getEnv("NO_COLOR");
+		const noColor = env.get("NO_COLOR");
 		if (noColor.length > 0) {
 			state.enabled = false;
 		}

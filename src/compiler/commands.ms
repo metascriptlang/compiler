@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Individual commands (check, dump-*, pipeline, run, test, fmt)
 
-import { exit, exec, clockMs } from "std/process";
+import { exit, exec } from "std/process";
 import { lex } from "../lexer/lexer";
 import { formatToken } from "../lexer/token";
 import { parseSource } from "../parser/statements/validation";
@@ -58,7 +58,7 @@ export function cmdDumpAst(filePath: string): void {
 // -- check --
 
 export function cmdCheck(filePath: string, opts: CliOptions): void {
-	const t0 = clockMs();
+	const t0 = performance.now();
 	const source = readSource(filePath);
 	const parseResult = parseSource(source);
 	if (!parseResult.ok) {
@@ -131,7 +131,7 @@ export function cmdPipeline(filePath: string): void {
 // then executes the resulting binary.
 
 export function cmdRun(filePath: string, opts: CliOptions): void {
-	const t0 = clockMs();
+	const t0 = performance.now();
 	// Build to out/debug/<name> via the full pipeline
 	ensureDir("out/debug");
 	const binName = replaceExt(baseName(filePath), "");

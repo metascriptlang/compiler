@@ -37,9 +37,15 @@ export {
 	sendText, sendJson, sendHtml, sendError, sendRaw, getClientFd,
 } from "./server";
 
-// Client
+// Plain HTTP client (matches Node's `http` module). Importing these does
+// NOT pull `std/crypto/tls` / mbedtls into the link.
+//
+// For HTTPS, import from `std/https` — same function names (`request`,
+// `requestWithRedirects`), TLS wiring underneath.
+//
+// For URL-based dispatch (`fetch(url)` auto-detecting http vs https), use
+// the global `fetch` from the prelude (see `std/core/fetch`).
 export {
 	HttpClient, createClient,
-	request, fetch,
-	clientFetch, requestWithRedirects,
+	request, requestWithRedirects,
 } from "./client";

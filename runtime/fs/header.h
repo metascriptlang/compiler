@@ -45,6 +45,11 @@ double msFsExists(msString path);
 double msFsIsFile(msString path);
 double msFsIsDir(msString path);
 
+/* Executable bit check (POSIX: access(path, X_OK); Windows: file-exists-and-regular,
+ * since Windows has no exec bit and delegates to PATHEXT/extension). Used by
+ * findOnPath to match shutil.which / exec.LookPath / Bun.which semantics. */
+double msFsIsExecutable(msString path);
+
 /* File size in bytes. Returns -1.0 on error. */
 double msFsFileSize(msString path);
 

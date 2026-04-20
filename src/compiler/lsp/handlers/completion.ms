@@ -2,7 +2,6 @@
 
 import { TransAmDb, dbParse, dbTypeCheck, dbEnsureModuleExports, dbResolveImport } from "../../transam/index";
 import { readDir } from "std/fs";
-import { clockMs } from "std/process";
 import {
 	lspJsonString,
 	lspGetField,
@@ -297,7 +296,7 @@ function lspCrossModuleCandidates(
 }
 
 export function handleCompletion(id: string, params: string, db: TransAmDb, cache: CompletionCache): string {
-	const t0 = clockMs();
+	const t0 = performance.now();
 	const pos = lspExtractPosition(params);
 	const path = lspUriToPath(pos.uri);
 	const source = dbGetSource(db, path);

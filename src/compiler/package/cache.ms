@@ -3,7 +3,7 @@
 // Filesystem operations (download, extract, flock) land in later phases.
 // See docs/PACKAGE.md for the cache layout specification.
 
-import { getEnv } from "std/process";
+import { env } from "std/process";
 import { exists } from "std/fs";
 
 // --- Base path ---
@@ -11,7 +11,7 @@ import { exists } from "std/fs";
 // Returns the cache root: ~/.metascript/cache
 // Uses $HOME environment variable. Returns empty string if HOME is not set.
 export function cacheRoot(): string {
-	const home = getEnv("HOME");
+	const home = env.get("HOME");
 	if (home === "") return "";
 	return home + "/.metascript/cache";
 }

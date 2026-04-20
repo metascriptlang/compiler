@@ -81,18 +81,36 @@ static inline int msSlabBucket(size_t totalSize) {
 /* Round up to bucket max so any request in the bucket range fits a reused entry. */
 static const size_t msSlabBucketSize[] = {32, 64, 96, 128};
 
+/* Slab primitive WITHOUT any zeroing — caller owns the memory state.
+ * Returns dirty memory on cache hit; malloc'd (dirty) memory on cache miss.
+ * Used by the Uninit alloc variants whose callers guarantee full field coverage. */
+static inline void* msSlabAllocRaw(size_t totalSize) {
+	int b = msSlabBucket(totalSize);
+	if (b >= 0 && msSlabTLS.free[b] != NULL) {
+		void* p = msSlabTLS.free[b];
+		msSlabTLS.free[b] = *(void**)p;
+		msSlabTLS.count[b]--;
+		return p;
+	}
+	/* Allocate bucket max, not exact size — slab reuses by bucket, not by exact size */
+	return malloc(b >= 0 ? msSlabBucketSize[b] : totalSize);
+}
+
+/* Safe slab primitive: zero-initialises the caller's requested range on both
+ * cache hit and fresh alloc. This is the Nim nimNewObj contract — callers see
+ * zero-initialised memory (header + payload) regardless of whether the block
+ * was recycled. Only `totalSize` bytes are zeroed (not the whole bucket): the
+ * extra slack inside a bucket is never read by the caller. Fresh allocations
+ * use calloc so the OS can return zero-pages without an explicit memset. */
 static inline void* msSlabAlloc(size_t totalSize) {
 	int b = msSlabBucket(totalSize);
 	if (b >= 0 && msSlabTLS.free[b] != NULL) {
 		void* p = msSlabTLS.free[b];
 		msSlabTLS.free[b] = *(void**)p;
 		msSlabTLS.count[b]--;
-		/* Zero only the header area — payload zeroed separately by codegen (memset).
-		 * Saves zeroing unused bytes in the bucket. */
-		memset(p, 0, sizeof(msRefHeader));
+		memset(p, 0, totalSize);
 		return p;
 	}
-	/* Allocate bucket max, not exact size — slab reuses by bucket, not by exact size */
 	return calloc(1, b >= 0 ? msSlabBucketSize[b] : totalSize);
 }
 
@@ -109,10 +127,36 @@ static inline void msSlabFree(void* p, size_t totalSize) {
 
 /* ===== Allocation ===== */
 
-/* Allocate object with ref header. Returns pointer to user data (past header). */
+/* Allocate object with ref header. Returns pointer to user data (past header).
+ * Safe default: header + payload are zero-initialised. Matches Nim nimNewObj. */
 static inline void* msAlloc(size_t size) {
 	size_t total = sizeof(msRefHeader) + size;
-	msRefHeader* h = (msRefHeader*)msSlabAlloc(total);
+	msRefHeader* h = (msRefHeader*)msSlabAlloc(total);   /* full zero */
+	/* rc, type already zero from msSlabAlloc; only rootIdx + allocSize need set */
+	h->rootIdx = -1;
+	h->allocSize = (uint32_t)total;
+	return (void*)(h + 1);
+}
+
+/* Allocate with RTTI — for typed class instances (ORC-aware).
+ * Safe default: header + payload are zero-initialised. Matches Nim nimNewObj. */
+static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
+	size_t total = sizeof(msRefHeader) + size;
+	msRefHeader* h = (msRefHeader*)msSlabAlloc(total);   /* full zero */
+	h->rootIdx = -1;
+	h->type = type;
+	h->allocSize = (uint32_t)total;
+	return (void*)(h + 1);
+}
+
+/* Uninit opt-in: payload stays dirty from the slab free-list (or malloc).
+ * ONLY use when the caller guarantees every payload byte is written before
+ * the next read. Mirrors Nim nimNewObjUninit. Codegen emits this only for
+ * call sites it can prove fully initialise the payload (e.g. new T(args)
+ * with args.length === fieldNames.length). */
+static inline void* msAllocUninit(size_t size) {
+	size_t total = sizeof(msRefHeader) + size;
+	msRefHeader* h = (msRefHeader*)msSlabAllocRaw(total);  /* dirty */
 	h->rc = 0;
 	h->rootIdx = -1;
 	h->type = NULL;
@@ -120,10 +164,9 @@ static inline void* msAlloc(size_t size) {
 	return (void*)(h + 1);
 }
 
-/* Allocate with RTTI — for typed class instances (ORC-aware). */
-static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
+static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 	size_t total = sizeof(msRefHeader) + size;
-	msRefHeader* h = (msRefHeader*)msSlabAlloc(total);
+	msRefHeader* h = (msRefHeader*)msSlabAllocRaw(total);  /* dirty */
 	h->rc = 0;
 	h->rootIdx = -1;
 	h->type = type;

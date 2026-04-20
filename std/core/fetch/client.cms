@@ -1,5 +1,15 @@
-// HTTP Client — connect, send request, read response.
-// Supports both HTTP (plain TCP) and HTTPS (TLS auto-enabled via std/crypto/tls import).
+// HTTP Client — plain HTTP over raw TCP.
+//
+// Keep this file free of TLS dependencies so that a program importing only
+// `request` / `requestWithRedirects` does NOT pull `std/crypto/tls` (and its
+// mbedtls vendor) into the alive-set.
+//
+// For HTTPS, use `std/https` — it reuses `doRequestOver` and
+// `requestWithRedirectsOver` from this file, swapping in a TLS transport.
+//
+// `fetch(url)` lives in `std/core/fetch` (auto-imported via prelude); it
+// dispatches to `request` from this module or from `std/https` based on the
+// URL protocol.
 
 @include("runtime/net/socket.h");
 
@@ -10,15 +20,13 @@ extern function msNetRecv(fd: int32, maxBytes: int32): string;
 extern function msNetClose(fd: int32): void;
 extern function msNetSetTimeout(fd: int32, ms: int32): int32;
 
-import { tlsConnect, tlsRead, tlsWrite, tlsClose } from "std/crypto/tls";
-
 import {
 	HttpMethod, HttpResponse, RequestOptions, FetchOptions, ParsedUrl, HttpHeaders,
 	methodToString, parseMethod,
 } from "./types";
 import {
 	HttpError,
-	connectionFailed, socketError, invalidResponse, tooManyRedirects,
+	connectionFailed, socketError, invalidResponse, invalidRequest, tooManyRedirects,
 } from "./errors";
 import {
 	createHeaders, setHeader, getHeader, serializeHeaders,
@@ -29,11 +37,11 @@ import { parseResponse, parseUrl, decodeChunked } from "./parser";
 // ===== Constants =====
 
 // Socket recv buffer per call — typical MTU-aligned chunk for HTTP/1.1.
-const RECV_CHUNK_SIZE: int32 = 8192;
+export const RECV_CHUNK_SIZE: int32 = 8192;
 
 // Max total bytes for response headers section — prevents unbounded buffering
 // on malicious/broken servers. GitHub's headers are ~4-6 KB; 64 KB is ample.
-const MAX_HEADER_BYTES: int32 = 65536;
+export const MAX_HEADER_BYTES: int32 = 65536;
 
 // ===== Client Interface =====
 
@@ -51,15 +59,10 @@ export function createClient(): HttpClient {
 	};
 }
 
-// ===== Public API =====
-
-// Full options request (low-level escape hatch).
-export function request(options: RequestOptions): Result<HttpResponse, HttpError> {
-	return doRequest(options);
-}
+// ===== Shared Helpers (exported for std/https + std/core/fetch) =====
 
 // Resolved FetchOptions with defaults applied.
-interface ResolvedOptions {
+export interface ResolvedOptions {
 	method: HttpMethod;
 	body: string;
 	headers: HttpHeaders;
@@ -68,7 +71,7 @@ interface ResolvedOptions {
 }
 
 // Apply FetchOptions over defaults. Null options → all defaults.
-function resolveFetchOptions(options: FetchOptions, defaultTimeout: int32, defaultMaxRedirects: int32): ResolvedOptions {
+export function resolveFetchOptions(options: FetchOptions, defaultTimeout: int32, defaultMaxRedirects: int32): ResolvedOptions {
 	let method = HttpMethod.GET;
 	let body = "";
 	let headers = createHeaders();
@@ -87,85 +90,25 @@ function resolveFetchOptions(options: FetchOptions, defaultTimeout: int32, defau
 }
 
 // Build path + query string from parsed URL.
-function urlPath(u: ParsedUrl): string {
+export function urlPath(u: ParsedUrl): string {
 	if (u.query.length === 0) return u.path;
 	return u.path + "?" + u.query;
 }
 
-// URL-based fetch with auto TLS, redirect following, and optional options.
-//   fetch("https://example.com")                          — simple GET
-//   fetch("https://example.com", { method: "POST", ... }) — with options
-export function fetch(url: string, options: FetchOptions = null): Result<HttpResponse, HttpError> {
-	const u = try parseUrl(url);
-	const r = resolveFetchOptions(options, 30000, 5);
-	return requestWithRedirects({
-		method: r.method, hostname: u.hostname, port: u.port, path: urlPath(u),
-		headers: r.headers, body: r.body, timeout: r.timeout,
-		tls: u.protocol === "https",
-	}, r.maxRedirects);
-}
+// ===== Transport-agnostic HTTP/1.1 Flow (DRY core for http + https) =====
 
-// ===== Client Methods =====
-
-// URL-based fetch with client defaults (user-agent, timeout, redirects).
-export function clientFetch(c: HttpClient, url: string, options: FetchOptions = null): Result<HttpResponse, HttpError> {
-	const u = try parseUrl(url);
-	const r = resolveFetchOptions(options, c.timeout, c.maxRedirects);
-	setHeader(r.headers, "user-agent", c.userAgent);
-	return requestWithRedirects({
-		method: r.method, hostname: u.hostname, port: u.port, path: urlPath(u),
-		headers: r.headers, body: r.body, timeout: r.timeout,
-		tls: u.protocol === "https",
-	}, r.maxRedirects);
-}
-
-// ===== Transport Abstraction =====
-// Unified send/recv/close for both plain TCP and TLS connections.
-
-function transportSend(fd: int32, tlsCtx: int64, data: string): int32 {
-	if (tlsCtx !== 0) return tlsWrite(tlsCtx, data);
-	return msNetSend(fd, data);
-}
-
-function transportRecv(fd: int32, tlsCtx: int64, maxBytes: int32): string {
-	if (tlsCtx !== 0) return tlsRead(tlsCtx, maxBytes);
-	return msNetRecv(fd, maxBytes);
-}
-
-function transportClose(fd: int32, tlsCtx: int64): void {
-	if (tlsCtx !== 0) tlsClose(tlsCtx);
-	if (fd >= 0) msNetClose(fd);
-}
-
-// ===== Core Request =====
-
-function doRequest(options: RequestOptions): Result<HttpResponse, HttpError> {
-	let fd: int32 = -1;
-	let tlsCtx: int64 = 0;
-
-	if (options.tls) {
-		// HTTPS: TLS handles TCP connect + handshake internally
-		const tlsResult = tlsConnect(options.hostname, options.port, "");
-		if (!tlsResult.ok) {
-			return Result.err(connectionFailed(`TLS handshake to ${options.hostname}:${options.port} failed`));
-		}
-		tlsCtx = tlsResult.value;
-	} else {
-		// HTTP: plain TCP
-		fd = msNetSocket();
-		if (fd < 0) return Result.err(socketError("socket() failed"));
-
-		if (options.timeout > 0) {
-			msNetSetTimeout(fd, options.timeout);
-		}
-
-		if (msNetConnect(fd, options.hostname, options.port) < 0) {
-			msNetClose(fd);
-			return Result.err(connectionFailed(`connect to ${options.hostname}:${options.port} failed`));
-		}
-	}
-
-	// Build request
+// Send fn: bytes → int (negative = error). Recv fn: max bytes → received bytes (empty = EOF).
+// Close fn: tear down the connection (always called exactly once on the way out).
+//
+// std/http/client wires these to msNet*; std/https/client wires them to
+// tlsRead/tlsWrite/tlsClose. The HTTP/1.1 logic itself lives only here.
+export function doRequestOver(
+	options: RequestOptions,
+	sendFn: (data: string) => int32,
+	recvFn: (maxBytes: int32) => string,
+	closeFn: () => void,
+): Result<HttpResponse, HttpError> {
+	// Build request line + headers + body.
 	setHeader(options.headers, "host", options.hostname);
 	if (options.body.byteLength > 0) {
 		setHeader(options.headers, "content-length", options.body.byteLength.toString());
@@ -175,54 +118,52 @@ function doRequest(options: RequestOptions): Result<HttpResponse, HttpError> {
 	let reqStr = methodToString(options.method) + " " + options.path + " HTTP/1.1\r\n";
 	reqStr = reqStr + serializeHeaders(options.headers) + "\r\n" + options.body;
 
-	if (transportSend(fd, tlsCtx, reqStr) < 0) {
-		transportClose(fd, tlsCtx);
+	if (sendFn(reqStr) < 0) {
+		closeFn();
 		return Result.err(socketError("send failed"));
 	}
 
-	// Read response headers — loop until \r\n\r\n (headers may span multiple TLS records).
+	// Read response headers — loop until \r\n\r\n.
 	let data = "";
 	while (!data.contains("\r\n\r\n")) {
-		const chunk = transportRecv(fd, tlsCtx, RECV_CHUNK_SIZE);
+		const chunk = recvFn(RECV_CHUNK_SIZE);
 		if (chunk.length === 0) break;
 		data = data + chunk;
 		if (data.length > MAX_HEADER_BYTES) break;
 	}
 	if (data.length === 0) {
-		transportClose(fd, tlsCtx);
+		closeFn();
 		return Result.err(invalidResponse("empty response"));
 	}
 
-	// Parse status + headers
 	const parsed = parseResponse(data);
 	if (!parsed.ok) {
-		transportClose(fd, tlsCtx);
+		closeFn();
 		return Result.err(parsed.error);
 	}
 
-	// Read full body
 	const contentLength = getContentLength(parsed.value.headers);
 	let body = "";
 
 	if (isChunked(parsed.value.headers)) {
 		let chunkedData = data.slice(parsed.value.bodyStart, data.length);
 		while (!chunkedData.startsWith("0\r\n") && !chunkedData.contains("\r\n0\r\n")) {
-			const more = transportRecv(fd, tlsCtx, RECV_CHUNK_SIZE);
+			const more = recvFn(RECV_CHUNK_SIZE);
 			if (more.length === 0) break;
 			chunkedData = chunkedData + more;
 		}
-		transportClose(fd, tlsCtx);
+		closeFn();
 		const decoded = decodeChunked(chunkedData);
 		if (!decoded.ok) return Result.err(decoded.error);
 		body = decoded.value;
 	} else if (contentLength > 0) {
-		body = readFullBody(fd, tlsCtx, data, parsed.value.bodyStart, contentLength);
-		transportClose(fd, tlsCtx);
+		body = readFullBodyOver(recvFn, data, parsed.value.bodyStart, contentLength);
+		closeFn();
 	} else if (contentLength < 0) {
-		body = readUntilClose(fd, tlsCtx, data, parsed.value.bodyStart);
-		transportClose(fd, tlsCtx);
+		body = readUntilCloseOver(recvFn, data, parsed.value.bodyStart);
+		closeFn();
 	} else {
-		transportClose(fd, tlsCtx);
+		closeFn();
 	}
 
 	return Result.ok({
@@ -233,9 +174,7 @@ function doRequest(options: RequestOptions): Result<HttpResponse, HttpError> {
 	});
 }
 
-// ===== Body Reading Helpers =====
-
-function readFullBody(fd: int32, tlsCtx: int64, initialData: string, bodyStart: int32, contentLength: int32): string {
+function readFullBodyOver(recvFn: (maxBytes: int32) => string, initialData: string, bodyStart: int32, contentLength: int32): string {
 	const available = initialData.length - bodyStart;
 	if (available >= contentLength) {
 		return initialData.slice(bodyStart, bodyStart + contentLength);
@@ -243,7 +182,7 @@ function readFullBody(fd: int32, tlsCtx: int64, initialData: string, bodyStart: 
 	let body = initialData.slice(bodyStart, initialData.length);
 	let remaining = contentLength - available;
 	while (remaining > 0) {
-		const chunk = transportRecv(fd, tlsCtx, remaining);
+		const chunk = recvFn(remaining);
 		if (chunk.length === 0) break;
 		body = body + chunk;
 		remaining = remaining - chunk.length;
@@ -251,19 +190,24 @@ function readFullBody(fd: int32, tlsCtx: int64, initialData: string, bodyStart: 
 	return body;
 }
 
-function readUntilClose(fd: int32, tlsCtx: int64, initialData: string, bodyStart: int32): string {
+function readUntilCloseOver(recvFn: (maxBytes: int32) => string, initialData: string, bodyStart: int32): string {
 	let body = initialData.slice(bodyStart, initialData.length);
 	while (true) {
-		const chunk = transportRecv(fd, tlsCtx, RECV_CHUNK_SIZE);
+		const chunk = recvFn(RECV_CHUNK_SIZE);
 		if (chunk.length === 0) break;
 		body = body + chunk;
 	}
 	return body;
 }
 
-// ===== Redirect Following =====
-
-export function requestWithRedirects(options: RequestOptions, maxRedirects: int32): Result<HttpResponse, HttpError> {
+// Redirect-following loop, parameterized over a per-attempt request fn.
+// std/http calls it with `doRequestPlain`; std/https calls it with its
+// own TLS-using doRequest.
+export function requestWithRedirectsOver(
+	options: RequestOptions,
+	maxRedirects: int32,
+	doReq: (opts: RequestOptions) => Result<HttpResponse, HttpError>,
+): Result<HttpResponse, HttpError> {
 	let remaining = maxRedirects;
 	let currentHostname = options.hostname;
 	let currentPort = options.port;
@@ -280,7 +224,7 @@ export function requestWithRedirects(options: RequestOptions, maxRedirects: int3
 			i = i + 1;
 		}
 
-		const resp = doRequest({
+		const resp = doReq({
 			method: currentMethod, hostname: currentHostname, port: currentPort,
 			path: currentPath, headers: headers, body: currentBody,
 			timeout: options.timeout, tls: currentTls,
@@ -291,7 +235,6 @@ export function requestWithRedirects(options: RequestOptions, maxRedirects: int3
 			return resp;
 		}
 
-		// Follow redirect
 		const location = getHeader(resp.value.headers, "location");
 		if (location.length === 0) return resp;
 
@@ -318,4 +261,45 @@ export function requestWithRedirects(options: RequestOptions, maxRedirects: int3
 		remaining = remaining - 1;
 	}
 	return Result.err(tooManyRedirects(maxRedirects));
+}
+
+// ===== Plain HTTP transport (TCP) =====
+
+function doRequestPlain(options: RequestOptions): Result<HttpResponse, HttpError> {
+	const fd = msNetSocket();
+	if (fd < 0) return Result.err(socketError("socket() failed"));
+
+	if (options.timeout > 0) {
+		msNetSetTimeout(fd, options.timeout);
+	}
+
+	if (msNetConnect(fd, options.hostname, options.port) < 0) {
+		msNetClose(fd);
+		return Result.err(connectionFailed(`connect to ${options.hostname}:${options.port} failed`));
+	}
+
+	return doRequestOver(
+		options,
+		(data: string) => msNetSend(fd, data),
+		(maxBytes: int32) => msNetRecv(fd, maxBytes),
+		() => msNetClose(fd),
+	);
+}
+
+// ===== Public API =====
+
+// Full options request. Rejects TLS — callers needing HTTPS use std/https.
+export function request(options: RequestOptions): Result<HttpResponse, HttpError> {
+	if (options.tls) {
+		return Result.err(invalidRequest("HTTPS requires std/https"));
+	}
+	return doRequestPlain(options);
+}
+
+// Redirect-following request for plain HTTP.
+export function requestWithRedirects(options: RequestOptions, maxRedirects: int32): Result<HttpResponse, HttpError> {
+	if (options.tls) {
+		return Result.err(invalidRequest("HTTPS requires std/https"));
+	}
+	return requestWithRedirectsOver(options, maxRedirects, doRequestPlain);
 }

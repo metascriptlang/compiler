@@ -1,0 +1,46 @@
+// HTTPS transport — HTTP/1.1 over TLS.
+//
+// Reuses doRequestOver / requestWithRedirectsOver from ./client (the entire
+// HTTP/1.1 state machine) and only swaps in TLS transport functions.
+//
+// Sits in std/core/fetch/ alongside ./client so a program importing only
+// plain `std/http` does NOT pull this file (and thus std/crypto/tls /
+// mbedtls) into the alive-set. The @compile chain via std/crypto/tls fires
+// only when one of this module's exports is reachable.
+
+import { tlsConnect, tlsRead, tlsWrite, tlsClose } from "std/crypto/tls";
+
+import { HttpResponse, RequestOptions } from "./types";
+import { HttpError, connectionFailed } from "./errors";
+import { doRequestOver, requestWithRedirectsOver } from "./client";
+
+// ===== TLS transport =====
+
+function doRequestTls(options: RequestOptions): Result<HttpResponse, HttpError> {
+	const ctx = tlsConnect(options.hostname, options.port, "");
+	if (!ctx.ok) {
+		return Result.err(connectionFailed(`TLS handshake to ${options.hostname}:${options.port} failed`));
+	}
+	const tlsCtx = ctx.value;
+	return doRequestOver(
+		options,
+		(data: string) => tlsWrite(tlsCtx, data),
+		(maxBytes: int32) => tlsRead(tlsCtx, maxBytes),
+		() => tlsClose(tlsCtx),
+	);
+}
+
+// ===== Public API =====
+// Function names match std/http (Node-style: http.request / https.request).
+
+// Full options request — forces TLS regardless of options.tls.
+export function request(options: RequestOptions): Result<HttpResponse, HttpError> {
+	return doRequestTls(options);
+}
+
+// Redirect-following request for HTTPS. Cross-protocol redirects to http://
+// are still routed through TLS (they will fail at handshake — strict
+// behavior matches Node's https.request).
+export function requestWithRedirects(options: RequestOptions, maxRedirects: int32): Result<HttpResponse, HttpError> {
+	return requestWithRedirectsOver(options, maxRedirects, doRequestTls);
+}

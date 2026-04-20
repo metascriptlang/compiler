@@ -88,6 +88,15 @@ double msFsIsDir(msString path) {
 	return S_ISDIR(st.st_mode) ? 1.0 : 0.0;
 }
 
+double msFsIsExecutable(msString path) {
+	/* Windows has no exec bit — an executable is defined by PATHEXT suffix.
+	 * findOnPath enforces PATHEXT matching above us, so here we just confirm
+	 * the path resolves to a regular file. Mirrors Bun.whichWin searchBin. */
+	struct _stat st;
+	if (_stat(msStringToCString(path), &st) != 0) return 0.0;
+	return S_ISREG(st.st_mode) ? 1.0 : 0.0;
+}
+
 double msFsFileSize(msString path) {
 	struct _stat st;
 	if (_stat(msStringToCString(path), &st) != 0) return -1.0;

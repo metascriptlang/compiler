@@ -10,7 +10,6 @@
 #define MS_STD_PROCESS_H
 
 #include <stdlib.h>
-#include <time.h>
 #include "runtime/core/system.h"
 
 #ifdef _WIN32
@@ -216,27 +215,33 @@ static inline msString msProcessGetEnv(msString name) {
 	return msStringFromCStr(val);
 }
 
-// =============================================================================
-// Monotonic clock
-// =============================================================================
-
 /**
- * Get monotonic clock time in milliseconds (fractional).
+ * Set environment variable. Overwrites existing. 1.0 on success, 0.0 on failure.
  */
-static inline double msProcessClockMs(void) {
+static inline double msProcessSetEnv(msString name, msString value) {
+	const char* cname = msStringToCString(name);
+	const char* cval = msStringToCString(value);
 #if defined(_WIN32)
-	LARGE_INTEGER freq, cnt;
-	QueryPerformanceFrequency(&freq);
-	QueryPerformanceCounter(&cnt);
-	return (double)(cnt.QuadPart * 1000) / (double)freq.QuadPart;
-#elif defined(__APPLE__) || defined(__linux__)
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+	return (_putenv_s(cname, cval) == 0) ? 1.0 : 0.0;
 #else
-	return 0.0;
+	return (setenv(cname, cval, 1) == 0) ? 1.0 : 0.0;
 #endif
 }
+
+/**
+ * Remove environment variable. 1.0 on success, 0.0 on failure (incl. not-set).
+ */
+static inline double msProcessUnsetEnv(msString name) {
+	const char* cname = msStringToCString(name);
+#if defined(_WIN32)
+	return (_putenv_s(cname, "") == 0) ? 1.0 : 0.0;
+#else
+	return (unsetenv(cname) == 0) ? 1.0 : 0.0;
+#endif
+}
+
+// Time primitives (wall-clock, monotonic) live in runtime/core/datetime.h,
+// surfaced via std/core/date (Date.now()) and std/core/time (time.monotonicMs()) preludes.
 
 #ifdef __cplusplus
 }
