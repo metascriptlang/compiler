@@ -6,7 +6,7 @@ import {
 } from "../../transam/index";
 import { detectCycle } from "../../transam/moduleDeps";
 import { writeStderr } from "std/io";
-import { lspNotification, lspFormatMessage, lspPathToUri, lspDirname } from "../protocol";
+import { lspNotification, lspFormatMessage, lspPathToUri, dirname } from "../protocol";
 import { lspFmtDiagnostic, lspFmtDiagnosticRange, lspFmtPublishDiagnostics } from "../format";
 import { sgCollectDiagnostics } from "../../../checker/suggest";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../../../ast/node";
@@ -14,35 +14,39 @@ import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../../fmt/
 import { loadFmtSection, validateBuildConfig } from "../../buildConfig";
 import { dbGetSource, lspEnsureFileLoaded } from "./shared";
 import { dbResolveImport } from "../../transam/index";
+import { findProjectRoot } from "../../../utils/path";
 
 
 // ===== Format Options from build.ms =====
 
-// Cached format options loaded from workspace build.ms on first use.
-let _fmtOptions: FormatOptions = null as unknown as FormatOptions;
-let _fmtOptionsLoaded = false;
+// Per-workspace cache: project root → FormatOptions loaded from its build.ms.
+// Keyed by the directory containing build.ms (result of findProjectRoot), so
+// multi-root workspaces each get their own config without collisions.
+let _fmtOptionsCacheKeys: string[] = [];
+let _fmtOptionsCacheValues: FormatOptions[] = [];
 
-// Get format options, loading from workspace build.ms if available.
-// The workspace root is derived from db.stdPath (set on LSP initialize to rootUri + "/std").
-export function getFormatOptions(db: TransAmDb): FormatOptions {
-	if (_fmtOptionsLoaded) return _fmtOptions;
-	_fmtOptionsLoaded = true;
+// Get format options, loading from the project's build.ms if available.
+// The project root is found by walking up from `path` looking for build.ms.
+// Falls back to defaults when no build.ms is found. Results are cached per root.
+export function getFormatOptions(db: TransAmDb, path: string): FormatOptions {
+	const projectRoot = findProjectRoot(path);
+	for (let i = 0; i < _fmtOptionsCacheKeys.length; i = i + 1) {
+		if (_fmtOptionsCacheKeys[i] === projectRoot) return _fmtOptionsCacheValues[i];
+	}
 	let opts = defaultFormatOptions();
-	// Derive workspace root from stdPath: "/path/to/project/std" -> "/path/to/project"
-	const stdPath = db.stdPath;
-	if (stdPath.length > 4) {
-		const wsRoot = stdPath.slice(0, stdPath.length - 4);
-		const fmtCfg = loadFmtSection(wsRoot);
+	if (projectRoot !== "") {
+		const fmtCfg = loadFmtSection(projectRoot);
 		opts = applyFmtSection(opts, fmtCfg);
 	}
-	_fmtOptions = opts;
+	_fmtOptionsCacheKeys.push(projectRoot);
+	_fmtOptionsCacheValues.push(opts);
 	return opts;
 }
 
-// Reset cached format options (call when workspace changes).
+// Reset cached format options (call when workspace changes or build.ms is saved).
 export function resetFormatOptions(): void {
-	_fmtOptionsLoaded = false;
-	_fmtOptions = null as unknown as FormatOptions;
+	_fmtOptionsCacheKeys = [];
+	_fmtOptionsCacheValues = [];
 }
 
 // ===== Format Violation Check =====
@@ -136,7 +140,7 @@ function checkFormatViolations(db: TransAmDb, path: string): string[] {
 	const source = dbGetSource(db, path);
 	if (source === "") return result;
 
-	const options = getFormatOptions(db);
+	const options = getFormatOptions(db, path);
 	const useTabs = options.useTabs;
 	const lines = splitLines(source);
 
@@ -264,7 +268,7 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 	// build.ms validation warnings (entry path not found, etc.)
 	if (path.length > 9 && path.slice(path.length - 9, path.length) === "/build.ms") {
 		const buildSource = dbGetSource(db, path);
-		const buildWarnings = validateBuildConfig(lspDirname(path), buildSource);
+		const buildWarnings = validateBuildConfig(dirname(path), buildSource);
 		for (let bw = 0; bw < buildWarnings.length; bw = bw + 1) {
 			if (diagCount > 0) diagArray = diagArray + ",";
 			const w = buildWarnings[bw];

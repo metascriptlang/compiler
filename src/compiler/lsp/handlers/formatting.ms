@@ -44,7 +44,7 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 	const actions: string[] = [];
 
 	// Check if this line has a format violation
-	const options = getFormatOptions(db);
+	const options = getFormatOptions(db, path);
 	const isCommentCont = info.indentEnd > 0 && info.indentEnd < line.length && line.byteAt(info.indentEnd) === "*".code;
 	const hasIndentIssue = info.indentEnd > 0 && info.indentEnd < line.length && !isCommentCont
 		&& (info.isMixed || (options.useTabs && info.hasSpace && !info.hasTab) || (!options.useTabs && info.hasTab && !info.hasSpace));
@@ -97,7 +97,7 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 	if (program === null) return lspResponse(id, "[]");
 	const t2 = performance.now();
 
-	const options = getFormatOptions(db);
+	const options = getFormatOptions(db, path);
 	options.source = source;
 	const doc = printFormattedNode(program, options);
 	const t3 = performance.now();

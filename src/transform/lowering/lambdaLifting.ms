@@ -14,7 +14,7 @@
 //     const f = { fn: $lifted_outer_1, env: { x: x } };
 //   }
 
-import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, ObjectLiteralData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, ObjectLiteralData, Type, TypeKind } from "../../ast/node";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
 import {
@@ -968,12 +968,23 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, loc: SourceLocat
 	// Reference parity (rawClosureCreation line 617-627): copy available values into env fields.
 	// Params and module-level vars/functions are available at function entry.
 	// Local vars (declared later) are handled by VarDecl→assignment rewrite.
+	//
+	// Module-level check must be symbol-based (Global flag), not name-based scope:
+	// when a local captured var shadows a module-level var of the same name
+	// (e.g. module-level `const me` + async-local `const me = await ...`), a
+	// name-based check mistakes the inner hoisted local for a module-level capture
+	// and emits `env.name = name` whose RHS has no declaration in function scope.
+	// Mirrors detectAllWalk's interestingVar check and Nim's `sfGlobal notin s.flags`.
 	for (const name of allCaptures.items) {
 		const isParam = nameSetContains(state.currentParams, name);
-		const isModLevel = isModuleLevelVar(state.ss, name);
+		const orig = findCapturedIdent(name, state.sharedEnvCapturedIdents);
+		const symOrig = (orig !== null) ? orig.resolvedSym : null as unknown as Symbol;
+		const isModLevel = (symOrig !== null
+				&& (symOrig.symbolKind === SymbolKind.Variable || symOrig.symbolKind === SymbolKind.Parameter))
+			? hasFlag(symOrig, SymbolFlag.Global)
+			: isModuleLevelVar(state.ss, name);
 		if (isParam || isModLevel) {
 			const lhs = makeMember(makeIdent(state.sharedEnvVarName, loc), name, loc);
-			const orig = findCapturedIdent(name, state.sharedEnvCapturedIdents);
 			const isCcgParam = isParam && orig !== null && orig.nodeType !== null && isCcgPtrType(orig.nodeType);
 			if (isCcgParam) {
 				// Ptr field: LHS type must be Ptr<T> so DRC skips RC hooks (noRcInfo for Ptr)

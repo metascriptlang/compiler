@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
-import { exit, exec } from "std/process";
+import { exit, exec, cmdExists } from "std/process";
 import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
@@ -110,7 +110,7 @@ export function main(): number {
 			// Cross-compile default: prefer zig cc over platform-specific cross-gcc.
 			// zig cc bundles clang + lld + sysroots for all targets — no external deps.
 			// Skip for bare/solana — they resolve their own toolchains.
-			if (opts.osTarget !== "" && opts.osTarget !== "bare" && opts.osTarget !== "solana" && exec("which zig > /dev/null 2>&1") === 0) {
+			if (opts.osTarget !== "" && opts.osTarget !== "bare" && opts.osTarget !== "solana" && cmdExists("zig")) {
 				opts.ccBinary = "zig cc";
 			}
 			if ((cfg.valid && cfg.build.target === "js") || opts.target === Target.JS) {

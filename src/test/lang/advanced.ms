@@ -1,7 +1,6 @@
 // Language tests: advanced patterns — closures, Result chains, match blocks, pipelines
 
-import { exec } from "std/process";
-import { readFile, writeFile } from "std/fs";
+import { readFile, writeFile, remove } from "std/fs";
 import { dirname, join } from "std/fs/path";
 
 type NumFn = (n: number) => number;
@@ -236,7 +235,7 @@ test "large file I/O" {
 	const back = rr.value;
 	assert back === content;
 	assert back.length > 400;
-	exec("rm -f " + path);
+	remove(path);
 }
 
 test "enum dispatch" {

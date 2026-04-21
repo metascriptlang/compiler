@@ -28,7 +28,7 @@ import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../
 import { readFile } from "std/fs";
 import { translateCHeader } from "./cimport/emit";
 import { resolveRuntimeDir } from "../utils/path";
-import { isAbsolute } from "std/fs/path";
+import { isAbsolute, dirname } from "std/fs/path";
 // (utils/string imports removed — using native .slice)
 
 // ===== Source Provider =====
@@ -147,7 +147,7 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 		// Resolve the .h file path relative to the consuming module
 		let headerPath = specifier;
 		if (specifier.startsWith("./") || specifier.startsWith("../")) {
-			const moduleDir = modulePath.slice(0, modulePath.lastIndexOf("/"));
+			const moduleDir = dirname(modulePath);
 			headerPath = moduleDir + "/" + specifier.slice(specifier.startsWith("./") ? 2 : 0, specifier.length);
 		}
 
@@ -172,7 +172,7 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 
 		// Generate extern declarations from C header
 		// Include paths: builtin C headers (stdint.h etc.) + header's own directory
-		const headerDir = headerPath.slice(0, headerPath.lastIndexOf("/"));
+		const headerDir = dirname(headerPath);
 		const compilerRoot = resolveRuntimeDir();
 		const builtinInclude = compilerRoot !== "" ? compilerRoot + "/src/module/cparse/include" : "src/module/cparse/include";
 		const includePaths = compilerRoot !== ""

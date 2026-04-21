@@ -5,7 +5,7 @@ import { readDir } from "std/fs";
 import {
 	lspJsonString,
 	lspGetField,
-	lspUriToPath, lspDirname,
+	lspUriToPath, dirname,
 	lspResponse
 } from "../protocol";
 import {
@@ -204,7 +204,7 @@ function lspModulePathToImportSpec(db: TransAmDb, currentPath: string, targetPat
 		return spec;
 	}
 	// Relative path: compute from currentPath's directory
-	const currentDir = lspDirname(currentPath);
+	const currentDir = dirname(currentPath);
 	if (targetPath.length > currentDir.length && targetPath.slice(0, currentDir.length) === currentDir) {
 		let rel = "./" + targetPath.slice(currentDir.length + 1, targetPath.length);
 		if (rel.length > 3 && rel.slice(rel.length - 3, rel.length) === ".ms") rel = rel.slice(0, rel.length - 3);
@@ -541,7 +541,7 @@ function lspCompleteImportPath(source: string, pos: LspCursorParams, db: TransAm
 	let insertPrefix = "";
 	if (dirPart === "." || dirPart === ".." || partial.startsWith("./") || partial.startsWith("../")) {
 		// Relative import — resolve against current file's directory
-		const fileDir = lspDirname(filePath);
+		const fileDir = dirname(filePath);
 		if (dirPart === "") {
 			scanDir = fileDir;
 		} else {
@@ -566,7 +566,7 @@ function lspCompleteImportPath(source: string, pos: LspCursorParams, db: TransAm
 		return items;
 	} else {
 		// Bare import with partial dir — try relative first
-		const fileDir = lspDirname(filePath);
+		const fileDir = dirname(filePath);
 		if (dirPart === "") {
 			scanDir = fileDir;
 		} else {

@@ -96,9 +96,10 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 		NodeKind.TypeAliasDecl => {},
 		NodeKind.ExternDecl => { genExternDecl(g, node); },
 		NodeKind.TestDecl => {
-			// Skip test blocks when DCE is active (build mode) — tests only compiled in test mode.
-			// Reference parity: compile-time code excluded from codegen when not in test/compileTime mode.
-			if (g.aliveSet.entries.length === 0) { genTestDeclNode(g, node); }
+			// Only emit test wrappers in test builds. Production builds strip
+			// TestDecl entirely (genTestDeclNode itself no-ops when !isTestBuild;
+			// the explicit check here skips descent for clarity + tiny codegen win).
+			if (g.isTestBuild) { genTestDeclNode(g, node); }
 		},
 		NodeKind.AssertStmt => { genTopLevelStmt(g, node); },
 		_ => { genTopLevelStmt(g, node); },

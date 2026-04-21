@@ -70,6 +70,29 @@ export function remove(path: string): Result<void, IoError> {
 	return Result.err(writeFailed(path, "remove failed"));
 }
 
+// Recursively remove a file or directory tree, Go-style. Mirrors
+// `os.RemoveAll`: a non-existent path returns ok so callers can clean up
+// without racing isExist checks. Walks children depth-first, then rmdir's
+// the root. Companion to `remove` (file only) for explicit intent —
+// no boolean flag to misuse, two names read as the thing they do.
+//
+// Uses recursion — fine for msc cache layouts (~2 levels). Not suitable
+// for pathological trees (> ~1000 deep). Symlink handling follows
+// whatever runtime/fs/*.c does for remove().
+export function removeAll(path: string): Result<void, IoError> {
+	if (!exists(path)) return Result.ok(null as unknown as void);
+	if (isDir(path)) {
+		for (const entry of readDir(path)) {
+			// readDir marks directories with a trailing "/" — strip for the child path.
+			const name = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
+			const r = removeAll(path + "/" + name);
+			if (!r.ok) return r;
+		}
+		return rmdir(path);
+	}
+	return remove(path);
+}
+
 export function rename(oldPath: string, newPath: string): Result<void, IoError> {
 	if (msFsRename(oldPath, newPath) === 1) return Result.ok(null as unknown as void);
 	const err = msFsLastErrno();

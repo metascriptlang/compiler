@@ -5,7 +5,7 @@ import { readFile, exists } from "std/fs";
 import { resolveRuntimeDir } from "../../../utils/path";
 import { writeStderr } from "std/io";
 import {
-	lspUriToPath, lspPathToUri, lspDirname,
+	lspUriToPath, lspPathToUri, dirname,
 	lspResponse
 } from "../protocol";
 import {
@@ -198,7 +198,7 @@ function lspResolveHeaderPath(headerRelPath: string, modulePath: string): string
 	if (headerRelPath.length > 0 && headerRelPath.charCodeAt(0) === "/".code) {
 		return headerRelPath;
 	}
-	const moduleRel = lspDirname(modulePath) + "/" + headerRelPath;
+	const moduleRel = dirname(modulePath) + "/" + headerRelPath;
 	if (exists(moduleRel)) return moduleRel;
 	const root = resolveRuntimeDir();
 	if (root !== "") {

@@ -5,19 +5,28 @@
  * readFile/writeFile re-exported from std/fs for backward compatibility.
  */
 
-@import("node:process", { argv, exit, cwd });
-@import("node:child_process", { execSync });
+@import("node:process", { argv, exit, cwd, platform as _nodePlatform });
+@import("node:child_process", { execSync, spawnSync });
 @import("node:fs", { existsSync, readdirSync });
 
 export extern const argv: string[];
 export extern function exit(code: number): void;
 export extern function cwd(): string;
+extern const _nodePlatform: string;
 extern function execSync(cmd: string): string;
+extern function spawnSync(cmd: string, args: string[], options: SpawnOpts): SpawnResult;
 extern function existsSync(path: string): boolean;
 extern function readdirSync(path: string): string[];
 
+interface SpawnOpts { stdio: string; }
+interface SpawnResult { status: number; }
+
 // Re-export from fs (Result-returning)
 export { readFile, writeFile } from "../fs/index";
+
+// Platform identifier — normalize Node's "win32" to our "windows" so MS code
+// sees the same values across backends.
+export const platform: string = _nodePlatform === "win32" ? "windows" : _nodePlatform;
 
 export function fileExists(path: string): boolean {
 	return existsSync(path);
@@ -26,6 +35,12 @@ export function fileExists(path: string): boolean {
 export function exec(command: string): number {
 	execSync(command);
 	return 0;
+}
+
+// Node-style `execFile`: no shell, forward-slash paths accepted natively.
+export function execFile(path: string, args: string[] = []): number {
+	const result = spawnSync(path, args, { stdio: "inherit" });
+	return result.status;
 }
 
 // env — Deno-style namespaced env API.

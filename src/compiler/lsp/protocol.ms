@@ -289,12 +289,12 @@ export function lspPathToUri(path: string): string {
 
 // ===== Path Helpers =====
 
-// Extract directory from a path: "/a/b/c.ms" → "/a/b"
-export function lspDirname(path: string): string {
-	const lastSlash = path.lastIndexOf("/");
-	if (lastSlash <= 0) return "/";
-	return path.slice(0, lastSlash);
-}
+// Re-export from std/fs/path so LSP handlers have one canonical path API.
+// (Historical `lspDirname` only split on "/"; replaced with the cross-platform
+// variant that accepts both "/" and "\\".) LSP handlers import `dirname` from
+// here; resolveImport below also uses it directly.
+import { dirname as _dirname } from "std/fs/path";
+export function dirname(p: string): string { return _dirname(p); }
 
 // Resolve a relative import specifier against a base file path.
 // Handles "./foo", "../bar", "../../baz". Auto-appends ".ms" if missing.
@@ -307,12 +307,12 @@ export function lspResolveImport(basePath: string, importSpec: string): string {
 	const second = importSpec.charAt(1);
 	if (second !== "/" && second !== ".") return "";
 
-	let dir = lspDirname(basePath);
+	let dir = dirname(basePath);
 	let spec = importSpec;
 
 	// Process "../" prefixes
 	while (spec.byteLength >= 3 && spec.slice(0, 3) === "../") {
-		dir = lspDirname(dir);
+		dir = dirname(dir);
 		spec = spec.slice(3, spec.byteLength);
 	}
 	// Process "./" prefix
@@ -458,9 +458,9 @@ test "format message" {
 }
 
 test "dirname basic" {
-	assert lspDirname("/a/b/c.ms") === "/a/b";
-	assert lspDirname("/a/b.ms") === "/a";
-	assert lspDirname("/a.ms") === "/";
+	assert dirname("/a/b/c.ms") === "/a/b";
+	assert dirname("/a/b.ms") === "/a";
+	assert dirname("/a.ms") === "/";
 }
 
 test "resolve import same dir" {

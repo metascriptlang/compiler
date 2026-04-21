@@ -13,7 +13,7 @@
 //   writeJsonBuildInstructions   → writeProjectCache
 //   BuildCache                   → project cache file (key=value format)
 
-import { exec, env } from "std/process";
+import { exec, env, platform } from "std/process";
 import { exists, readFile, writeFile, rename, copyFile, fileSize, remove, readDir } from "std/fs";
 import { ensureDir } from "./io";
 import { getCompilerName, modeFlags } from "./cc";
@@ -98,11 +98,14 @@ export function fullCompileCmd(ccOption: number, mode: number, extraFlags: strin
 // Fingerprint folds in VERSION so that any msc release that changes runtime/*.h
 // (but not the .c bytes) still invalidates every entry — otherwise stale .o with
 // old header layout would be served. Also makes the global cache safe across upgrades.
+// Folds in host `platform` too: host-native builds don't pass an explicit -target,
+// so without this a macOS Mach-O and a Windows PE object would share the same
+// fingerprint and collide in the global content-addressed cache (`~/.metascript/cache/objects/`).
 // Exported so parallel compile workers can compute per-item fingerprints explicitly
 // (avoids any shared module-state read-after-write races).
 export function computeFingerprint(srcPath: string, compileCmd: string): string {
 	const src = try readFile(srcPath) catch "";
-	return `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}`;
+	return `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}:${platform}`;
 }
 
 // ===== Global Content-Addressed Cache =====
@@ -212,7 +215,7 @@ export function ensureVersionMarker(): void {
 // Remove a file if it exists (reference-aligned: tryRemoveFile).
 function tryRemoveFile(path: string): void {
 	if (exists(path)) {
-		exec(`rm -f "${path}"`);
+		remove(path);
 	}
 }
 

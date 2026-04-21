@@ -17,9 +17,11 @@ extern function msProcessArgvAt(idx: number): string;
 extern function msProcessExit(code: number): void;
 extern function msProcessCwd(): string;
 extern function msProcessExec(command: string): number;
+extern function msProcessExecFile(path: string, args: string[]): number;
 extern function msProcessGetEnv(name: string): string;
 extern function msProcessSetEnv(name: string, value: string): number;
 extern function msProcessUnsetEnv(name: string): number;
+extern function msProcessPlatform(): string;
 
 // =============================================================================
 // Command-line arguments
@@ -62,6 +64,15 @@ export function exec(command: string): number {
 	return msProcessExec(command);
 }
 
+// Run a binary directly (no shell). Mirrors Node.js `child_process.execFile`:
+// path is taken literally (no PATH search — use `findOnPath` first if needed),
+// args are passed as argv (POSIX) or assembled with MS-CRT quoting (Windows).
+// On Windows this bypasses cmd.exe entirely, so forward-slash paths like
+// "out/debug/hello.exe" work without normalization. Stdio inherits the parent.
+export function execFile(path: string, args: string[] = []): number {
+	return msProcessExecFile(path, args);
+}
+
 // =============================================================================
 // Environment variables
 // =============================================================================
@@ -83,6 +94,15 @@ export class env {
 
 // Time primitives moved to std/core/date (Date.now()) and std/core/time
 // (time.monotonicMs()) — both preludes, no import needed.
+
+// =============================================================================
+// Platform detection
+// =============================================================================
+//
+// Matches Node/Bun/Deno: single string identifier, resolved once at module load.
+// Values: "windows" | "darwin" | "linux" | "other". Compare with `platform === "..."`.
+
+export const platform: string = msProcessPlatform();
 
 // =============================================================================
 // Executable lookup (PATH search)
@@ -118,7 +138,7 @@ function hasWinExeSuffix(cmd: string): boolean {
 
 export function findOnPath(cmd: string): string {
 	if (cmd === "") return "";
-	const isWin = env.get("OS") === "Windows_NT";
+	const isWin = platform === "windows";
 
 	// Input with separator → direct lookup only; never fall through to PATH.
 	if (cmd.indexOf("/") >= 0 || cmd.indexOf("\\") >= 0) {

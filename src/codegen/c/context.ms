@@ -605,6 +605,12 @@ export function moduleTemp(g: CGen): string {
 
 // Emit #line directive for source mapping (Standard reference parity: line instrumentation)
 // Only emits when line or file changes to avoid bloat.
+//
+// Windows paths like `C:\Users\foo\bar.ms` embedded in a C string literal cause
+// `\U`, `\f`, `\b` etc. to be parsed as escape sequences. Normalize `\` → `/`
+// at this boundary (matches Bun's path.replaceAll("\\", "/") in matchesGlob and
+// cwd normalization) — Windows accepts either separator and the C preprocessor
+// is happy with forward slashes in #line paths.
 export function emitLineDir(g: CGen, p: CProc, node: Node): void {
 	if (node === null) return;
 	const loc = node.location;
@@ -612,7 +618,8 @@ export function emitLineDir(g: CGen, p: CProc, node: Node): void {
 	if (loc.line === g.lastLineLine && g.modulePath === g.lastLineFile) return;
 	g.lastLineLine = loc.line;
 	g.lastLineFile = g.modulePath;
-	emitStmts(p, `\n#line ${loc.line} "${g.modulePath}"\n`);
+	const safePath = g.modulePath.replaceAll("\\", "/");
+	emitStmts(p, `\n#line ${loc.line} "${safePath}"\n`);
 }
 
 // ===== Final Assembly — concatenate all sections =====

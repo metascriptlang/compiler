@@ -13,7 +13,7 @@
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/core");
 @passC("-Iruntime/crypto");
-@passC("-DMBEDTLS_CONFIG_FILE='<mbedtls/mbedtlsConfig.h>'");
+@passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
 @passC("-DMBEDTLS_PLATFORM_MEMORY");
 
 // mbedTLS SSL library

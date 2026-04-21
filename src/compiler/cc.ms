@@ -2,10 +2,19 @@
 //
 // Invokes clang to compile generated C source into native binaries.
 
-import { exec, env, cmdExists } from "std/process";
+import { exec, env, cmdExists, platform } from "std/process";
+import { writeFile } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { CliOptions } from "./options";
 import { resolveRuntimeDir } from "../utils/path";
+
+// Target OS identity — `osTarget` left empty for host-native builds, but
+// platform-specific file/flag pickers still need to know which OS is being
+// targeted. Falls back to the host when not explicitly cross-compiling.
+export function effectiveOsTarget(osTarget: string): string {
+	if (osTarget !== "") return osTarget;
+	return platform;
+}
 
 // -- ccache detection --
 
@@ -297,16 +306,19 @@ export function cliLinkFlags(base: string, opts: CliOptions): string {
 	if (opts.strip) flags = appendFlag(flags, "-s");
 	if (opts.isHcr) {
 		flags = appendFlag(flags, "-shared");
-	} else if (opts.osTarget === "linux") {
-		flags = appendFlag(flags, "-Wl,--gc-sections");
-		flags = appendFlag(flags, "-lpthread");
-	} else if (opts.osTarget === "windows") {
-		flags = appendFlag(flags, "-Wl,--gc-sections");
-		flags = appendFlag(flags, "-lws2_32");
-		flags = appendFlag(flags, "-lmswsock");
-		flags = appendFlag(flags, "-lbcrypt");
-	} else if (opts.osTarget === "" || opts.osTarget === "darwin") {
-		flags = appendFlag(flags, "-Wl,-dead_strip");
+	} else {
+		const osId = effectiveOsTarget(opts.osTarget);
+		if (osId === "linux") {
+			flags = appendFlag(flags, "-Wl,--gc-sections");
+			flags = appendFlag(flags, "-lpthread");
+		} else if (osId === "windows") {
+			flags = appendFlag(flags, "-Wl,--gc-sections");
+			flags = appendFlag(flags, "-lws2_32");
+			flags = appendFlag(flags, "-lmswsock");
+			flags = appendFlag(flags, "-lbcrypt");
+		} else if (osId === "darwin") {
+			flags = appendFlag(flags, "-Wl,-dead_strip");
+		}
 	}
 	return flags;
 }
@@ -353,20 +365,28 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 	return exec(cmd);
 }
 
+// Windows cmd.exe caps command lines at 8191 chars. Link commands with hundreds
+// of .o files exceed that. GCC/clang/zig cc accept `@file` response files —
+// spill the bulky middle (.o list + extraFlags) there and pass one `@path` on
+// the CLI. Threshold matches Nim's preventLinkCmdMaxCmdLen (8000 on Windows).
+const LINK_CMD_LIMIT = 7800;
+
 // Link object files + runtime into a binary.
 // oFileList: space-separated list of .o file paths
 // Returns 0 on success, non-zero on failure.
 export function linkObjects(oFileList: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): number {
-	let cmd = getCompilerName(ccOption, ccBinary);
-
+	const compiler = getCompilerName(ccOption, ccBinary);
 	const rtDir = resolveRuntime();
-	if (rtDir !== "") {
-		cmd = `${cmd} -iquote${dirname(dirname(rtDir))}`;
-	}
+	const rtFlag = rtDir !== "" ? ` -iquote${dirname(dirname(rtDir))}` : "";
+	const bulk = extraFlags !== "" ? `${oFileList} ${extraFlags}` : oFileList;
+	const cmd = `${compiler}${rtFlag} ${bulk} -o ${outBinary} -lm`;
 
-	cmd = `${cmd} ${oFileList} -o ${outBinary} -lm`;
-	if (extraFlags !== "") cmd = `${cmd} ${extraFlags}`;
-	return exec(cmd);
+	if (cmd.length <= LINK_CMD_LIMIT) return exec(cmd);
+
+	// Overflow: write bulk args to a response file in the same dir as the binary.
+	const rspPath = `${dirname(outBinary)}/_link.rsp`;
+	writeFile(rspPath, bulk);
+	return exec(`${compiler}${rtFlag} @${rspPath} -o ${outBinary} -lm`);
 }
 
 // Get the runtime directory path (for -I include path).

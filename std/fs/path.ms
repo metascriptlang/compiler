@@ -242,6 +242,62 @@ export function normalize(p: string): string {
 	return result;
 }
 
+// ===== relative =====
+
+// Return path from `from` to `to`, with ".." segments where needed.
+// Accepts both "/" and "\\" on input, emits "/". Matches Node's path.relative.
+//
+// Identical paths → "". Different roots (drive or UNC) → absolute `to`.
+// Otherwise walks up `from` to the common ancestor then down to `to`.
+//
+//   relative("/a/b", "/a/b/c.ms") === "c.ms"
+//   relative("/a/b/c", "/a/d")    === "../../d"
+//   relative("C:/foo", "D:/bar")  === "D:/bar"   (different drives)
+//   relative("/a", "/a")          === ""
+export function relative(from: string, to: string): string {
+	const fromN = normalize(from);
+	const toN = normalize(to);
+	if (fromN === toN) return "";
+
+	const fromRoot = rootLen(fromN);
+	const toRoot = rootLen(toN);
+
+	// Absolute/relative mismatch or different roots (e.g. C:/ vs D:/) → absolute `to`.
+	if (fromRoot === 0 && toRoot > 0) return toN;
+	if (fromRoot > 0 && toRoot === 0) return toN;
+	if (fromRoot > 0 && toRoot > 0) {
+		if (fromN.slice(0, fromRoot) !== toN.slice(0, toRoot)) return toN;
+	}
+
+	// Split the body after the common root into clean segments.
+	const fromBody = fromN.slice(fromRoot, fromN.length);
+	const toBody = toN.slice(toRoot, toN.length);
+	const fromClean: string[] = [];
+	for (const s of fromBody.split("/")) { if (s !== "") fromClean.push(s); }
+	const toClean: string[] = [];
+	for (const s of toBody.split("/")) { if (s !== "") toClean.push(s); }
+
+	// Common prefix length.
+	let common = 0;
+	const minLen = fromClean.length < toClean.length ? fromClean.length : toClean.length;
+	while (common < minLen && fromClean[common] === toClean[common]) {
+		common = common + 1;
+	}
+
+	// ".." for each remaining from-segment, then the remaining to-segments.
+	const parts: string[] = [];
+	let i = common;
+	while (i < fromClean.length) { parts.push(".."); i = i + 1; }
+	i = common;
+	while (i < toClean.length) { parts.push(toClean[i]); i = i + 1; }
+
+	if (parts.length === 0) return "";
+	let result = parts[0];
+	let j = 1;
+	while (j < parts.length) { result = result + "/" + parts[j]; j = j + 1; }
+	return result;
+}
+
 // ===== Tests =====
 
 test "dirname basic" {
@@ -428,4 +484,37 @@ test "normalize Windows mixed" {
 test "normalize UNC" {
 	assert normalize("\\\\s\\d\\.\\x") === "//s/d/x";
 	assert normalize("//server/share/a/../b") === "//server/share/b";
+}
+
+test "relative identical paths" {
+	assert relative("/a/b", "/a/b") === "";
+	assert relative("C:/foo", "C:/foo") === "";
+}
+
+test "relative ancestor to descendant" {
+	assert relative("/a/b", "/a/b/c.ms") === "c.ms";
+	assert relative("/a", "/a/b/c") === "b/c";
+}
+
+test "relative siblings" {
+	assert relative("/a/b/c", "/a/d") === "../../d";
+	assert relative("/a/b", "/c/d") === "../../c/d";
+}
+
+test "relative Windows drive mismatch returns absolute" {
+	assert relative("C:/foo", "D:/bar") === "D:/bar";
+}
+
+test "relative Windows mixed separators" {
+	assert relative("C:\\a\\b", "C:/a/b/c.ms") === "c.ms";
+	assert relative("C:/a", "C:\\a\\b\\c") === "b/c";
+}
+
+test "relative trailing slashes ignored" {
+	assert relative("/a/b/", "/a/b/c") === "c";
+	assert relative("/a/b", "/a/b/") === "";
+}
+
+test "relative to root" {
+	assert relative("/a/b", "/") === "../..";
 }

@@ -6,7 +6,7 @@
 @passC("-Ivendor/mbedtls/tf-psa-crypto/core");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
-@passC("-DMBEDTLS_CONFIG_FILE='<mbedtls/mbedtlsConfig.h>'");
+@passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
 
 // Our crypto implementation
 @compile("runtime/crypto/hash.c");

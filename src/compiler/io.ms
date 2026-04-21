@@ -1,7 +1,7 @@
 // MetaScript Compiler CLI — File I/O and shared error helpers
 
-import { exit, exec } from "std/process";
-import { readFile, writeFile } from "std/fs";
+import { exit, exec, cmdExists, platform } from "std/process";
+import { readFile, writeFile, ensureDir as fsEnsureDir } from "std/fs";
 import { CheckerContext } from "../checker/context";
 import { error, red, green, bold, dim } from "../utils/color";
 
@@ -36,45 +36,13 @@ export function replaceExt(inputFile: string, newExt: string): string {
 	return inputFile + newExt;
 }
 
-// Get directory name from path. dirName("a/b/c.ms") → "a/b", dirName("c.ms") → "."
-export function dirName(filePath: string): string {
-	let lastSlash = -1;
-	for (let i = 0; i < filePath.length; i += 1) {
-		if (filePath.charCodeAt(i) === "/".code) {
-			lastSlash = i;
-		}
-	}
-	if (lastSlash < 0) return ".";
-	return filePath.slice(0, lastSlash);
-}
-
-// Get filename from path. baseName("a/b/c.ms") → "c.ms", baseName("c.ms") → "c.ms"
-export function baseName(filePath: string): string {
-	let lastSlash = -1;
-	for (let i = 0; i < filePath.length; i += 1) {
-		if (filePath.charCodeAt(i) === "/".code) {
-			lastSlash = i;
-		}
-	}
-	if (lastSlash < 0) return filePath;
-	return filePath.slice(lastSlash + 1, filePath.length);
-}
-
-// Strip base directory prefix from path. stripBase("a/b/c.ms", "a/b") → "c.ms"
-export function stripBase(fullPath: string, baseDir: string): string {
-	if (baseDir === ".") return fullPath;
-	if (fullPath.startsWith(baseDir)) {
-		const after = baseDir.length;
-		if (after < fullPath.length && fullPath.charCodeAt(after) === "/".code) {
-			return fullPath.slice(after + 1, fullPath.length);
-		}
-	}
-	return fullPath;
-}
+// Path utilities live in std/fs/path — import there. This module keeps only
+// msc-specific file-IO helpers (replaceExt, ensureDir, readSource, etc.).
 
 // Ensure directory exists (creates parent directories as needed).
+// Delegates to std/fs — cross-platform (no shell dependency).
 export function ensureDir(dir: string): void {
-	exec("mkdir -p " + dir);
+	fsEnsureDir(dir);
 }
 
 // -- JS runtime detection (bun preferred, node fallback) --
@@ -85,42 +53,23 @@ let jsRuntimeChecked = false;
 export function getJSRuntime(): string {
 	if (!jsRuntimeChecked) {
 		jsRuntimeChecked = true;
-		if (exec("which bun > /dev/null 2>&1") === 0) {
-			jsRuntime = "bun";
-		} else {
-			jsRuntime = "node";
-		}
+		jsRuntime = cmdExists("bun") ? "bun" : "node";
 	}
 	return jsRuntime;
 }
 
-// -- Platform detection --
-// -1=unchecked, 0=unix, 1=windows
-let platformIsWindows = -1;
+// -- Platform-dependent file suffixes --
 
 export function exeSuffix(): string {
-	if (platformIsWindows < 0) {
-		if (exec("test -f /bin/sh") !== 0) {
-			platformIsWindows = 1;
-		} else {
-			platformIsWindows = 0;
-		}
-	}
-	if (platformIsWindows === 1) return ".exe";
-	return "";
+	return platform === "windows" ? ".exe" : "";
 }
 
 export function soSuffix(): string {
-	if (platformIsWindows < 0) {
-		if (exec("test -f /bin/sh") !== 0) {
-			platformIsWindows = 1;
-		} else {
-			platformIsWindows = 0;
-		}
-	}
-	if (platformIsWindows === 1) return ".dll";
-	if (exec("test $(uname) = Darwin") === 0) return ".dylib";
-	return ".so";
+	return match (platform) {
+		"windows" => ".dll",
+		"darwin" => ".dylib",
+		_ => ".so",
+	};
 }
 
 // -- Output directory based on build mode --
@@ -181,21 +130,3 @@ test "replaceExt .ms to .js" { assert replaceExt("foo.ms", ".js") === "foo.js"; 
 test "replaceExt .ms to empty" { assert replaceExt("foo.ms", "") === "foo"; }
 
 test "replaceExt no .ms" { assert replaceExt("foo", ".js") === "foo.js"; }
-
-test "dirName with slashes" { assert dirName("a/b/c.ms") === "a/b"; }
-
-test "dirName no slash" { assert dirName("c.ms") === "."; }
-
-test "dirName deep path" { assert dirName("src/compiler/io.ms") === "src/compiler"; }
-
-test "baseName with slashes" { assert baseName("a/b/c.ms") === "c.ms"; }
-
-test "baseName no slash" { assert baseName("c.ms") === "c.ms"; }
-
-test "stripBase removes prefix" { assert stripBase("a/b/c.ms", "a/b") === "c.ms"; }
-
-test "stripBase dot passthrough" { assert stripBase("c.ms", ".") === "c.ms"; }
-
-test "stripBase no match" { assert stripBase("x/y.ms", "a/b") === "x/y.ms"; }
-
-test "stripBase partial prefix no match" { assert stripBase("a/bc/d.ms", "a/b") === "a/bc/d.ms"; }

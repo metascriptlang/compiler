@@ -159,6 +159,14 @@ export function mangleModuleName(modulePath: string): string {
 			result = result + charOrd(ch);
 		}
 	}
+	// Ensure the mangled name starts with a letter so it is a valid C identifier
+	// when used as the first token (e.g. in `<modname>__Init000`). Windows
+	// absolute paths begin with a drive letter (`C:` → `67` + wildcard), and
+	// uppercase-first relative paths (`MyMod` → `77y...`) start with a digit.
+	// POSIX absolute paths avoid this by chance (leading `/` → `Z`).
+	if (result.length > 0 && result.charAt(0) >= "0" && result.charAt(0) <= "9") {
+		result = "M" + result;
+	}
 	return result;
 }
 
@@ -436,8 +444,14 @@ test "path separators become Z" { assert mangleModuleName("src/codegen/c") === "
 test "dots become O" { assert mangleModuleName("foo.bar") === "fooObar"; }
 
 test "uppercase becomes ordinal" {
-	assert mangleModuleName("MyClass") === "77y67lass";
-	assert mangleModuleName("AB") === "6566";
+	assert mangleModuleName("MyClass") === "M77y67lass";
+	assert mangleModuleName("AB") === "M6566";
+}
+
+test "windows drive letter does not produce digit-leading identifier" {
+	// `C:` → `67` + wildcard — without guard this yields `6763Z…`, invalid as C ident.
+	const out = mangleModuleName("C:/Users/foo/mod.cms");
+	assert out.charAt(0) === "M";
 }
 
 test "underscore becomes ordinal" { assert mangleModuleName("my_mod") === "my95mod"; }

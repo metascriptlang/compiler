@@ -71,17 +71,39 @@ export function compileGlob(pattern: string): Result<Glob, string> {
 		}
 	}
 
+	// Collapse relative-path segments uniformly. Matches Bun's GlobWalker
+	// semantics (src/glob/GlobWalker.zig:1434-1443 — .Dot / .DotBack syntax
+	// hints): "." is a no-op segment (skip without consuming path input);
+	// ".." is rejected because publish globs must not escape the project
+	// root. A leading "." additionally anchors the pattern at the root,
+	// the standard Unix spelling of "foo in current directory".
+	const segs: string[] = [];
+	for (let k = 0; k < rawSegs.length; k = k + 1) {
+		const seg = rawSegs[k];
+		if (seg === ".") {
+			if (segs.length === 0) anchored = true;
+			continue;
+		}
+		if (seg === "..") {
+			return Result.err("'..' is not allowed in pattern: " + pattern);
+		}
+		segs.push(seg);
+	}
+	if (segs.length === 0) {
+		return Result.err("pattern collapses to empty: " + pattern);
+	}
+
 	// Has-internal-slash → also anchored. Floating patterns prepend "**".
-	const hasSlash = p.indexOf("/") >= 0;
+	const hasSlash = segs.length > 1;
 	if (!anchored && !hasSlash) {
 		// No slash anywhere → floating. Prepend "**".
 		const withFloat: string[] = ["**"];
 		let k = 0;
-		while (k < rawSegs.length) { withFloat.push(rawSegs[k]); k = k + 1; }
+		while (k < segs.length) { withFloat.push(segs[k]); k = k + 1; }
 		return Result.ok({ segments: withFloat });
 	}
 
-	return Result.ok({ segments: rawSegs });
+	return Result.ok({ segments: segs });
 }
 
 // Compile a list of patterns. Invalid patterns are dropped with their error
@@ -234,6 +256,38 @@ test "compile accepts full-segment **" {
 	assert compileGlob("**/foo").ok;
 	assert compileGlob("foo/**").ok;
 	assert compileGlob("foo/**/bar").ok;
+}
+
+test "leading ./ is treated as root-anchored" {
+	// "./foo" should match root-level "foo" (same as "/foo"), not deep "foo".
+	assert globMatch(mustCompile("./foo"), "foo");
+	assert !globMatch(mustCompile("./foo"), "bar/foo");
+}
+
+test "leading ./**/ matches full tree" {
+	assert globMatch(mustCompile("./events/**/*.ms"), "events/apigw-v2.ms");
+	assert globMatch(mustCompile("./events/**/*.ms"), "events/nested/inner.ms");
+	assert !globMatch(mustCompile("./events/**/*.ms"), "other/foo.ms");
+}
+
+test "leading ./*.ms matches top-level only" {
+	assert globMatch(mustCompile("./*.ms"), "build.ms");
+	assert globMatch(mustCompile("./*.ms"), "index.ms");
+	assert !globMatch(mustCompile("./*.ms"), "events/apigw-v2.ms");
+}
+
+test "middle . is no-op" {
+	assert globMatch(mustCompile("foo/./bar.ms"), "foo/bar.ms");
+	assert globMatch(mustCompile("events/./*.ms"), "events/apigw-v2.ms");
+}
+
+test "compile rejects .." {
+	assert !compileGlob("../foo").ok;
+	assert !compileGlob("foo/../bar").ok;
+}
+
+test "compile rejects bare . alone" {
+	assert !compileGlob(".").ok;
 }
 
 test "compile rejects unterminated class" {

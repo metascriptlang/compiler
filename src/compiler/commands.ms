@@ -1,6 +1,8 @@
 // MetaScript Compiler CLI — Individual commands (check, dump-*, pipeline, run, test, fmt)
 
-import { exit, exec } from "std/process";
+import { exit, exec, execFile } from "std/process";
+import { removeAll } from "std/fs";
+import { basename } from "std/fs/path";
 import { lex } from "../lexer/lexer";
 import { formatToken } from "../lexer/token";
 import { parseSource } from "../parser/statements/validation";
@@ -12,7 +14,7 @@ import { checkProgram } from "../checker/checkPass";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { CliOptions } from "./options";
-import { readSource, writeOutput, printErrorsAndExit, printTiming, replaceExt, baseName, ensureDir } from "./io";
+import { readSource, writeOutput, printErrorsAndExit, printTiming, replaceExt, ensureDir, exeSuffix } from "./io";
 import { cmdBuildC } from "./compile";
 import { maybeShowUpdateNotice } from "./upgrade";
 import { error, success, bold, cyan, dim, green, red, path } from "../utils/color";
@@ -132,16 +134,19 @@ export function cmdPipeline(filePath: string): void {
 
 export function cmdRun(filePath: string, opts: CliOptions): void {
 	const t0 = performance.now();
-	// Build to out/debug/<name> via the full pipeline
+	// Build to out/debug/<name>[.exe] via the full pipeline. exeSuffix() picks
+	// the right extension for the host (Windows needs `.exe` for CreateProcess).
 	ensureDir("out/debug");
-	const binName = replaceExt(baseName(filePath), "");
-	const tmpBin = "out/debug/" + binName;
+	const binName = replaceExt(basename(filePath), "");
+	const tmpBin = "out/debug/" + binName + exeSuffix();
 	opts.outputPath = tmpBin;
 	opts.forceRebuild = true;
 	cmdBuildC(filePath, opts);
 
 	if (opts.showTime) printTiming("compiled", t0);
-	const runCode = exec(tmpBin);
+	// execFile bypasses the shell — no cmd.exe path-parsing quirks, forward
+	// slashes accepted natively by CreateProcess.
+	const runCode = execFile(tmpBin);
 	// Show update notice before exit — cmdRun terminates here, bypassing
 	// main()'s post-command hook.
 	maybeShowUpdateNotice();
@@ -181,11 +186,7 @@ export function cmdFmt(filePath: string, opts: CliOptions, fmtCfg: FmtSection): 
 
 export function cmdInit(name: string): void {
 	if (name === "") name = ".";
-	if (name !== ".") {
-		exec("mkdir -p " + name + "/src");
-	} else {
-		exec("mkdir -p src");
-	}
+	ensureDir(name === "." ? "src" : name + "/src");
 	const buildPath = name + "/build.ms";
 	const srcPath = name + "/src/index.ms";
 	const buildContent = "import { BuildConfig } from \"std/build\";\n\nconst config: BuildConfig = {\n\troot: \"src/index.ms\",\n\tfmt: {\n\t\tuseTabs: true,\n\t},\n};\n\nexport default config;\n";
@@ -200,7 +201,6 @@ export function cmdInit(name: string): void {
 // -- clean --
 
 export function cmdClean(): void {
-	exec("rm -rf out");
-	exec("rm -f /tmp/_msc_*.c /tmp/_msc_*.o");
+	removeAll("out");
 	console.log(success("Cleaned") + " build artifacts");
 }
