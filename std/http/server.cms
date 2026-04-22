@@ -88,7 +88,7 @@ export function createServer(handler: RequestHandler): HttpServer {
 	};
 }
 
-export function serverListen(server: HttpServer, addr: string, port: int32): Result<void, HttpError> {
+export function listen(this server: HttpServer, addr: string, port: int32): Result<void, HttpError> {
 	const fd = msNetSocket();
 	if (fd < 0) return Result.err(socketError("socket() failed"));
 	if (msNetBind(fd, addr, port) < 0) {
