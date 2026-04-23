@@ -1665,16 +1665,29 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			}
 		}
 	}
-	// Backwards type inference: resolve generic params from expectedType before checking args.
-	// e.g. Result.ok({...}) with expected Result<ParsedResponse, HttpError> → T=ParsedResponse
-	// so arg expected type becomes ParsedResponse instead of GenericParam("T").
+	// Backwards type inference: derive bindings from expectedType as HINTS for arg checking.
+	// Stored in a separate `paramHints` array rather than substituted into `calleeType`, so
+	// the arg-mismatch check at line ~1831 still sees GenericParam and correctly skips —
+	// otherwise a concrete-arg call nested in an incompatible outer context
+	// (e.g. `console.log(max(3, 7))`: max's T backward-binds to string → 3:int32 false-errors)
+	// would false-positive here instead of surfacing the real error at the outer call
+	// (int32 return not assignable to console.log's string param).
+	//
+	// The hint still flows to args that NEED context to type-check:
+	//   Result.ok({...}) with expected Result<ParsedResponse, HttpError>
+	//     → paramHints[0] = ParsedResponse → object literal types as ParsedResponse
+	//
+	// Forward inference from actual arg types (line ~1871) then drives instantiation,
+	// and inferGenericReturn (line ~1910) combines arg+expected bindings for the return type.
+	let paramHints: Type[] = null as unknown as Type[];
 	if (!needsOverloadScoring && calleeType !== null && calleeType.kind === TypeKind.Function
 		&& expectedType !== null && calleeType.typeReturn !== null
 		&& hasGenericParams(calleeType)) {
 		const backBindings = createUnifyBindings();
 		unifyType(calleeType.typeReturn, expectedType, backBindings);
 		if (backBindings.names.length > 0) {
-			calleeType = instantiateGeneric(calleeType, backBindings.names, backBindings.types);
+			const hinted = instantiateGeneric(calleeType, backBindings.names, backBindings.types);
+			paramHints = hinted.typeChildren;
 		}
 	}
 	// Overloaded direct calls — delegate arg checking to resolveOverloadCall
@@ -1687,7 +1700,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 	const argTypes: Type[] = [];
 	for (let ai = 0; ai < d.arguments.length; ai += 1) {
 		let paramExpected: Type = null;
-		if (calleeType !== null && calleeType.kind === TypeKind.Function
+		if (paramHints !== null && ai < paramHints.length) {
+			paramExpected = paramHints[ai];
+		} else if (calleeType !== null && calleeType.kind === TypeKind.Function
 			&& calleeType.typeChildren !== null
 			&& ai < calleeType.typeChildren.length) {
 			paramExpected = calleeType.typeChildren[ai];
