@@ -169,7 +169,7 @@ export function createArray(element: Type): Type {
 	};
 }
 
-export function createSizedArray(element: Type, size: number): Type {
+export function createSizedArray(element: Type | null, size: number): Type {
 	const t = emptyType();
 	t.kind = TypeKind.SizedArray;
 	t.typeReturn = element;
@@ -184,7 +184,7 @@ export function createSpan(element: Type): Type {
 	return t;
 }
 
-export function createFunction(paramTypes: Type[], paramNames: string[], returnType: Type): Type {
+export function createFunction(paramTypes: Type[], paramNames: string[], returnType: Type | null): Type {
 	return {
 		kind: TypeKind.Function, typeName: "", typeNames: paramNames, typeChildren: paramTypes,
 		typeReturn: returnType, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
@@ -232,7 +232,7 @@ export function createResult(okType: Type, errType: Type): Type {
 	return createGenericInstance(base, [okType, errType]);
 }
 
-export function createPromise(innerType: Type): Type {
+export function createPromise(innerType: Type | null): Type {
 	const base = emptyType();
 	base.kind = TypeKind.Struct;
 	base.typeName = "Promise";
@@ -247,7 +247,7 @@ export function createPromise(innerType: Type): Type {
 // AwaitableScopeBound), propagated through createGenericInstance onto every
 // instance. PARALOCK R1-R6 rules read these via isAffineAwaitable; compat.ms
 // implements the implicit upcast to a plain Promise (strips the flags).
-export function createSpawnHandle(innerType: Type): Type {
+export function createSpawnHandle(innerType: Type | null): Type {
 	const base = emptyType();
 	base.kind = TypeKind.Struct;
 	base.typeName = "Promise";
@@ -272,18 +272,18 @@ export function createIterator(yieldType: Type): Type {
 	return iter;
 }
 
-export function isIterator(t: Type): boolean {
+export function isIterator(t: Type | null): boolean {
 	if (t === null) return false;
 	return t.typeName === "Iterator";
 }
 
-export function getIteratorNextFnType(t: Type): Type {
+export function getIteratorNextFnType(t: Type | null): Type | null {
 	if (t === null || !isIterator(t)) return null;
 	if (t.typeChildren !== null && t.typeChildren.length > 0) return t.typeChildren[0];
 	return null;
 }
 
-export function getIteratorYieldType(t: Type): Type {
+export function getIteratorYieldType(t: Type): Type | null {
 	if (t === null) return null;
 	// Iterator struct has field "next: () => IteratorResult<T>"
 	// IteratorResult has field "value: T" — extract T from there
@@ -299,19 +299,19 @@ export function getIteratorYieldType(t: Type): Type {
 	return unknownType();
 }
 
-export function isResult(t: Type): boolean {
+export function isResult(t: Type | null): boolean {
 	if (t === null) return false;
 	if (t.kind === TypeKind.Result) return true;
 	return t.kind === TypeKind.GenericInstance && t.typeName === "Result";
 }
 
-export function getResultOkType(t: Type): Type {
+export function getResultOkType(t: Type | null): Type | null {
 	if (t === null) return null;
 	if (t.kind === TypeKind.GenericInstance && t.typeChildren.length > 0) return t.typeChildren[0];
 	return t.typeReturn;
 }
 
-export function getResultErrType(t: Type): Type {
+export function getResultErrType(t: Type | null): Type | null {
 	if (t === null) return null;
 	if (t.kind === TypeKind.GenericInstance && t.typeChildren.length > 1) return t.typeChildren[1];
 	return t.typeExtra;
@@ -348,7 +348,7 @@ export const PEEL_ALL: int32 = 3;
 // Does NOT peel GenericInstance — for shape queries, GenericInstance IS the answer
 // (e.g. Promise<T> is a GenericInstance we want to inspect, not peel past).
 // Returns the input unchanged if no layer matches the mask.
-export function peelThrough(t: Type, mask: int32): Type {
+export function peelThrough(t: Type, mask: int32): Type | null {
 	if (t === null) return null;
 	let cur = t;
 	// Fixed-point loop — keep peeling until no layer matches the mask.
@@ -371,7 +371,7 @@ export function peelThrough(t: Type, mask: int32): Type {
 // Returns true for `Promise<T>` (plain or affine) and @awaitable-annotated types
 // (detected by the AwaitableAffine flag bit set by `createGenericInstance`).
 // Peels through Alias wrappers so `type P = Promise<int>; P` still answers true.
-export function isAwaitable(t: Type): boolean {
+export function isAwaitable(t: Type | null): boolean {
 	if (t === null) return false;
 	const p = peelThrough(t, PEEL_ALIAS);
 	if (p === null || p.kind !== TypeKind.GenericInstance) return false;
@@ -383,10 +383,10 @@ export function isAwaitable(t: Type): boolean {
 
 // awaitedType — the T inside an Awaitable<T>. Returns null for non-awaitables
 // or shape-degenerate awaitables (e.g. typeChildren empty).
-export function awaitedType(t: Type): Type {
+export function awaitedType(t: Type): Type | null {
 	if (t === null) return null;
 	const p = peelThrough(t, PEEL_ALIAS);
-	if (!isAwaitable(p)) return null;
+	if (p === null || !isAwaitable(p)) return null;
 	if (p.typeChildren !== null && p.typeChildren.length > 0) return p.typeChildren[0];
 	// Fallback for edge cases where a stub awaitable has no type arg recorded yet.
 	return p.typeReturn;
@@ -395,7 +395,7 @@ export function awaitedType(t: Type): Type {
 // isAffineAwaitable — an awaitable carrying affine consumption semantics
 // (spawn-origin Promises, @affineAwaitable types). Reads the flag bit set by T2.
 // Used by PARALOCK R1-R6 affine checker rules.
-export function isAffineAwaitable(t: Type): boolean {
+export function isAffineAwaitable(t: Type | null): boolean {
 	if (t === null) return false;
 	const p = peelThrough(t, PEEL_ALIAS);
 	if (p === null) return false;
@@ -410,10 +410,31 @@ export function createTypeRef(name: string): Type {
 }
 
 export function createUnion(types: Type[]): Type {
+	// Flatten nested unions — `Union(Null, Union(A, B))` becomes `Union(Null, A, B)`.
+	// Nested unions can leak in via flow-graph join when one antecedent is itself a
+	// union. Without flattening, unwrapRefNullUnion (and other shape checks) miss
+	// the canonical 2-variant form and codegen falls back to a literal tagged union.
+	let needsFlatten = false;
+	for (const ut of types) {
+		if (ut !== null && ut.kind === TypeKind.Union) { needsFlatten = true; break; }
+	}
+	let flat: Type[] = types;
+	if (needsFlatten) {
+		flat = [];
+		for (const ut of types) {
+			if (ut !== null && ut.kind === TypeKind.Union && ut.typeChildren !== null) {
+				for (const inner of ut.typeChildren) {
+					if (inner !== null) flat.push(inner);
+				}
+			} else if (ut !== null) {
+				flat.push(ut);
+			}
+		}
+	}
 	const t = emptyType();
 	t.kind = TypeKind.Union;
-	t.typeChildren = types;
-	for (const ut of types) { propagateToOwner(t, ut); }
+	t.typeChildren = flat;
+	for (const ut of flat) { propagateToOwner(t, ut); }
 	return t;
 }
 
@@ -421,8 +442,8 @@ export function createUnion(types: Type[]): Type {
 // When fieldTypes is non-empty, also checks type kind to disambiguate variants with
 // same field names but different types (e.g., { value: number } vs { value: string }).
 // Returns the variant index, or -1 if no variant matches.
-export function findUnionVariant(unionType: Type, fieldNames: string[], fieldTypes: Type[]): number {
-	if (unionType.typeChildren === null || fieldNames.length === 0) return -1;
+export function findUnionVariant(unionType: Type | null, fieldNames: string[], fieldTypes: Type[]): number {
+	if (unionType === null || unionType.typeChildren === null || fieldNames.length === 0) return -1;
 	let vi = 0;
 	while (vi < unionType.typeChildren.length) {
 		const variant = unionType.typeChildren[vi];
@@ -478,8 +499,8 @@ function typesCompatibleForVariant(formal: Type, actual: Type): boolean {
 
 // Check if a name-only matched variant is ambiguous (another variant has the same field names).
 // When ambiguous, we need property types to disambiguate (e.g. { value: number } vs { value: string }).
-export function isAmbiguousVariant(unionType: Type, matchedIdx: number, fieldNames: string[]): boolean {
-	if (unionType.typeChildren === null) return false;
+export function isAmbiguousVariant(unionType: Type | null, matchedIdx: number, fieldNames: string[]): boolean {
+	if (unionType === null || unionType.typeChildren === null) return false;
 	let vi = 0;
 	while (vi < unionType.typeChildren.length) {
 		if (vi !== matchedIdx) {
@@ -506,7 +527,7 @@ export function isAmbiguousVariant(unionType: Type, matchedIdx: number, fieldNam
 }
 
 // Find a field's type within a single variant struct. Returns null if not found.
-export function findFieldInVariant(variant: Type, fieldName: string): Type {
+export function findFieldInVariant(variant: Type, fieldName: string): Type | null {
 	if (variant === null || variant.typeNames === null) return null;
 	let i = 0;
 	while (i < variant.typeNames.length) {
@@ -520,12 +541,14 @@ export function findFieldInVariant(variant: Type, fieldName: string): Type {
 
 // Check if a union type is a discriminated union (has discriminant metadata).
 // Discriminated unions have typeExtra (enum type) and typeNames[0] (discriminant field name).
-export function isDiscriminatedUnion(t: Type): boolean {
+export function isDiscriminatedUnion(t: Type | null): boolean {
+	if (t === null) return false;
 	return t.kind === TypeKind.Union && t.typeExtra !== null && t.typeNames !== null && t.typeNames.length > 0;
 }
 
 // Get the discriminant field name from a discriminated union.
-export function getDiscriminantName(t: Type): string {
+export function getDiscriminantName(t: Type | null): string {
+	if (t === null) return "";
 	if (t.typeNames !== null && t.typeNames.length > 0) return t.typeNames[0];
 	return "";
 }
@@ -539,11 +562,11 @@ export interface DiscriminantInfo {
 	discField: string;
 }
 
-export function detectUnionDiscriminant(unionType: Type, fieldName: string): DiscriminantInfo {
+export function detectUnionDiscriminant(unionType: Type | null, fieldName: string): DiscriminantInfo {
 	if (isDiscriminatedUnion(unionType) && getDiscriminantName(unionType) === fieldName) {
 		return { isStringDU: false, discField: fieldName };
 	}
-	if (unionType.kind === TypeKind.Union) {
+	if (unionType !== null && unionType.kind === TypeKind.Union) {
 		const sdf = findSharedStringDiscriminant(unionType);
 		if (sdf !== "" && sdf === fieldName) {
 			return { isStringDU: true, discField: sdf };
@@ -554,8 +577,8 @@ export function detectUnionDiscriminant(unionType: Type, fieldName: string): Dis
 
 // Find variant index by field name. Returns the first variant containing the field.
 // Used for direct field access on discriminated unions (e.g., s.radius → s.v0.radius).
-export function findVariantByFieldName(unionType: Type, fieldName: string): number {
-	if (unionType.typeChildren === null) return -1;
+export function findVariantByFieldName(unionType: Type | null, fieldName: string): number {
+	if (unionType === null || unionType.typeChildren === null) return -1;
 	let i = 0;
 	while (i < unionType.typeChildren.length) {
 		const variant = unionType.typeChildren[i];
@@ -572,8 +595,8 @@ export function findVariantByFieldName(unionType: Type, fieldName: string): numb
 // Find variant index by discriminant enum value name (e.g. "NumLit" or "NodeKind.NumLit").
 // typeNames layout: [discFieldName, key0, key1, ...] — keys start at index 1.
 // Matches both qualified ("Kind.A") and unqualified ("A") against stored keys.
-export function findVariantByDiscriminant(unionType: Type, enumValue: string): number {
-	if (unionType.typeNames === null || unionType.typeNames.length < 2) return -1;
+export function findVariantByDiscriminant(unionType: Type | null, enumValue: string): number {
+	if (unionType === null || unionType.typeNames === null || unionType.typeNames.length < 2) return -1;
 	const queryBare = bareAfterDelim(enumValue, ".");
 	// Also handle underscore-mangled form: checkMemberExpr rewrites EnumType.Member to EnumType_Member
 	const queryBareUnderscore = bareAfterDelim(enumValue, "_");
@@ -595,9 +618,10 @@ export function findVariantByDiscriminant(unionType: Type, enumValue: string): n
 //   - have a distinct StringLiteral type in each variant (so we can disambiguate)
 // Returns the field name, or "" if no such field exists.
 // Preference order: first matching field encountered in variant 0.
-export function findSharedStringDiscriminant(unionType: Type): string {
-	if (unionType.typeChildren === null || unionType.typeChildren.length < 2) return "";
-	const first = unionType.typeChildren[0];
+export function findSharedStringDiscriminant(unionType: Type | null): string {
+	if (unionType === null || unionType.typeChildren === null || unionType.typeChildren.length < 2) return "";
+	const variants = unionType.typeChildren;
+	const first = variants[0];
 	if (first === null || first.typeNames === null) return "";
 	for (let fi = 0; fi < first.typeNames.length; fi += 1) {
 		if (fi >= first.typeChildren.length) continue;
@@ -607,8 +631,8 @@ export function findSharedStringDiscriminant(unionType: Type): string {
 		// Check every other variant has this field as a StringLiteral with a *different* value.
 		let sharedOk = true;
 		const seen: string[] = [firstFt.typeName];
-		for (let vi = 1; vi < unionType.typeChildren.length; vi += 1) {
-			const v = unionType.typeChildren[vi];
+		for (let vi = 1; vi < variants.length; vi += 1) {
+			const v = variants[vi];
 			if (v === null || v.typeNames === null) { sharedOk = false; break; }
 			let foundInV = false;
 			for (let vfi = 0; vfi < v.typeNames.length; vfi += 1) {
@@ -634,9 +658,9 @@ export function findSharedStringDiscriminant(unionType: Type): string {
 
 // Tier 2: collect all string-literal discriminant values from a union's variants.
 // Returns ["circle", "square"] for type Shape = {kind:"circle",...} | {kind:"square",...}.
-export function collectStringDiscriminantValues(unionType: Type, discFieldName: string): string[] {
+export function collectStringDiscriminantValues(unionType: Type | null, discFieldName: string): string[] {
 	const values: string[] = [];
-	if (unionType.typeChildren === null) return values;
+	if (unionType === null || unionType.typeChildren === null) return values;
 	for (const variant of unionType.typeChildren) {
 		if (variant === null || variant.typeNames === null) continue;
 		for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
@@ -657,8 +681,8 @@ export function collectStringDiscriminantValues(unionType: Type, discFieldName: 
 // Used when the union is string-literal based (type Shape = {kind:"a",...} | {kind:"b",...})
 // and there's no enum-backed discriminant metadata on the union itself.
 // Returns -1 if no variant has a StringLiteral field matching the value.
-export function findVariantByStringDiscriminant(unionType: Type, discFieldName: string, litValue: string): number {
-	if (unionType.typeChildren === null) return -1;
+export function findVariantByStringDiscriminant(unionType: Type | null, discFieldName: string, litValue: string): number {
+	if (unionType === null || unionType.typeChildren === null) return -1;
 	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
 		const variant = unionType.typeChildren[i];
 		if (variant === null || variant.typeNames === null) continue;
@@ -701,7 +725,7 @@ export function createMaybeType(inner: Type): Type {
 	return t;
 }
 
-export function createRef(inner: Type): Type {
+export function createRef(inner: Type | null): Type {
 	return {
 		kind: TypeKind.Ref, typeName: "", typeNames: [], typeChildren: [],
 		typeReturn: inner, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
@@ -709,7 +733,7 @@ export function createRef(inner: Type): Type {
 	};
 }
 
-export function createPtr(inner: Type): Type {
+export function createPtr(inner: Type | null): Type {
 	return {
 		kind: TypeKind.Ptr, typeName: "", typeNames: [], typeChildren: [],
 		typeReturn: inner, typeExtra: null, typeFlags: 0 as int32,
@@ -859,7 +883,7 @@ export function createStringLiteral(value: string): Type {
 	return t;
 }
 
-export function isStringLiteral(t: Type): boolean {
+export function isStringLiteral(t: Type | null): boolean {
 	return t !== null && t.kind === TypeKind.StringLiteral;
 }
 
@@ -876,7 +900,7 @@ export function createEnumLiteral(enumType: Type, memberName: string): Type {
 	return t;
 }
 
-export function isEnumLiteral(t: Type): boolean {
+export function isEnumLiteral(t: Type | null): boolean {
 	return t !== null && t.kind === TypeKind.EnumLiteral;
 }
 
@@ -894,8 +918,8 @@ export function createConditionalType(check: Type, extendsType: Type, trueType: 
 
 // Evaluate a conditional type if its check and extends types are concrete (no GenericParam).
 // Returns the true/false branch, or the original type if unevaluable.
-export function evaluateConditionalType(t: Type): Type {
-	if (t.kind !== TypeKind.Conditional) return t;
+export function evaluateConditionalType(t: Type | null): Type {
+	if (t === null || t.kind !== TypeKind.Conditional) return t !== null ? t : unknownType();
 	if (t.typeChildren.length < 4) return t;
 	const check = t.typeChildren[0];
 	const ext = t.typeChildren[1];
@@ -931,7 +955,7 @@ function isAssignableForConditional(source: Type, target: Type): boolean {
 	return source.kind === target.kind;
 }
 
-export function isAllStringLiteralUnion(t: Type): boolean {
+export function isAllStringLiteralUnion(t: Type | null): boolean {
 	if (t === null || t.kind !== TypeKind.Union) return false;
 	if (t.typeChildren.length === 0) return false;
 	for (const child of t.typeChildren) {
@@ -942,13 +966,13 @@ export function isAllStringLiteralUnion(t: Type): boolean {
 
 // isStringLike — true for String, StringLiteral, and Union<StringLiteral...>.
 // Single source of truth: these are all msString at runtime.
-export function isStringLike(t: Type): boolean {
+export function isStringLike(t: Type | null): boolean {
 	if (t === null) return false;
 	if (t.kind === TypeKind.String || t.kind === TypeKind.StringLiteral) return true;
 	return isAllStringLiteralUnion(t);
 }
 
-export function isFloatType(t: Type): boolean {
+export function isFloatType(t: Type | null): boolean {
 	if (t === null) return false;
 	return t.kind === TypeKind.Float32 || t.kind === TypeKind.Float64;
 }
@@ -957,11 +981,13 @@ export function isFloatType(t: Type): boolean {
 // Encoded in typeFlags bits 8-15. Zero = not set = all params required.
 // Stores minArity + 1 so that 0 means "not set" (backward compatible).
 
-export function setMinArity(t: Type, minArity: number): void {
+export function setMinArity(t: Type | null, minArity: number): void {
+	if (t === null) return;
 	t.typeFlags = (t.typeFlags & 0xFF) | (((minArity as int32) + 1) << 8);
 }
 
-export function getMinArity(t: Type): number {
+export function getMinArity(t: Type | null): number {
+	if (t === null) return 0;
 	const encoded: int32 = (t.typeFlags >> 8) & 0xFF;
 	if (encoded === 0) return t.typeChildren.length;
 	return (encoded - 1) as number;
@@ -969,13 +995,15 @@ export function getMinArity(t: Type): number {
 
 // ===== Attached Ops Helpers (Implementation parity) =====
 
-export function getAttachedOp(t: Type, op: AttachedOp): string {
+export function getAttachedOp(t: Type | null, op: AttachedOp): string {
+	if (t === null) return "";
 	const idx = op as number;
 	if (t.attachedOps.length <= idx) return "";
 	return t.attachedOps[idx];
 }
 
-export function setAttachedOp(t: Type, op: AttachedOp, name: string): void {
+export function setAttachedOp(t: Type | null, op: AttachedOp, name: string): void {
+	if (t === null) return;
 	// Grow array to fit index
 	while (t.attachedOps.length <= (op as number)) {
 		t.attachedOps.push("");
@@ -983,7 +1011,7 @@ export function setAttachedOp(t: Type, op: AttachedOp, name: string): void {
 	t.attachedOps[op as number] = name;
 }
 
-export function hasDestructor(t: Type): boolean {
+export function hasDestructor(t: Type | null): boolean {
 	return getAttachedOp(t, AttachedOp.AttachedDestructor) !== "";
 }
 
@@ -991,7 +1019,7 @@ export function hasDestructor(t: Type): boolean {
 // DJB2 hash of type structure → "msTuple_HASH". Same algorithm as C codegen
 // (types.ms:genTupleType) so generated comparison functions match struct names.
 
-export function tupleTypeName(t: Type): string {
+export function tupleTypeName(t: Type | null): string {
 	if (t === null || t.kind !== TypeKind.Tuple) return "";
 	let key = "tuple:";
 	let i = 0;
@@ -1039,32 +1067,52 @@ function typeKey(t: Type): string {
 
 // ===== Type Classification Helpers =====
 
-export function isStructType(t: Type): boolean {
+export function isStructType(t: Type | null): boolean {
 	if (t === null) return false;
 	if (t.kind !== TypeKind.Struct) return false;
 	return (t.typeFlags & TypeFlag.IsStruct) !== 0;
 }
 
-export function isMaybeType(t: Type): boolean {
+export function isMaybeType(t: Type | null): boolean {
 	if (t === null) return false;
 	return (t.typeFlags & TypeFlag.IsMaybe) !== 0;
 }
 
 export function unwrapMaybeType(t: Type): Type {
-	return t.typeReturn;
+	const inner = t.typeReturn;
+	return inner !== null ? inner : t;
 }
 
-// unwrapRef — unwrap Ref<T> or Ptr<T> to get inner type (reference: skip pointer types)
+// unwrapRef — unwrap Ref<T> or Ptr<T> to get inner type (reference: skip pointer types).
+// Caller passes a non-null Type (or pre-narrowed value); typeReturn for Ref/Ptr
+// is guaranteed non-null by createRef/createPtr, so the result is non-null.
 export function unwrapRef(t: Type): Type {
-	if (t === null) return t;
-	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return t.typeReturn;
+	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
+		const inner = t.typeReturn;
+		if (inner !== null) return inner;
+	}
 	return t;
+}
+
+// If t is Union(Ref<T>, Null) or Union(Ptr<T>, Null), return the Ref/Ptr member.
+// Otherwise return null. Used by codegen to collapse nullable-ref unions to bare
+// pointer types (the null pointer is the natural sentinel — no Maybe wrapper needed).
+export function unwrapRefNullUnion(t: Type): Type | null {
+	if (t === null || t.kind !== TypeKind.Union) return null;
+	if (t.typeChildren === null || t.typeChildren.length !== 2) return null;
+	const a = t.typeChildren[0];
+	const b = t.typeChildren[1];
+	if (a === null || b === null) return null;
+	if ((a.kind === TypeKind.Ref || a.kind === TypeKind.Ptr) && b.kind === TypeKind.Null) return a;
+	if ((b.kind === TypeKind.Ref || b.kind === TypeKind.Ptr) && a.kind === TypeKind.Null) return b;
+	return null;
 }
 
 // ===== Needs RC =====
 // Types that need reference counting. Pure type query — no codegen dependency.
 
-export function needsRC(t: Type): boolean {
+export function needsRC(t: Type | null): boolean {
+	if (t === null) return false;
 	if (t === null) return false;
 	return match (t.kind) {
 		TypeKind.String => true,
@@ -1117,7 +1165,7 @@ export function wrapLent(inner: Type): Type {
 	return t;
 }
 
-export function isSinkType(t: Type): boolean {
+export function isSinkType(t: Type | null): boolean {
 	return t !== null && t.kind === TypeKind.Sink;
 }
 
@@ -1125,7 +1173,7 @@ export function isLentType(t: Type): boolean {
 	return t !== null && t.kind === TypeKind.Lent;
 }
 
-export function skipModifier(t: Type): Type {
+export function skipModifier(t: Type | null): Type | null {
 	if (t === null) return t;
 	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent || t.kind === TypeKind.Var) return t.typeReturn;
 	return t;
@@ -1269,8 +1317,8 @@ function substituteClearFlag(t: Type): void {
 	}
 }
 
-export function substituteType(t: Type, paramName: string, concrete: Type): Type {
-	if (t === null) return t;
+export function substituteType(t: Type | null, paramName: string, concrete: Type): Type {
+	if (t === null) return unknownType();
 	if (t.kind === TypeKind.GenericParam && t.typeName === paramName) return concrete;
 	if (substituteIsSeen(t)) return t;
 	substituteSetFlag(t);
@@ -1344,7 +1392,7 @@ export function createUnifyBindings(): UnifyBindings {
 
 let unifyDepth = 0;
 
-export function unifyType(formal: Type, concrete: Type, bindings: UnifyBindings): void {
+export function unifyType(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
 	if (formal === null || concrete === null) return;
 	// Identity check — break circular type references (e.g., Doc → DocData → Doc)
 	if (formal === concrete) return;
@@ -1355,7 +1403,9 @@ export function unifyType(formal: Type, concrete: Type, bindings: UnifyBindings)
 	unifyDepth = unifyDepth - 1;
 }
 
-function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): void {
+function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
+	if (formal === null) return;
+	if (concrete === null) return;
 	// Direct generic param match
 	if (formal.kind === TypeKind.GenericParam) {
 		bindings.names.push(formal.typeName);
@@ -1436,7 +1486,7 @@ function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): 
 
 // Cycle-safe: named Object/Union types don't contain GenericParams after resolution
 let _hasGenericDepth = 0;
-export function hasGenericParams(t: Type): boolean {
+export function hasGenericParams(t: Type | null): boolean {
 	if (t === null) return false;
 	if (t.kind === TypeKind.GenericParam) return true;
 	if (_hasGenericDepth > 20) return false;
@@ -1466,7 +1516,8 @@ function hasGenericParamsInner(t: Type): boolean {
 
 // ===== Type Query Helpers =====
 
-export function isNumeric(t: Type): boolean {
+export function isNumeric(t: Type | null): boolean {
+	if (t === null) return false;
 	return t.kind === TypeKind.Number || t.kind === TypeKind.Int8 ||
 		t.kind === TypeKind.Int16 || t.kind === TypeKind.Int32 ||
 		t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint8 ||
@@ -1475,7 +1526,7 @@ export function isNumeric(t: Type): boolean {
 		t.kind === TypeKind.Float64 || t.kind === TypeKind.Char;
 }
 
-export function isIntegerType(t: Type): boolean {
+export function isIntegerType(t: Type | null): boolean {
 	if (t === null) return false;
 	return t.kind === TypeKind.Int8 || t.kind === TypeKind.Int16 ||
 		t.kind === TypeKind.Int32 || t.kind === TypeKind.Int64 ||
@@ -1520,12 +1571,18 @@ export function isCallable(t: Type): boolean {
 }
 
 export function getReturnType(t: Type): Type {
-	if (t.kind === TypeKind.Function) return t.typeReturn;
+	if (t.kind === TypeKind.Function) {
+		const ret = t.typeReturn;
+		return ret !== null ? ret : unknownType();
+	}
 	return unknownType();
 }
 
 export function getElementType(t: Type): Type {
-	if (t.kind === TypeKind.Array || t.kind === TypeKind.SizedArray || t.kind === TypeKind.Span || t.kind === TypeKind.Ptr) return t.typeReturn;
+	if (t.kind === TypeKind.Array || t.kind === TypeKind.SizedArray || t.kind === TypeKind.Span || t.kind === TypeKind.Ptr) {
+		const elem = t.typeReturn;
+		return elem !== null ? elem : unknownType();
+	}
 	// @builtin("IndexableMap") subscript: `m[k]` returns V. Makes `{ [key: K]: V }`
 	// work at runtime via .get() after the lowering in transform/native/nativeLower.ms.
 	if (t.kind === TypeKind.GenericInstance && isIndexableMapType(t)
@@ -1537,7 +1594,8 @@ export function getElementType(t: Type): Type {
 
 // Collect unique GenericParam names from a type tree (used by getProperty for GenericInstance substitution)
 let _collectGenericDepth = 0;
-function collectGenericParamNames(t: Type, names: string[]): void {
+function collectGenericParamNames(t: Type | null, names: string[]): void {
+	if (t === null) return;
 	if (t === null) return;
 	if (_collectGenericDepth > 20) return;
 	if (t.kind === TypeKind.GenericParam) {
@@ -1558,7 +1616,8 @@ function collectGenericParamNames(t: Type, names: string[]): void {
 	_collectGenericDepth = _collectGenericDepth - 1;
 }
 
-export function getProperty(t: Type, name: string): Type {
+export function getProperty(t: Type | null, name: string): Type {
+	if (t === null) return unknownType();
 	// Unwrap Ref/Ptr to access inner Object's properties (class types are Ref<Object>)
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
 		if (t.typeReturn !== null) return getProperty(t.typeReturn, name);
@@ -1569,7 +1628,8 @@ export function getProperty(t: Type, name: string): Type {
 			if (propName === name) {
 				if (i < t.typeChildren.length) {
 					const found = t.typeChildren[i];
-						return found;
+					if (found === null) return unknownType();
+					return found;
 				}
 				return unknownType();
 			}
@@ -1606,27 +1666,26 @@ export function getProperty(t: Type, name: string): Type {
 	// For discriminated unions, the discriminant field maps to _tag.
 	if (t.kind === TypeKind.Union && t.typeChildren !== null) {
 		// Check discriminant field first (e.g. "kind" on a discriminated union)
-		if (t.typeExtra !== null && t.typeNames !== null && t.typeNames.length > 0) {
+		const tex = t.typeExtra;
+		if (tex !== null && t.typeNames !== null && t.typeNames.length > 0) {
 			if (t.typeNames[0] === name) {
-				return t.typeExtra; // discriminant field returns the enum type
+				return tex; // discriminant field returns the enum type
 			}
 		}
 		// Search variants for the field — return type if unambiguous across variants
-		let foundType: Type = null;
+		let foundType: Type | null = null;
 		let ambiguous = false;
 		for (const variant of t.typeChildren) {
+			if (variant === null) continue;
 			const ft = findFieldInVariant(variant, name);
-			if (ft !== null) {
-				if (foundType === null) {
-					foundType = ft;
-				} else if (foundType.kind !== ft.kind) {
-					ambiguous = true;
-				}
+			if (ft === null) continue;
+			if (foundType === null) {
+				foundType = ft;
+			} else if (foundType.kind !== ft.kind) {
+				ambiguous = true;
 			}
 		}
-		if (foundType !== null && !ambiguous) return foundType;
-		// Ambiguous fields (same name, different types across variants) require `as` cast
-		if (foundType !== null) return foundType; // return first match — runtime guard needed
+		if (foundType !== null) return foundType;
 	}
 	// Enum member access: Color.Red → returns the Enum type
 	if (t.kind === TypeKind.Enum) {
@@ -1663,8 +1722,19 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind === TypeKind.Error;
 }
 
-// typeNameOf — maps Type to its canonical string name (used by checker + transforms)
-export function typeNameOf(t: Type): string {
+// typeNameOf — IDENTITY name. Returns the canonical string name used for
+// type-keyed lookups: extension receiver matching, transform dispatch,
+// `typeof X` extension form, type-string round-trips through the parser.
+//
+// Returns "" for kinds that have no addressable identity name (Null, Void,
+// Never, Unknown, Error, Function, GenericParam). Callers in identity contexts
+// rely on this empty-return to short-circuit lookups; do NOT add fallbacks here.
+//
+// For human-readable display (error messages, signatures, hints) use
+// `typeDisplayName` instead — it never returns empty and falls back to the
+// kind's spelling.
+export function typeNameOf(t: Type | null): string {
+	if (t === null) return "";
 	// Reference parity: ownership modifiers are transparent — unwrap before naming
 	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent) {
 		if (t.typeReturn !== null) return typeNameOf(t.typeReturn);
@@ -1708,12 +1778,15 @@ export function typeNameOf(t: Type): string {
 		TypeKind.TypeReference => t.typeName,
 		TypeKind.Distinct => t.typeName,
 		TypeKind.Union => {
-			// Display string literal unions as "north" | "south"
+			// Display string literal unions as "north" | "south".
+			// Children are rendered for display, so use typeDisplayName so a
+			// `null` member shows as "null" instead of an empty segment that
+			// would produce "string |  | int32".
 			if (t.typeChildren.length > 0) {
 				let display = "";
 				for (const child of t.typeChildren) {
 					if (display !== "") display = display + " | ";
-					display = display + typeNameOf(child);
+					display = display + typeDisplayName(child);
 				}
 				return display;
 			}
@@ -1723,11 +1796,40 @@ export function typeNameOf(t: Type): string {
 	};
 }
 
+// typeDisplayName — DISPLAY name. Used for diagnostics, error messages,
+// signature formatting, LSP hover/hint output. Never returns empty.
+//
+// Layered fallback:
+//   1. typeNameOf — for kinds that have an identity name (string, Map, etc.)
+//   2. Spelling for kinds typeNameOf reports as nameless (null, void, etc.)
+//   3. <kind:N> escape hatch for unknown future kinds.
+//
+// For type-keyed lookups (extension receiver matching, transform dispatch),
+// use typeNameOf directly — the empty return is intentional there.
+export function typeDisplayName(t: Type | null): string {
+	if (t === null) return "<null>";
+	const name = typeNameOf(t);
+	if (name !== "") return name;
+	return match (t.kind) {
+		TypeKind.Null => "null",
+		TypeKind.Void => "void",
+		TypeKind.Never => "never",
+		TypeKind.Unknown => "unknown",
+		TypeKind.Error => "<error>",
+		TypeKind.Function => "function",
+		TypeKind.GenericParam => t.typeName !== "" ? t.typeName : "<T>",
+		// Anonymous struct (object literal type) — typeName is "" so typeNameOf
+		// returns empty. Diagnostics historically display these as "object".
+		TypeKind.Struct => "object",
+		_ => "<kind:" + t.kind.toString() + ">",
+	};
+}
+
 // getBuiltinKind — read the @builtin("...") tag from a type's underlying class Symbol.
 // Returns "" if the type has no builtin annotation. Walks transparent wrappers
 // (Sink/Lent/Var/Distinct/Ref/Ptr) and GenericInstance → base class, mirroring
 // typeNameOf's unwrap policy so `sink m: Map<K,V>` still registers as IndexableMap.
-export function getBuiltinKind(t: Type): string {
+export function getBuiltinKind(t: Type | null): string {
 	if (t === null) return "";
 	if (t.sym !== null && t.sym.builtinKind !== "") return t.sym.builtinKind;
 	if (t.kind === TypeKind.GenericInstance && t.typeExtra !== null) {
@@ -1746,7 +1848,7 @@ export function getBuiltinKind(t: Type): string {
 // isIndexableMapType — true when t is a class tagged @builtin("IndexableMap").
 // Used by subscript lowering (m[k] → m.get(k) / m.set(k, v)) and m[k] element typing.
 // Both Map<K,V> and HashMap<K,V> in std/core/struct.ms carry this tag.
-export function isIndexableMapType(t: Type): boolean {
+export function isIndexableMapType(t: Type | null): boolean {
 	return getBuiltinKind(t) === "IndexableMap";
 }
 
@@ -1848,20 +1950,20 @@ test "primitive kinds" {
 test "createArray" {
 	const arrType = createArray(numberType());
 	assert arrType.kind === TypeKind.Array;
-	assert arrType.typeReturn.kind === TypeKind.Number;
+	assert arrType.typeReturn !== null && arrType.typeReturn.kind === TypeKind.Number;
 }
 
 test "createSizedArray" {
 	const arrType = createSizedArray(numberType(), 4);
 	assert arrType.kind === TypeKind.SizedArray;
-	assert arrType.typeReturn.kind === TypeKind.Number;
+	assert arrType.typeReturn !== null && arrType.typeReturn.kind === TypeKind.Number;
 	assert arrType.typeFlags === 4;
 }
 
 test "createSpan" {
 	const spanType = createSpan(numberType());
 	assert spanType.kind === TypeKind.Span;
-	assert spanType.typeReturn.kind === TypeKind.Number;
+	assert spanType.typeReturn !== null && spanType.typeReturn.kind === TypeKind.Number;
 }
 
 test "createFunction" {
@@ -1869,7 +1971,7 @@ test "createFunction" {
 	assert fnType.kind === TypeKind.Function;
 	assert fnType.typeChildren.length === 2;
 	assert fnType.typeNames[0] === "a";
-	assert fnType.typeReturn.kind === TypeKind.Boolean;
+	assert fnType.typeReturn !== null && fnType.typeReturn.kind === TypeKind.Boolean;
 }
 
 test "createStruct" {
@@ -1891,8 +1993,10 @@ test "createEnum" {
 test "createResult" {
 	const r = createResult(numberType(), stringType());
 	assert isResult(r);
-	assert getResultOkType(r).kind === TypeKind.Number;
-	assert getResultErrType(r).kind === TypeKind.String;
+	const ok = getResultOkType(r);
+	assert ok !== null && ok.kind === TypeKind.Number;
+	const err = getResultErrType(r);
+	assert err !== null && err.kind === TypeKind.String;
 }
 
 test "createTypeRef" {
@@ -1904,10 +2008,10 @@ test "createTypeRef" {
 test "createRef and Ptr" {
 	const r = createRef(numberType());
 	assert r.kind === TypeKind.Ref;
-	assert r.typeReturn.kind === TypeKind.Number;
+	assert r.typeReturn !== null && r.typeReturn.kind === TypeKind.Number;
 	const p = createPtr(stringType());
 	assert p.kind === TypeKind.Ptr;
-	assert p.typeReturn.kind === TypeKind.String;
+	assert p.typeReturn !== null && p.typeReturn.kind === TypeKind.String;
 }
 
 test "isNumeric" {
@@ -1971,7 +2075,7 @@ test "substitute in array" {
 	const arr = createArray(createGenericParam("T"));
 	const result = substituteType(arr, "T", stringType());
 	assert result.kind === TypeKind.Array;
-	assert result.typeReturn.kind === TypeKind.String;
+	assert result.typeReturn !== null && result.typeReturn.kind === TypeKind.String;
 }
 
 test "substitute in function" {
@@ -1979,7 +2083,7 @@ test "substitute in function" {
 	const result = substituteType(fn, "T", numberType());
 	assert result.kind === TypeKind.Function;
 	assert result.typeChildren[0].kind === TypeKind.Number;
-	assert result.typeReturn.kind === TypeKind.Number;
+	assert result.typeReturn !== null && result.typeReturn.kind === TypeKind.Number;
 }
 
 test "substitute in Result" {
@@ -1987,16 +2091,20 @@ test "substitute in Result" {
 	const step1 = substituteType(r, "T", numberType());
 	const step2 = substituteType(step1, "E", stringType());
 	assert isResult(step2);
-	assert getResultOkType(step2).kind === TypeKind.Number;
-	assert getResultErrType(step2).kind === TypeKind.String;
+	const ok2 = getResultOkType(step2);
+	assert ok2 !== null && ok2.kind === TypeKind.Number;
+	const err2 = getResultErrType(step2);
+	assert err2 !== null && err2.kind === TypeKind.String;
 }
 
 test "instantiateGeneric multi-param" {
 	const r = createResult(createGenericParam("T"), createGenericParam("E"));
 	const result = instantiateGeneric(r, ["T", "E"], [numberType(), stringType()]);
 	assert isResult(result);
-	assert getResultOkType(result).kind === TypeKind.Number;
-	assert getResultErrType(result).kind === TypeKind.String;
+	const ok = getResultOkType(result);
+	assert ok !== null && ok.kind === TypeKind.Number;
+	const err = getResultErrType(result);
+	assert err !== null && err.kind === TypeKind.String;
 }
 
 test "primitive unchanged" {

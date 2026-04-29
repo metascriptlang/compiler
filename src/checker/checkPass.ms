@@ -4,7 +4,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { unknownType, charType, float64Type, voidType, createFunction, createPromise, typeNameOf, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
+import { unknownType, charType, float64Type, voidType, nullType, createFunction, createPromise, typeNameOf, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords } from "./context";
@@ -38,15 +38,16 @@ import { BreakState, markInitialized, saveInitState, restoreInitState, breaksBlo
 
 // Extract directory from module path (e.g. "src/foo/bar.ms" → "src/foo")
 // Brief type description for error messages
-function formatTypeBrief(t: Type): string {
+function formatTypeBrief(t: Type | null): string {
 	if (t === null) return "unknown";
 	if (isResult(t)) {
-		const okName = getResultOkType(t) !== null ? typeNameOf(getResultOkType(t)) : "?";
-		const errName = getResultErrType(t) !== null ? typeNameOf(getResultErrType(t)) : "?";
-		return "Result<" + (okName !== "" ? okName : "void") + ", " + (errName !== "" ? errName : "?") + ">";
+		const ok = getResultOkType(t);
+		const err = getResultErrType(t);
+		const okName = ok !== null ? typeDisplayName(ok) : "?";
+		const errName = err !== null ? typeDisplayName(err) : "?";
+		return "Result<" + okName + ", " + errName + ">";
 	}
-	const name = typeNameOf(t);
-	return name !== "" ? name : t.kind.toString();
+	return typeDisplayName(t);
 }
 
 // ===== PARALOCK Phase 1: Scope-Exit Affine Check =====
@@ -215,7 +216,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
 	// Resolve declared type FIRST so it can flow as expectedType into initializer (Implementation parity)
-	let declType: Type = null;
+	let declType: Type | null = null;
 	if (d.declType !== "") {
 		const typeLoc = node.typeExpr !== null ? node.typeExpr.location : d.nameLocation;
 		declType = resolveAnnotation(d.declType, ctx, typeLoc.line, typeLoc.column);
@@ -230,6 +231,24 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		addWarning(ctx,
 			`explicit 'Promise<T>' annotation on a spawn result strips PARALOCK affine tracking — '${d.declName}' will not be lifetime-checked. Remove the annotation to enable affine checking, or keep it as an opt-out`,
 			d.nameLocation.line, d.nameLocation.column);
+	}
+	// TS-aligned (TS2322): `const x: T = expr` where expr's type is `null` and
+	// T is non-nullable is a type error at the assignment. Targeted at `null`
+	// only — broader assignability checking at var-decl is a separate concern
+	// (the codebase historically defers most decl-time mismatches to downstream
+	// passes; widening this filter risks surfacing latent legacy mismatches).
+	// Catches `const x: int32 = id(null)` where the naked-T `id<T>(x:T):T`
+	// returns `null` and we want the error here, not at C compile.
+	const dt = declType;
+	if (dt !== null && initType !== null
+		&& initType.kind === TypeKind.Null
+		&& dt.kind !== TypeKind.Unknown
+		&& dt.kind !== TypeKind.GenericParam
+		&& !isAssignable(initType, dt)) {
+		const initLoc = d.initializer !== null ? d.initializer.location : d.nameLocation;
+		addError(ctx,
+			"Type 'null' is not assignable to type '" + typeDisplayName(dt) + "'",
+			initLoc.line, initLoc.column);
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
 	if (declType !== null && d.initializer !== null) {
@@ -874,12 +893,28 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	}
 	if (d.argument === null) return;
 
-	// Stamp `return null` with the function's declared return type so codegen knows the type.
+	// `return null`: validate assignability with retType=Null FIRST, then stamp
+	// d.argument.nodeType with the declared return type for codegen. The fast-path
+	// here used to stamp-and-return, skipping the isAssignable check — that
+	// allowed `function f(): Foo { return null; }` to silently compile even when
+	// `Foo` is non-nullable. Order matters: stamp BEFORE check would compare
+	// the expected type against itself (trivially passes); check BEFORE stamp
+	// compares Null against expected, which is the real safety question.
 	if (d.argument.kind === NodeKind.NullLiteral) {
 		if (ctx.currentFunction !== null
 			&& ctx.currentFunction.symbolType.kind === TypeKind.Function
 			&& ctx.currentFunction.symbolType.typeReturn !== null) {
-			d.argument.nodeType = ctx.currentFunction.symbolType.typeReturn;
+			const declared = ctx.currentFunction.symbolType.typeReturn;
+			d.argument.nodeType = nullType();
+			if (declared.kind !== TypeKind.Unknown && !isAssignable(nullType(), declared)) {
+				addError(ctx,
+					"Return type mismatch in '" + ctx.currentFunction.name + "': expected " + formatTypeBrief(declared) + ", got null",
+					node.location.line, node.location.column);
+				return;
+			}
+			// Stamp expected type for codegen (so value-type returns emit `(T){0}`,
+			// pointer returns emit `NULL`, Maybe<T> returns emit a wrapper, etc.)
+			d.argument.nodeType = declared;
 		}
 		return;
 	}
@@ -893,7 +928,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	//     (fitNode), and assignability checking all agree on T — without this, an
 	//     object literal returned from an async function would be matched against
 	//     Promise's fields, not T's.
-	let returnExpected: Type = null;
+	let returnExpected: Type | null = null;
 	if (ctx.matchExprDepth === 0
 		&& ctx.currentFunction !== null
 		&& ctx.currentFunction.symbolType.kind === TypeKind.Function
@@ -1018,8 +1053,8 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 
 	// Detect discriminated union narrowing: match (base.discriminantField)
 	// Handles both enum-based DUs (isDiscriminatedUnion) and string-literal DUs (Tier 2).
-	let narrowBase: Symbol = null;
-	let narrowUnion: Type = null;
+	let narrowBase: Symbol | null = null;
+	let narrowUnion: Type | null = null;
 	let narrowIsStringDU = false;
 	let narrowDiscField = "";
 	if (d.matchStmtDisc.kind === NodeKind.MemberExpr) {
@@ -1885,7 +1920,7 @@ test "typed function params resolved" {
 	assert sym.symbolType.kind === TypeKind.Function;
 	assert sym.symbolType.typeChildren[0].kind === TypeKind.Number;
 	assert sym.symbolType.typeChildren[1].kind === TypeKind.Number;
-	assert sym.symbolType.typeReturn.kind === TypeKind.Number;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Int32;
 }
 
 test "typed function call returns annotated type" {
@@ -1900,7 +1935,7 @@ test "array literal infers element type" {
 	const sym = lookupSymbol(ctx.table, "arr");
 	assert sym !== null;
 	assert sym.symbolType.kind === TypeKind.Array;
-	assert sym.symbolType.typeReturn.kind === TypeKind.Int32;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Int32;
 }
 
 test "arrow function has Function type" {
@@ -1914,42 +1949,42 @@ test "inferred return type from body" {
 	const ctx = checkSource("function foo() { return 42; }");
 	const sym = lookupSymbol(ctx.table, "foo");
 	assert sym !== null;
-	assert sym.symbolType.typeReturn.kind === TypeKind.Int32;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Int32;
 }
 
 test "annotated return type preserved" {
 	const ctx = checkSource("function bar(): string { return \"hi\"; }");
 	const sym = lookupSymbol(ctx.table, "bar");
 	assert sym !== null;
-	assert sym.symbolType.typeReturn.kind === TypeKind.String;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.String;
 }
 
 test "arrow infers return type" {
 	const ctx = checkSource("const f = (x) => 42;");
 	const sym = lookupSymbol(ctx.table, "f");
 	assert sym !== null;
-	assert sym.symbolType.typeReturn.kind === TypeKind.Int32;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Int32;
 }
 
 test "string return inferred" {
 	const ctx = checkSource("function greet() { return \"hello\"; }");
 	const sym = lookupSymbol(ctx.table, "greet");
 	assert sym !== null;
-	assert sym.symbolType.typeReturn.kind === TypeKind.String;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.String;
 }
 
 test "boolean return inferred" {
 	const ctx = checkSource("function isOk() { return true; }");
 	const sym = lookupSymbol(ctx.table, "isOk");
 	assert sym !== null;
-	assert sym.symbolType.typeReturn.kind === TypeKind.Boolean;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Boolean;
 }
 
 test "no return stays unknown" {
 	const ctx = checkSource("function noop() { const x = 1; }");
 	const sym = lookupSymbol(ctx.table, "noop");
 	assert sym !== null;
-	assert sym.symbolType.typeReturn.kind === TypeKind.Unknown;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Unknown;
 }
 
 test "return type mismatch detected" { assert !checkOk("function foo(): number { return \"hello\"; }"); }
@@ -2048,7 +2083,7 @@ test "generic param resolved as GenericParam" {
 	assert sym !== null;
 	assert sym.symbolType.kind === TypeKind.Function;
 	assert sym.symbolType.typeChildren[0].kind === TypeKind.GenericParam;
-	assert sym.symbolType.typeReturn.kind === TypeKind.GenericParam;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.GenericParam;
 }
 
 test "generic call infers return type" {

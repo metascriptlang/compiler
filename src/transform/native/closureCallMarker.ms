@@ -85,7 +85,7 @@ function wrapFuncArgsAsThunks(cd: CallExprData): void {
 	}
 }
 
-function getCalleeType(cd: CallExprData): Type {
+function getCalleeType(cd: CallExprData): Type | null {
 	if (cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
 		return cd.callee.nodeType;
 	}

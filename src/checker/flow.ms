@@ -31,11 +31,11 @@ import { typeRelation, TypeRelation } from "./compat";
 // produces complete types; Phase 3 will introduce proper incompleteness.
 
 export interface FlowType {
-	t: Type;
+	t: Type | null;
 	incomplete: boolean;
 }
 
-function flowType(t: Type, incomplete: boolean): FlowType {
+function flowType(t: Type | null, incomplete: boolean): FlowType {
 	return { t, incomplete };
 }
 
@@ -140,7 +140,7 @@ function findLoopInfo(stack: FlowLoopInfo[], loopNode: FlowNode, refKey: string)
 
 // Append a type to a list only if it's not already present (structural dedup).
 // Used to keep the per-loop antecedent set bounded.
-function appendIfUnique(types: Type[], t: Type): void {
+function appendIfUnique(types: Type[], t: Type | null): void {
 	if (t === null) return;
 	for (const u of types) {
 		if (u === t) return;
@@ -160,6 +160,19 @@ function appendIfUnique(types: Type[], t: Type): void {
 
 function isMatchingReference(source: Node, target: Node): boolean {
 	if (source === null || target === null) return false;
+	// Unwrap checker-inserted hidden conversions. The condition expression is
+	// stored at bind time (no HiddenDeref); the access in the body has been
+	// rewritten by the checker to wrap reference-typed reads in HiddenDeref
+	// so codegen knows to deref the pointer. Without unwrapping, the structural
+	// comparison fails between the bind-time condition and check-time access.
+	while (source.kind === NodeKind.HiddenDeref || source.kind === NodeKind.HiddenAddr) {
+		const hd = source.data as { expr: Node };
+		source = hd.expr;
+	}
+	while (target.kind === NodeKind.HiddenDeref || target.kind === NodeKind.HiddenAddr) {
+		const hd = target.data as { expr: Node };
+		target = hd.expr;
+	}
 	if (source === target) return true;
 	if (source.kind !== target.kind) return false;
 	match (source.kind) {
@@ -229,7 +242,9 @@ export function getFlowTypeOfReference(refNode: Node, declaredType: Type): Type 
 	if (flow === null) return declaredType;
 	const state = createFlowState(refNode, declaredType);
 	const ft = getTypeAtFlowNode(state, flow);
-	return ft.t;
+	const t = ft.t;
+	if (t === null) return declaredType;
+	return t;
 }
 
 // Phase 4: Ref<T> nullability query for --strict-nil. Walks the flow graph
@@ -490,7 +505,7 @@ function getTypeAtSwitchClause(state: FlowState, flow: FlowNode): FlowType {
 	// Collect the case-test values in the clause range. Each SwitchCaseData
 	// may contain multiple caseTests (fall-through `case "a": case "b":`) —
 	// all those tests produce the same narrowed body.
-	let narrowed: Type = null;
+	let narrowed: Type | null = null;
 	let anyDefault = false;
 	const lo: int32 = clauseData.clauseStart;
 	const hi: int32 = clauseData.clauseEnd;
@@ -541,6 +556,15 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 	let anyIncomplete = false;
 	let list: FlowList = flow.antecedents;
 	while (list !== null) {
+		// Skip Unreachable antecedents — they represent dead-code paths
+		// (e.g. the then-branch of `if (x === null) return;`) and contribute
+		// no information to the join. Including them broke the fast-path below:
+		// Unreachable returns declaredType, which short-circuited the join and
+		// erased real narrowing from sibling branches.
+		if ((list.flow.flags & FlowFlags.Unreachable) !== 0) {
+			list = list.next;
+			continue;
+		}
 		const ft = getTypeAtFlowNode(state, list.flow);
 		if (ft.incomplete) anyIncomplete = true;
 		// Fast path: declared type in antecedents = declared type result.
@@ -556,15 +580,24 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 	if (antecedents.length === 1) {
 		return flowType(antecedents[0], anyIncomplete);
 	}
-	// Dedup structurally-identical types before building the union.
+	// Dedup types before building the union. Pointer equality misses Union
+	// instances built at different sites with the same shape (e.g. Type | null
+	// constructed twice produces two different Union objects), which leaks into
+	// hover/error messages as `Type | null | Type` when reassignment chains
+	// merge at a BranchLabel. Use typeRelation === Exact to catch these.
+	// Filter Never — it's the empty/unreachable type and contributes nothing.
 	const uniq: Type[] = [];
 	for (const a of antecedents) {
+		if (a === null) continue;
+		if (a.kind === TypeKind.Never) continue;
 		let seen = false;
 		for (const u of uniq) {
 			if (u === a) { seen = true; break; }
+			if (typeRelation(u, a) === TypeRelation.Exact) { seen = true; break; }
 		}
 		if (!seen) uniq.push(a);
 	}
+	if (uniq.length === 0) return flowType(state.declaredType, anyIncomplete);
 	if (uniq.length === 1) return flowType(uniq[0], anyIncomplete);
 	return flowType(createUnion(uniq), anyIncomplete);
 }
@@ -613,18 +646,27 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 		}
 		return flowType(state.declaredType, true);
 	}
-	// First visit: walk antecedents.
+	// First visit: walk antecedents in REVERSE order. The binder prepends
+	// antecedents (addAntecedent puts new entries at the list head), so the
+	// pre-loop edge — added first by `addAntecedent` BEFORE the body — ends
+	// up at the LIST TAIL, while the back-edge sits at the head. To establish
+	// baseline narrowing without re-entering the loop label, we must walk
+	// pre-loop FIRST. Collect into an array and reverse.
 	const info: FlowLoopInfo = { loopNode: flow, refKey: state.refKey, types: [] };
 	let firstAnteType: FlowType = null as unknown as FlowType;
 	let widened = false;
-	let list: FlowList = flow.antecedents;
-	// Push BEFORE recursing so nested re-entries find us. For the first
-	// antecedent (pre-loop path), we don't want re-entry to short-circuit —
-	// but since the first antecedent is acyclic relative to this loop, it
-	// won't recurse back into this loopNode anyway.
+	const reversed: FlowNode[] = [];
+	let cursor: FlowList = flow.antecedents;
+	while (cursor !== null) {
+		reversed.push(cursor.flow);
+		cursor = cursor.next;
+	}
+	// Push BEFORE recursing so nested re-entries find us. The pre-loop walk
+	// is acyclic relative to this loop and won't trigger re-entry; the
+	// back-edge walk DOES re-enter and must see info.types populated already.
 	state.flowLoopStack.push(info);
-	while (list !== null) {
-		const ft = getTypeAtFlowNode(state, list.flow);
+	for (let ri = reversed.length - 1; ri >= 0; ri = ri - 1) {
+		const ft = getTypeAtFlowNode(state, reversed[ri]);
 		if (firstAnteType === null) {
 			firstAnteType = ft;
 		}
@@ -633,7 +675,6 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 			widened = true;
 			break;
 		}
-		list = list.next;
 	}
 	// Pop our frame.
 	state.flowLoopStack.pop();
@@ -666,6 +707,8 @@ function unionOfTypes(types: Type[]): Type {
 	const uniq: Type[] = [];
 	for (const t of types) {
 		if (t === null) continue;
+		// Never is the empty/unreachable type — contributes nothing to a union.
+		if (t.kind === TypeKind.Never) continue;
 		let seen = false;
 		for (const u of uniq) {
 			if (u === t) { seen = true; break; }
@@ -689,7 +732,7 @@ function unionOfTypes(types: Type[]): Type {
 let _narrowDepth: int32 = 0;
 const NARROW_DEPTH_LIMIT: int32 = 20;
 
-export function narrowType(t: Type, expr: Node, refNode: Node, assumeTrue: boolean): Type {
+export function narrowType(t: Type | null, expr: Node, refNode: Node, assumeTrue: boolean): Type | null {
 	if (t === null || expr === null || refNode === null) return t;
 	if (_narrowDepth >= NARROW_DEPTH_LIMIT) return t;
 	_narrowDepth = _narrowDepth + 1;
@@ -698,7 +741,7 @@ export function narrowType(t: Type, expr: Node, refNode: Node, assumeTrue: boole
 	return result;
 }
 
-function narrowTypeInner(t: Type, expr: Node, refNode: Node, assumeTrue: boolean): Type {
+function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: boolean): Type | null {
 	if (expr.kind === NodeKind.UnaryExpr) {
 		const d = expr.data as UnaryExprData;
 		if (d.unaryOp === "!") {
@@ -788,7 +831,8 @@ function narrowTypeInner(t: Type, expr: Node, refNode: Node, assumeTrue: boolean
 // name, `typeReturn` is the narrowing target type. Looks up the parameter's
 // positional index in the callee type's `typeNames`, matches the argument at
 // that index against `refNode`, and returns the narrowed type.
-function narrowTypeByPredicate(t: Type, callExpr: Node, refNode: Node, assumeTrue: boolean): Type {
+function narrowTypeByPredicate(t: Type | null, callExpr: Node, refNode: Node, assumeTrue: boolean): Type | null {
+	if (t === null) return t;
 	const cd = callExpr.data as CallExprData;
 	const callee = cd.callee;
 	if (callee === null) return t;
@@ -851,7 +895,8 @@ function narrowTypeByPredicate(t: Type, callExpr: Node, refNode: Node, assumeTru
 // class/type identifier. If `left` matches our reference, resolve the RHS to
 // a type and narrow accordingly: truthy → intersect with target, falsy →
 // exclude target from the union.
-function narrowTypeByInstanceof(t: Type, left: Node, right: Node, refNode: Node, assumeTrue: boolean): Type {
+function narrowTypeByInstanceof(t: Type | null, left: Node, right: Node, refNode: Node, assumeTrue: boolean): Type | null {
+	if (t === null) return t;
 	if (left === null || right === null) return t;
 	if (!isMatchingReference(left, refNode)) return t;
 	// Resolve the RHS to a type. The RHS is typically an Identifier referencing
@@ -889,7 +934,8 @@ function narrowTypeByInstanceof(t: Type, left: Node, right: Node, refNode: Node,
 // Remove Null variants from a type. For unions, filters out TypeKind.Null
 // members and reconstructs. Non-union, non-null types pass through unchanged
 // (non-nullable values aren't affected by truthiness narrowing).
-function removeNullFromType(t: Type): Type {
+function removeNullFromType(t: Type | null): Type | null {
+	if (t === null) return t;
 	if (t.kind === TypeKind.Null) return neverType();
 	if (t.kind !== TypeKind.Union || t.typeChildren === null) return t;
 	const remaining: Type[] = [];
@@ -904,7 +950,8 @@ function removeNullFromType(t: Type): Type {
 
 // Extract the Null variant from a type. For unions, returns the Null member
 // if present. Non-union types or unions without Null return t unchanged.
-function extractNullFromType(t: Type): Type {
+function extractNullFromType(t: Type | null): Type | null {
+	if (t === null) return t;
 	if (t.kind === TypeKind.Null) return t;
 	if (t.kind !== TypeKind.Union || t.typeChildren === null) return t;
 	for (const v of t.typeChildren) {
@@ -922,29 +969,29 @@ function extractNullFromType(t: Type): Type {
 // Compound assignments (`+=`, `-=`), UpdateExpr (`x++`, `--x`), and
 // destructuring assignments fall through to `null` — the caller widens to
 // `declared` by tail-recursing to the antecedent, which is the safe default.
-function narrowByAssignment(node: Node, refNode: Node, declared: Type): Type {
-	if (node === null) return null as unknown as Type;
+function narrowByAssignment(node: Node, refNode: Node, declared: Type): Type | null {
+	if (node === null) return null;
 	if (node.kind === NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		if (d.operator !== "=") return null as unknown as Type;
+		if (d.operator !== "=") return null;
 		if (d.left === null || !isMatchingReference(d.left, refNode)) {
-			return null as unknown as Type;
+			return null;
 		}
-		if (d.right === null || d.right.nodeType === null) return null as unknown as Type;
+		if (d.right === null || d.right.nodeType === null) return null;
 		return constrainToDeclared(d.right.nodeType, declared);
 	}
 	if (node.kind === NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
 		if (d.initializer === null || d.initializer.nodeType === null) {
-			return null as unknown as Type;
+			return null;
 		}
 		// The reference must be an Identifier whose resolvedSym is this decl.
-		if (refNode.kind !== NodeKind.Identifier) return null as unknown as Type;
+		if (refNode.kind !== NodeKind.Identifier) return null;
 		const sym = refNode.resolvedSym;
-		if (sym === null || sym.declNode !== node) return null as unknown as Type;
+		if (sym === null || sym.declNode !== node) return null;
 		return constrainToDeclared(d.initializer.nodeType, declared);
 	}
-	return null as unknown as Type;
+	return null;
 }
 
 // Constrain an assigned value's type to remain within the variable's declared
@@ -1006,8 +1053,8 @@ function getAliasedCondition(idNode: Node): Node {
 }
 
 function narrowTypeByEquality(
-	t: Type, left: Node, right: Node, op: string, refNode: Node, assumeTrue: boolean
-): Type {
+	t: Type | null, left: Node, right: Node, op: string, refNode: Node, assumeTrue: boolean
+): Type | null {
 	// !== and != invert the sense
 	const eff = (op === "!==" || op === "!=") ? !assumeTrue : assumeTrue;
 	// Case 0: typeof narrowing. `typeof x === "string"` or `"string" === typeof x`.
@@ -1062,7 +1109,7 @@ function isTypeofOperand(node: Node): boolean {
 // `literalExpr` is the RHS (or LHS) string literal naming the type.
 // `assumeTrue` is the effective sense: true → keep the matching type,
 // false → exclude it (for `typeof x !== "literal"`).
-function narrowTypeByTypeof(t: Type, literalExpr: Node, assumeTrue: boolean): Type {
+function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boolean): Type | null {
 	if (t === null || literalExpr === null) return t;
 	if (literalExpr.kind !== NodeKind.StringLiteral) return t;
 	const d = literalExpr.data as StringLiteralData;
@@ -1071,7 +1118,7 @@ function narrowTypeByTypeof(t: Type, literalExpr: Node, assumeTrue: boolean): Ty
 	// For union types, filter variants by whether their kind matches.
 	if (t.kind === TypeKind.Union) {
 		const remaining: Type[] = [];
-		let matchVariant: Type = null;
+		let matchVariant: Type | null = null;
 		if (t.typeChildren !== null) {
 			for (const v of t.typeChildren) {
 				if (v === null) continue;
@@ -1105,8 +1152,8 @@ function typeKindOfTypeofString(s: string): TypeKind {
 // `propName` is the field name (e.g. "kind"); `valueExpr` is the compared
 // literal; `assumeTrue` picks the matching variant (true) or excludes it.
 export function narrowTypeByDiscriminantProperty(
-	t: Type, propName: string, valueExpr: Node, assumeTrue: boolean
-): Type {
+	t: Type | null, propName: string, valueExpr: Node, assumeTrue: boolean
+): Type | null {
 	if (t === null || t.kind !== TypeKind.Union) return t;
 	const info = detectUnionDiscriminant(t, propName);
 	if (info.discField === "") return t;
@@ -1144,20 +1191,20 @@ export function narrowTypeByDiscriminantProperty(
 // Narrow a union type by equality to a literal. Handles:
 //   - null literal: remove/keep Null member
 //   - future: string, number, boolean literals
-function narrowByLiteralEquality(t: Type, literal: Node, assumeTrue: boolean): Type {
+function narrowByLiteralEquality(t: Type | null, literal: Node, assumeTrue: boolean): Type | null {
 	if (t === null) return t;
 	if (isNullLiteral(literal)) {
 		if (t.kind !== TypeKind.Union) {
 			// Simple nullable: x: T | null. Filter by assumeTrue.
 			if (t.kind === TypeKind.Null) {
-				return assumeTrue ? t : unknownType();
+				return assumeTrue ? t : neverType();
 			}
 			return t;
 		}
 		// Union: filter out (or keep) the null variant.
 		const remaining: Type[] = [];
 		let hasNull = false;
-		let nullVariant: Type = null;
+		let nullVariant: Type | null = null;
 		if (t.typeChildren !== null) {
 			for (const v of t.typeChildren) {
 				if (v === null) continue;

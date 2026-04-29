@@ -44,7 +44,7 @@ import { injectCancelSafePoints } from "./cancelSafePoints";
 // Tracks `const h = spawn(fn);` declarations. When `await h` is later found
 // in the same scope, rewrites to zero-alloc msAwaitSlot path instead of
 // heap-allocated msFuture. Cleared at function boundaries.
-struct SpawnSlotEntry { slotIdent: Node; closureArg: Node; innerType: Type; }
+struct SpawnSlotEntry { slotIdent: Node; closureArg: Node; innerType: Type | null; }
 let _spawnSlotMap: HashMap<string, SpawnSlotEntry> = new HashMap<string, SpawnSlotEntry>();
 
 // Opaque pointer type → void* in C codegen. Used for AwaitGroup and result temps.
@@ -52,7 +52,7 @@ export const VOID_PTR_TYPE: Type = createPtr(createPrimitive(TypeKind.Void));
 
 // P9 DRY: extract the 5-line "temp sym → call → typed VarDecl" pattern that
 // repeats across fused, deferred, and timeout paths.
-export function makeTempDecl(ctx: TransformContext, prefix: string, initExpr: Node, t: Type, loc: SourceLocation): { decl: Node, ident: Node } {
+export function makeTempDecl(ctx: TransformContext, prefix: string, initExpr: Node, t: Type | null, loc: SourceLocation): { decl: Node, ident: Node } {
 	const sym = freshTempSym(ctx, prefix, t);
 	initExpr.nodeType = t;
 	const decl = makeVarDecl(sym.name, initExpr, DeclKind.Const, loc);
@@ -76,7 +76,7 @@ function unboxFnName(kind: TypeKind): string {
 	};
 }
 
-export function makeUnboxCall(voidPtrExpr: Node, innerType: Type, loc: SourceLocation): Node {
+export function makeUnboxCall(voidPtrExpr: Node, innerType: Type | null, loc: SourceLocation): Node {
 	if (innerType === null) return voidPtrExpr;
 	const fn = unboxFnName(innerType.kind);
 	if (fn === "") return voidPtrExpr;
@@ -88,7 +88,7 @@ export function makeUnboxCall(voidPtrExpr: Node, innerType: Type, loc: SourceLoc
 // Get the inner type that an await expression should produce.
 // Uses the T1/T2 semantic layer: if the expression type is `Promise<T>` (plain or affine),
 // extract T. Otherwise returns null (let C handle it as void*).
-function getAwaitInnerType(awaitArgExpr: Node): Type {
+function getAwaitInnerType(awaitArgExpr: Node): Type | null {
 	if (awaitArgExpr === null || awaitArgExpr.nodeType === null) return null;
 	return awaitedType(awaitArgExpr.nodeType);
 }
@@ -97,14 +97,14 @@ function getAwaitInnerType(awaitArgExpr: Node): Type {
 
 // Check if a node is a spawn() call. Returns the closure argument and optional
 // timeout from the options object: spawn(fn, { timeout: N }).
-export function getSpawnInfo(node: Node): { closure: Node, timeout: Node } {
-	if (node === null || node.kind !== NodeKind.CallExpr) return { closure: null as unknown as Node, timeout: null as unknown as Node };
+export function getSpawnInfo(node: Node): { closure: Node | null, timeout: Node | null } {
+	if (node === null || node.kind !== NodeKind.CallExpr) return { closure: null, timeout: null };
 	const cd = node.data as CallExprData;
 	const sym = node.resolvedSym !== null ? node.resolvedSym : cd.callee.resolvedSym;
-	if (sym === null || (sym.builtinKind !== "PromiseSpawn" && sym.nativeName !== "msSpawn")) return { closure: null as unknown as Node, timeout: null as unknown as Node };
-	if (cd.arguments.length < 1) return { closure: null as unknown as Node, timeout: null as unknown as Node };
+	if (sym === null || (sym.builtinKind !== "PromiseSpawn" && sym.nativeName !== "msSpawn")) return { closure: null, timeout: null };
+	if (cd.arguments.length < 1) return { closure: null, timeout: null };
 	const closure = cd.arguments[0];
-	let timeout: Node = null;
+	let timeout: Node | null = null;
 	// Extract timeout from options object: spawn(fn, { timeout: N })
 	if (cd.arguments.length >= 2 && cd.arguments[1].kind === NodeKind.ObjectLiteral) {
 		const opts = cd.arguments[1].data as ObjectLiteralData;
@@ -125,7 +125,7 @@ export function getSpawnInfo(node: Node): { closure: Node, timeout: Node } {
 // Emits timeout handling stmts for AwaitGroup: compute deadline, timed wait,
 // check timedOut → free + throw. Returns the blocking call stmts (replaces
 // the single msAwaitGroupBlocking call). If no timeout, returns single blocking call.
-export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node, loc: SourceLocation, ctx: TransformContext): Node[] {
+export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc: SourceLocation, ctx: TransformContext): Node[] {
 	const stmts: Node[] = [];
 	if (timeoutExpr === null) {
 		// No timeout — simple blocking wait
@@ -166,7 +166,7 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node, loc: Source
 // Emits: $as = msAwaitSlotCreate(1); msSpawnSlotSubmit($as, 0, closure);
 //        msAwaitSlotWait($as); result = msAwaitSlotResult($as); msAwaitSlotRelease();
 // Slow path (timeout): heap-allocated msAwaitGroup with mutex/condvar for timed wait.
-function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node): { stmts: Node[], resultIdent: Node } {
+function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node | null): { stmts: Node[], resultIdent: Node } {
 	// Timeout requires mutex+condvar → fall back to heap AwaitGroup
 	if (timeoutExpr !== null) {
 		return expandFusedAwaitHeap(closureArg, loc, ctx, timeoutExpr);
@@ -199,7 +199,7 @@ function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformC
 }
 
 // Heap-allocated AwaitGroup path — used when timeout is needed (mutex+condvar for timed wait).
-function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node): { stmts: Node[], resultIdent: Node } {
+function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node | null): { stmts: Node[], resultIdent: Node } {
 	const stmts: Node[] = [];
 
 	// 1. const $ag = msAwaitGroupInit(1);
@@ -207,7 +207,7 @@ function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: Transf
 	stmts.push(ag.decl);
 
 	// 2. Inject cancel safe-points into the closure body
-	let closureBody: Node = null;
+	let closureBody: Node | null = null;
 	if (closureArg.kind === NodeKind.FunctionExpr) {
 		closureBody = (closureArg.data as FunctionExprData).funcExprBody;
 	} else if (closureArg.kind === NodeKind.ArrowFunction) {
@@ -243,7 +243,7 @@ function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: Transf
 // etc.) that handles both boxed and typed future layouts internally via the
 // isBoxed flag — no separate unbox step needed. For structs/refs/strings,
 // falls back to msWaitFor + unbox.
-function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: TransformContext, innerType: Type): { stmts: Node[], resultIdent: Node, typed: boolean } {
+function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: TransformContext, innerType: Type | null): { stmts: Node[], resultIdent: Node, typed: boolean } {
 	const stmts: Node[] = [];
 
 	// If handleExpr is a complex expression (call, member, etc.), hoist it into

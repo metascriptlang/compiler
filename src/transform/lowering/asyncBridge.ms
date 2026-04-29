@@ -81,7 +81,7 @@ function findVarType(entries: VarTypeInfo[], name: string): Type {
 }
 
 // Promise<T> from inner type, or Promise<void> if null
-function promiseTypeFor(inner: Type): Type {
+function promiseTypeFor(inner: Type | null): Type {
 	return inner !== null ? createPromise(inner) : createPromise(voidType());
 }
 
@@ -93,7 +93,7 @@ import { isStructLikeType } from "../util";
 // Tags the call's nodeType with Promise<T> (the true result type of the
 // allocator) so DRC's cross-pass contract is preserved. Codegen extracts T via
 // awaitedType when emitting sizeof(msFuture_<T>).
-function makeRetFutAlloc(innerType: Type, loc: SourceLocation): Node {
+function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
 	if (isStructLikeType(innerType)) {
 		const call = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
 		call.nodeType = promiseTypeFor(innerType);
@@ -157,7 +157,7 @@ function hasYieldInBody(node: Node): boolean {
 // return val → msFutureComplete($retFut, val); return;
 // Build the msFutureCompleteT or msFutureCompleteVoid statement(s) for a return value.
 // Returns an array of statements (usually 1, but 2 for arrays due to msSinkBoxStruct expansion).
-function makeFutureCompleteStmts(valueExpr: Node, isVoid: boolean, promiseType: Type, fnReturnInner: Type, loc: SourceLocation): Node[] {
+function makeFutureCompleteStmts(valueExpr: Node, isVoid: boolean, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation): Node[] {
 	if (isVoid || valueExpr === null) {
 		return [makeExprStmt(makeCall(
 			makeIdent("msFutureCompleteVoid", loc),
@@ -190,7 +190,7 @@ function makeFutureCompleteStmts(valueExpr: Node, isVoid: boolean, promiseType: 
 	), loc)];
 }
 
-function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Type, loc: SourceLocation): void {
+function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt === null) continue;
@@ -438,7 +438,7 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 	return current;
 }
 
-function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type): Node {
+function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	if (body === null) return body;
 	if (body.kind !== NodeKind.BlockStmt) return body;
 
@@ -585,7 +585,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type): Node {
 
 // Recursively rewrite all ReturnStmt nodes to msFutureComplete + return $retFut.
 // Stops at nested function boundaries (each function has its own return semantics).
-function rewriteReturns(node: Node, promiseType: Type, fnReturnInner: Type): void {
+function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Type | null): void {
 	if (node === null) return;
 	match (node.kind) {
 		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction => {},
@@ -646,7 +646,7 @@ function rewriteReturns(node: Node, promiseType: Type, fnReturnInner: Type): voi
 }
 
 // Simple wrapper: async function with no await → wrap return value in msFutureComplete
-function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type): Node {
+function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	if (body === null) return body;
 	if (body.kind !== NodeKind.BlockStmt) return body;
 
@@ -699,15 +699,15 @@ function isWasAsync(node: Node): boolean {
 }
 
 // Extract Promise<T>'s inner type from a function's declared return type.
-function getFnReturnInner(fnNode: Node): Type {
-	if (fnNode === null || fnNode.nodeType === null) return null as unknown as Type;
+function getFnReturnInner(fnNode: Node): Type | null {
+	if (fnNode === null || fnNode.nodeType === null) return null;
 	const fnType = fnNode.nodeType;
-	if (fnType.kind !== TypeKind.Function || fnType.typeReturn === null) return null as unknown as Type;
+	if (fnType.kind !== TypeKind.Function || fnType.typeReturn === null) return null;
 	if (isAwaitable(fnType.typeReturn)) return awaitedType(fnType.typeReturn);
-	return null as unknown as Type;
+	return null;
 }
 
-function rewriteAsyncFnBody(body: Node, fnReturnInner: Type): Node {
+function rewriteAsyncFnBody(body: Node, fnReturnInner: Type | null): Node {
 	if (!hasYieldInBody(body)) {
 		return rewriteSimpleAsyncBody(body, fnReturnInner);
 	}

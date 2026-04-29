@@ -92,12 +92,12 @@ export class Type {
 	typeName: string;
 	typeNames: string[];
 	typeChildren: Type[];
-	typeReturn: Type;
-	typeExtra: Type;
+	typeReturn: Type | null;
+	typeExtra: Type | null;
 	typeFlags: int32;
 	callConv: CallingConvention;
 	attachedOps: string[];
-	sym: Symbol;
+	sym: Symbol | null;
 }
 
 // ===== Symbol Kind =====
@@ -280,7 +280,7 @@ export type NodeData =
 	| { array: Node, index: Node }                                 // ArrayAccess
 	| { properties: Node[], keys: string[], keyLocations: SourceLocation[] } // ObjectLiteral
 	| { elements: Node[] }                                         // ArrayLiteral
-	| { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string } // ArrowFunction
+	| { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string, arrowDefaults: Node[] } // ArrowFunction
 	| { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string } // FunctionExpr
 	| { asExpr: Node, asType: string }                              // TypeAssertion
 	| { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node } // ConditionalExpr
@@ -472,7 +472,7 @@ export type MemberExprData = { object: Node, property: string, isOptional: boole
 export type ArrayAccessData = { array: Node, index: Node };
 export type ObjectLiteralData = { properties: Node[], keys: string[], keyLocations: SourceLocation[] };
 export type ArrayLiteralData = { elements: Node[] };
-export type ArrowFunctionData = { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string };
+export type ArrowFunctionData = { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string, arrowDefaults: Node[] };
 export type FunctionExprData = { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string };
 export type TypeAssertionData = { asExpr: Node, asType: string };
 export type ConditionalExprData = { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node };

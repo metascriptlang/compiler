@@ -32,7 +32,7 @@ function createScope(): TypeScope {
 	return { names: [], types: [] };
 }
 
-function scopeLookup(scopes: TypeScope[], name: string): Type {
+function scopeLookup(scopes: TypeScope[], name: string): Type | null {
 	let i = scopes.length - 1;
 	while (i >= 0) {
 		const s = scopes[i];
@@ -317,7 +317,7 @@ export function refineTypes(program: Node, ctx: TransformContext, registry: Expo
 
 // Registry Bridge: look up cross-module symbol by name (first match).
 // Uses pre-built name index from ExportRegistry → O(1) avg instead of linear scan.
-function registryLookup(name: string): Type {
+function registryLookup(name: string): Type | null {
 	if (_registryNameIndex === null) return null;
 	if (!_registryNameIndex.has(name)) return null;
 	const list = _registryNameIndex.get(name);
@@ -327,7 +327,7 @@ function registryLookup(name: string): Type {
 
 // Registry Bridge: look up type by name (for TypeAssertion "x as Foo" and enum member access).
 // Searches only homonymous exports for matching TypeKind (struct/enum/alias).
-function registryTypeLookup(name: string): Type {
+function registryTypeLookup(name: string): Type | null {
 	if (_registryNameIndex === null) return null;
 	if (!_registryNameIndex.has(name)) return null;
 	const list = _registryNameIndex.get(name);
@@ -346,7 +346,7 @@ function registryTypeLookup(name: string): Type {
 
 // Desperation heuristic: map common compiler variable names to known types.
 // Last resort when resolvedSym, scope, and registry all fail.
-function desperationHeuristic(name: string): Type {
+function desperationHeuristic(name: string): Type | null {
 	// Suffix-based: *Type/*type → Type, *Sym → Symbol
 	if (name.endsWith("Type") || name.endsWith("type")) return registryTypeLookup("Type");
 	if (name.endsWith("Sym")) return registryTypeLookup("Symbol");

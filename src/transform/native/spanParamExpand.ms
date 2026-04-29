@@ -91,7 +91,7 @@ function expandFunctionDecl(node: Node, expandedFuncs: ExpandedFunc[], ctx: Tran
 			if (pType !== null && (pType.kind === TypeKind.Var || pType.kind === TypeKind.Sink || pType.kind === TypeKind.Lent)) {
 				pType = pType.typeReturn;
 			}
-			if (pType !== null && pType.kind === TypeKind.Span) {
+			if (pType !== null && pType.kind === TypeKind.Span && pType.typeReturn !== null) {
 				spanParams.push({
 					originalIndex: i,
 					paramName: d.params[i],

@@ -142,28 +142,34 @@ function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext,
 // Inject concrete type symbols into scope so resolveAnnotation finds them during re-check.
 // For Array<Ref<Item>>, extracts "Item" and adds Ref<Struct("Item")> to scope.
 // Reference parity (instantiateGenericParamList): concrete types added to scope.
-function injectConcreteTypeSyms(t: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
+function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
 	if (t === null) return;
-	match (t.kind) {
-		TypeKind.Ref when (t.typeReturn !== null) => {
-			if (t.typeReturn.kind === TypeKind.Struct && t.typeReturn.typeName !== "") {
-				tryInjectTypeSym(t.typeReturn.typeName, t, ctx, callerCtx, injected);
-			}
-			injectConcreteTypeSyms(t.typeReturn, ctx, callerCtx, injected);
-		},
-		TypeKind.Array when (t.typeReturn !== null) => {
-			injectConcreteTypeSyms(t.typeReturn, ctx, callerCtx, injected);
-		},
-		TypeKind.Struct when (t.typeName !== "") => {
-			tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
-		},
-		TypeKind.GenericInstance when (t.typeChildren !== null) => {
-			for (const child of t.typeChildren) {
-				injectConcreteTypeSyms(child, ctx, callerCtx, injected);
-			}
-		},
-		_ => {},
-	};
+	const tr = t.typeReturn;
+	// Hand-rolled dispatch: match `when` guards don't propagate narrowing into
+	// the arm body in the current binder, so we can't safely access `tr.kind`
+	// inside `TypeKind.Ref when (tr !== null) => { ... tr.kind ... }`. The
+	// if-chain below makes the narrowing scope explicit and matches the binder's
+	// flow-based narrowing exactly.
+	if (t.kind === TypeKind.Ref && tr !== null) {
+		if (tr.kind === TypeKind.Struct && tr.typeName !== "") {
+			tryInjectTypeSym(tr.typeName, t, ctx, callerCtx, injected);
+		}
+		injectConcreteTypeSyms(tr, ctx, callerCtx, injected);
+		return;
+	}
+	if (t.kind === TypeKind.Array && tr !== null) {
+		injectConcreteTypeSyms(tr, ctx, callerCtx, injected);
+		return;
+	}
+	if (t.kind === TypeKind.Struct && t.typeName !== "") {
+		tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
+		return;
+	}
+	if (t.kind === TypeKind.GenericInstance && t.typeChildren !== null) {
+		for (const child of t.typeChildren) {
+			injectConcreteTypeSyms(child, ctx, callerCtx, injected);
+		}
+	}
 }
 
 function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {

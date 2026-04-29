@@ -16,10 +16,10 @@ import { parseSource, parseSourceLenient } from "../parser/statements/validation
 // ===== Data Types =====
 
 export interface SgSuggest {
-	sym: Symbol;           // symbol pointer for identity-based matching
+	sym: Symbol | null;    // symbol pointer for identity-based matching; null for synthetic suggests
 	name: string;
 	kind: SymbolKind;
-	symType: Type;
+	symType: Type | null;
 	location: SourceLocation;
 	modulePath: string;    // source file path (for cross-file navigation)
 	containerName: string; // owning class/interface name (for display: "console.log")
@@ -181,7 +181,7 @@ function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
 // Reference-aligned: uses sym pointer identity (not name string) to avoid false positives
 // with shadowed or aliased symbols. Falls back to name+modulePath for cross-module.
 
-export function sgQueryBySym(ctx: CheckerContext, targetSym: Symbol): SgSymbolRef[] {
+export function sgQueryBySym(ctx: CheckerContext, targetSym: Symbol | null): SgSymbolRef[] {
 	const result: SgSymbolRef[] = [];
 	if (ctx.symRecords === null || targetSym === null) return result;
 	const records = ctx.symRecords;
@@ -233,11 +233,11 @@ export function sgQueryByDefiningModule(ctx: CheckerContext, name: string, defMo
 
 // ===== sgTypeToString — full recursive type formatting =====
 
-export function sgTypeToString(t: Type): string {
+export function sgTypeToString(t: Type | null): string {
 	return sgTypeToStringDepth(t, 0);
 }
 
-function sgTypeToStringDepth(t: Type, depth: number): string {
+function sgTypeToStringDepth(t: Type | null, depth: number): string {
 	if (t === null) return "unknown";
 	if (depth > 10) return "...";
 
@@ -453,7 +453,7 @@ function sgFormatFuncDecl(name: string, t: Type): string {
 
 // Format struct/interface/class fields as multiline "  field: type;\n" for hover display.
 // Unwraps Ref to reach the inner Struct. Returns "" if no fields.
-function sgFormatStructFields(t: Type): string {
+function sgFormatStructFields(t: Type | null): string {
 	if (t === null) return "";
 	let st = t;
 	if (st.kind === TypeKind.Ref && st.typeReturn !== null) st = st.typeReturn;
@@ -1744,15 +1744,16 @@ export function sgGetPrefix(source: string, line: number, col: number): string {
 
 // ===== sgGetCompletionCandidates — collect matching symbols =====
 
-function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverType: Type): SgSuggest[] {
+function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverType: Type | null): SgSuggest[] {
 	const result: SgSuggest[] = [];
 	// Unwrap Ref/Ptr to get inner struct (class instances are Ref<Struct>)
-	let rt = receiverType;
-	if (rt !== null && (rt.kind === TypeKind.Ref || rt.kind === TypeKind.Ptr)) {
+	if (receiverType === null) return result;
+	let rt: Type = receiverType;
+	if (rt.kind === TypeKind.Ref || rt.kind === TypeKind.Ptr) {
 		rt = unwrapRef(rt);
 	}
 	// Dot completion: properties from receiver type
-	if (rt !== null && rt.kind === TypeKind.Struct) {
+	if (rt.kind === TypeKind.Struct) {
 		for (let i = 0; i < rt.typeNames.length; i = i + 1) {
 			const propName = rt.typeNames[i];
 			const ps = sgPrefixMatch(prefix, propName);
@@ -1771,7 +1772,7 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 		}
 	}
 	// Enum member completion
-	if (rt !== null && rt.kind === TypeKind.Enum) {
+	if (rt.kind === TypeKind.Enum) {
 		for (let i = 0; i < rt.typeNames.length; i = i + 1) {
 			const memberName = rt.typeNames[i];
 			const ps = sgPrefixMatch(prefix, memberName);
@@ -1827,7 +1828,7 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 	return result;
 }
 
-export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletionKind, prefix: string, receiverType: Type): SgSuggest[] {
+export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletionKind, prefix: string, receiverType: Type | null): SgSuggest[] {
 	if (kind === SgCompletionKind.MemberAccess) {
 		return sgCompleteMemberAccess(ctx, prefix, receiverType);
 	}
@@ -2438,7 +2439,7 @@ function sgCollectCallParamHints(
 // ===== Exception Inlay Hints =====
 
 // Infer the return type of a call expression's callee.
-function inferCalleeReturnType(ctx: CheckerContext, node: Node): Type {
+function inferCalleeReturnType(ctx: CheckerContext, node: Node): Type | null {
 	if (node.kind === NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
 		if (cd.callee !== null && cd.callee.kind === NodeKind.Identifier) {

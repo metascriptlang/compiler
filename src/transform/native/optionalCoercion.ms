@@ -1,12 +1,14 @@
-// Optional Coercion — wraps T returns for T|null return types in C
-// Follows reference optional_coercion.zig
+// Optional Coercion — wraps T returns for Maybe<T> (struct | null) return types in C
 //
-// In C, `T | null` is represented as a tagged union (msOptionalT).
-// When a function returns T|null but an arm returns plain T,
-// the value must be wrapped: return msOptionalWrap(value);
-// When returning null: return msOptionalNull();
+// Only fires for value-type structs wrapped as Maybe (struct has no null sentinel,
+// so it needs a `{ value, present }` wrapper). Ref<T>|Null / Ptr<T>|Null stay as
+// Union — codegen emits them as bare pointer with NULL sentinel, no wrapping needed.
+// Primitive | null stays as Union too — wrapping helpers for primitives don't exist.
 //
-// Detection: function has T|null return type annotation (contains "|").
+// Detection: resolved return type has the IsMaybe flag (set by resolvePass when
+// collapsing struct | null → Maybe<T>). The string-based detection used previously
+// was unsafe — it fired on every "|" annotation including ref unions.
+//
 // All return statements in the body are transformed:
 //   return null   → return msOptionalNull()
 //   return expr   → return msOptionalWrap(expr)
@@ -15,10 +17,10 @@ import {
 	Node, NodeKind,
 	FunctionDeclData, ReturnStmtData, BlockStmtData, IfStmtData,
 } from "../../ast/node";
+import { isMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent } from "../util";
-import { findChar } from "../../utils/string";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { createTransformContext } from "../context";
 
@@ -33,19 +35,16 @@ function optionalVisitor(node: Node): Node {
 	if (node.kind !== NodeKind.FunctionDecl) return node;
 	const d = node.data as FunctionDeclData;
 
-	// Check if return type annotation contains "|" (union type, likely T|null)
-	if (!isOptionalReturnType(d.fnReturnType)) return node;
+	// Only fire when the resolved return type is Maybe<T> (struct | null).
+	// Ref/Ptr/primitive unions skip this transform — codegen handles them directly.
+	const sym = node.resolvedSym;
+	if (sym === null || sym.symbolType === null || sym.symbolType.typeReturn === null) return node;
+	if (!isMaybeType(sym.symbolType.typeReturn)) return node;
 
 	// Walk the function body and transform return statements
 	transformReturnsInBody(d.fnBody, d.fnReturnType);
 
 	return node;
-}
-
-// Check if a return type string looks like an optional (contains top-level "|")
-function isOptionalReturnType(retType: string): boolean {
-	if (retType === "") return false;
-	return findChar(retType, "|") >= 0;
 }
 
 // Walk body and transform returns in T|null functions
@@ -113,14 +112,17 @@ test "if unchanged" { assert firstStmtKindAfter("if (x) {}", coerceOptionals) ==
 
 test "non-optional function unchanged" { assert firstStmtKindAfter("function foo(): number { return 1; }", coerceOptionals) === NodeKind.FunctionDecl; }
 
-test "return null in optional fn becomes call" {
+// Detection is now type-based (requires resolvedSym set by the checker).
+// parseInput skips the checker, so the transform sees no Maybe flag and is a no-op.
+// These tests verify that no-checker invocations don't accidentally wrap returns.
+test "return null without checker is unchanged" {
 	const k = getReturnArgKind("function foo(): number | null { return null; }");
-	assert k === NodeKind.CallExpr;
+	assert k === NodeKind.NullLiteral;
 }
 
-test "return expr in optional fn becomes call" {
+test "return expr without checker is unchanged" {
 	const k = getReturnArgKind("function foo(): number | null { return 42; }");
-	assert k === NodeKind.CallExpr;
+	assert k === NodeKind.NumberLiteral;
 }
 
 test "return expr in plain fn unchanged" {

@@ -135,7 +135,7 @@ function cloneNodeImpl(node: Node): Node {
 	if (kind === NodeKind.ArrayAccess) { const d = node.data as ArrayAccessData; const data: NodeData = { array: cloneNodeImpl(d.array), index: cloneNodeImpl(d.index) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
 	if (kind === NodeKind.ObjectLiteral) { const d = node.data as ObjectLiteralData; const data: NodeData = { properties: cloneNodeArray(d.properties), keys: cloneStringArray(d.keys), keyLocations: d.keyLocations !== null ? d.keyLocations : [] }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
 	if (kind === NodeKind.ArrayLiteral) { const d = node.data as ArrayLiteralData; const data: NodeData = { elements: cloneNodeArray(d.elements) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ArrowFunction) { const d = node.data as ArrowFunctionData; const data: NodeData = { arrowParams: cloneStringArray(d.arrowParams), arrowParamTypes: cloneStringArray(d.arrowParamTypes), arrowBody: cloneNodeImpl(d.arrowBody), arrowFlags: d.arrowFlags, arrowReturnType: d.arrowReturnType }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
+	if (kind === NodeKind.ArrowFunction) { const d = node.data as ArrowFunctionData; const data: NodeData = { arrowParams: cloneStringArray(d.arrowParams), arrowParamTypes: cloneStringArray(d.arrowParamTypes), arrowBody: cloneNodeImpl(d.arrowBody), arrowFlags: d.arrowFlags, arrowReturnType: d.arrowReturnType, arrowDefaults: cloneNodeArray(d.arrowDefaults !== null ? d.arrowDefaults : []) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
 	if (kind === NodeKind.FunctionExpr) { const d = node.data as FunctionExprData; const data: NodeData = { funcExprParams: cloneStringArray(d.funcExprParams), funcExprParamTypes: cloneStringArray(d.funcExprParamTypes), funcExprBody: cloneNodeImpl(d.funcExprBody), funcExprFlags: d.funcExprFlags, funcExprReturnType: d.funcExprReturnType }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
 	if (kind === NodeKind.TypeAssertion) { const d = node.data as TypeAssertionData; const data: NodeData = { asExpr: cloneNodeImpl(d.asExpr), asType: d.asType }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
 	if (kind === NodeKind.ConditionalExpr) { const d = node.data as ConditionalExprData; const data: NodeData = { ternaryCondition: cloneNodeImpl(d.ternaryCondition), ternaryConsequent: cloneNodeImpl(d.ternaryConsequent), ternaryAlternate: cloneNodeImpl(d.ternaryAlternate) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
@@ -227,7 +227,7 @@ export function monoSubstAnnotation(annotation: string, paramName: string, concr
 // Type-to-string for annotation substitution (human-readable MetaScript type names).
 // Used by substituteAnnotations to replace generic params in type annotations.
 // NOT for C name mangling — use registry.ms:monoTypeKey for that.
-export function monoConcreteTypeName(t: Type): string {
+export function monoConcreteTypeName(t: Type | null): string {
 	if (t === null) return "unknown";
 	if (isResult(t)) return `Result<${monoConcreteTypeName(getResultOkType(t))}, ${monoConcreteTypeName(getResultErrType(t))}>`;
 	return match (t.kind) {

@@ -34,7 +34,7 @@ import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // Create a member access on a Result variable with resolvedSym for the property.
 // Derives type from Result's typeReturn (T) and typeExtra (E) directly.
-function makeResultMember(sym: Symbol, resType: Type, propName: string, loc: SourceLocation): Node {
+function makeResultMember(sym: Symbol, resType: Type | null, propName: string, loc: SourceLocation): Node {
 	const ref = makeIdentResolved(sym, loc);
 	const mem = makeMember(ref, propName, loc);
 
@@ -63,8 +63,8 @@ function lookupResultErr(ctx: TransformContext): Symbol {
 // not the inner expression's Result type (e.g. Result<void, string> vs Result<Person, string>).
 // Uses walkExpandBlocksHooked's FnEntry/FnExit callbacks to save/restore on function boundaries.
 
-let enclosingFnRetType: Type = null;
-let fnRetTypeStack: Type[] = [];
+let enclosingFnRetType: Type | null = null;
+let fnRetTypeStack: (Type | null)[] = [];
 
 function onFnEntry(node: Node): void {
 	fnRetTypeStack.push(enclosingFnRetType);

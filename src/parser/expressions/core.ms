@@ -8,7 +8,7 @@ import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, isIdentLike } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
-import { isArrowFunction, parseArrowFunction } from "./arrow";
+import { isArrowFunction, parseArrowFunction, parseBareIdentArrow } from "./arrow";
 import { parseObjectLiteral } from "./object";
 import { parseExprList, parseCallExpr } from "./call";
 import { parseTemplateLiteral } from "./template";
@@ -283,6 +283,12 @@ function parsePrimary(state: ParserState): ExprResult {
 		return Result.ok(createNode(NodeKind.RegexLiteral, { regexPattern: token.value }, token));
 	}
 
+	// Bare-ident arrow: x => body  (ES6 single-untyped-param shorthand)
+	// Detected before plain Ident handler — must run first or `x` is consumed as identifier.
+	if (token.kind === TokenKind.Ident && peek(state, 1).kind === TokenKind.Arrow) {
+		return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "");
+	}
+
 	if (token.kind === TokenKind.Ident ||
 		token.kind === TokenKind.This ||
 		token.kind === TokenKind.Super) {
@@ -443,6 +449,11 @@ function parsePrimary(state: ParserState): ExprResult {
 				advance(state);
 			}
 			return parseFuncExprBody(state, token, feFlags);
+		}
+		// async bare-ident arrow: async x => ...
+		if (isIdentLike(peek(state, 1)) && peek(state, 2).kind === TokenKind.Arrow) {
+			advance(state); // consume 'async'
+			return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "async");
 		}
 		// async arrow: async () => ... or async (x) => ...
 		if (state.position + 1 < state.tokens.length &&

@@ -106,6 +106,15 @@ function parseTypeAtom(state: ParserState): Node {
 		return parseTypeObjectLiteral(state);
 	}
 
+	// Tuple type: [T, U, ...] — bracket at start of type position (not array suffix).
+	// The string form (resolveAnnotation) is the source of truth for the type;
+	// we balance-skip and emit a placeholder Identifier so parser state is preserved.
+	// (Positioned tuple AST as a dedicated NodeKind is a future enhancement.)
+	if (token.kind === TokenKind.LBracket) {
+		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		return createNode(NodeKind.Identifier, { name: "[tuple]" }, token);
+	}
+
 	// Named type: identifier (possibly with generics and array suffix)
 	if (!isTypeIdent(token)) {
 		// Fallback: create an Identifier with whatever token we have
@@ -356,10 +365,19 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 			advance(state);
 			skipTypeAtomNoOptional(state);
 		}
+		// Array type suffix: ((T) => U)[] or (T)[]
+		while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
+			skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		}
 		return;
 	}
 	if (token.kind === TokenKind.LBrace) {
 		skipBalanced(state, TokenKind.LBrace, TokenKind.RBrace);
+		return;
+	}
+	// Tuple type: [T, U, ...] — bracket at start of type position (not array suffix)
+	if (token.kind === TokenKind.LBracket) {
+		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 		return;
 	}
 	advance(state);
@@ -395,12 +413,26 @@ function skipTypeAtom(state: ParserState): void {
 			advance(state);
 			skipTypeAtom(state);
 		}
+		// Array type suffix on parenthesized/function type: ((n) => T)[] or (T)[]
+		while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
+			skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		}
 		return;
 	}
 
 	// Object type: { x: T; y: U }
 	if (token.kind === TokenKind.LBrace) {
 		skipBalanced(state, TokenKind.LBrace, TokenKind.RBrace);
+		return;
+	}
+
+	// Tuple type: [T, U, ...] — bracket at start of type position (not array suffix)
+	if (token.kind === TokenKind.LBracket) {
+		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		// Optional marker: [T, U]?
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+			advance(state);
+		}
 		return;
 	}
 

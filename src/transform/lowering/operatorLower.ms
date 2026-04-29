@@ -30,7 +30,7 @@ import { findExtension, ExtensionMethod } from "../../checker/context";
 
 // Resolve the Type of an expression node.
 // Tries nodeType first (set by checker/analyzer), then resolvedSym, then symbol table.
-function resolveType(ctx: TransformContext, node: Node): Type {
+function resolveType(ctx: TransformContext, node: Node): Type | null {
 	if (node.nodeType !== null) return node.nodeType;
 	if (node.resolvedSym !== null && node.resolvedSym.symbolType !== null) {
 		return node.resolvedSym.symbolType;

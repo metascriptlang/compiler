@@ -30,7 +30,7 @@ import { makeIdent, makeCall, makeNumber, makeNull, isStructLikeType } from "../
 
 // Runtime type-tag for msFutureThenTyped / msFutureCatchTyped. Matches
 // MS_TYPETAG_* in runtime/promise/combinator.h (0=ptr, 1=int, 2=double, 3=string).
-function typeTagFor(t: Type): number {
+function typeTagFor(t: Type | null): number {
 	if (t === null) return 0;
 	return match (t.kind) {
 		TypeKind.Void | TypeKind.Unknown => 0,
@@ -47,7 +47,7 @@ function typeTagFor(t: Type): number {
 // variants (Chain, Then, Catch, Finally). Returns "" if no typed variant
 // exists (caller must fall back to the untyped/boxed path).
 // Correct for futures with inline typed storage (populated via msFutureCompleteT).
-function futureTypedSuffix(t: Type): string {
+function futureTypedSuffix(t: Type | null): string {
 	if (t === null) return "";
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "double",
@@ -62,17 +62,17 @@ function futureTypedSuffix(t: Type): string {
 	};
 }
 
-function futureThenFnForInner(t: Type): string {
+function futureThenFnForInner(t: Type | null): string {
 	const suffix = futureTypedSuffix(t);
 	return suffix === "" ? "" : "msFutureThen_" + suffix;
 }
 
-function futureCatchFnForInner(t: Type): string {
+function futureCatchFnForInner(t: Type | null): string {
 	const suffix = futureTypedSuffix(t);
 	return suffix === "" ? "" : "msFutureCatch_" + suffix;
 }
 
-function futureFinallyFnForInner(t: Type): string {
+function futureFinallyFnForInner(t: Type | null): string {
 	const suffix = futureTypedSuffix(t);
 	return suffix === "" ? "" : "msFutureFinally_" + suffix;
 }
@@ -82,7 +82,7 @@ function futureFinallyFnForInner(t: Type): string {
 // (those fall through to legacy generic msPromiseAll). Struct types use their
 // declared typeName which matches codegen's mangle(getTypeDesc(t)) for simple
 // names — genFutureType emits the matching MS_PROMISE_ALL_FOR instance.
-function promiseAllFnForInner(t: Type): string {
+function promiseAllFnForInner(t: Type | null): string {
 	const suffix = futureTypedSuffix(t);
 	if (suffix !== "") return "msPromiseAllFor_msFuture_" + suffix;
 	if (t !== null && t.kind === TypeKind.Struct && t.typeName !== "") {

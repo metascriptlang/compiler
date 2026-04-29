@@ -111,7 +111,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 			closureArg = pair;
 		}
 		// Get return type from Promise<T> on the CallExpr (set by checker's Spawn inference)
-		let closureRetType: Type = null;
+		let closureRetType: Type | null = null;
 		if (node.nodeType !== null && isAwaitable(node.nodeType)) {
 			closureRetType = awaitedType(node.nodeType);
 		} else if (closureArg.nodeType !== null && closureArg.nodeType.kind === TypeKind.Function) {

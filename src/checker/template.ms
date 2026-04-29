@@ -35,7 +35,7 @@ let _templateGensymCounter: int32 = 0;
 let _templateDepth: int32 = 0;
 const TEMPLATE_DEPTH_LIMIT: int32 = 100;
 
-export function expandTemplate(ctx: CheckerContext, sym: Symbol, callNode: Node, callData: CallExprData, expectedType: Type): Type {
+export function expandTemplate(ctx: CheckerContext, sym: Symbol, callNode: Node, callData: CallExprData, expectedType: Type | null): Type {
 	if (_templateDepth >= TEMPLATE_DEPTH_LIMIT) {
 		addError(ctx, `Template '${sym.name}' instantiation too deep (limit ${TEMPLATE_DEPTH_LIMIT})`,
 			callNode.location.line, callNode.location.column);
@@ -47,7 +47,7 @@ export function expandTemplate(ctx: CheckerContext, sym: Symbol, callNode: Node,
 	return result;
 }
 
-function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, callData: CallExprData, expectedType: Type): Type {
+function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, callData: CallExprData, expectedType: Type | null): Type {
 	const fnDecl = sym.declNode;
 	if (fnDecl === null) return unknownType();
 	const fd = fnDecl.data as FunctionDeclData;

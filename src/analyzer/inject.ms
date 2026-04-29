@@ -9,7 +9,7 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { isSinkType, createPrimitive } from "../checker/types";
 import { lookupSymbol, lookupLocal, hasFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
@@ -1417,7 +1417,7 @@ function classifyNestedCallReturn(callExpr: Node, dctx: DrcContext): RcInfo {
 }
 
 // Get the return Type of a nested call expression (Blocker 27: typed sinks)
-function getCallReturnType(callExpr: Node, dctx: DrcContext): Type {
+function getCallReturnType(callExpr: Node, dctx: DrcContext): Type | null {
 	if (dctx.ctx.checkerCtx === null) return null;
 	const sym = resolveCallSym(callExpr, dctx);
 	if (sym === null || sym.symbolType === null) return null;
@@ -1655,7 +1655,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// Prefer nodeType from checker (set on the VariableDecl during check pass)
 	// Fall back to symbol table lookup only if nodeType is absent
 	if (dctx.ctx.checkerCtx === null) return stmt;
-	let varType: Type = null;
+	let varType: Type | null = null;
 	if (stmt.nodeType !== null) {
 		varType = stmt.nodeType;
 	} else {
@@ -2447,7 +2447,7 @@ test "callCanThrow true for user functions" {
 
 test "stmtCanThrow true for ThrowStmt" {
 	const loc = testLoc();
-	const throwStmt: Node = { kind: NodeKind.ThrowStmt, data: { throwArg: makeNull(loc) }, location: loc, nodeType: null, resolvedSym: noSym, flags: 0 };
+	const throwStmt = createNodeAt(NodeKind.ThrowStmt, { throwArg: makeNull(loc) }, loc);
 	assert stmtCanThrow(throwStmt);
 }
 

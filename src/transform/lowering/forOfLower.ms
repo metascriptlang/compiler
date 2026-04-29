@@ -50,7 +50,7 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 // → { const $iter = iter; let $r = $iter.next();
 //     while (!$r.done) { const x = $r.value; body; $r = $iter.next(); } }
 
-function makeNextCallSym(iterSym: Symbol, resultType: Type, loc: SourceLocation): Node {
+function makeNextCallSym(iterSym: Symbol, resultType: Type | null, loc: SourceLocation): Node {
 	const call = makeCall(makeMember(makeIdentResolved(iterSym, loc), "next", loc), [], loc);
 	if (resultType !== null) call.nodeType = resultType;
 	return call;

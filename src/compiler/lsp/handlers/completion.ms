@@ -79,7 +79,7 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 // Find the root struct type for an object literal by walking the AST.
 // Finds the outermost ObjectLiteral ancestor, then looks for the VariableDecl
 // that contains it to get the declared type via sgRecords.
-function lspFindObjectLiteralTypeAST(program: Node, line: number, col: number, ctx: CheckerContext): Type {
+function lspFindObjectLiteralTypeAST(program: Node, line: number, col: number, ctx: CheckerContext): Type | null {
 	// Find the outermost ObjectLiteral ancestor at cursor position
 	const rootObj = lspFindRootObjectLiteral(program, line, col);
 	if (rootObj === null) return null;
@@ -382,7 +382,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	// For MemberAccess, resolve receiver type via symRecords.
 	// Works for both simple (config.) and nested (config.fmt.) chains:
 	// scan backward from cursor to find the last `.`, then query the token before it.
-	let receiverType: Type = null;
+	let receiverType: Type | null = null;
 	if (kind === SgCompletionKind.MemberAccess) {
 		// Find the dot position by scanning source backward from cursor
 		const lineOffset = sgGetLineOffset(source, pos.line);

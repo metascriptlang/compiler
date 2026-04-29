@@ -12,7 +12,7 @@ import { findExtension } from "../../checker/context";
 import { makeIdent, makeCall, makeString, makeBool, makeBinary, makeMember, enumToStringName, syntheticToken } from "../util";
 
 // Resolve the struct type for a type name string (e.g., "Person" → struct type with fields).
-function resolveJsonTargetType(typeArgStr: string, ctx: TransformContext): Type {
+function resolveJsonTargetType(typeArgStr: string, ctx: TransformContext): Type | null {
 	if (ctx.checkerCtx === null) return null;
 	const sym = lookupSymbol(ctx.checkerCtx.table, typeArgStr);
 	if (sym === null) return null;
@@ -142,9 +142,16 @@ function wrapFieldAsJson(fieldAccess: Node, ftype: Type, loc: SourceLocation, ct
 }
 
 // Build jsonObject(keys, vals) for a nested struct field
-function buildNestedJsonObject(obj: Node, structType: Type, loc: SourceLocation, ctx: TransformContext): Node {
+function buildNestedJsonObject(obj: Node, structType: Type | null, loc: SourceLocation, ctx: TransformContext): Node {
 	const keyNodes: Node[] = [];
 	const valNodes: Node[] = [];
+	if (structType === null) {
+		const keysArrEmpty = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticToken(loc));
+		keysArrEmpty.nodeType = createArray(stringType());
+		const valsArrEmpty = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, syntheticToken(loc));
+		valsArrEmpty.nodeType = createArray(unknownType());
+		return makeCall(resolveDbgIdent("jsonObject", ctx, loc), [keysArrEmpty, valsArrEmpty], loc);
+	}
 	let fi = 0;
 	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
 		const fname = structType.typeNames[fi];
@@ -173,8 +180,8 @@ function buildJsonValueDebug(arg: Node, loc: SourceLocation, ctx: TransformConte
 }
 
 // Build: "\x1b[34mTypeName \x1b[0m" + stringify(jsonObject(keys, vals))
-function buildStructDebugString(arg: Node, typeName: string, structType: Type, isClass: boolean, isAnon: boolean, loc: SourceLocation, ctx: TransformContext): Node {
-	if (structType.typeNames === null || structType.typeChildren === null) return arg;
+function buildStructDebugString(arg: Node, typeName: string, structType: Type | null, isClass: boolean, isAnon: boolean, loc: SourceLocation, ctx: TransformContext): Node {
+	if (structType === null || structType.typeNames === null || structType.typeChildren === null) return arg;
 
 	// Color prefix: blue for struct, green for class, cyan for anon
 	const color = isAnon ? "\x1b[36m" : isClass ? "\x1b[32m" : "\x1b[34m";

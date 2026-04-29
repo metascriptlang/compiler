@@ -36,7 +36,7 @@ export function createMonoRegistry(): MonoRegistry {
 }
 
 // C-safe type key for name mangling and dedup.
-export function monoTypeKey(t: Type): string {
+export function monoTypeKey(t: Type | null): string {
 	if (t === null) return "null";
 	return match (t.kind) {
 		TypeKind.Number => "number",

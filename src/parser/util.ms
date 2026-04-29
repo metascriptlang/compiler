@@ -36,9 +36,9 @@ export function skipOptionalType(state: ParserState): void {
 // Also builds a positioned TypeExpr AST (standard parity: PNode type tree).
 // Retrieve via getLastTypeExpr() after calling captureOptionalType().
 
-let _lastTypeExpr: Node = null;
+let _lastTypeExpr: Node | null = null;
 
-export function getLastTypeExpr(): Node {
+export function getLastTypeExpr(): Node | null {
 	return _lastTypeExpr;
 }
 

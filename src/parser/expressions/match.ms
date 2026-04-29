@@ -76,7 +76,7 @@ function parseMatchCase(
 	const patterns = try parseMatchPatterns(state);
 
 	// Parse optional 'when' guard: pattern when condition => body
-	let guard: Node = null;
+	let guard: Node | null = null;
 	if (current(state).kind === TokenKind.When) {
 		advance(state);
 		guard = try exprParser(state, 0);

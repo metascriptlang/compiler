@@ -16,7 +16,7 @@ export function syntheticToken(loc: SourceLocation): Token {
 // Lives here — not in builtinLower or promiseLower — because three sibling modules
 // (builtinLower, promiseLower, asyncBridge) all need it; keeping it in any one of
 // them creates a circular import with the others.
-export function isStructLikeType(t: Type): boolean {
+export function isStructLikeType(t: Type | null): boolean {
 	if (t === null) return false;
 	return t.kind === TypeKind.Struct || t.kind === TypeKind.GenericInstance
 		|| t.kind === TypeKind.Tuple || t.kind === TypeKind.String;
@@ -37,7 +37,7 @@ export function makeIdent(identName: string, loc: SourceLocation): Node {
 }
 
 // Typed variant: creates an identifier with a known Type (for synthetic temps)
-export function makeTypedIdent(identName: string, t: Type, loc: SourceLocation): Node {
+export function makeTypedIdent(identName: string, t: Type | null, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.Identifier, { name: identName }, syntheticToken(loc));
 	if (t !== null) { n.nodeType = t; }
 	return n;
@@ -120,11 +120,11 @@ export function makeExprStmt(exprNode: Node, loc: SourceLocation): Node {
 	return createNode(NodeKind.ExprStmt, { expr: exprNode }, syntheticToken(loc));
 }
 
-export function makeReturn(arg: Node, loc: SourceLocation): Node {
+export function makeReturn(arg: Node | null, loc: SourceLocation): Node {
 	return createNode(NodeKind.ReturnStmt, { argument: arg }, syntheticToken(loc));
 }
 
-export function makeIf(cond: Node, thenBranch: Node, elseBranch: Node, loc: SourceLocation): Node {
+export function makeIf(cond: Node, thenBranch: Node, elseBranch: Node | null, loc: SourceLocation): Node {
 	return createNode(NodeKind.IfStmt, { condition: cond, consequent: thenBranch, alternate: elseBranch }, syntheticToken(loc));
 }
 
@@ -254,7 +254,7 @@ export function makeSwitchCase(tests: Node[], stmts: Node[], isDefault: boolean,
 
 // ===== Declaration Builders =====
 
-export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[], body: Node, flags: string, returnType: string, loc: SourceLocation): Node {
+export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[], body: Node | null, flags: string, returnType: string, loc: SourceLocation): Node {
 	const emptyDefaults: Node[] = [];
 	const n = createNode(NodeKind.FunctionDecl, {
 		fnName: name, params: fnParams, fnParamTypes: paramTypes,

@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, isFloatType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType, isStringLike, awaitedType } from "../../checker/types";
+import { isIntegerType, isFloatType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType, isStringLike, awaitedType, unwrapRefNullUnion } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -25,6 +25,26 @@ import { GcMode } from "../../checker/context";
 // Build a msAllocTyped/msAllocTypedUninit call expression. Under --gc=manual,
 // TypeInfo is not emitted so we pass NULL; otherwise we reference the type's
 // TypeInfo global.
+// Strip Sink/Lent ownership modifiers — codegen treats them as transparent wrappers.
+function resolveSinkLent(t: Type | null): Type | null {
+	if (t === null) return null;
+	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent) {
+		return t.typeReturn;
+	}
+	return t;
+}
+
+// Unwrap Ptr/Ref/Sink/Lent to expose the inner Union for variant→union pointer casts.
+function unwrapPointerLikeForVariant(t: Type | null): Type | null {
+	if (t === null) return null;
+	const k = t.kind;
+	if ((k === TypeKind.Ptr || k === TypeKind.Ref
+		|| k === TypeKind.Sink || k === TypeKind.Lent) && t.typeReturn !== null) {
+		return t.typeReturn;
+	}
+	return t;
+}
+
 function genAllocCall(g: CGen, cType: string, fn: string): string {
 	const typeArg = (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) ? "NULL" : `&${cType}TypeInfo`;
 	return `(${cType}*)${fn}(sizeof(${cType}), ${typeArg})`;
@@ -46,7 +66,7 @@ function genAllocTypedUninit(g: CGen, cType: string): string {
 // every field is written before the next read, (2) no inherited fields —
 // typeExtra !== null means the class inherits, and inherited fields are NOT
 // in typeNames so coverage can't be proved. Default to safe on any doubt.
-function pickAllocExpr(g: CGen, cType: string, innerType: Type, argsCoverAllFields: boolean): string {
+function pickAllocExpr(g: CGen, cType: string, innerType: Type | null, argsCoverAllFields: boolean): string {
 	const hasBase = innerType !== null && innerType.typeExtra !== null;
 	const safeUninit = !hasBase && argsCoverAllFields;
 	return safeUninit ? genAllocTypedUninit(g, cType) : genAllocTyped(g, cType);
@@ -195,7 +215,7 @@ function isLvalueNode(node: Node): boolean {
 // compound literal (starts with '{'), hoist it to a temp variable first.
 // Reference-aligned address-of: always operates on named locations.
 // paramType: optional parameter type from call site for resolving untyped literals.
-export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, paramType: Type): string {
+export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, paramType: Type | null): string {
 	if (snippet.byteLength > 0 && snippet.byteAt(0) === "{".code) {
 		// Bare compound literal — must hoist to temp (Reference: generate temporary + field assignment)
 		let cType = "";
@@ -333,15 +353,13 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 	if (p !== null && exprNode !== null && !isLvalueNode(exprNode)) {
 		// When paramType (from implementation) resolves to a Union but exprNode.nodeType
 		// is a Struct variant (from overload), wrap in the full tagged union.
-		let resolvedParam = paramType;
-		if (resolvedParam !== null && (resolvedParam.kind === TypeKind.Sink || resolvedParam.kind === TypeKind.Lent)) {
-			resolvedParam = resolvedParam.typeReturn;
-		}
+		const resolvedParam = resolveSinkLent(paramType);
+		const exprNT = exprNode.nodeType;
 		if (resolvedParam !== null && resolvedParam.kind === TypeKind.Union
-			&& exprNode.nodeType !== null && exprNode.nodeType.kind === TypeKind.Struct
+			&& exprNT !== null && exprNT.kind === TypeKind.Struct
 			&& exprNode.kind === NodeKind.ObjectLiteral) {
 			const unionName = getTypeDesc(g, resolvedParam);
-			const variantType = getTypeDesc(g, exprNode.nodeType);
+			const variantType = getTypeDesc(g, exprNT);
 			// Find variant index by matching the Struct in the Union's typeChildren
 			let varIdx = -1;
 			let vi = 0;
@@ -379,12 +397,9 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 	// widening (variant* → union*) must happen here at the conversion point — same pattern
 	// as the compound literal union wrapping above (lines 183-213).
 	if (paramType !== null && exprNode !== null && exprNode.nodeType !== null) {
-		let innerParam = paramType;
-		if ((innerParam.kind === TypeKind.Ptr || innerParam.kind === TypeKind.Ref
-			|| innerParam.kind === TypeKind.Sink || innerParam.kind === TypeKind.Lent) && innerParam.typeReturn !== null) {
-			innerParam = innerParam.typeReturn;
-		}
-		if (innerParam.kind === TypeKind.Union && exprNode.nodeType.kind === TypeKind.Struct) {
+		const innerParam = unwrapPointerLikeForVariant(paramType);
+		const exprNT = exprNode.nodeType;
+		if (innerParam !== null && innerParam.kind === TypeKind.Union && exprNT.kind === TypeKind.Struct) {
 			const unionCType = getTypeDesc(g, innerParam);
 			return `(${unionCType}*)&(${snippet})`;
 		}
@@ -541,6 +556,12 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			}
 			if (nk === TypeKind.Boolean) {
 				ctx.results.push("MS_FALSE");
+				return;
+			}
+			// Union(Ref<T>, Null) / Union(Ptr<T>, Null) is a pointer at C level — emit NULL,
+			// not (T){0}. Must check before isNilableValueType (which returns true for Union).
+			if (unwrapRefNullUnion(node.nodeType) !== null) {
+				ctx.results.push(cNullLiteral());
 				return;
 			}
 			if (isNilableValueType(node.nodeType)) {
@@ -949,7 +970,16 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void
 	// extern from "c_name" — useHeader propagates #include to consuming module.
 	// Runtime externs (no headerPath) already have headers always included (system.h, core/*.h).
 	// User externs (with headerPath) get their @include propagated to this module.
-	if (sym !== null && sym.nativeName !== "") {
+	//
+	// IMPORTANT: nativeName is overloaded — it's the FFI symbol for extern functions
+	// AND the mangled C local name for ordinary variables (set in statements.ms when
+	// hoisting decls). Without the SymbolKind guard, a stored closure call like
+	// `const f: (n) => N = arrow; f(10)` would be miscompiled as a native FFI call,
+	// emitting `f_1_(10)` instead of dispatching through genClosureCall.
+	if (sym !== null && sym.nativeName !== ""
+		&& sym.symbolKind !== SymbolKind.Variable
+		&& sym.symbolKind !== SymbolKind.Parameter
+		&& sym.symbolKind !== SymbolKind.Property) {
 		useHeader(g, sym);
 		ctx.results.push(emitNativeCall(g, p, sym.nativeName, cd.arguments, sym));
 		return;
@@ -1452,6 +1482,14 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			if (node.nodeType !== null) {
 				// Unwrap Ref<Union> for discriminated union construction
 				let litType = node.nodeType;
+				// Union(Ref<T>, Null) — collapse to bare Ref<T> so the rest of the
+				// dispatch picks the Ref/heap-alloc path. The source-level union
+				// stays on node.nodeType for narrowing fidelity; we only override
+				// the local litType used for layout decisions here.
+				const refFromUnion = unwrapRefNullUnion(litType);
+				if (refFromUnion !== null) {
+					litType = refFromUnion;
+				}
 				if (litType.kind === TypeKind.Ref && litType.typeReturn !== null && litType.typeReturn.kind === TypeKind.Union) {
 					litType = litType.typeReturn;
 					isRefUnion = true;
@@ -1522,9 +1560,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 							unionWrapIdx = varIdx;
 						}
 					}
-				} else if (node.nodeType.kind === TypeKind.Ref && node.nodeType.typeReturn !== null) {
-					// Class/interface type: ObjectLiteral constructs inner struct, heap-allocated
-					cType = getTypeDesc(g, node.nodeType.typeReturn);
+				} else if (litType.kind === TypeKind.Ref && litType.typeReturn !== null) {
+					// Class/interface type: ObjectLiteral constructs inner struct, heap-allocated.
+					// litType is the unwrapped form — bare Ref<T> here, even when node.nodeType
+					// is Union(Ref<T>, Null). Source-level union stays on node.nodeType.
+					cType = getTypeDesc(g, litType.typeReturn);
 					isClassObj = true;
 				} else {
 					const td = getTypeDesc(g, node.nodeType);

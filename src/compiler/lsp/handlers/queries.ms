@@ -346,7 +346,7 @@ export function handleDocumentHighlight(id: string, params: string, db: TransAmD
 // ===== Rename =====
 
 // Build TextEdit array for refs in a single file (sym identity for current file)
-function buildFileEditsBySym(ctx: CheckerContext, sym: Symbol, newName: string): string {
+function buildFileEditsBySym(ctx: CheckerContext, sym: Symbol | null, newName: string): string {
 	const refs = sgQueryBySym(ctx, sym);
 	if (refs.length === 0) return "";
 	const edits: string[] = [];

@@ -893,16 +893,11 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		ctx.strictDefs = opts.strictDefs;
 		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
-		// Render non-fatal checker errors and track for codegen gate
-		// Skip warnings — already rendered in graph checker phase
+		// Errors and warnings were already rendered in the graph-checker phase
+		// (loadAndCheckGraph → reportModuleErrors). Re-checking here re-populates
+		// ctx.errors with the same diagnostics — only count them for the codegen
+		// gate; do NOT render again, otherwise every error/warning prints twice.
 		if (hasErrors(ctx)) {
-			for (const e of ctx.errors) {
-				if (e.severity === Severity.Warning || e.severity === Severity.Hint) continue;
-				renderModuleError(modPath, mod.source, {
-					message: e.message, line: e.line, column: e.column,
-					severity: ErrorSeverity.Error,
-				});
-			}
 			totalCheckerErrors = totalCheckerErrors + errorCount(ctx);
 		}
 		ctx.errors = [];

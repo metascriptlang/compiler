@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, substituteType, createStruct, createArray, needsRC, hasAsgnFlag } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, unwrapRefNullUnion } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
 import { Node, CallExprData, Type, TypeKind, SymbolKind } from "../../ast/node";
@@ -46,7 +46,7 @@ function isBeingDefined(key: string): boolean {
 // Generates deterministic C struct names for anonymous interfaces (typeName === "").
 // Uses a structural key (field names + types) hashed to a short hex-like string.
 
-function anonFieldKey(t: Type): string {
+function anonFieldKey(t: Type | null): string {
 	if (t === null) return "null";
 	return match (t.kind) {
 		TypeKind.Struct => {
@@ -177,7 +177,7 @@ export function buildAnonStructDef(structName: string, rawName: string): string 
 // ===== Type Signature Key =====
 // Generates a unique string key for a Type (used for cache lookups).
 
-export function typeKey(t: Type): string {
+export function typeKey(t: Type | null): string {
 	if (t === null) return "null";
 	return match (t.kind) {
 		TypeKind.Number => "number",
@@ -290,7 +290,13 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.Char => "char",
 		TypeKind.String | TypeKind.StringLiteral => "msString",
 		TypeKind.CString => "const char*",
-		TypeKind.Void | TypeKind.Null => "void",
+		TypeKind.Void => "void",
+		// `Null` as a TYPE (not the literal value) appears when a generic param
+		// monomorphizes to T=Null — e.g. `id(null)` without contextual type.
+		// `void` is invalid for parameters and locals, so map to `void*` which
+		// is exactly what MS_NIL/`((void*)0)` already is. Functions returning
+		// or accepting `Null`-typed values then compile and link correctly.
+		TypeKind.Null => "void*",
 		_ => "",
 	};
 }
@@ -303,6 +309,8 @@ export function isPointerType(t: Type): boolean {
 	if (t === null) return false;
 	const inner = skipModifier(t);
 	if (inner === null) return false;
+	// Union(Ref<T>, Null) collapses to T* in C — same C representation as Ref<T>.
+	if (inner.kind === TypeKind.Union && unwrapRefNullUnion(inner) !== null) return true;
 	return match (inner.kind) {
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => true,
 		_ => false,
@@ -332,6 +340,8 @@ export function ccgIntroducedPtr(t: Type): boolean {
 	const inner = skipModifier(t);
 	if (inner === null) return false;
 	if (isStructType(inner)) return getTypeSize(inner) > PTR_THRESHOLD;
+	// Union(Ref<T>, Null) collapses to T* in C — the pointer IS the value, no struct-via-pointer.
+	if (inner.kind === TypeKind.Union && unwrapRefNullUnion(inner) !== null) return false;
 	return match (inner.kind) {
 		TypeKind.Tuple => getTypeSize(inner) > PTR_THRESHOLD,
 		TypeKind.Array => true,  // arrays always by pointer: mutable by default, realloc invalidates caller copy
@@ -385,7 +395,7 @@ function useImportedTypeHeader(g: CGen, t: Type): void {
 
 // Reference parity (isInvalidReturnType): returns true when NRVO needed.
 // Takes the return type AND optionally the function type (for cdecl/importc check).
-export function isNrvoReturnType(retType: Type, funcType: Type): boolean {
+export function isNrvoReturnType(retType: Type | null, funcType: Type | null): boolean {
 	if (retType === null) return false;
 	// importc return types → no NRVO (C struct returned by value)
 	if (isImportedType(retType)) return false;
@@ -402,7 +412,7 @@ export function isNrvoReturnType(retType: Type, funcType: Type): boolean {
 // Centralized two-source callee type lookup. Reference implementation uses a single isInvalidReturnType()
 // in reference types called from 10 locations across 4 files.
 
-export function getCalleeReturnType(callNode: Node): Type {
+export function getCalleeReturnType(callNode: Node): Type | null {
 	const cd = callNode.data as CallExprData;
 	if (cd.callee !== null && cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
 		return cd.callee.nodeType.typeReturn;
@@ -414,7 +424,7 @@ export function getCalleeReturnType(callNode: Node): Type {
 	return null;
 }
 
-export function getCalleeFuncType(callNode: Node): Type {
+export function getCalleeFuncType(callNode: Node): Type | null {
 	const cd = callNode.data as CallExprData;
 	if (cd.callee !== null && cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
 		return cd.callee.nodeType;
@@ -432,7 +442,7 @@ export function getCalleeFuncType(callNode: Node): Type {
 // getTypeForward — Standard reference implementation parity: like getTypeDesc but only emits a forward
 // declaration + returns the C type name. Used when only a pointer is needed
 // (e.g., array element type during self-referential struct definition).
-export function getTypeForward(g: CGen, t: Type): string {
+export function getTypeForward(g: CGen, t: Type | null): string {
 	if (t === null) return "void*";
 	const simple = getSimpleTypeDesc(t);
 	if (simple !== "") return simple;
@@ -508,7 +518,7 @@ export function ensureTypeInfoDef(g: CGen, className: string): void {
 // Main entry point: returns C type name string for a MetaScript Type.
 // Emits type definitions to CGen sections as side effect.
 
-export function getTypeDesc(g: CGen, t: Type): string {
+export function getTypeDesc(g: CGen, t: Type | null): string {
 	if (t === null) return "void*";
 	// Standard reference parity: strip ownership modifiers at entry.
 	// Ownership modifiers like sink and lent don't affect the C type descriptor.
@@ -574,7 +584,13 @@ export function getTypeDesc(g: CGen, t: Type): string {
 	}
 	if (isResult(t)) return genResultType(g, t);
 	if (isAwaitable(t)) return genFutureType(g, t);
-	if (k === TypeKind.Union) return genUnionType(g, t);
+	if (k === TypeKind.Union) {
+		// Union(Ref<T>, Null) / Union(Ptr<T>, Null) → bare pointer.
+		// The null pointer is the natural sentinel — no Maybe wrapper needed.
+		const refMember = unwrapRefNullUnion(t);
+		if (refMember !== null) return getTypeDesc(g, refMember);
+		return genUnionType(g, t);
+	}
 	if (k === TypeKind.Tuple) return genTupleType(g, t);
 	if (k === TypeKind.Unknown) return "void*";
 	if (k === TypeKind.GenericParam) return "void*";
@@ -592,16 +608,16 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		typeCacheSet(g.typeCache, cacheKey, instName);
 		// Instantiate the base struct with concrete type args, then emit as a named struct
 		// Unwrap Ref for class/interface types (class = Ref<Struct> in C backend)
-		let baseType = t.typeExtra;
-		if (baseType !== null && baseType.kind === TypeKind.Ref && baseType.typeReturn !== null) {
-			baseType = baseType.typeReturn;
-		}
+		const rawBase = t.typeExtra;
+		const baseType: Type | null = (rawBase !== null && rawBase.kind === TypeKind.Ref && rawBase.typeReturn !== null)
+			? rawBase.typeReturn
+			: rawBase;
 		if (baseType !== null && baseType.kind === TypeKind.Struct) {
 			// Substitute generic params in fields with concrete type args
 			const genericDecl = getGenericDecl(t.typeName);
 			if (genericDecl !== "") {
 				const paramNames = splitTopLevel(genericDecl, ",");
-				let concType = baseType;
+				let concType: Type = baseType;
 				for (let pi = 0; pi < paramNames.length; pi += 1) {
 					if (pi < t.typeChildren.length) {
 						concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);

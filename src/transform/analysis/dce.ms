@@ -74,7 +74,8 @@ function isNeverCall(node: Node, ctx: TransformContext): boolean {
 	const sym = lookupSymbol(ctx.checkerCtx.table, name);
 	if (sym === null) return false;
 	if (sym.symbolType.kind !== TypeKind.Function) return false;
-	return sym.symbolType.typeReturn.kind === TypeKind.Never;
+	const ret = sym.symbolType.typeReturn;
+	return ret !== null && ret.kind === TypeKind.Never;
 }
 
 // ===== Level 2: Symbol-level Dead Declaration Elimination =====

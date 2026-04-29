@@ -787,8 +787,18 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const arrowBody = readNode(objHeap, arrHeap, h, "arrowBody", loc);
 			const arrowFlags = readStr(objHeap, h, "arrowFlags");
 			const arrowReturnType = readStr(objHeap, h, "arrowReturnType");
+			// Invariant: arrowDefaults.length === arrowParams.length. Macros emitting
+			// arrows can't (yet) carry defaults through serialization; pad with null
+			// per param to maintain the invariant for downstream consumers.
+			const arrowDefaults: Node[] = [];
+			let dpi = 0;
+			while (dpi < arrowParams.length) {
+				arrowDefaults.push(null as unknown as Node);
+				dpi = dpi + 1;
+			}
 			return createNodeAt(NodeKind.ArrowFunction, {
 				arrowParams, arrowParamTypes, arrowBody, arrowFlags, arrowReturnType,
+				arrowDefaults,
 			}, loc);
 		},
 		NodeKind.FunctionExpr => {

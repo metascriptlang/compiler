@@ -139,7 +139,7 @@ export function isLentParam(sym: Symbol): boolean {
 
 // ===== Main Classification Entry Point =====
 
-export function classifyType(t: Type, ctx: TransformContext): RcInfo {
+export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 	if (t === null) return noRcInfo();
 	if (isPrimitiveKind(t.kind)) return noRcInfo();
 

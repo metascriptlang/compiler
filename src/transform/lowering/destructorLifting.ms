@@ -534,7 +534,10 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 	// Primitives fall through to _ => defaultOp (isPrimitiveKind is canonical list)
 	match (fieldType.kind) {
 		TypeKind.String => { stringOp(hook, xf, yf, fieldName, buf, loc); },
-		TypeKind.Array => { arrayOp(hook, fieldType.typeReturn, xf, yf, lctx, buf, loc); },
+		TypeKind.Array => {
+			const elem = fieldType.typeReturn;
+			if (elem !== null) arrayOp(hook, elem, xf, yf, lctx, buf, loc);
+		},
 		TypeKind.Struct => {
 			if (fieldType.typeName !== "") {
 				// Reference parity: trace only emits for cyclic field types (defaultOp is no-op for trace)

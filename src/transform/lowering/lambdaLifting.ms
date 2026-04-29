@@ -213,7 +213,7 @@ function preserveResolvedTypes(fnNode: Node, originalNodeType: Type): void {
 
 // Derive type string from resolved nodeType (Reference parity: use resolved symbol types for field typing)
 // Used when string annotation is empty but checker has resolved the type.
-function typeToEnvStr(t: Type): string {
+function typeToEnvStr(t: Type | null): string {
 	if (t === null) return "";
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 => "number",
@@ -619,7 +619,7 @@ function isEnvPtrField(envStructType: Type, fieldName: string): boolean {
 	return false;
 }
 
-function rewriteNode(node: Node, captures: NameSet, envTypeName: string, envStructType: Type): Node {
+function rewriteNode(node: Node, captures: NameSet, envTypeName: string, envStructType: Type): Node | null {
 	if (node === null) return null;
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
@@ -652,7 +652,7 @@ function rewriteNode(node: Node, captures: NameSet, envTypeName: string, envStru
 // in the outer function are rewritten to access through the named env variable.
 // This ensures mutations inside closures are visible to the outer function and vice versa.
 
-function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node {
+function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 	if (node === null) return null;
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
@@ -754,7 +754,9 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	// For shared env, rewrite ALL captured names (env has fields for all captures)
 	const rewriteCaptures = useShared ? state.sharedEnvCapturedNames : captures;
 	let rewrittenBody = rewriteNode(body, rewriteCaptures, envName, envStructType);
-	if (rewrittenBody.kind !== NodeKind.BlockStmt) {
+	if (rewrittenBody === null) {
+		rewrittenBody = makeBlock([], loc);
+	} else if (rewrittenBody.kind !== NodeKind.BlockStmt) {
 		rewrittenBody = makeBlock([makeReturn(rewrittenBody, loc)], loc);
 	}
 
@@ -1420,7 +1422,13 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 	if (node.kind === NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
 		for (const p of d.arrowParams) { defineVar(state.ss, p); }
-		walkLiftBody(d.arrowBody, state);
+		if (d.arrowBody !== null
+			&& (d.arrowBody.kind === NodeKind.ArrowFunction
+				|| d.arrowBody.kind === NodeKind.FunctionExpr)) {
+			d.arrowBody = walkOrLift(d.arrowBody, state);
+		} else {
+			walkLiftBody(d.arrowBody, state);
+		}
 		state.capturedIdents = [];
 		const captures = detectCaptures(d.arrowBody, state.ss, state.capturedIdents);
 		popFuncBoundary(state.ss);

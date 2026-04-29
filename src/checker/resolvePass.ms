@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeNameOf, emptyType } from "./types";
+import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -148,22 +148,17 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 				members.push(resolveAnnotation(part, ctx, line, col));
 			}
 		}
-		// T | null where T is interface → Maybe<T> (Reference: Maybe/Option parity)
+		// T | null where T is value-type struct → Maybe<T> (struct has no null sentinel,
+		// so it needs a wrapper). Ref<T> | null and Ptr<T> | null stay as Union — codegen
+		// collapses them to bare pointer at emit time (the null pointer IS the sentinel),
+		// while the type checker keeps the union so flow narrowing can distinguish
+		// `Foo` from `Foo | null`.
 		if (members.length === 2) {
 			if (isStructType(members[0]) && members[1] !== null && members[1].kind === TypeKind.Null) {
 				return createMaybeType(members[0]);
 			}
 			if (members[0] !== null && members[0].kind === TypeKind.Null && isStructType(members[1])) {
 				return createMaybeType(members[1]);
-			}
-			// Ref<T> | null or Ptr<T> | null → bare pointer (already nullable in C)
-			const m0kind = members[0] !== null ? members[0].kind : TypeKind.Unknown;
-			const m1kind = members[1] !== null ? members[1].kind : TypeKind.Unknown;
-			if ((m0kind === TypeKind.Ref || m0kind === TypeKind.Ptr) && m1kind === TypeKind.Null) {
-				return members[0];
-			}
-			if (m0kind === TypeKind.Null && (m1kind === TypeKind.Ref || m1kind === TypeKind.Ptr)) {
-				return members[1];
 			}
 		}
 		if (members.length > 0) return createUnion(members);
@@ -242,6 +237,23 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 			}
 		}
 		return createStruct("", names, types, true);
+	}
+
+	// Tuple type: [T, U, ...] — bracket at start AND end, distinct from `T[]` array suffix.
+	// This is checked BEFORE array suffixes because those forms have a base type before the `[`.
+	if (trimmed.charAt(0) === "[" && trimmed.endsWith("]")) {
+		const tupleInner = trimmed.slice(1, trimmed.length - 1).trim();
+		if (tupleInner !== "") {
+			const elements = splitTopLevel(tupleInner, ",");
+			// Single element with no comma is ambiguous with `[N]` size, but standalone
+			// `[N]` isn't valid TS — we treat it as a 1-element tuple. `[T]` works.
+			const tupleTypes: Type[] = [];
+			for (const e of elements) {
+				const t = e.trim();
+				if (t !== "") tupleTypes.push(resolveAnnotation(t, ctx, line, col));
+			}
+			if (tupleTypes.length > 0) return createTuple(tupleTypes);
+		}
 	}
 
 	// Check for array suffix [] or [ ] (token-joined form from captureOptionalType)
@@ -361,7 +373,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 								&& resolvedArgs[ci].kind !== TypeKind.GenericParam
 								&& !isAssignableCheck(resolvedArgs[ci], constraintType)) {
 							const paramName = paramStr.slice(0, colonPos).trim();
-							addError(ctx, `Type '${typeNameOf(resolvedArgs[ci])}' does not satisfy constraint '${constraintName}' for type parameter '${paramName}' in '${baseName}'`, line, col);
+							addError(ctx, `Type '${typeDisplayName(resolvedArgs[ci])}' does not satisfy constraint '${constraintName}' for type parameter '${paramName}' in '${baseName}'`, line, col);
 						}
 					}
 				}
@@ -1106,7 +1118,7 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 //   typeChildren = variant types, typeName = alias name,
 //   typeExtra = discriminant enum Type,
 //   typeNames = [discFieldName, variantKey0, variantKey1, ...]
-function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): Type {
+function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): Type | null {
 	// Resolve discriminant type — must be an enum
 	const discType = resolveAnnotation(d.discriminantType, ctx, 0, 0);
 	if (discType.kind !== TypeKind.Enum) {
@@ -1473,39 +1485,41 @@ test "empty" { assert resolveWith("").kind === TypeKind.Unknown; }
 test "number[]" {
 	const t = resolveWith("number[]");
 	assert t.kind === TypeKind.Array;
-	assert t.typeReturn.kind === TypeKind.Number;
+	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Number;
 }
 
 test "string[]" {
 	const t = resolveWith("string[]");
 	assert t.kind === TypeKind.Array;
-	assert t.typeReturn.kind === TypeKind.String;
+	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.String;
 }
 
 test "Result<number, string>" {
 	const t = resolveWith("Result<number, string>");
 	assert isResult(t);
-	assert getResultOkType(t).kind === TypeKind.Number;
-	assert getResultErrType(t).kind === TypeKind.String;
+	const ok = getResultOkType(t);
+	assert ok !== null && ok.kind === TypeKind.Number;
+	const err = getResultErrType(t);
+	assert err !== null && err.kind === TypeKind.String;
 }
 
 test "Array<boolean>" {
 	const t = resolveWith("Array<boolean>");
 	assert t.kind === TypeKind.Array;
-	assert t.typeReturn.kind === TypeKind.Boolean;
+	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Boolean;
 }
 
 test "number[4]" {
 	const t = resolveWith("number[4]");
 	assert t.kind === TypeKind.SizedArray;
-	assert t.typeReturn.kind === TypeKind.Number;
+	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Number;
 	assert t.typeFlags === 4;
 }
 
 test "Span<boolean>" {
 	const t = resolveWith("Span<boolean>");
 	assert t.kind === TypeKind.Span;
-	assert t.typeReturn.kind === TypeKind.Boolean;
+	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Boolean;
 }
 
 test "string | number" {
@@ -1556,7 +1570,8 @@ test "function with typed params" {
 	assert sym.symbolType.kind === TypeKind.Function;
 	assert sym.symbolType.typeChildren[0].kind === TypeKind.Number;
 	assert sym.symbolType.typeChildren[1].kind === TypeKind.Number;
-	assert sym.symbolType.typeReturn.kind === TypeKind.Number;
+	const ret1 = sym.symbolType.typeReturn;
+	assert ret1 !== null && ret1.kind === TypeKind.Number;
 }
 
 test "decorated function gets resolved" {
@@ -1572,7 +1587,8 @@ test "decorated function gets resolved" {
 	const sym = lookupSymbol(ctx.table, "floor");
 	assert sym !== null;
 	assert sym.symbolType.kind === TypeKind.Function;
-	assert sym.symbolType.typeReturn.kind === TypeKind.Number;
+	const ret = sym.symbolType.typeReturn;
+	assert ret !== null && ret.kind === TypeKind.Number;
 }
 
 test "Box<number> records instantiation" {
@@ -1653,8 +1669,8 @@ test "constraint stored on GenericParam typeExtra" {
 	assert sym !== null;
 	assert sym.symbolType.kind === TypeKind.GenericParam;
 	assert sym.symbolType.typeName === "T";
-	assert sym.symbolType.typeExtra !== null;
-	assert sym.symbolType.typeExtra.kind === TypeKind.Number;
+	const ext = sym.symbolType.typeExtra;
+	assert ext !== null && ext.kind === TypeKind.Number;
 	closeScope(ctx.table);
 }
 
@@ -1693,28 +1709,44 @@ test "fnDefaults on FunctionDeclData" {
 
 // ===== Nullable Pointer Resolution Tests =====
 
-test "Ref<number> | null resolves to bare Ref" {
+test "Ref<number> | null stays Union(Ref, Null)" {
 	const t = resolveWith("Ref<number> | null");
-	assert t.kind === TypeKind.Ref;
-	assert t.typeReturn.kind === TypeKind.Number;
+	assert t.kind === TypeKind.Union;
+	assert t.typeChildren.length === 2;
+	assert t.typeChildren[0].kind === TypeKind.Ref;
+	const inner0 = t.typeChildren[0].typeReturn;
+	assert inner0 !== null && inner0.kind === TypeKind.Number;
+	assert t.typeChildren[1].kind === TypeKind.Null;
 }
 
-test "null | Ref<string> resolves to bare Ref" {
+test "null | Ref<string> stays Union(Null, Ref)" {
 	const t = resolveWith("null | Ref<string>");
-	assert t.kind === TypeKind.Ref;
-	assert t.typeReturn.kind === TypeKind.String;
+	assert t.kind === TypeKind.Union;
+	assert t.typeChildren.length === 2;
+	assert t.typeChildren[0].kind === TypeKind.Null;
+	assert t.typeChildren[1].kind === TypeKind.Ref;
+	const inner1 = t.typeChildren[1].typeReturn;
+	assert inner1 !== null && inner1.kind === TypeKind.String;
 }
 
-test "Ptr<number> | null resolves to bare Ptr" {
+test "Ptr<number> | null stays Union(Ptr, Null)" {
 	const t = resolveWith("Ptr<number> | null");
-	assert t.kind === TypeKind.Ptr;
-	assert t.typeReturn.kind === TypeKind.Number;
+	assert t.kind === TypeKind.Union;
+	assert t.typeChildren.length === 2;
+	assert t.typeChildren[0].kind === TypeKind.Ptr;
+	const inner0 = t.typeChildren[0].typeReturn;
+	assert inner0 !== null && inner0.kind === TypeKind.Number;
+	assert t.typeChildren[1].kind === TypeKind.Null;
 }
 
-test "null | Ptr<boolean> resolves to bare Ptr" {
+test "null | Ptr<boolean> stays Union(Null, Ptr)" {
 	const t = resolveWith("null | Ptr<boolean>");
-	assert t.kind === TypeKind.Ptr;
-	assert t.typeReturn.kind === TypeKind.Boolean;
+	assert t.kind === TypeKind.Union;
+	assert t.typeChildren.length === 2;
+	assert t.typeChildren[0].kind === TypeKind.Null;
+	assert t.typeChildren[1].kind === TypeKind.Ptr;
+	const inner1 = t.typeChildren[1].typeReturn;
+	assert inner1 !== null && inner1.kind === TypeKind.Boolean;
 }
 
 test "string | null stays Union (not pointer)" {

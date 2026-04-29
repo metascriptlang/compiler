@@ -425,11 +425,12 @@ export function stripReceiverParam(fnType: Type): Type {
 // Standard reference pattern: compare nominal types by identity using isAssignable,
 // not string-based receiverTypeName comparison.
 
-export function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
+export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boolean {
 	// Static extensions: string-based matching (receiver not in typeChildren)
 	if (ext.isStatic) {
 		return ext.receiverTypeName === typeNameOf(objType);
 	}
+	if (objType === null) return false;
 	// Instance extensions: type-based matching on first param (sym.typ is authoritative).
 	const fnType = getExtFnType(ext);
 	if (fnType.kind !== TypeKind.Function) return false;
@@ -469,6 +470,14 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
 			const baseName = objName.slice(0, sepPos);
 			if (ext.receiverTypeName === baseName) return true;
 		}
+		// Type-alias fallback: typeNameOf returns the canonical primitive name
+		// (e.g. "string" for `type Buffer = string`), losing the alias. The alias
+		// symbol is preserved on objType.sym (stamped by collectTypeAlias). Mirror
+		// the static fallback in checkExprPass.ms so instance method dispatch
+		// `s.method()` resolves extensions registered against the alias name.
+		if (objType.sym !== null
+				&& objType.sym.symbolKind === SymbolKind.TypeAlias
+				&& ext.receiverTypeName === objType.sym.name) return true;
 		// Nominal mismatch: both have names but they differ → not a match.
 		// Prevents structural false positives (reference: sameObjectTypes uses a.id == b.id).
 		if (objName !== "") return false;
@@ -476,7 +485,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
 	return isAssignable(objType, receiverType);
 }
 
-export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type): ExtensionMethod[] {
+export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type | null): ExtensionMethod[] {
 	const results: ExtensionMethod[] = [];
 	let i = 0;
 	while (i < exts.length) {
@@ -655,8 +664,8 @@ export interface SgSymRecord {
 	line: number;          // 1-based (parser convention)
 	col: number;           // 1-based (parser convention)
 	colEnd: number;        // col + token length
-	sym: Symbol;           // resolved symbol
-	symType: Type;         // type at this use site
+	sym: Symbol | null;    // resolved symbol; null for synthetic records
+	symType: Type | null;  // type at this use site; null when not yet resolved
 	kind: SymbolKind;      // may override sym.symbolKind (e.g. Method for class functions)
 	name: string;          // display name (may differ from sym.name for mangled methods)
 	containerName: string; // owning type name ("console" for console.log)
@@ -665,7 +674,7 @@ export interface SgSymRecord {
 
 export function sgRecordSym(
 	ctx: CheckerContext, line: number, col: number, colEnd: number,
-	sym: Symbol, symType: Type, kind: SymbolKind,
+	sym: Symbol | null, symType: Type | null, kind: SymbolKind,
 	name: string, containerName: string, isDecl: boolean
 ): void {
 	if (ctx.symRecords === null) return;

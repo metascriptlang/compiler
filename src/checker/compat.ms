@@ -7,7 +7,7 @@ import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, string
 // ===== Assignability =====
 
 let _assignDepth = 0;
-export function isAssignable(source: Type, target: Type): boolean {
+export function isAssignable(source: Type | null, target: Type | null): boolean {
 	if (_assignDepth > 20) return true;
 	_assignDepth = _assignDepth + 1;
 	const result = isAssignableInner(source, target);
@@ -15,11 +15,16 @@ export function isAssignable(source: Type, target: Type): boolean {
 	return result;
 }
 
-function isAssignableInner(source: Type, target: Type): boolean {
+function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// Reference parity: sink and lent modifiers are transparent ownership modifiers — unwrap before comparing
 	// Standard reference implementation skips these modifiers during type relationship checks.
 	source = skipModifier(source);
 	target = skipModifier(target);
+
+	// Null guard: null operands flow through unwrapped types and indicate
+	// "no information" — conservatively report compatible to avoid blocking checks
+	// that legitimately have no type yet (e.g. unresolved generics).
+	if (source === null || target === null) return true;
 
 	// Never is the bottom type — assignable TO everything. After exhaustive
 	// narrowing (all union variants handled), the residual type is never.
@@ -101,10 +106,26 @@ function isAssignableInner(source: Type, target: Type): boolean {
 	// TypeReference: unresolved forward/cross-module type — compare by canonical name.
 
 
-	// null assignable to nullable targets (Object, Array, SizedArray, Span, Function, Ref, Ptr)
+	// Target is union: source must be assignable to at least one member.
+	// MUST run before:
+	//  - Ref→T auto-deref, so `Ref<X>` matches `Union(Ref<X>, Null)` directly
+	//    instead of being deref'd to `X` (which wouldn't match Ref<X>).
+	//  - Null-source allowance, so `null` matches `Union(T, Null)` via the
+	//    Null member instead of falling into the legacy bare-target rule.
+	if (target.kind === TypeKind.Union) {
+		for (const member of target.typeChildren) {
+			if (isAssignable(source, member)) return true;
+		}
+		return false;
+	}
+
+	// null assignable to legacy nullable kinds (value-struct/array/function/span).
+	// TS-strict shift: Ref/Ptr are NO LONGER auto-nullable — callers must use
+	// `T | null` (handled by the Union-target check above) to opt into nullability.
+	// (Struct/Array/Function/Span allowances kept for now — separate migration.)
 	if (source.kind === TypeKind.Null) {
 		return match (target.kind) {
-			TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Function | TypeKind.Ref | TypeKind.Ptr => true,
+			TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Function => true,
 			_ => false,
 		};
 	}
@@ -175,13 +196,7 @@ function isAssignableInner(source: Type, target: Type): boolean {
 		return true;
 	}
 
-	// Target is union: source must be assignable to at least one member
-	if (target.kind === TypeKind.Union) {
-		for (const member of target.typeChildren) {
-			if (isAssignable(source, member)) return true;
-		}
-		return false;
-	}
+	// (Target-is-union check moved earlier — see above the Ref auto-deref branch.)
 
 	return false;
 }
@@ -213,7 +228,8 @@ export function needsStdConv(source: Type, target: Type): boolean {
 }
 
 // Function assignability: contravariant params, covariant return
-function isFunctionAssignable(source: Type, target: Type): boolean {
+function isFunctionAssignable(source: Type | null, target: Type | null): boolean {
+	if (source === null || target === null) return false;
 	if (source.typeChildren.length !== target.typeChildren.length) return false;
 	// Check params (contravariant: target params assignable to source params)
 	let i = 0;
@@ -229,23 +245,31 @@ function isFunctionAssignable(source: Type, target: Type): boolean {
 }
 
 // Object assignability: nominal first, then structural (source has all target properties)
-function isObjectAssignable(source: Type, target: Type): boolean {
+function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	// Identity: same object → trivially assignable
 	if (source === target) return true;
+	if (source === null || target === null) return false;
 	// Nominal: same typeName means same type (handles self-referencing types like Type, Scope)
 	if (source.typeName !== "" && source.typeName === target.typeName) return true;
 	// Cross-module nominal: types linked via sym identity (both point to same Symbol)
 	if (source.sym !== null && source.sym === target.sym) return true;
+	// Pin source/target fields to locals — the binder's flow narrowing on the
+	// `source: Type | null` parameter doesn't always propagate into nested
+	// for-of bodies (each loop iteration walks the narrowing chain anew).
+	const sNames = source.typeNames;
+	const sChildren = source.typeChildren;
+	const tNames = target.typeNames;
+	const tChildren = target.typeChildren;
 	let targetIdx = 0;
-	for (const targetProp of target.typeNames) {
+	for (const targetProp of tNames) {
 		// Look for matching prop in source
 		let found = false;
 		let si = 0;
-		for (const sourceProp of source.typeNames) {
+		for (const sourceProp of sNames) {
 			if (sourceProp === targetProp) {
 				found = true;
-				if (si < source.typeChildren.length && targetIdx < target.typeChildren.length) {
-					if (!isAssignable(source.typeChildren[si], target.typeChildren[targetIdx])) {
+				if (si < sChildren.length && targetIdx < tChildren.length) {
+					if (!isAssignable(sChildren[si], tChildren[targetIdx])) {
 						return false;
 					}
 				}
@@ -271,7 +295,7 @@ export enum TypeRelation {
 }
 
 let _relationDepth = 0;
-export function typeRelation(formal: Type, actual: Type): TypeRelation {
+export function typeRelation(formal: Type | null, actual: Type | null): TypeRelation {
 	if (_relationDepth > 20) return TypeRelation.Generic;
 	_relationDepth = _relationDepth + 1;
 	const result = typeRelationInner(formal, actual);
@@ -279,7 +303,8 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 	return result;
 }
 
-function typeRelationInner(formal: Type, actual: Type): TypeRelation {
+function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelation {
+	if (formal === null || actual === null) return TypeRelation.None;
 	// Ownership modifiers (Sink/Lent) are transparent — unwrap before comparison.
 	// inferOwnership wraps sink params in TypeKind.Sink; overload scoring must see through.
 	if (formal.kind === TypeKind.Sink || formal.kind === TypeKind.Lent) {
@@ -507,7 +532,7 @@ function cmpInheritancePenalty(a: number, b: number): number {
 // candidateTypeA/B are the Function types for generic specialization (Phase 5).
 // Pass null to skip steps 7-8.
 export function cmpCandidates(a: CandidateScore, b: CandidateScore,
-	candidateTypeA: Type, candidateTypeB: Type): number {
+	candidateTypeA: Type | null, candidateTypeB: Type | null): number {
 	// 1. Exact matches (highest priority)
 	let result = a.exactMatches - b.exactMatches;
 	if (result !== 0) return result;
@@ -574,7 +599,7 @@ function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 // Higher depth = more specific overload.
 // GenericParam = 1, Container<T> = 1 + sumGeneric(T)
 let sumGenericDepth = 0;
-function sumGeneric(t: Type): number {
+function sumGeneric(t: Type | null): number {
 	if (t === null) return 0;
 	if (t.kind === TypeKind.GenericParam || t.kind === TypeKind.Unknown) return 1;
 	if (sumGenericDepth > 20) return 0;
@@ -632,7 +657,7 @@ export function resolveOverloadIdx(candidates: Type[], argTypes: Type[],
 	scopeDepths: number[]): number {
 	let bestIdx = -1;
 	let bestScore = emptyCandidateScore();
-	let bestType: Type = null;
+	let bestType: Type | null = null;
 	let ambiguous = false;
 	for (let i = 0; i < candidates.length; i += 1) {
 		if (candidates[i].kind !== TypeKind.Function) continue;
@@ -847,7 +872,13 @@ test "same ptr inner" {
 	assert isAssignable(p1, p2);
 }
 
-test "null to ref" { assert isAssignable(nullType(), createRef(numberType())); }
+// TS-strict: null is NOT assignable to bare Ref<T> — must be Union(Ref<T>, Null).
+test "null rejected by bare ref" { assert !isAssignable(nullType(), createRef(numberType())); }
+
+test "null accepted by Ref|Null union" {
+	const u = createUnion([createRef(numberType()), nullType()]);
+	assert isAssignable(nullType(), u);
+}
 
 test "null to sized array" { assert isAssignable(nullType(), createSizedArray(numberType(), 4)); }
 
@@ -874,7 +905,13 @@ test "mismatched element to span" {
 	assert typeRelation(span, arr) === TypeRelation.None;
 }
 
-test "null to ptr" { assert isAssignable(nullType(), createPtr(numberType())); }
+// TS-strict: null is NOT assignable to bare Ptr<T> — must be Union(Ptr<T>, Null).
+test "null rejected by bare ptr" { assert !isAssignable(nullType(), createPtr(numberType())); }
+
+test "null accepted by Ptr|Null union" {
+	const u = createUnion([createPtr(numberType()), nullType()]);
+	assert isAssignable(nullType(), u);
+}
 
 test "same distinct name" {
 	const d1 = createDistinct(numberType());

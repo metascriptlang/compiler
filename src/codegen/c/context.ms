@@ -96,7 +96,7 @@ export interface CLoc {
 	storage: CStorageLoc;
 	snippet: string;       // C code fragment ("x", "a->b", "T1_")
 	isIndirect: boolean;   // Implementation parity: backend introduced a pointer
-	locType: Type;         // MetaScript type (for RC decisions, type mapping)
+	locType: Type | null;  // MetaScript type (for RC decisions, type mapping); null until populated
 }
 
 export function initLoc(kind: CLocKind, storage: CStorageLoc): CLoc {
@@ -153,7 +153,7 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 
 export class CProc {
 	name: string;          // mangled C name
-	returnType: Type;      // MetaScript return type
+	returnType: Type | null;      // MetaScript return type (null = void/inferred)
 	isNrvo: boolean;       // true if function uses NRVO (out-param calling convention)
 	labels: number;        // unique temp counter (T1_, T2_, ...)
 	blocks: CBlock[];      // nested block stack (blocks[0] = top-level)
@@ -191,7 +191,7 @@ export function isIndirectLocal(p: CProc, name: string): boolean {
 	return false;
 }
 
-export function createProc(name: string, returnType: Type): CProc {
+export function createProc(name: string, returnType: Type | null): CProc {
 	const topBlock = createBlock(0, false);
 	const blocks: CBlock[] = [];
 	blocks.push(topBlock);

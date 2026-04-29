@@ -52,8 +52,8 @@ function isAsyncFn(node: Node): boolean {
 
 interface SpawnSlot {
 	closure: Node;
-	timeout: Node;
-	innerType: Type;
+	timeout: Node | null;
+	innerType: Type | null;
 }
 
 function getMultiSpawnSlots(awaitArg: Node): SpawnSlot[] {
@@ -79,7 +79,7 @@ function getMultiSpawnSlots(awaitArg: Node): SpawnSlot[] {
 
 // ===== Expansion =====
 
-function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: TransformContext, isAsync: boolean): { stmts: Node[], resultExpr: Node } {
+function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: TransformContext, isAsync: boolean): { stmts: Node[], resultExpr: Node | null } {
 	const n = slots.length;
 	const stmts: Node[] = [];
 
@@ -90,7 +90,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	stmts.push(ag.decl);
 
 	// 2. Inject cancel safe-points + submit tasks
-	let groupTimeout: Node = null;
+	let groupTimeout: Node | null = null;
 	let si = 0;
 	while (si < n) {
 		const slot = slots[si];
@@ -100,7 +100,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		}
 		// Inject safe-points into closure body when timeout
 		if (groupTimeout !== null) {
-			let closureBody: Node = null;
+			let closureBody: Node | null = null;
 			if (slot.closure.kind === NodeKind.FunctionExpr) {
 				closureBody = (slot.closure.data as FunctionExprData).funcExprBody;
 			} else if (slot.closure.kind === NodeKind.ArrowFunction) {
@@ -171,7 +171,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		if (it === null || it.kind !== TypeKind.Void) { allVoid = false; }
 	}
 
-	let resultExpr: Node = null;
+	let resultExpr: Node | null = null;
 	if (!allVoid) {
 		// Read results + unbox
 		const resultIdents: Node[] = [];

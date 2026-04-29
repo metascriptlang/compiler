@@ -398,7 +398,7 @@ function genIfStmt(g: CGen, p: CProc, node: Node): void {
 	// Collect all branches: [{cond, body}, ...] + optional elseBody
 	const branches: Node[] = [];
 	const bodies: Node[] = [];
-	let elseBody: Node = null;
+	let elseBody: Node | null = null;
 	let current = node;
 	while (current !== null && current.kind === NodeKind.IfStmt) {
 		const d = current.data as IfStmtData;

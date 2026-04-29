@@ -79,7 +79,7 @@ export function freshTemp(ctx: TransformContext, prefix: string): string {
 
 // Reference parity (getTemp): create a Symbol for a DRC temp variable.
 // Returns a Symbol with declNode=null — safe to store on VarInfo (no destroy cascade).
-export function freshTempSym(ctx: TransformContext, prefix: string, t: Type): Symbol {
+export function freshTempSym(ctx: TransformContext, prefix: string, t: Type | null): Symbol {
 	const name = freshTemp(ctx, prefix);
 	return makeSymbol(name, SymbolKind.Variable, t !== null ? t : unknownType(), false);
 }

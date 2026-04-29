@@ -98,7 +98,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 	const declTypeExpr = getLastTypeExpr();
 
 	// Uninitialized declaration: `let x: Type;` — requires type annotation, disallowed for const
-	let init: Node = null;
+	let init: Node | null = null;
 	if (current(state).kind === TokenKind.Assign) {
 		advance(state);
 		init = try callExprParser(state);

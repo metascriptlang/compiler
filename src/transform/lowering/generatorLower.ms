@@ -98,13 +98,14 @@ function lookupDeclType(names: string[], types: Type[], name: string): Type {
 	return null as unknown as Type;
 }
 
-function buildIterResultType(returnNodeType: Type): Type {
+function buildIterResultType(returnNodeType: Type | null): Type | null {
 	if (returnNodeType === null || !isIterator(returnNodeType)) return null;
 	const yieldType = getIteratorYieldType(returnNodeType);
+	if (yieldType === null) return null;
 	return createStruct("IteratorResult", ["value", "done"], [yieldType, createPrimitive(TypeKind.Boolean)], false);
 }
 
-function makeIterResult(value: Node, done: boolean, loc: SourceLocation, resultType: Type): Node {
+function makeIterResult(value: Node, done: boolean, loc: SourceLocation, resultType: Type | null): Node {
 	const obj = makeObjectLiteral(
 		["value", "done"],
 		[value, makeBool(done, loc)],
@@ -114,7 +115,7 @@ function makeIterResult(value: Node, done: boolean, loc: SourceLocation, resultT
 	return obj;
 }
 
-function makeDoneResult(loc: SourceLocation, resultType: Type): Node {
+function makeDoneResult(loc: SourceLocation, resultType: Type | null): Node {
 	return makeIterResult(makeNull(loc), true, loc, resultType);
 }
 
@@ -185,7 +186,7 @@ export function containsYield(node: Node): boolean {
 }
 
 // Emit yield: transition to next state + return IteratorResult.
-function emitYield(sc: StateCollector, currentState: number, nextSt: number, yieldArg: Node, loc: SourceLocation, resultType: Type): void {
+function emitYield(sc: StateCollector, currentState: number, nextSt: number, yieldArg: Node, loc: SourceLocation, resultType: Type | null): void {
 	sc.items[currentState].stmts.push(makeStateAssign(nextSt, loc));
 	sc.items[currentState].stmts.push(makeReturn(makeIterResult(yieldArg, false, loc, resultType), loc));
 	sc.items[currentState].isYield = true;
@@ -195,7 +196,7 @@ function emitYield(sc: StateCollector, currentState: number, nextSt: number, yie
 // ===== State Splitting =====
 // Split a linear sequence of statements at yield points.
 
-export function splitStmts(stmts: Node[], sc: StateCollector, startState: number, exitState: number, loc: SourceLocation, resultType: Type): void {
+export function splitStmts(stmts: Node[], sc: StateCollector, startState: number, exitState: number, loc: SourceLocation, resultType: Type | null): void {
 	let currentState = startState;
 	let i = 0;
 	while (i < stmts.length) {
@@ -284,7 +285,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 // Split while loop containing yield into states:
 // condState: if (cond) { $state = bodyStart } else { $state = exitState }
 // bodyStates: ... (recursive split, last transitions back to condState)
-function splitWhile(node: Node, sc: StateCollector, currentState: number, exitState: number, loc: SourceLocation, resultType: Type): void {
+function splitWhile(node: Node, sc: StateCollector, currentState: number, exitState: number, loc: SourceLocation, resultType: Type | null): void {
 	const wd = node.data as WhileStmtData;
 
 	// Condition state = currentState (reuse, already allocated)
@@ -312,7 +313,7 @@ function splitWhile(node: Node, sc: StateCollector, currentState: number, exitSt
 // currentState: if (cond) { $state = thenStart } else { $state = elseStart }
 // thenStates: ... → joinState
 // elseStates: ... → joinState
-function splitIf(node: Node, sc: StateCollector, currentState: number, joinState: number, loc: SourceLocation, resultType: Type): void {
+function splitIf(node: Node, sc: StateCollector, currentState: number, joinState: number, loc: SourceLocation, resultType: Type | null): void {
 	const id = node.data as IfStmtData;
 
 	const thenStart = allocState(sc);
@@ -357,7 +358,7 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 // ===== Return Rewriting =====
 // Rewrite return stmts in generator body: return val → $state = -1; return { value: val, done: true }
 
-function rewriteReturns(stmts: Node[], loc: SourceLocation, resultType: Type): void {
+function rewriteReturns(stmts: Node[], loc: SourceLocation, resultType: Type | null): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt.kind === NodeKind.ReturnStmt) {
@@ -398,7 +399,7 @@ export function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, loc: 
 
 // ===== State Machine Builder =====
 
-function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType: Type): Node {
+function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType: Type | null): Node {
 	// Default (terminal) state: return { value: null, done: true }
 	let current: Node = makeBlock([makeReturn(makeDoneResult(loc, resultType), loc)], loc);
 
@@ -417,7 +418,7 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType:
 
 // ===== Generator Function Transform =====
 
-function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type, loc: SourceLocation): Node {
+function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, loc: SourceLocation): Node {
 	// 1. Collect all local variable names and their types
 	const nc: NameSet = createNameSet();
 	collectDeclNames(body, nc, false);

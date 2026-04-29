@@ -184,7 +184,7 @@ export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutabl
 	return makeSymbolState(name, kind, symType, mutable, SymbolState.Hollow);
 }
 
-export function makeSymbolState(name: string, kind: SymbolKind, symType: Type, mutable: boolean, state: SymbolState): Symbol {
+export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | null, mutable: boolean, state: SymbolState): Symbol {
 	const sym = new Symbol();
 	sym.name = name;
 	sym.nameId = 0;
