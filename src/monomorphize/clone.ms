@@ -48,6 +48,12 @@ function cloneNodeArray(nodes: Node[]): Node[] {
 	return result;
 }
 
+function cloneOptionalNodeArray(nodes: (Node | null)[]): (Node | null)[] {
+	const result: (Node | null)[] = [];
+	for (const n of nodes) { result.push(n !== null ? cloneNodeImpl(n) : null); }
+	return result;
+}
+
 function cloneStringArray(strs: string[]): string[] {
 	const result: string[] = [];
 	for (const s of strs) { result.push(s); }
@@ -135,7 +141,7 @@ function cloneNodeImpl(node: Node): Node {
 	if (kind === NodeKind.ArrayAccess) { const d = node.data as ArrayAccessData; const data: NodeData = { array: cloneNodeImpl(d.array), index: cloneNodeImpl(d.index) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
 	if (kind === NodeKind.ObjectLiteral) { const d = node.data as ObjectLiteralData; const data: NodeData = { properties: cloneNodeArray(d.properties), keys: cloneStringArray(d.keys), keyLocations: d.keyLocations !== null ? d.keyLocations : [] }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
 	if (kind === NodeKind.ArrayLiteral) { const d = node.data as ArrayLiteralData; const data: NodeData = { elements: cloneNodeArray(d.elements) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ArrowFunction) { const d = node.data as ArrowFunctionData; const data: NodeData = { arrowParams: cloneStringArray(d.arrowParams), arrowParamTypes: cloneStringArray(d.arrowParamTypes), arrowBody: cloneNodeImpl(d.arrowBody), arrowFlags: d.arrowFlags, arrowReturnType: d.arrowReturnType, arrowDefaults: cloneNodeArray(d.arrowDefaults !== null ? d.arrowDefaults : []) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
+	if (kind === NodeKind.ArrowFunction) { const d = node.data as ArrowFunctionData; const data: NodeData = { arrowParams: cloneStringArray(d.arrowParams), arrowParamTypes: cloneStringArray(d.arrowParamTypes), arrowBody: cloneNodeImpl(d.arrowBody), arrowFlags: d.arrowFlags, arrowReturnType: d.arrowReturnType, arrowDefaults: cloneOptionalNodeArray(d.arrowDefaults !== null ? d.arrowDefaults : []) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
 	if (kind === NodeKind.FunctionExpr) { const d = node.data as FunctionExprData; const data: NodeData = { funcExprParams: cloneStringArray(d.funcExprParams), funcExprParamTypes: cloneStringArray(d.funcExprParamTypes), funcExprBody: cloneNodeImpl(d.funcExprBody), funcExprFlags: d.funcExprFlags, funcExprReturnType: d.funcExprReturnType }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
 	if (kind === NodeKind.TypeAssertion) { const d = node.data as TypeAssertionData; const data: NodeData = { asExpr: cloneNodeImpl(d.asExpr), asType: d.asType }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
 	if (kind === NodeKind.ConditionalExpr) { const d = node.data as ConditionalExprData; const data: NodeData = { ternaryCondition: cloneNodeImpl(d.ternaryCondition), ternaryConsequent: cloneNodeImpl(d.ternaryConsequent), ternaryAlternate: cloneNodeImpl(d.ternaryAlternate) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }

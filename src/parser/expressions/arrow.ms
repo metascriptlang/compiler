@@ -2,7 +2,7 @@
 // Extracted from expression.ms with callback injection
 
 import { TokenKind } from "../../lexer/token";
-import { NodeKind, Expression, createNode, ArrowFunctionData, makeLoc } from "../../ast/node";
+import { Node, NodeKind, Expression, createNode, ArrowFunctionData, makeLoc } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek } from "../context";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParsedDefaults, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
@@ -127,10 +127,10 @@ export function parseArrowFunction(
 	const arrowParamTypes = extractParamTypes(raw);
 	// Pad defaults to match arrowParams length (parser only pushes when default present)
 	const rawDefaults = getLastParsedDefaults();
-	const arrowDefaults: Node[] = [];
+	const arrowDefaults: (Node | null)[] = [];
 	let di = 0;
 	while (di < arrowParams.length) {
-		arrowDefaults.push(di < rawDefaults.length ? rawDefaults[di] : (null as unknown as Node));
+		arrowDefaults.push(di < rawDefaults.length ? rawDefaults[di] : null);
 		di = di + 1;
 	}
 
@@ -203,10 +203,10 @@ export function parseBareIdentArrow(
 			arrowBody: blockBody,
 			arrowFlags: flags,
 			arrowReturnType: "",
-			arrowDefaults: [null as unknown as Node],
+			arrowDefaults: [null],
 		}, identToken);
 		blockNode.typeExpr = null;
-		blockNode.typeExprs = [null as unknown as Node];
+		blockNode.typeExprs = [null];
 		blockNode.paramLocations = [makeLoc(identToken.line, identToken.column)];
 		return Result.ok(blockNode);
 	}
@@ -218,10 +218,10 @@ export function parseBareIdentArrow(
 		arrowBody: exprBody,
 		arrowFlags: flags,
 		arrowReturnType: "",
-		arrowDefaults: [null as unknown as Node],
+		arrowDefaults: [null],
 	}, identToken);
 	exprNode.typeExpr = null;
-	exprNode.typeExprs = [null as unknown as Node];
+	exprNode.typeExprs = [null];
 	exprNode.paramLocations = [makeLoc(identToken.line, identToken.column)];
 	return Result.ok(exprNode);
 }

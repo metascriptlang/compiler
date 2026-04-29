@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — File I/O and shared error helpers
 
-import { exit, exec, cmdExists, platform } from "std/process";
+import { exit, cmdExists, platform } from "std/process";
 import { readFile, writeFile, ensureDir as fsEnsureDir } from "std/fs";
 import { CheckerContext } from "../checker/context";
 import { error, red, green, bold, dim } from "../utils/color";

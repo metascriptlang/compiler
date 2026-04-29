@@ -83,8 +83,34 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: number, co
 }
 
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: number, col: number): Type {
-	const trimmed = text.trim();
+	let trimmed = text.trim();
 	if (trimmed === "") return unknownType();
+	// Strip outer parens that wrap the entire expression (not function type form `(...) => ...`).
+	// `(T | null)`, `(A & B)`, etc. — needed when `(...)` surrounds the type before an array
+	// suffix `[]` strips down to the parenthesised form. Without this, splitTopLevel("|") sees
+	// `|` inside parens (depth > 0) and skips union detection.
+	while (trimmed.length >= 2 && trimmed.charAt(0) === "(" && trimmed.charAt(trimmed.length - 1) === ")") {
+		// Verify the outer parens match (depth returns to 0 only at the final char) AND that
+		// this isn't a function type form `(params) => ret` (those reach the `=>` branch below).
+		let depth = 0;
+		let closesAtEnd = true;
+		let isFnForm = false;
+		for (let i = 0; i < trimmed.length; i += 1) {
+			const c = trimmed.charAt(i);
+			if (c === "(") depth = depth + 1;
+			if (c === ")") {
+				depth = depth - 1;
+				if (depth === 0 && i < trimmed.length - 1) {
+					closesAtEnd = false;
+					const after = trimmed.slice(i + 1, trimmed.length).trim();
+					if (after.length >= 2 && after.charAt(0) === "=" && after.charAt(1) === ">") isFnForm = true;
+					break;
+				}
+			}
+		}
+		if (!closesAtEnd || isFnForm) break;
+		trimmed = trimmed.slice(1, trimmed.length - 1).trim();
+	}
 
 	// Tier 3: infer X — produce a GenericParam placeholder for conditional type unification
 	if (trimmed.length > 6 && trimmed.slice(0, 6) === "infer ") {
@@ -580,9 +606,10 @@ export function resolveTypeExpr(node: Node, ctx: CheckerContext): void {
 
 // Resolve all TypeExpr nodes in a type annotation array (params, fields).
 // Null-safe: skips null arrays and null entries.
-export function resolveTypeExprs(exprs: Node[], ctx: CheckerContext): void {
+export function resolveTypeExprs(exprs: (Node | null)[], ctx: CheckerContext): void {
 	if (exprs === null) return;
 	for (const te of exprs) {
+		if (te === null) continue;
 		resolveTypeExpr(te, ctx);
 	}
 }

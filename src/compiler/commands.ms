@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Individual commands (check, dump-*, pipeline, run, test, fmt)
 
-import { exit, exec, execFile } from "std/process";
+import { exit, execFile } from "std/process";
 import { removeAll } from "std/fs";
 import { basename } from "std/fs/path";
 import { lex } from "../lexer/lexer";

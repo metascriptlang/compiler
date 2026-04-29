@@ -1228,6 +1228,11 @@ function getTypeSizeInner(t: Type): number {
 			}
 		},
 		TypeKind.Union => {
+			// Union(Ref<T>, Null) collapses to bare T* in codegen (via unwrapRefNullUnion in
+			// getTypeDesc). Size must match the C representation — not the abstract
+			// tagged-union math — otherwise shouldIndirectParam misjudges struct fields
+			// containing `T | null` (sees them as larger than they actually are in C).
+			if (unwrapRefNullUnion(t) !== null) return targetPtrSize;
 			// tag + max(member sizes)
 			let maxSize = 0;
 			if (t.typeChildren !== null) {

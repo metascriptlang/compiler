@@ -4,7 +4,7 @@ import { exit, exec, cmdExists, execFile } from "std/process";
 import { exists } from "std/fs";
 import { parseSource } from "../parser/statements/validation";
 import { Node, ProgramData } from "../ast/node";
-import { CheckerContext, GcMode, hasErrors, hasFatalErrors, errorCount, Severity } from "../checker/context";
+import { CheckerContext, GcMode, hasErrors, hasFatalErrors, errorCount } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";

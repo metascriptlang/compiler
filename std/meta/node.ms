@@ -280,7 +280,7 @@ export type NodeData =
 	| { array: Node, index: Node }                                 // ArrayAccess
 	| { properties: Node[], keys: string[], keyLocations: SourceLocation[] } // ObjectLiteral
 	| { elements: Node[] }                                         // ArrayLiteral
-	| { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string, arrowDefaults: Node[] } // ArrowFunction
+	| { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string, arrowDefaults: (Node | null)[] } // ArrowFunction
 	| { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string } // FunctionExpr
 	| { asExpr: Node, asType: string }                              // TypeAssertion
 	| { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node } // ConditionalExpr
@@ -444,7 +444,7 @@ export class Node {
 	flags: int32;
 	comments: Token[]; // Added for comment preservation
 	typeExpr: Node;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
-	typeExprs: Node[]; // Per-param/per-field type annotation ASTs (parallel to string[] type fields)
+	typeExprs: (Node | null)[]; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
 	paramLocations: SourceLocation[]; // Per-param source locations for DEF recording
 	typeArg: string; // Explicit generic type arg string (e.g. "Person" from parse<Person>()) — stored on AST, not side-channel
 	flowNode: FlowNode; // Flow graph node for narrowing queries (TypeScript-go parity). Null until binder runs; null for non-reference nodes.
@@ -472,7 +472,7 @@ export type MemberExprData = { object: Node, property: string, isOptional: boole
 export type ArrayAccessData = { array: Node, index: Node };
 export type ObjectLiteralData = { properties: Node[], keys: string[], keyLocations: SourceLocation[] };
 export type ArrayLiteralData = { elements: Node[] };
-export type ArrowFunctionData = { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string, arrowDefaults: Node[] };
+export type ArrowFunctionData = { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string, arrowDefaults: (Node | null)[] };
 export type FunctionExprData = { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string };
 export type TypeAssertionData = { asExpr: Node, asType: string };
 export type ConditionalExprData = { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node };

@@ -428,7 +428,18 @@ export function stripReceiverParam(fnType: Type): Type {
 export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boolean {
 	// Static extensions: string-based matching (receiver not in typeChildren)
 	if (ext.isStatic) {
-		return ext.receiverTypeName === typeNameOf(objType);
+		if (ext.receiverTypeName === typeNameOf(objType)) return true;
+		// Type-alias fallback (mirrors the instance-branch fallback below): when
+		// the receiver expression is `Buffer` (a `type Buffer = string` alias),
+		// objType resolves to the underlying `string` and typeNameOf returns
+		// "string", but objType.sym is the Buffer alias symbol (stamped by
+		// collectTypeAlias). Without this, static extensions like Buffer.alloc()
+		// fail to match, NodeFlag.ExtCall isn't set, extensionMethodLower skips
+		// the rewrite, and codegen emits buggy closure dispatch.
+		if (objType !== null && objType.sym !== null
+				&& objType.sym.symbolKind === SymbolKind.TypeAlias
+				&& ext.receiverTypeName === objType.sym.name) return true;
+		return false;
 	}
 	if (objType === null) return false;
 	// Instance extensions: type-based matching on first param (sym.typ is authoritative).

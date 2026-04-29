@@ -4,7 +4,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { unknownType, charType, float64Type, voidType, nullType, createFunction, createPromise, typeNameOf, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
+import { unknownType, charType, float64Type, voidType, nullType, createFunction, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords } from "./context";
@@ -222,6 +222,21 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		declType = resolveAnnotation(d.declType, ctx, typeLoc.line, typeLoc.column);
 		resolveTypeExpr(node.typeExpr, ctx);
 	}
+	// Self-recursive closure binding: `const fact: T = n => fact(n-1)`. The
+	// arrow body references `fact` before its symbol exists at the normal
+	// post-init registration site (line ~273). Pre-register the symbol with
+	// its declared type so the body's lookup resolves. Only when:
+	//   (1) we have a declared type — without it the symbol's type is unknown
+	//   (2) the initializer is an ArrowFunction or FunctionExpr — preserving
+	//       TDZ semantics for non-closure initializers like `const x = x + 1`
+	let preRegisteredSelfRefSym: Symbol = null as unknown as Symbol;
+	if (declType !== null && d.initializer !== null
+			&& (d.initializer.kind === NodeKind.ArrowFunction
+				|| d.initializer.kind === NodeKind.FunctionExpr)
+			&& lookupLocal(ctx.table, d.declName) === null) {
+		preRegisteredSelfRefSym = makeSymbol(d.declName, SymbolKind.Variable, declType, d.declKind !== DeclKind.Const);
+		defineOrError(ctx, preRegisteredSelfRefSym, node);
+	}
 	checkExpr(ctx, d.initializer, declType);
 	const initType = d.initializer !== null ? d.initializer.nodeType : null;
 	// PARALOCK Phase 1: explicit `: Promise<T>` annotation on a affine Promise-producing
@@ -260,7 +275,8 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		varType = declType;
 	}
 	node.nodeType = varType;
-	// If already collected in pass 1 (e.g. export const), update type
+	// If already collected in pass 1 (e.g. export const) OR pre-registered above
+	// for self-recursive closure binding, update type and re-record.
 	const existing = lookupLocal(ctx.table, d.declName);
 	if (existing !== null) {
 		existing.symbolType = varType;

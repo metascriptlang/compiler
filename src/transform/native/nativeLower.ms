@@ -13,7 +13,7 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import { Node, NodeKind, ArrayAccessData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, HiddenStdConvData, Type, TypeKind } from "../../ast/node";
-import { isNumeric } from "../../checker/types";
+import { isNumeric, unwrapRefNullUnion } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber, makeMember } from "../util";
@@ -138,6 +138,8 @@ function getArrayMacroName(elemType: Type | null): string {
 	if (elemType.kind === TypeKind.String) return "msArrayAccess";
 	// Pointer element types (classes, refs) use msRefArray — void* indirection
 	if (elemType.kind === TypeKind.Ref || elemType.kind === TypeKind.Ptr) return "msRefArrayAccess";
+	// Union(Ref<T>, Null) collapses to T* in C — same representation as Ref<T>.
+	if (elemType.kind === TypeKind.Union && unwrapRefNullUnion(elemType) !== null) return "msRefArrayAccess";
 	// Value-type struct elements use per-type array typedefs
 	return "msArrayAccess";
 }

@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
-import { exit, exec, cmdExists } from "std/process";
+import { exit, cmdExists } from "std/process";
 import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";

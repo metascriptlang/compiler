@@ -790,10 +790,10 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			// Invariant: arrowDefaults.length === arrowParams.length. Macros emitting
 			// arrows can't (yet) carry defaults through serialization; pad with null
 			// per param to maintain the invariant for downstream consumers.
-			const arrowDefaults: Node[] = [];
+			const arrowDefaults: (Node | null)[] = [];
 			let dpi = 0;
 			while (dpi < arrowParams.length) {
-				arrowDefaults.push(null as unknown as Node);
+				arrowDefaults.push(null);
 				dpi = dpi + 1;
 			}
 			return createNodeAt(NodeKind.ArrowFunction, {
