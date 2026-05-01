@@ -4,13 +4,13 @@
 import { Node } from "../../ast/node";
 import { RaiserContext } from "../../raiser/context";
 
-type MacroEvaluatorFn = (program: Node) => RaiserContext;
+type MacroEvaluatorFn = (program: Node) => RaiserContext | null;
 
-let macroEvaluatorFn: MacroEvaluatorFn = (program: Node): RaiserContext => {
-	return null as unknown as RaiserContext;
+let macroEvaluatorFn: MacroEvaluatorFn = (program: Node): RaiserContext | null => {
+	return null;
 };
 
-export function callMacroEvaluator(program: Node): RaiserContext {
+export function callMacroEvaluator(program: Node): RaiserContext | null {
 	return macroEvaluatorFn(program);
 }
 

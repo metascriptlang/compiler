@@ -726,19 +726,18 @@ export function createMaybeType(inner: Type): Type {
 }
 
 export function createRef(inner: Type | null): Type {
-	return {
-		kind: TypeKind.Ref, typeName: "", typeNames: [], typeChildren: [],
-		typeReturn: inner, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
-		callConv: CallingConvention.CcDefault, attachedOps: [],
-	};
+	const t = emptyType();
+	t.kind = TypeKind.Ref;
+	t.typeReturn = inner;
+	t.typeFlags = TypeFlag.HasAsgn as int32;
+	return t;
 }
 
 export function createPtr(inner: Type | null): Type {
-	return {
-		kind: TypeKind.Ptr, typeName: "", typeNames: [], typeChildren: [],
-		typeReturn: inner, typeExtra: null, typeFlags: 0 as int32,
-		callConv: CallingConvention.CcDefault, attachedOps: [],
-	};
+	const t = emptyType();
+	t.kind = TypeKind.Ptr;
+	t.typeReturn = inner;
+	return t;
 }
 
 export function createBorrow(inner: Type): Type {

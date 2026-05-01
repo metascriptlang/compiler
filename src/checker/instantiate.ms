@@ -39,9 +39,9 @@ export function registerModuleCtx(modulePath: string, ctx: CheckerContext): void
 	_moduleCtxMap.set(modulePath, ctx);
 }
 
-export function lookupModuleCtx(modulePath: string): CheckerContext {
-	if (modulePath === "") return null as unknown as CheckerContext;
-	if (!_moduleCtxMap.has(modulePath)) return null as unknown as CheckerContext;
+export function lookupModuleCtx(modulePath: string): CheckerContext | null {
+	if (modulePath === "") return null;
+	if (!_moduleCtxMap.has(modulePath)) return null;
 	return _moduleCtxMap.get(modulePath);
 }
 

@@ -44,7 +44,7 @@ export function genTestDeclNode(g: CGen, node: Node): void {
 		if (locals.length > 0) add(procs, locals);
 		const stmts = readProcStmts(p);
 		if (stmts.length > 0) add(procs, stmts);
-		g.currentProc = null as unknown as CProc;
+		g.currentProc = null;
 	}
 
 	addLine(procs, "}");

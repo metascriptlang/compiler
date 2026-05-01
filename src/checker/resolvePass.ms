@@ -902,7 +902,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	// stash a sentinel on the function Type's `typeExtra` slot — flow.ms
 	// narrowType reads this to narrow callers in conditions.
 	let returnType: Type;
-	let predicateSentinel: Type = null as unknown as Type;
+	let predicateSentinel: Type | null = null;
 	if (d.fnReturnType !== "") {
 		// Assertion function: `asserts paramName is Type` — strip `asserts `
 		// prefix and handle as a predicate with void return type and a distinct

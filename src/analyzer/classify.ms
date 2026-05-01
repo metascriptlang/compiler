@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isResult, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
+import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isResult, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
@@ -191,6 +191,17 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 		TypeKind.TypeReference => noRcInfo(),
 		TypeKind.Distinct => { if (t.typeReturn !== null) { return classifyType(t.typeReturn, ctx); } else { return noRcInfo(); } },
 		TypeKind.Union => {
+			// Anonymous nullable-Ref union (`Ref<T> | Null` / `Ptr<T> | Null`):
+			// codegen lowers this to a bare T* (see types.ms unwrapRefNullUnion +
+			// pointer-size path). DRC must see it as Ref so field assignments emit
+			// msIncref and scope cleanup decrefs. Without this, fields typed
+			// `T | null` (e.g. `Type.typeReturn`) are not refcounted and dangle
+			// when the original allocation is destroyed.
+			const refInner = unwrapRefNullUnion(t);
+			if (refInner !== null) {
+				if (refInner.sym !== null && refInner.sym.symbolKind === SymbolKind.Actor) return noRcInfo();
+				return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
+			}
 			if (t.typeName !== "" && hasAsgnFlag(t)) {
 				return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "Destroy", t.typeName + "Copy", t.typeName + "WasMoved", t.typeName + "Sink", false);
 			} else { return noRcInfo(); }

@@ -232,27 +232,18 @@ function createLiftState(): LiftState {
 	return state;
 }
 
-// Lift-state context discriminator: are we currently emitting code that lives
-// directly in the enclosing fn's body (where the named hoisted env var like
-// `_env_<fn>_` is in scope), or inside a nested closure body whose `_envP`
-// param IS the enclosing fn's env?
-//
-// `tryLiftClosure` invokes `saveSharedEnv` on entry, which flips
-// `sharedEnvActive` to false but leaves `sharedEnvName/VarName/StructType`
-// intact. So:
-//   - sharedEnvActive=true  → in fn body (use named hoisted var)
+// Lift-state context discriminator. `tryLiftClosure` invokes `saveSharedEnv`
+// on entry, which flips `sharedEnvActive` to false but keeps the enclosing
+// fn's `sharedEnvName/VarName/StructType` intact. So:
+//   - sharedEnvActive=true  → emitting in fn body (named hoisted var in scope)
 //   - sharedEnvActive=false && sharedEnvName!="" → in nested-arrow body
-//     (use `_envP` — the enclosing fn's env arrived as the closure's param)
-//   - sharedEnvName=""     → no enclosing fn (module level)
+//     (the enclosing fn's env arrived as `_envP`)
+//   - sharedEnvName=""      → no enclosing fn (module level)
 //
-// `currentEnvAccessName` returns the right C identifier to access the
-// enclosing fn's env from wherever the emitted code is being placed.
+// `currentEnvAccessName` returns the right C identifier to read the enclosing
+// fn's env from wherever the emitted code lands.
 function inEnclosingFnBody(state: LiftState): boolean {
 	return state.sharedEnvActive;
-}
-
-function inNestedClosureBody(state: LiftState): boolean {
-	return !state.sharedEnvActive && state.sharedEnvName !== "";
 }
 
 function hasEnclosingFnEnv(state: LiftState): boolean {
@@ -1037,7 +1028,7 @@ function walkLiftStmtList(stmts: Node[], state: LiftState): Node[] {
 			if (nameSetContains(state.sharedEnvCapturedNames, vd.declName)) {
 				// VarDecl of a captured var: rewrite to env field assignment.
 				// Access form depends on lexical context — see comments on
-				// `inEnclosingFnBody` / `inNestedClosureBody`.
+				// `inEnclosingFnBody` (true → named hoisted var; false → `_envP`).
 				const stmtLoc = stmts[si].location;
 				let envAccess: Node;
 				if (inEnclosingFnBody(state)) {

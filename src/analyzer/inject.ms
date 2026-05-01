@@ -797,7 +797,15 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 		NodeKind.CallExpr => {
 			const preStmts = processCallArgs(rhs, idx, stmts, dctx, loc);
 			if ((flags & MOC_IS_DECL) !== 0) {
-				return wrapWithCallArgPre(stmt, preStmts, loc);
+				// Push call-arg sink temps to the scope's preStmts buffer so
+				// processStmtList emits them BEFORE the VarDecl. Wrapping in a
+				// BlockStmt would break module-level const decls: codegen's
+				// genTopLevelStmt only routes raw VariableDecl to genGlobalVar,
+				// so a wrapped BlockStmt fell through to the local-stmt path,
+				// turning module globals into Init000 locals (undefined-symbol
+				// link errors on cross-function references).
+				for (const p of preStmts) { addPre(dctx, p); }
+				return stmt;
 			}
 			// Non-IsDecl: save old → assign → incref(new) → destroy(old)
 			// Identity-case safety: incref new before decref old (Reference: =copy on result)
@@ -1423,13 +1431,6 @@ function getCallReturnType(callExpr: Node, dctx: DrcContext): Type | null {
 	if (sym === null || sym.symbolType === null) return null;
 	if (sym.symbolType.kind !== TypeKind.Function) return null;
 	return sym.symbolType.typeReturn;
-}
-
-// Wrap a statement with pre-statements from call arg processing
-function wrapWithCallArgPre(stmt: Node, preStmts: Node[], loc: SourceLocation): Node {
-	if (preStmts.length === 0) return stmt;
-	preStmts.push(stmt);
-	return makeBlock(preStmts, loc);
 }
 
 // ===== Literal Field/Element RC Processing =====
@@ -2358,14 +2359,6 @@ test "both fresh branches are SINK" {
 	// ConditionalExpr is in isFreshExpr, but processConditionalInit
 	// differentiates between all-fresh and mixed branches.
 	assert isFreshExpr(NodeKind.ConditionalExpr);
-}
-
-test "wrapWithCallArgPre no-op on empty" {
-	const loc = testLoc();
-	const stmt = makeExprStmt(makeNull(loc), loc);
-	const result = wrapWithCallArgPre(stmt, [], loc);
-	// With empty pre, should return stmt unchanged
-	assert result === stmt;
 }
 
 test "string type needs cleanup with String rcKind" {

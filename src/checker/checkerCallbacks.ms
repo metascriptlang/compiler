@@ -8,7 +8,7 @@ import { SourceLocation } from "../ast/node";
 type ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null) => void;
 type StmtCheckerFn = (ctx: CheckerContext, node: Node) => void;
 type BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]) => void;
-type InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext) => Symbol;
+type InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext) => Symbol | null;
 
 let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null): void => {
 };
@@ -19,8 +19,8 @@ let stmtCheckerFn: StmtCheckerFn = (ctx: CheckerContext, node: Node): void => {
 let bodyCheckerFn: BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): void => {
 };
 
-let instantiateGenericFn: InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): Symbol => {
-	return null as unknown as Symbol;
+let instantiateGenericFn: InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): Symbol | null => {
+	return null;
 };
 
 
@@ -36,7 +36,7 @@ export function callCheckFunctionBody(ctx: CheckerContext, sym: Symbol, params: 
 	bodyCheckerFn(ctx, sym, params, body, paramLocs);
 }
 
-export function callInstantiateGeneric(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): Symbol {
+export function callInstantiateGeneric(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): Symbol | null {
 	return instantiateGenericFn(sym, paramNames, concreteTypes, ctx);
 }
 

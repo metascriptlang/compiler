@@ -22,7 +22,7 @@ import { Node, NodeKind, BinaryExprData, IdentifierData, TypeAssertionData, Sour
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary } from "../util";
-import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike } from "../../checker/types";
+import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension, ExtensionMethod } from "../../checker/context";
 
@@ -209,12 +209,18 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 			d.right = hasNullLeft ? fnMember : d.right;
 			return node;
 		}
-		// Other value types (Result, Tuple, String, Union) can never be null —
+		// Other value types (Result, Tuple, String, plain Union) can never be null —
 		// fold to constant true/false. Reference parity: value types can't be nil.
+		// EXCLUSION: `Union(Ref<T>, Null)` / `Union(Ptr<T>, Null)` IS the standard
+		// nullable pointer pattern (kept as Union for flow narrowing — see
+		// resolveAnnotation in resolvePass.ms). Those CAN be null at runtime, so
+		// the comparison must stay as a real runtime pointer check.
 		if (valueType !== null) {
 			const vk = valueType.kind;
-			if (vk === TypeKind.GenericInstance || vk === TypeKind.Tuple || vk === TypeKind.String
-				|| vk === TypeKind.Union) {
+			if (vk === TypeKind.GenericInstance || vk === TypeKind.Tuple || vk === TypeKind.String) {
+				return makeBool(isNotEqual, loc);
+			}
+			if (vk === TypeKind.Union && unwrapRefNullUnion(valueType) === null) {
 				return makeBool(isNotEqual, loc);
 			}
 		}

@@ -54,7 +54,7 @@ function evalComptimeBlock(node: Node): Node {
 	const program = createNode(NodeKind.Program, { programStmts: finalStmts }, synthToken(loc));
 
 	// Evaluate through the Raiser VM
-	let ctx = evalASTFull(program);
+	let ctx: RaiserContext | null = evalASTFull(program);
 
 	// Convert VM result back to an AST literal
 	const result = valueToNode(ctx.lastResult, ctx.objectHeap, ctx.arrayHeap, loc);
@@ -62,7 +62,7 @@ function evalComptimeBlock(node: Node): Node {
 	// Reclaim VM heaps — prevents monotonic growth during long builds
 	clearObjectHeap(ctx.objectHeap);
 	clearArrayHeap(ctx.arrayHeap);
-	ctx = null as unknown as RaiserContext;
+	ctx = null;
 
 	return result;
 }

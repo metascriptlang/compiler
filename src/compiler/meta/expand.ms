@@ -920,7 +920,11 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(node.location));
 
 	// Run in Raiser VM
-	let vmCtx = callMacroEvaluator(program);
+	let vmCtx: RaiserContext | null = callMacroEvaluator(program);
+	if (vmCtx === null) {
+		addError(ctx, `Macro '${d.macroName}' evaluator unavailable`, node.location.line, node.location.column);
+		return node;
+	}
 
 	// Check for VM-level errors (instruction budget, division by zero, etc.)
 	if (vmCtx.lastError !== "") {
@@ -998,7 +1002,7 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	// Reclaim VM heaps
 	clearObjectHeap(vmCtx.objectHeap);
 	clearArrayHeap(vmCtx.arrayHeap);
-	vmCtx = null as unknown as RaiserContext;
+	vmCtx = null;
 
 	// Re-expand if result contains more macros (depth-limited)
 	if (depth < 16 && hasUserMacroInvocation(result, ctx)) {

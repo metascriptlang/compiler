@@ -535,7 +535,7 @@ export function aliveSetHasModule(aliveSet: AliveSet, modulePath: string): boole
 
 export class CGen {
 	sections: Builder[];       // CSection enum-indexed (10 sections)
-	currentProc: CProc;        // active proc being generated
+	currentProc: CProc | null;        // active proc being generated
 	typeCache: TypeCache;      // fully-emitted types
 	forwTypeCache: TypeCache;  // forward-declared types
 	stringPool: StringPool;    // interned string literals
@@ -570,7 +570,7 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 	}
 	return {
 		sections,
-		currentProc: null as unknown as CProc,
+		currentProc: null,
 		typeCache: createTypeCache(),
 		forwTypeCache: createTypeCache(),
 		stringPool: createStringPool(),
