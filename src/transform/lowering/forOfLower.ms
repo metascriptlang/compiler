@@ -76,6 +76,13 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 	const bodyStmts: Node[] = [];
 	const itemDecl = makeVarDecl(d.forOfBinding, makeMember(makeIdentResolved(rSym, loc), "value", loc), boolToDeclKind(d.forOfIsConst), loc);
 	if (bindingSym !== null) itemDecl.resolvedSym = bindingSym;
+	// Stamp the binding's resolved element type so downstream passes (generatorLower's
+	// collectDeclTypes → env field types, lambdaLifting's typeToEnvStr) see the
+	// monomorphized T. Without this, env fields fall back to `void*` and DRC hooks
+	// reference `<Type>__unknown` instead of `<Type>__string` etc.
+	if (resultType !== null && resultType.typeChildren !== null && resultType.typeChildren.length > 0) {
+		itemDecl.nodeType = resultType.typeChildren[0];
+	}
 	bodyStmts.push(itemDecl);
 	for (const s of extractBodyStmts(d.forOfBody)) { bodyStmts.push(s); }
 	bodyStmts.push(makeExprStmt(makeAssign(makeIdentResolved(rSym, loc), makeNextCallSym(iterSym, resultType, loc), loc), loc));
@@ -159,6 +166,13 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 		itemDecl.flags = itemDecl.flags | NodeFlag.Cursor;
 		if (bindingSym !== null) itemDecl.resolvedSym = bindingSym;
+		// Stamp the element type (Array<T>.typeReturn = T after mono) so downstream
+		// passes can see the monomorphized binding type. Same reason as the iterator
+		// path above — without this, generic for..of bindings degrade to `void*` in
+		// generated C and break DRC hook resolution.
+		if (iterType !== null && iterType.typeReturn !== null) {
+			itemDecl.nodeType = iterType.typeReturn;
+		}
 		whileStmts.push(itemDecl);
 	}
 

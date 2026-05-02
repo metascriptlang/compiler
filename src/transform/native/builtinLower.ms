@@ -268,18 +268,10 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 	const keys: string[] = ["ok"];
 	const values: Node[] = [makeBool(isOk, loc)];
 
-	if (isOk) {
-		const okType = getResultOkType(resType);
-		if (okType !== null && okType.kind !== TypeKind.Void) {
-			keys.push("value");
-			values.push(cd.arguments[0]);
-		}
-	} else {
-		const errType = getResultErrType(resType);
-		if (errType !== null && errType.kind !== TypeKind.Void) {
-			keys.push("error");
-			values.push(cd.arguments[0]);
-		}
+	const payloadType = isOk ? getResultOkType(resType) : getResultErrType(resType);
+	if (payloadType !== null && payloadType.kind !== TypeKind.Void) {
+		keys.push(isOk ? "value" : "error");
+		values.push(cd.arguments[0]);
 	}
 
 	const literal = makeObjectLiteral(keys, values, loc);

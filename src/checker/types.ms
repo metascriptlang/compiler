@@ -14,7 +14,7 @@ import { Type, TypeKind, TypeFlag, CallingConvention, AttachedOp } from "../ast/
 //
 //   kind           — the TypeKind enum value
 //   typeName       — nominal name (e.g. "Promise", "Result", struct name)
-//   typeNames      — field/variant names (Struct fields, Union variants, Result ["ok","value","error"])
+//   typeNames      — field/variant names (Struct fields, Union variants, DU disc metadata)
 //   typeChildren   — type args, field types, variant types, parameter types
 //   typeReturn     — function return type; alias target; alternate uninstantiated body
 //   typeExtra      — second companion slot (DiscriminatedUnion enum, Result's err for GI)
@@ -44,7 +44,7 @@ import { Type, TypeKind, TypeFlag, CallingConvention, AttachedOp } from "../ast/
 //   Function       — typeChildren = param types, typeReturn = return type, typeNames = param names
 //   Struct         — typeName = struct name, typeNames = field names, typeChildren = field types
 //   Union          — typeChildren = variant types, typeNames[0] = discriminant (if DU)
-//   Result         — typeChildren = [ok, err] (GI form also), typeReturn/typeExtra = ok/err fallbacks
+//   Result         — boolean-disc match-type Union; GI typeChildren = [ok, err]
 //   Ref/Ptr/Borrow — typeReturn = referent type
 //   Array/Span     — typeReturn = element type
 //   SizedArray     — typeReturn = element, typeFlags upper bits = size
@@ -222,12 +222,30 @@ export function createEnum(name: string, members: string[], values: number[]): T
 }
 
 
+// Result<T, E> as a boolean-discriminated match-type internally:
+//   `match (ok: boolean) { true => { value: T }, false => { error: E } }`
+// Layout is a tagged union — `r.value` is unreachable when !r.ok, and
+// `if (r.ok)` narrows the active variant. Codegen lowers via the standard
+// `genUnionType` path; member access dispatch in expressions.ms reads
+// `r.v0.ok` / `r.v0.value` / `r.v1.error` through the union-overlapping
+// memory at the discriminator slot.
+//
+// `void` type args (`Result<void, E>` for fallible-no-payload calls) leave
+// the field with `void` type — codegen filters it out at typedef + hook walk
+// to avoid emitting invalid `void value;` declarations.
 export function createResult(okType: Type, errType: Type): Type {
-	const base = emptyType();
-	base.kind = TypeKind.Struct;
+	const trueVariant = emptyType();
+	trueVariant.kind = TypeKind.Struct;
+	trueVariant.typeNames = ["ok", "value"];
+	trueVariant.typeChildren = [createBooleanLiteral(true), okType];
+	const falseVariant = emptyType();
+	falseVariant.kind = TypeKind.Struct;
+	falseVariant.typeNames = ["ok", "error"];
+	falseVariant.typeChildren = [createBooleanLiteral(false), errType];
+	const base = createUnion([trueVariant, falseVariant]);
 	base.typeName = "Result";
-	base.typeNames = ["ok", "value", "error"];
-	base.typeChildren = [createPrimitive(TypeKind.Boolean), okType, errType];
+	base.typeExtra = booleanType();
+	base.typeNames = ["ok", "true", "false"];
 	base.typeFlags = TypeFlag.HasAsgn as int32;
 	return createGenericInstance(base, [okType, errType]);
 }
@@ -305,16 +323,20 @@ export function isResult(t: Type | null): boolean {
 	return t.kind === TypeKind.GenericInstance && t.typeName === "Result";
 }
 
+// Result's ok-type / err-type live on the GenericInstance's `typeChildren`
+// slots ([T, E] from `Result<T, E>`). The Union body's `typeExtra` carries the
+// disc TYPE (`Boolean`) — never the err type — so reading it would be wrong.
+// `createResult` always wraps in a GI; `null` returns are for non-Result inputs.
 export function getResultOkType(t: Type | null): Type | null {
 	if (t === null) return null;
 	if (t.kind === TypeKind.GenericInstance && t.typeChildren.length > 0) return t.typeChildren[0];
-	return t.typeReturn;
+	return null;
 }
 
 export function getResultErrType(t: Type | null): Type | null {
 	if (t === null) return null;
 	if (t.kind === TypeKind.GenericInstance && t.typeChildren.length > 1) return t.typeChildren[1];
-	return t.typeExtra;
+	return null;
 }
 
 // =====================================================================
@@ -528,11 +550,13 @@ export function isAmbiguousVariant(unionType: Type | null, matchedIdx: number, f
 
 // Find a field's type within a single variant struct. Returns null if not found.
 export function findFieldInVariant(variant: Type, fieldName: string): Type | null {
-	if (variant === null || variant.typeNames === null) return null;
+	// Peel Ref/Ptr — interface-typed variants are Ref<Struct> in the C backend.
+	const v = peelToStruct(variant);
+	if (v === null || v.typeNames === null) return null;
 	let i = 0;
-	while (i < variant.typeNames.length) {
-		if (variant.typeNames[i] === fieldName && i < variant.typeChildren.length) {
-			return variant.typeChildren[i];
+	while (i < v.typeNames.length) {
+		if (v.typeNames[i] === fieldName && i < v.typeChildren.length) {
+			return v.typeChildren[i];
 		}
 		i = i + 1;
 	}
@@ -575,13 +599,18 @@ export function detectUnionDiscriminant(unionType: Type | null, fieldName: strin
 	return { isStringDU: false, discField: "" };
 }
 
-// Find variant index by field name. Returns the first variant containing the field.
-// Used for direct field access on discriminated unions (e.g., s.radius → s.v0.radius).
+// Find variant index by field name, peeling Ref/Ptr per variant to reach the
+// underlying Struct. Returns the first variant containing the field, or -1.
+//
+// Caller must establish DU context FIRST — typically by checking
+// `isRealDiscriminatedUnion` (codegen) or `narrowingObjType.kind === Union`
+// after `peelToStructOrUnion`. Without that gate, calling on `T | null`
+// (nullable) patterns would erroneously match the Ref variant's fields.
 export function findVariantByFieldName(unionType: Type | null, fieldName: string): number {
 	if (unionType === null || unionType.typeChildren === null) return -1;
 	let i = 0;
 	while (i < unionType.typeChildren.length) {
-		const variant = unionType.typeChildren[i];
+		const variant = peelToStruct(unionType.typeChildren[i]);
 		if (variant !== null && variant.typeNames !== null) {
 			for (const fn of variant.typeNames) {
 				if (fn === fieldName) return i;
@@ -617,30 +646,94 @@ export function findVariantByDiscriminant(unionType: Type | null, enumValue: str
 //   - be present on every variant
 //   - have a distinct StringLiteral type in each variant (so we can disambiguate)
 // Returns the field name, or "" if no such field exists.
+// Maximum peel depth — guards against malformed cyclic/deeply-nested types.
+// 8 covers any realistic chain (Ref<GI<Ref<GI<...>>>> is already 4 levels).
+const PEEL_MAX_DEPTH = 8;
+
 // Preference order: first matching field encountered in variant 0.
-export function findSharedStringDiscriminant(unionType: Type | null): string {
+// Peel Ref/Ptr wrapper to reach the underlying Struct so variant field walks
+// work for interface-typed variants (interface = Ref<Struct> in the C backend).
+// Returns the original type if it's already a Struct or has no peelable wrapper.
+export function peelToStruct(t: Type | null): Type | null {
+	if (t === null) return null;
+	let cur: Type = t;
+	let _g = 0;
+	while (cur !== null && _g < PEEL_MAX_DEPTH) {
+		_g = _g + 1;
+		if (cur.kind === TypeKind.Struct) return cur;
+		if ((cur.kind === TypeKind.Ref || cur.kind === TypeKind.Ptr) && cur.typeReturn !== null) {
+			cur = cur.typeReturn;
+			continue;
+		}
+		break;
+	}
+	return cur;
+}
+
+// Peel Ref/Ptr/GenericInstance wrappers until reaching a Struct or Union body.
+// Used by checkers and codegen for generic match-type aliases like
+// `MyResult<T, E> = Ref<MyData<T, E>>` where the chain is GI → Ref → GI → Union.
+// Returns the original type if no peelable wrapper exists. Bounded by
+// `PEEL_MAX_DEPTH` against pathological cyclic types.
+export function peelToStructOrUnion(t: Type | null): Type | null {
+	if (t === null) return null;
+	let cur: Type = t;
+	let _g = 0;
+	while (cur !== null && _g < PEEL_MAX_DEPTH) {
+		_g = _g + 1;
+		if (cur.kind === TypeKind.Struct || cur.kind === TypeKind.Union) return cur;
+		if ((cur.kind === TypeKind.Ref || cur.kind === TypeKind.Ptr) && cur.typeReturn !== null) {
+			cur = cur.typeReturn;
+			continue;
+		}
+		if (cur.kind === TypeKind.GenericInstance) {
+			if (cur.typeReturn !== null) {
+				cur = cur.typeReturn;
+				continue;
+			}
+			if (cur.typeExtra !== null) {
+				cur = cur.typeExtra;
+				continue;
+			}
+		}
+		break;
+	}
+	return cur;
+}
+
+// Detect a literal-typed discriminant field shared by every variant. Variants
+// must each have the SAME field name with the requested `literalKind` type
+// and DISTINCT values (different `typeName` strings). Returns the field name
+// or "" when no such discriminator exists.
+//
+// Single implementation backs both `findSharedStringDiscriminant` (for
+// `kind: "circle" | "square"`) and `findSharedBooleanDiscriminant` (for
+// `ok: true | false`). Variants are peeled through `Ref`/`Ptr` so interface-
+// typed variants (`Ref<Struct>` in the C backend) work the same as bare
+// anonymous structs.
+function findSharedLiteralDiscriminant(unionType: Type | null, literalKind: TypeKind): string {
 	if (unionType === null || unionType.typeChildren === null || unionType.typeChildren.length < 2) return "";
 	const variants = unionType.typeChildren;
-	const first = variants[0];
+	const first = peelToStruct(variants[0]);
 	if (first === null || first.typeNames === null) return "";
 	for (let fi = 0; fi < first.typeNames.length; fi += 1) {
 		if (fi >= first.typeChildren.length) continue;
 		const firstFt = first.typeChildren[fi];
-		if (firstFt === null || firstFt.kind !== TypeKind.StringLiteral) continue;
+		if (firstFt === null || firstFt.kind !== literalKind) continue;
 		const candidateName = first.typeNames[fi];
-		// Check every other variant has this field as a StringLiteral with a *different* value.
+		// Check every other variant has this field as the same literal kind with a
+		// *different* value (so the discriminator can disambiguate variants).
 		let sharedOk = true;
 		const seen: string[] = [firstFt.typeName];
 		for (let vi = 1; vi < variants.length; vi += 1) {
-			const v = variants[vi];
+			const v = peelToStruct(variants[vi]);
 			if (v === null || v.typeNames === null) { sharedOk = false; break; }
 			let foundInV = false;
 			for (let vfi = 0; vfi < v.typeNames.length; vfi += 1) {
 				if (v.typeNames[vfi] !== candidateName) continue;
 				if (vfi >= v.typeChildren.length) break;
 				const vft = v.typeChildren[vfi];
-				if (vft === null || vft.kind !== TypeKind.StringLiteral) break;
-				// Reject duplicate values across variants
+				if (vft === null || vft.kind !== literalKind) break;
 				let dup = false;
 				for (const s of seen) { if (s === vft.typeName) { dup = true; break; } }
 				if (dup) { sharedOk = false; break; }
@@ -656,12 +749,51 @@ export function findSharedStringDiscriminant(unionType: Type | null): string {
 	return "";
 }
 
+export function findSharedStringDiscriminant(unionType: Type | null): string {
+	return findSharedLiteralDiscriminant(unionType, TypeKind.StringLiteral);
+}
+
+// Tier 2 (boolean): detect a boolean-literal discriminant shared by every variant.
+// Variants must each have the same field name with a BooleanLiteral type and
+// distinct values (true vs false).
+export function findSharedBooleanDiscriminant(unionType: Type | null): string {
+	return findSharedLiteralDiscriminant(unionType, TypeKind.BooleanLiteral);
+}
+
+// Find the variant index whose `discFieldName` field is a literal of the given
+// kind with `litValueName` as its `typeName`. Backs both the string and boolean
+// variant lookups — both encode the literal value in `Type.typeName`
+// (`"circle"`/`"square"` for StringLiteral, `"true"`/`"false"` for
+// BooleanLiteral). Returns -1 when no variant matches.
+function findVariantByLiteralDiscriminant(unionType: Type | null, discFieldName: string, literalKind: TypeKind, litValueName: string): number {
+	if (unionType === null || unionType.typeChildren === null) return -1;
+	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
+		const variant = peelToStruct(unionType.typeChildren[i]);
+		if (variant === null || variant.typeNames === null) continue;
+		for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
+			if (variant.typeNames[fi] !== discFieldName) continue;
+			if (fi >= variant.typeChildren.length) continue;
+			const ft = variant.typeChildren[fi];
+			if (ft !== null && ft.kind === literalKind && ft.typeName === litValueName) {
+				return i;
+			}
+		}
+	}
+	return -1;
+}
+
+// Find variant index by boolean literal discriminator value.
+export function findVariantByBooleanDiscriminant(unionType: Type | null, discFieldName: string, litValue: boolean): number {
+	return findVariantByLiteralDiscriminant(unionType, discFieldName, TypeKind.BooleanLiteral, litValue ? "true" : "false");
+}
+
 // Tier 2: collect all string-literal discriminant values from a union's variants.
 // Returns ["circle", "square"] for type Shape = {kind:"circle",...} | {kind:"square",...}.
 export function collectStringDiscriminantValues(unionType: Type | null, discFieldName: string): string[] {
 	const values: string[] = [];
 	if (unionType === null || unionType.typeChildren === null) return values;
-	for (const variant of unionType.typeChildren) {
+	for (const rawVariant of unionType.typeChildren) {
+		const variant = peelToStruct(rawVariant);
 		if (variant === null || variant.typeNames === null) continue;
 		for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
 			if (variant.typeNames[fi] !== discFieldName) continue;
@@ -682,20 +814,7 @@ export function collectStringDiscriminantValues(unionType: Type | null, discFiel
 // and there's no enum-backed discriminant metadata on the union itself.
 // Returns -1 if no variant has a StringLiteral field matching the value.
 export function findVariantByStringDiscriminant(unionType: Type | null, discFieldName: string, litValue: string): number {
-	if (unionType === null || unionType.typeChildren === null) return -1;
-	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
-		const variant = unionType.typeChildren[i];
-		if (variant === null || variant.typeNames === null) continue;
-		for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
-			if (variant.typeNames[fi] !== discFieldName) continue;
-			if (fi >= variant.typeChildren.length) continue;
-			const ft = variant.typeChildren[fi];
-			if (ft !== null && ft.kind === TypeKind.StringLiteral && ft.typeName === litValue) {
-				return i;
-			}
-		}
-	}
-	return -1;
+	return findVariantByLiteralDiscriminant(unionType, discFieldName, TypeKind.StringLiteral, litValue);
 }
 
 // Maybe<T> — Reference: Maybe/Option parity. Wrapper struct { value: T, present: bool }.
@@ -817,12 +936,12 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	const isRefWrapped = baseType.kind === TypeKind.Ref && baseType.typeReturn !== null;
 	const innerBase = isRefWrapped ? baseType.typeReturn : baseType;
 	if (innerBase.kind !== TypeKind.Struct && innerBase.kind !== TypeKind.Union) return;
-	// Only instantiate if ALL type args are concrete
-	let ai = 0;
-	while (ai < gi.typeChildren.length) {
-		if (gi.typeChildren[ai] !== null && gi.typeChildren[ai].kind === TypeKind.GenericParam) return;
-		ai = ai + 1;
-	}
+	// Always instantiate, even when type args are still GenericParams. Inside a
+	// generic function body (e.g., `function makeOk<T, E>(...): Result<T, E>`),
+	// substituting `T → T` is identity but produces a body with the discriminant
+	// and variant fields exposed — needed for object-literal validation and field
+	// access against the generic instance. Without this, generic match-type
+	// aliases stay opaque during their own factory's body checking.
 	// Split declared param names (e.g. "K,V" → ["K", "V"])
 	const paramNames = splitTopLevel(declaredParams, ",");
 	if (paramNames.length === 0 || paramNames.length > gi.typeChildren.length) return;
@@ -884,6 +1003,21 @@ export function createStringLiteral(value: string): Type {
 
 export function isStringLiteral(t: Type | null): boolean {
 	return t !== null && t.kind === TypeKind.StringLiteral;
+}
+
+// BooleanLiteral: specific boolean value as a type (TypeScript parity).
+// typeName = "true" | "false" — the literal value as a string.
+// Required for discriminated union narrowing on `ok: true | false` discriminants.
+export function createBooleanLiteral(value: boolean): Type {
+	const t = emptyType();
+	t.kind = TypeKind.BooleanLiteral;
+	t.typeName = value ? "true" : "false";
+	return t;
+}
+
+export function booleanLiteralValue(t: Type | null): boolean {
+	if (t === null || t.kind !== TypeKind.BooleanLiteral) return false;
+	return t.typeName === "true";
 }
 
 // EnumLiteral: a specific enum member as a type (TypeScript parity).
@@ -1111,7 +1245,6 @@ export function unwrapRefNullUnion(t: Type): Type | null {
 // Types that need reference counting. Pure type query — no codegen dependency.
 
 export function needsRC(t: Type | null): boolean {
-	if (t === null) return false;
 	if (t === null) return false;
 	return match (t.kind) {
 		TypeKind.String => true,
@@ -1723,6 +1856,7 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind === TypeKind.Char
 		|| kind === TypeKind.CString
 		|| kind === TypeKind.StringLiteral
+		|| kind === TypeKind.BooleanLiteral
 		|| kind === TypeKind.Error;
 }
 

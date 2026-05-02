@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple } from "./types";
+import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -194,6 +194,12 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 	if (trimmed.length >= 2 && trimmed.charAt(0) === "\"" && trimmed.charAt(trimmed.length - 1) === "\"") {
 		return createStringLiteral(trimmed.slice(1, trimmed.length - 1));
 	}
+
+	// Boolean literal type: `true` / `false` → BooleanLiteral (TypeScript parity)
+	// Required for discriminated union narrowing on boolean discriminants
+	// (e.g. `type Result<T,E> = { ok: true, value: T } | { ok: false, error: E }`).
+	if (trimmed === "true") return createBooleanLiteral(true);
+	if (trimmed === "false") return createBooleanLiteral(false);
 
 	// Object literal type: { field: Type; ... } or { field: Type, ... }
 	// Also handles index signature: { [key: K]: V } → normalized to Map<K, V>.
@@ -1096,7 +1102,22 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 
 	// Discriminated union: resolve structured variant data instead of aliasType text
 	if (d.discriminantName !== "") {
+		// Tier 3: open generic param scope for `type MyData<T, E> = match (...) { ... }`
+		// so variant field annotations (e.g. `value: T`) can resolve T as a GenericParam
+		// instead of Unknown. Without this, instantiated generic match-types lose their
+		// type parameters and field access returns Unknown.
+		const hasGenericAliasDU = d.aliasGenericParams !== null && d.aliasGenericParams !== "";
+		if (hasGenericAliasDU) {
+			openScope(ctx.table, ScopeKind.Block);
+			const paramList = splitTopLevel(d.aliasGenericParams, ",");
+			for (const p of paramList) {
+				defineGenericParam(ctx, p.trim());
+			}
+		}
 		const resolved = resolveDiscriminatedUnion(ctx, d);
+		if (hasGenericAliasDU) {
+			closeScope(ctx.table);
+		}
 		if (resolved !== null) {
 			assignType(sym.symbolType, resolved);
 			node.nodeType = sym.symbolType;
@@ -1130,6 +1151,21 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	if (hasGenericAlias && resolved.typeName === "") {
 		resolved.typeName = d.aliasName;
 	}
+	// TypeScript-parity auto-detection of boolean-discriminator DUs:
+	// `type R = { ok: true, ... } | { ok: false, ... }`. Stamp the discriminator
+	// metadata so codegen and narrowing treat it as discriminated. String-literal
+	// DUs (`{ kind: "circle" } | { kind: "square" }`) are handled by the existing
+	// `findSharedStringDiscriminant` path used directly by checkExprPass — those
+	// tests rely on the un-stamped Union shape, so don't auto-stamp them here.
+	if (resolved.kind === TypeKind.Union
+		&& (resolved.typeNames === null || resolved.typeNames.length === 0)
+		&& resolved.typeExtra === null) {
+		const boolDisc = findSharedBooleanDiscriminant(resolved);
+		if (boolDisc !== "") {
+			resolved.typeNames = [boolDisc];
+			resolved.typeExtra = booleanType();
+		}
+	}
 	if (d.aliasIsDistinct) {
 		const distType = createDistinct(resolved);
 		assignType(sym.symbolType, distType);
@@ -1146,45 +1182,77 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 //   typeExtra = discriminant enum Type,
 //   typeNames = [discFieldName, variantKey0, variantKey1, ...]
 function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): Type | null {
-	// Resolve discriminant type — must be an enum
+	// Resolve discriminant type — must be an enum or boolean.
+	// Boolean disc is the natural fit for two-variant unions like
+	// `type Result<T,E> = match (ok: boolean) { true => {...}, false => {...} }`.
 	const discType = resolveAnnotation(d.discriminantType, ctx, 0, 0);
-	if (discType.kind !== TypeKind.Enum) {
-		addError(ctx, "Discriminant type '" + d.discriminantType + "' must be an enum", 0, 0);
+	const isBooleanDisc = discType.kind === TypeKind.Boolean;
+	if (discType.kind !== TypeKind.Enum && !isBooleanDisc) {
+		addError(ctx, "Discriminant type '" + d.discriminantType + "' must be an enum or boolean", 0, 0);
 		return null;
 	}
 
-	// Validate each variant key is a valid enum member
-	for (const key of d.variantKeys) {
-		const memberName = bareAfterDelim(key, ".");
-		let found = false;
-		if (discType.typeNames !== null) {
-			for (const m of discType.typeNames) {
-				if (m === memberName) {
-					found = true;
-				}
+	if (isBooleanDisc) {
+		// Boolean disc requires exactly the keys "true" and "false".
+		for (const key of d.variantKeys) {
+			if (key !== "true" && key !== "false") {
+				addError(ctx, "Variant key '" + key + "' must be 'true' or 'false' for boolean discriminator", 0, 0);
 			}
 		}
-		if (!found) {
-			addError(ctx, "'" + key + "' is not a member of enum '" + d.discriminantType + "'", 0, 0);
+	} else {
+		// Validate each variant key is a valid enum member
+		for (const key of d.variantKeys) {
+			const memberName = bareAfterDelim(key, ".");
+			let found = false;
+			if (discType.typeNames !== null) {
+				for (const m of discType.typeNames) {
+					if (m === memberName) {
+						found = true;
+					}
+				}
+			}
+			if (!found) {
+				addError(ctx, "'" + key + "' is not a member of enum '" + d.discriminantType + "'", 0, 0);
+			}
 		}
 	}
 
-	// Resolve each variant type — name each variant for error messages
+	// Resolve each variant type.
+	// - Enum disc: stamp variant with `<alias>.<key>` (dotted form). The dot
+	//   serves dual purpose: error messages display `MyData.Ok`, and
+	//   `variantStructCName` excludes dotted names from direct C use (falls
+	//   back to synthetic `<Union>_v<N>` which matches the typedef emitted
+	//   by `genUnionType`).
+	// - Boolean disc: variants stay anonymous. Inject the disc field as
+	//   `BooleanLiteral` so `r.ok` member access reads through overlapping
+	//   variant memory (`v<N>.<disc>`).
 	const variantTypes: Type[] = [];
 	for (let vi = 0; vi < d.variantTypes.length; vi += 1) {
 		const resolved = resolveAnnotation(d.variantTypes[vi], ctx, 0, 0);
-		if (resolved !== null && vi < d.variantKeys.length) {
-			const bareKey = d.variantKeys[vi].indexOf(".") >= 0 ? d.variantKeys[vi].slice(d.variantKeys[vi].indexOf(".") + 1, d.variantKeys[vi].length) : d.variantKeys[vi];
-			resolved.typeName = d.aliasName + "." + bareKey;
+		if (resolved !== null && resolved.kind === TypeKind.Struct && vi < d.variantKeys.length) {
+			if (isBooleanDisc) {
+				const discValue = d.variantKeys[vi] === "true";
+				const discFieldType = createBooleanLiteral(discValue);
+				const newNames: string[] = [d.discriminantName];
+				for (const n of resolved.typeNames) newNames.push(n);
+				const newChildren: Type[] = [discFieldType];
+				for (const c of resolved.typeChildren) newChildren.push(c);
+				resolved.typeNames = newNames;
+				resolved.typeChildren = newChildren;
+			} else {
+				const bareKey = bareAfterDelim(d.variantKeys[vi], ".");
+				resolved.typeName = d.aliasName + "." + bareKey;
+			}
 		}
 		variantTypes.push(resolved);
 	}
 
-	// Build Union type with discriminant metadata
+	// Build Union type with discriminant metadata.
+	// typeExtra = discriminant type (Enum or Boolean primitive)
+	// typeNames = [discFieldName, key0, key1, ...]
 	const unionType = createUnion(variantTypes);
 	unionType.typeName = d.aliasName;
-	// Store discriminant metadata: typeExtra = enum type, typeNames = [discFieldName, key0, key1, ...]
-	unionType.typeExtra = discType;
+	unionType.typeExtra = isBooleanDisc ? booleanType() : discType;
 	const names: string[] = [d.discriminantName];
 	for (const key of d.variantKeys) {
 		names.push(key);

@@ -174,6 +174,17 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		return true;
 	}
 
+	// BooleanLiteral → Boolean (subtype: `true` assignable to boolean).
+	// BooleanLiteral → BooleanLiteral matches only on identical value.
+	// Boolean → BooleanLiteral falls through to the default `false` (general
+	// boolean cannot satisfy a specific true/false constraint).
+	if (source.kind === TypeKind.BooleanLiteral && target.kind === TypeKind.Boolean) {
+		return true;
+	}
+	if (source.kind === TypeKind.BooleanLiteral && target.kind === TypeKind.BooleanLiteral) {
+		return source.typeName === target.typeName;
+	}
+
 	// EnumLiteral → Enum (subtype: NodeKind.BinaryExpr assignable to NodeKind)
 	if (source.kind === TypeKind.EnumLiteral && target.kind === TypeKind.Enum) {
 		return source.typeName === target.typeName;

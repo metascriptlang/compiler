@@ -14,6 +14,23 @@
 # Archive naming matches install.sh expectations:
 #   os:   darwin | linux | windows
 #   arch: arm64 | x86_64
+#
+# Release workflow
+# ----------------
+# Every release ships as a GitHub Pre-release. Stable users are not affected
+# until you manually promote a release to "Latest".
+#
+#   1. Bump VERSION in src/compiler/usage.ms
+#   2. ./tools/release.sh --upload     (publishes as pre-release)
+#   3. Test the new build
+#   4. When satisfied, promote it manually:
+#        gh release edit v<VERSION> --latest=true --prerelease=false
+#
+# Power users can install a specific pre-release with:
+#   curl -fsSL https://metascriptlang.org/install.sh | MSC_VERSION=<version> sh
+#
+# Stable users always get whatever's currently marked "Latest" via:
+#   curl -fsSL https://metascriptlang.org/install.sh | sh
 
 set -euo pipefail
 
@@ -69,12 +86,31 @@ for t in "${TARGETS[@]}"; do
 done
 
 # Check prerequisites
-for cmd in bun zig tar zip; do
+for cmd in bun zig zip; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "error: $cmd is required but not found in PATH"
         exit 1
     fi
 done
+
+# Pick the tar implementation. macOS ships BSD tar, which unconditionally
+# embeds `com.apple.provenance` and other LIBARCHIVE.xattr.* headers in pax
+# archives. GNU tar on Linux/Windows warns "Ignoring unknown extended header
+# keyword" for each entry during extraction. Requiring GNU tar on macOS
+# (brew install gnu-tar, exposes `gtar`) produces clean archives that install
+# quietly everywhere. Linux hosts already ship GNU tar as `tar`.
+if [ "$(uname -s)" = "Darwin" ]; then
+    if command -v gtar &>/dev/null; then
+        TAR=gtar
+    else
+        echo "error: GNU tar required on macOS to avoid Apple xattr headers"
+        echo "  install with: brew install gnu-tar"
+        exit 1
+    fi
+else
+    TAR=tar
+fi
+
 if [ "$UPLOAD" = true ] && ! command -v gh &>/dev/null; then
     echo "error: gh (GitHub CLI) is required for --upload but not found in PATH"
     exit 1
@@ -264,7 +300,7 @@ build_target() {
         (cd "$stage" && zip -qr "$archive_path" .)
     else
         archive_path="$DIST_DIR/${archive_name}.tar.gz"
-        tar -czf "$archive_path" -C "$stage" .
+        "$TAR" -czf "$archive_path" -C "$stage" .
     fi
 
     local size
@@ -295,11 +331,23 @@ upload_release() {
 
     # Create release (or update if exists)
     if gh release view "$tag" &>/dev/null; then
+        # Refuse to overwrite a release that's currently marked Latest —
+        # that would silently ship untested binaries to stable users.
+        # If a hotfix without bumping version is genuinely needed, demote first:
+        #   gh release edit "$tag" --latest=false --prerelease
+        is_latest=$(gh release view "$tag" --json isLatest --jq '.isLatest' 2>/dev/null)
+        if [ "$is_latest" = "true" ]; then
+            echo "  error: Release $tag is currently marked Latest."
+            echo "         Refusing to overwrite stable assets."
+            echo "         Bump VERSION in src/compiler/usage.ms before re-running."
+            return 1
+        fi
         echo "  release $tag exists, uploading assets..."
         gh release upload "$tag" "${assets[@]}" --clobber
     else
         echo "  creating release $tag..."
         gh release create "$tag" "${assets[@]}" \
+            --prerelease \
             --title "MetaScript $tag" \
             --notes "$(cat <<EOF
 ## MetaScript Compiler $tag

@@ -21,12 +21,17 @@ import "./lang/closuresAdv";
 import "./lang/interfaces";
 import "./lang/classes";
 import "./lang/result";
+import "./lang/discrim";
+import "./lang/json";
 import "./lang/trycatch";
 import "./lang/recursion";
 import "./lang/advanced";
 import "./lang/async";
 import "./lang/syntax";
 import "./lang/multimod/main";
+
+// -- regression suite (one file per fixed bug) --
+import "./fixedbugs/index";
 
 // -- E2E pipeline tests --
 import "./c/variables";
@@ -38,6 +43,9 @@ import "./c/expressions";
 import "./c/closures";
 import "./c/result";
 import "./c/buffer";
+import "./c/httpServer";
+import "./c/actor";
+import "./c/json";
 import "./c/drcLifecycle";
 import "./js/basic";
 import "./js/result";

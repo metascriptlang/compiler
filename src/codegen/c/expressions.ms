@@ -7,15 +7,15 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, isFloatType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType, isStringLike, awaitedType, unwrapRefNullUnion } from "../../checker/types";
+import { isIntegerType, isFloatType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, awaitedType, unwrapRefNullUnion, peelToStructOrUnion } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
-	emitProcLocalsLine, lookupLocalName,
+	emitProcLocalsLine, lookupLocalName, typeCacheGet,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType, ensurePromiseAllInstance } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType, ensurePromiseAllInstance, typeKey } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto, isDrcLifecycleName } from "./forward";
@@ -43,6 +43,83 @@ function unwrapPointerLikeForVariant(t: Type | null): Type | null {
 		return t.typeReturn;
 	}
 	return t;
+}
+
+// True if the Union should be lowered to a tagged union in C (`{_tag, v0, v1, ...}`)
+// rather than collapsed into a single carrier type. We exclude:
+//   - `T | null` — bare `T*` pointer (handled by `unwrapRefNullUnion`)
+//   - All-pointer unions where every variant resolves to the same inner struct
+//     (no discriminator) — these are not user-authored DUs but accidental shapes
+//     created by flow narrowing or join points where two pointers to the same
+//     class converge.
+//
+// We accept a Union as "real" when ANY of these hold:
+//   1. Stamped DU metadata (`typeNames[0]` + `typeExtra` from match-type).
+//   2. Shared string-literal or boolean-literal discriminator across variants
+//      — TS-style `{ kind: "a" } | { kind: "b" }`, `{ ok: true } | { ok: false }`.
+//   3. At least one variant is a non-pointer (Struct/anonymous record) —
+//      covers `NodeData`-style structural unions.
+//   4. Variants resolve to DISTINCT inner struct names — covers TS-style
+//      `Circle | Square` where each variant is `Ref<distinctClass>`.
+function isRealDiscriminatedUnion(t: Type): boolean {
+	if (t === null || t.kind !== TypeKind.Union) return false;
+	if (t.typeChildren === null || t.typeChildren.length === 0) return false;
+	if (unwrapRefNullUnion(t) !== null) return false;
+	if (isDiscriminatedUnion(t)) return true;
+	if (findSharedStringDiscriminant(t) !== "") return true;
+	if (findSharedBooleanDiscriminant(t) !== "") return true;
+	// Distinctness check: walk variants, peel pointer wrappers, collect inner
+	// struct names. Real DUs (Shape = Circle | Square, NodeData = { ... } | { ... })
+	// have either non-pointer variants OR distinct named structs. Accidental
+	// shapes like `Union(Ref<Type>, Ref<Type>)` collapse to one entry.
+	const seenNames: string[] = [];
+	let hasNonPointerVariant = false;
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		let v = t.typeChildren[i];
+		if (v === null) continue;
+		if ((v.kind === TypeKind.Ref || v.kind === TypeKind.Ptr) && v.typeReturn !== null) {
+			v = v.typeReturn;
+		} else if (v.kind !== TypeKind.Null) {
+			hasNonPointerVariant = true;
+		}
+		if (v.kind === TypeKind.Null) continue;
+		const name = v.typeName !== "" ? v.typeName : "$anon$" + i.toString();
+		let alreadySeen = false;
+		for (const sn of seenNames) {
+			if (sn === name) { alreadySeen = true; break; }
+		}
+		if (!alreadySeen) seenNames.push(name);
+	}
+	if (hasNonPointerVariant) return true;
+	return seenNames.length >= 2;
+}
+
+// Variant struct C name. Three sources, in priority order:
+//   1. Named struct/interface variant (e.g. `OkResult`) — reuse directly
+//   2. genUnionType's variant cache — when two distinct Union instances share
+//      a structurally identical variant (e.g. `Result<void,IoError>` and
+//      `Result<string,IoError>` both have a `{ok: false, error: IoError}`
+//      variant), genUnionType emits ONE typedef and reuses it. The cache key
+//      is the variant's `typeKey`. Without consulting the cache here, the OL
+//      construction would emit `<Union>_v<N>` for an undefined typedef.
+//   3. Synthetic `<Union>_v<N>` — fallback when no cache hit and no named
+//      variant struct.
+function variantStructCName(g: CGen, unionType: Type, varIdx: number, unionName: string): string {
+	if (unionType.typeChildren !== null && varIdx < unionType.typeChildren.length) {
+		let v = unionType.typeChildren[varIdx];
+		if (v !== null && (v.kind === TypeKind.Ref || v.kind === TypeKind.Ptr) && v.typeReturn !== null) {
+			v = v.typeReturn;
+		}
+		if (v !== null && v.kind === TypeKind.Struct && v.typeName.length > 0
+			&& v.typeName.indexOf(".") < 0) {
+			return mangle(v.typeName);
+		}
+		if (v !== null && v.kind === TypeKind.Struct) {
+			const cached = typeCacheGet(g.typeCache, typeKey(v));
+			if (cached !== "") return cached;
+		}
+	}
+	return `${unionName}_v${varIdx}`;
 }
 
 function genAllocCall(g: CGen, cType: string, fn: string): string {
@@ -210,6 +287,22 @@ function isLvalueNode(node: Node): boolean {
 		|| isArrayAccessCall(node);
 }
 
+// Emit `_clit<N>` tagged-union wrapper temp and return its address.
+// Layout: { unionT tmp; tmp._tag = varIdx; tmp.v<idx> = (cast?)snippet; }
+// `withCast` is true when the source value type differs from the variant
+// struct's declared type and a C cast is needed to silence -Wincompatible-types
+// (always true for compound-literal sources, false when the snippet is already
+// a variant-typed lvalue).
+function emitTaggedUnionWrapAddr(p: CProc, unionName: string, varIdx: number, varTypeCName: string, snippet: string, withCast: boolean): string {
+	p.labels += 1;
+	const tmpName = `_clit${p.labels}_`;
+	emitProcLocalsLine(p, `${unionName} ${tmpName};`);
+	emitStmtsLine(p, `${tmpName}._tag = ${varIdx};`);
+	const valueRhs = withCast ? `(${varTypeCName})${snippet}` : snippet;
+	emitStmtsLine(p, `${tmpName}.v${varIdx} = ${valueRhs};`);
+	return "&" + tmpName;
+}
+
 // Reference parity: standard address generation always operates on a named variable,
 // never on a bare compound literal. When we need &(expr) and expr is a bare
 // compound literal (starts with '{'), hoist it to a temp variable first.
@@ -245,13 +338,8 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 					}
 					if (varIdx >= 0) {
 						// Wrap in full union type so &temp is NodeData*, not variant*
-						p.labels += 1;
-						const tmpName = `_clit${p.labels}_`;
-						const varTypeName = `${unionName}_v${varIdx}`;
-						emitProcLocalsLine(p, `${unionName} ${tmpName};`);
-						emitStmtsLine(p, `${tmpName}._tag = ${varIdx};`);
-						emitStmtsLine(p, `${tmpName}.v${varIdx} = (${varTypeName})${snippet};`);
-						return "&" + tmpName;
+						const varTypeName = variantStructCName(g, exprNode.nodeType, varIdx, unionName);
+						return emitTaggedUnionWrapAddr(p, unionName, varIdx, varTypeName, snippet, true);
 					}
 				}
 			} else {
@@ -289,13 +377,8 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 					}
 					if (varIdx >= 0) {
 						// Emit as full union with tag + variant
-						p.labels += 1;
-						const tmpName = `_clit${p.labels}_`;
-						emitProcLocalsLine(p, `${unionName} ${tmpName};`);
-						emitStmtsLine(p, `${tmpName}._tag = ${varIdx};`);
-						const varTypeName = `${unionName}_v${varIdx}`;
-						emitStmtsLine(p, `${tmpName}.v${varIdx} = (${varTypeName})${snippet};`);
-						return "&" + tmpName;
+						const varTypeName = variantStructCName(g, exprNode.nodeType, varIdx, unionName);
+						return emitTaggedUnionWrapAddr(p, unionName, varIdx, varTypeName, snippet, true);
 					}
 				}
 			} else if (innerType !== null) {
@@ -338,13 +421,8 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 				}
 			}
 			if (varIdx >= 0) {
-				p.labels += 1;
-				const tmpName = `_clit${p.labels}_`;
-				const varTypeName = `${unionName}_v${varIdx}`;
-				emitProcLocalsLine(p, `${unionName} ${tmpName};`);
-				emitStmtsLine(p, `${tmpName}._tag = ${varIdx};`);
-				emitStmtsLine(p, `${tmpName}.v${varIdx} = (${varTypeName})${snippet};`);
-				return "&" + tmpName;
+				const varTypeName = variantStructCName(g, paramType, varIdx, unionName);
+				return emitTaggedUnionWrapAddr(p, unionName, varIdx, varTypeName, snippet, true);
 			}
 		}
 	}
@@ -368,12 +446,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 				vi = vi + 1;
 			}
 			if (varIdx >= 0 && unionName !== "") {
-				p.labels += 1;
-				const tmpName = `_clit${p.labels}_`;
-				emitProcLocalsLine(p, `${unionName} ${tmpName};`);
-				emitStmtsLine(p, `${tmpName}._tag = ${varIdx};`);
-				emitStmtsLine(p, `${tmpName}.v${varIdx} = ${snippet};`);
-				return "&" + tmpName;
+				return emitTaggedUnionWrapAddr(p, unionName, varIdx, "", snippet, false);
 			}
 		}
 		let cType = "";
@@ -1206,24 +1279,102 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			}
 		}
 		// Discriminated union: tag field → _tag, variant fields → v<N>.field
-		// Unwrap Ref<Union> for field access (Ref<Union> is how type alias Ref<Data> resolves)
+		// Unwrap Ref<Union>/GenericInstance for field access (e.g.
+		// `Result<T, E> = Ref<ResultData<T, E>>` chains Ref → GI → Union).
 		let objType = d.object.nodeType !== null ? d.object.nodeType
 			: (d.object.resolvedSym !== null ? d.object.resolvedSym.symbolType : null);
-		if (objType !== null && objType.kind === TypeKind.Ref && objType.typeReturn !== null) {
-			objType = objType.typeReturn;
-		}
-		if (objType !== null && objType.kind === TypeKind.Union) {
+		objType = peelToStructOrUnion(objType);
+		// Route through `v<N>` ONLY when this is actually a discriminated union.
+		// `isRealDiscriminatedUnion` rejects `T | null` nullable patterns
+		// (which collapse to bare `T*` in C) and accidental
+		// `Union(Ref<X>, Ref<X>)` shapes that lack discriminator semantics.
+		if (objType !== null && objType.kind === TypeKind.Union && isRealDiscriminatedUnion(objType)) {
 			const acc = objIsPtr ? "->" : ".";
-			// Tag field access: s.kind → s._tag
+			// Discriminator field access. Translation depends on the discriminant
+			// type:
+			//  - Enum (match-type with `match (kind: K) { ... }`): the wrapper has
+			//    `_tag` of the enum type — emit `r._tag` directly.
+			//  - Boolean / String literal (TS-style `{ ok: true } | { ok: false }` or
+			//    `{ kind: "a" } | { kind: "b" }`): the discriminator field is stored
+			//    in each variant struct, sharing memory at the same offset (it's the
+			//    first field in each variant). Emit `r.v0.<disc>` to read the active
+			//    variant's value through the overlapping union memory.
 			if (isDiscriminatedUnion(objType) && getDiscriminantName(objType) === d.property) {
+				const dt = objType.typeExtra;
+				if (dt !== null && (dt.kind === TypeKind.Boolean || dt.kind === TypeKind.String)) {
+					ctx.results.push(`${obj}${acc}v0.${field}`);
+					return;
+				}
 				ctx.results.push(`${obj}${acc}_tag`);
 				return;
 			}
-			// Variant field access: s.radius → s.v<N>.radius
+			// Codegen-only string-DU detection (TS-style `{ kind: "a" } | { kind: "b" }`).
+			// The checker treats this as "non-discriminated" for backward-compatible
+			// error reporting, so typeExtra is null. Detect on the fly here so
+			// member access still routes through the variant slot.
+			if (!isDiscriminatedUnion(objType)) {
+				const strDisc = findSharedStringDiscriminant(objType);
+				if (strDisc !== "" && strDisc === d.property) {
+					ctx.results.push(`${obj}${acc}v0.${field}`);
+					return;
+				}
+			}
+			// Variant field access: s.radius → s.v<N>.radius. The DU gate above
+			// (`isRealDiscriminatedUnion`) already excluded `T | null` nullable
+			// patterns, so the peel inside `findVariantByFieldName` is safe.
 			const varIdx = findVariantByFieldName(objType, d.property);
 			if (varIdx >= 0) {
 				ctx.results.push(`${obj}${acc}v${varIdx}.${field}`);
 				return;
+			}
+		}
+		// Narrowed-variant field access: when type-checker narrows a Union down
+		// to a specific variant inside a guarded branch, the C memory is still
+		// the union wrapper. Walk through HiddenDeref to reach the underlying
+		// identifier and route through `v<N>` slot if it's a Union.
+		let walkObj: Node = d.object;
+		while (walkObj !== null && walkObj.kind === NodeKind.HiddenDeref) {
+			// HiddenDerefData and ExprStmtData are both `{ expr: Node }` —
+			// the latter is already imported here and is the canonical alias
+			// other HiddenDeref consumers use elsewhere in this file.
+			walkObj = (walkObj.data as ExprStmtData).expr;
+		}
+		if (walkObj !== null && walkObj.kind === NodeKind.Identifier && walkObj.resolvedSym !== null) {
+			let declTy = walkObj.resolvedSym.symbolType;
+			while (declTy !== null && declTy.kind === TypeKind.Ref && declTy.typeReturn !== null) {
+				declTy = declTy.typeReturn;
+			}
+			// Same DU-only filter as the main path.
+			if (declTy !== null && declTy.kind === TypeKind.Union && isRealDiscriminatedUnion(declTy)) {
+				const declVarIdx = findVariantByFieldName(declTy, d.property);
+				if (declVarIdx >= 0) {
+					// `obj` may already wrap the identifier in `(*x)` via HiddenDeref;
+					// regenerate the raw C name to avoid double-deref like `(*(*r))`.
+					const idData = walkObj.data as IdentifierData;
+					const rawName = idData.name;
+					const idSym = walkObj.resolvedSym;
+					const safe = safeName(rawName);
+					let cName = "";
+					if (idSym !== null && idSym.nativeName !== "") {
+						cName = idSym.nativeName;
+					} else if (isModuleGlobalVar(idSym)) {
+						cName = mangledGlobalName(idSym, rawName);
+					} else {
+						const mapped = lookupLocalName(p, safe);
+						cName = mapped !== "" ? mapped : safe;
+					}
+					// If the symbol is passed by pointer in C, use `->`; otherwise
+					// direct dot access. Three paths produce a pointer:
+					//   1. Reference type (Ref/Ptr/Borrow): isPointerType is true
+					//   2. Large value-type param: tracked via `isIndirectParam`
+					//   3. Local hoisted via `&temp` for borrow: tracked via
+					//      `isIndirectLocal`
+					const ptrType = isPointerType(walkObj.nodeType !== null ? walkObj.nodeType : (idSym !== null ? idSym.symbolType : null));
+					const indirect = isIndirectParam(p, rawName) || isIndirectLocal(p, rawName);
+					const acc2 = (ptrType || indirect) ? "->" : ".";
+					ctx.results.push(`${cName}${acc2}v${declVarIdx}.${field}`);
+					return;
+				}
 			}
 		}
 		if (objIsPtr) {
@@ -1479,6 +1630,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			let unionWrapIdx = -1;
 			let unionDiscKeyIdx = -1;
 			let isRefUnion = false;
+			// True when the resolved Union has a literal-disc field that lives in
+			// each variant struct (vs enum-disc match-type where the disc is the
+			// wrapper's `_tag`). Construction must write the disc field instead
+			// of skipping it.
+			let discFieldInVariant = false;
 			if (node.nodeType !== null) {
 				// Unwrap Ref<Union> for discriminated union construction
 				let litType = node.nodeType;
@@ -1490,12 +1646,43 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				if (refFromUnion !== null) {
 					litType = refFromUnion;
 				}
-				if (litType.kind === TypeKind.Ref && litType.typeReturn !== null && litType.typeReturn.kind === TypeKind.Union) {
-					litType = litType.typeReturn;
-					isRefUnion = true;
+				// Peel Ref/GenericInstance to reach the underlying Union body. Two
+				// shapes flow into the construction site:
+				//   - `R<T, E>` (GenericInstance over a Union body) — generic
+				//     match-type/TS-style DU; literal typed `{ok: true, ...}`.
+				//   - `Ref<R<T, E>>` (e.g. `type Result<T,E> = Ref<ResultData>`) —
+				//     heap-allocated wrapper; construction needs `msAlloc`.
+				//
+				// `namingType` keeps the form `getTypeDesc` should consult for
+				// the per-instance C name. The OUTER GenericInstance carries the
+				// monomorphized name (`R<int, string>` → `R__int_string`); the
+				// peeled inner Union body keeps the BASE name (`R`) and would
+				// otherwise emit a duplicate, base-named typedef that conflicts
+				// at the call site (`R*` vs `R__int_string*`). For `Ref<GI>` we
+				// strip the Ref but anchor naming on the GI; for bare `GI` the
+				// outer GI is already namingType.
+				let namingType = litType;
+				if (litType.kind === TypeKind.Ref || litType.kind === TypeKind.GenericInstance) {
+					const wasRef = litType.kind === TypeKind.Ref;
+					// Anchor naming: prefer the GI under any Ref wrapper so getTypeDesc
+					// flows through the mono-mangling path (codegen/c/types.ms:602-662).
+					let outerForName = litType;
+					if (wasRef && litType.typeReturn !== null
+						&& litType.typeReturn.kind === TypeKind.GenericInstance) {
+						outerForName = litType.typeReturn;
+					}
+					const inner = peelToStructOrUnion(litType);
+					if (inner !== null && inner.kind === TypeKind.Union) {
+						litType = inner;
+						if (wasRef) {
+							isRefUnion = true;
+							namingType = outerForName.kind === TypeKind.GenericInstance
+								? outerForName : inner;
+						}
+					}
 				}
 				if (litType.kind === TypeKind.Union && d.keys.length > 0) {
-					const unionName = getTypeDesc(g, litType);
+					const unionName = getTypeDesc(g, namingType);
 					// Discriminated union: use discriminant key to find variant
 					const discName = isDiscriminatedUnion(litType) ? getDiscriminantName(litType) : "";
 					let discKeyIdx = -1;
@@ -1507,29 +1694,44 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 						}
 					}
 					unionDiscKeyIdx = discKeyIdx;
+					const dt = litType.typeExtra;
+					discFieldInVariant = dt !== null && (dt.kind === TypeKind.Boolean || dt.kind === TypeKind.String);
 					if (discKeyIdx >= 0) {
 						// Discriminated: resolve variant from discriminant value
 						const discValNode = d.properties[discKeyIdx];
-						let discValStr = "";
-						if (discValNode !== null && discValNode.kind === NodeKind.MemberExpr) {
-							const md = discValNode.data as MemberExprData;
-							if (md.object !== null && md.object.kind === NodeKind.Identifier) {
-								discValStr = (md.object.data as IdentifierData).name + "." + md.property;
-							}
-						} else if (discValNode !== null && discValNode.kind === NodeKind.Identifier) {
-							// Checker rewrites Enum.Member → Enum_Member identifier
-							const idName = (discValNode.data as IdentifierData).name;
-							// Convert Enum_Member back to Enum.Member for variant lookup
-							const usIdx = idName.indexOf("_");
-							if (usIdx > 0) {
-								discValStr = idName.slice(0, usIdx) + "." + idName.slice(usIdx + 1, idName.length);
-							} else {
-								discValStr = idName;
-							}
+						let varIdx = -1;
+						// Boolean-literal discriminant: `ok: true` / `ok: false`.
+						if (discValNode !== null && discValNode.kind === NodeKind.BooleanLiteral) {
+							const bd = discValNode.data as BooleanLiteralData;
+							varIdx = findVariantByBooleanDiscriminant(litType, discName, bd.boolValue);
 						}
-						const varIdx = findVariantByDiscriminant(litType, discValStr);
+						// String-literal discriminant: `kind: "circle"`.
+						if (varIdx < 0 && discValNode !== null && discValNode.kind === NodeKind.StringLiteral) {
+							const sd = discValNode.data as StringLiteralData;
+							varIdx = findVariantByStringDiscriminant(litType, discName, sd.value);
+						}
+						if (varIdx < 0) {
+							let discValStr = "";
+							if (discValNode !== null && discValNode.kind === NodeKind.MemberExpr) {
+								const md = discValNode.data as MemberExprData;
+								if (md.object !== null && md.object.kind === NodeKind.Identifier) {
+									discValStr = (md.object.data as IdentifierData).name + "." + md.property;
+								}
+							} else if (discValNode !== null && discValNode.kind === NodeKind.Identifier) {
+								// Checker rewrites Enum.Member → Enum_Member identifier
+								const idName = (discValNode.data as IdentifierData).name;
+								// Convert Enum_Member back to Enum.Member for variant lookup
+								const usIdx = idName.indexOf("_");
+								if (usIdx > 0) {
+									discValStr = idName.slice(0, usIdx) + "." + idName.slice(usIdx + 1, idName.length);
+								} else {
+									discValStr = idName;
+								}
+							}
+							varIdx = findVariantByDiscriminant(litType, discValStr);
+						}
 						if (varIdx >= 0) {
-							cType = `${unionName}_v${varIdx}`;
+							cType = variantStructCName(g, litType, varIdx, unionName);
 							unionWrapName = unionName;
 							unionWrapIdx = varIdx;
 						}
@@ -1555,7 +1757,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 							}
 						}
 						if (varIdx >= 0) {
-							cType = `${unionName}_v${varIdx}`;
+							cType = variantStructCName(g, litType, varIdx, unionName);
 							unionWrapName = unionName;
 							unionWrapIdx = varIdx;
 						}
@@ -1602,11 +1804,17 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					emitProcLocalsLine(p, `${cType} ${tmpName};`);
 					emitStmtsLine(p, `memset(&${tmpName}, 0, sizeof(${cType}));`);
 				}
+				// For enum-disc match-type unions (typeExtra=Enum), the
+				// discriminator IS the wrapper's `_tag`, so the key is skipped.
+				// For boolean/string-disc DUs (typeExtra=Boolean/String), the
+				// discriminator field exists IN each variant struct — must be
+				// written.
+				const skipDiscKey = discFieldInVariant ? -1 : unionDiscKeyIdx;
 				let i = 0;
 				while (i < d.keys.length) {
 					const val = peekResult(ctx, cc, i);
 					// Skip discriminant key — handled by _tag in union wrap
-					if (i === unionDiscKeyIdx) { i += 1; continue; }
+					if (i === skipDiscKey) { i += 1; continue; }
 					// Skip NullLiteral fields — memset already zeroed them.
 					// This avoids void* → value-type errors for self-referential pointer fields
 					// where the C field is T* but the MS type is T (e.g. Type.typeReturn).

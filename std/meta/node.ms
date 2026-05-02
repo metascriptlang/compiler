@@ -26,6 +26,11 @@ export enum TypeKind {
 	// Added by the peelThrough work in src/checker/types.ms — transparent type
 	// alias wrapper that peelThrough strips when PEEL_ALIAS mask is set.
 	Alias,
+	// Boolean literal type (TypeScript parity): `true` and `false` as distinct
+	// types. Required for discriminated union narrowing on boolean discriminants
+	// (e.g. `type Result<T, E> = { ok: true, value: T } | { ok: false, error: E }`).
+	// Codegen lowers to MS_BOOL with the literal value.
+	BooleanLiteral,
 }
 
 // ===== Calling Convention =====

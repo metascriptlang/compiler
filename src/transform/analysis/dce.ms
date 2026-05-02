@@ -19,7 +19,7 @@
 import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, TypeKind, SymbolKind } from "../../ast/node";
 import { TransformContext, createTransformContextWithChecker, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { forEachChild } from "../../ast/visitor";
-import { createFunction, neverType, voidType } from "../../checker/types";
+import { createFunction, neverType, voidType, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "../../checker/types";
 import { lookupSymbol, makeSymbol, defineSymbol } from "../../checker/symbol";
 import { CheckerContext, createContext } from "../../checker/context";
 import { getDeclName } from "../../checker/collectPass";
@@ -111,11 +111,36 @@ function collectIdentifiers(node: Node, refs: NameSet): void {
 // Reference parity: function-level DCE is handled by codegen (isDeclAlive with
 // cross-module visibility), NOT by transform-level DCE (per-module, no cross-module refs).
 // Only type aliases and enums are safe to eliminate at transform level.
+//
+// Exception: TypeAliasDecls that resolve to discriminated unions (match-type or
+// TS-style with shared literal discriminator) need destructor lifting to emit
+// per-variant hooks. DCE's identifier walker doesn't track type-level references
+// (annotation strings, not Identifier nodes), so any DU alias would be eliminated
+// before destructorLifting can emit `<Name>Destroy`. Keep them alive.
 function isEliminable(node: Node): boolean {
-	return match (node.kind) {
-		NodeKind.EnumDecl | NodeKind.TypeAliasDecl => true,
-		_ => false,
-	};
+	if (node.kind === NodeKind.EnumDecl) return true;
+	if (node.kind === NodeKind.TypeAliasDecl) {
+		// Discriminated-union aliases need destructor lifting to emit per-variant
+		// hooks. DCE's identifier walker can't track type-level references
+		// (annotation strings, not Identifier nodes), so any DU alias would be
+		// eliminated before destructorLifting saw it, leaving `<Name>Destroy`
+		// undefined at link time. Detect three DU shapes:
+		//  - Stamped (typeNames[0] + typeExtra): match-type or boolean DU.
+		//  - Boolean-discriminator union: detected via findSharedBooleanDiscriminant.
+		//  - String-discriminator union: detected via findSharedStringDiscriminant.
+		// Other aliases stay eliminable (transparent to the C emitter).
+		const sym = node.resolvedSym;
+		if (sym !== null && sym.symbolType !== null) {
+			const t = sym.symbolType;
+			if (t.kind === TypeKind.Union) {
+				if (t.typeNames !== null && t.typeNames.length > 0 && t.typeExtra !== null) return false;
+				if (findSharedBooleanDiscriminant(t) !== "") return false;
+				if (findSharedStringDiscriminant(t) !== "") return false;
+			}
+		}
+		return true;
+	}
+	return false;
 }
 
 // Compiler-generated names are always alive (produced by transforms).

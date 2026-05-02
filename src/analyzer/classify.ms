@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isResult, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion } from "../checker/types";
+import { isPrimitiveKind, hasAsgnFlag, isAwaitable, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
@@ -159,10 +159,8 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			// Awaitables (`Promise<T>`, plain or affine) are exempt from DRC — their lifecycle
 			// is managed by the await transform (create → wait → explicit destroy).
 			if (isAwaitable(t)) return noRcInfo();
-			// Result has bespoke codegen (msResult_<ok>_<err> — codegen/types.ms:1083).
-			// destructorLifting also skips these; using mangleMonoName here would produce
-			// hook names pointing to a type codegen never emits → link error.
-			if (isResult(t)) return noRcInfo();
+			// Result is a boolean-discriminated match-type Union post-migration —
+			// flow through the standard mangled hook generation below.
 			// Monomorphized struct instance: build hook names via `mangleMonoName` so they match
 			// codegen's struct naming (src/codegen/c/types.ms:582-588) and destructorLifting's
 			// hook emission (unwrapGenericInstance).

@@ -1735,14 +1735,18 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	d.initializer = processNode(d.initializer, dctx, DrcMode.Consumed);
 	const init = d.initializer;
 
-	// Result field extraction: $result_N.value → wasMoved on source to prevent double-free
+	// Result field extraction: $result_N.value → wasMoved on source to prevent double-free.
+	// Reuse the original `md.object` Identifier so its nodeType/resolvedSym flow
+	// through to codegen — the post-migration Result lays out as a tagged union,
+	// and the Union-DU member access path needs the type info to route through
+	// the active variant slot (`r.v0.value`) instead of bare `r.value`.
 	if (init.kind === NodeKind.MemberExpr) {
 		const md = init.data as MemberExprData;
 		if (md.object.kind === NodeKind.Identifier && md.property === "value") {
 			const objName = (md.object.data as IdentifierData).name;
 			if (objName.startsWith("$result")) {
 				if (rcInfo.wasMovedFn !== "") {
-					const valueMember = makeMember(makeIdent(objName, loc), "value", loc);
+					const valueMember = makeMember(md.object, "value", loc);
 					valueMember.nodeType = init.nodeType;
 					addPending(dctx, makeWasMovedOnExpr(valueMember, rcInfo, loc));
 				}

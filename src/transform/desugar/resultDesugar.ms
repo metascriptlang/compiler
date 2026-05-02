@@ -26,14 +26,14 @@ import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import {
 	makeIdentResolved, makeVarDecl, makeBlock,
-	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool,
+	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Helpers: Typed Result Access =====
 
 // Create a member access on a Result variable with resolvedSym for the property.
-// Derives type from Result's typeReturn (T) and typeExtra (E) directly.
+// Property type comes from `getResultOkType` (T) / `getResultErrType` (E).
 function makeResultMember(sym: Symbol, resType: Type | null, propName: string, loc: SourceLocation): Node {
 	const ref = makeIdentResolved(sym, loc);
 	const mem = makeMember(ref, propName, loc);
@@ -128,10 +128,13 @@ function rewriteResultCall(node: Node): Node {
 function makeResultOk(args: Node[], resType: Type, loc: SourceLocation): Node {
 	if (args.length === 1) {
 		// Propagate T from Result<T, E> onto the value arg if untyped or weakly typed
-		// (e.g. ObjectLiteral { node: ..., pos: ... } for ParseResult)
-		if (resType !== null && resType.typeReturn !== null && resType.typeReturn.kind === TypeKind.Struct) {
+		// (e.g. ObjectLiteral { node: ..., pos: ... } for ParseResult). Pull T via
+		// `getResultOkType` — post-migration `resType.typeReturn` is the Union body,
+		// not the ok-type itself.
+		const okT = getResultOkType(resType);
+		if (okT !== null && (okT.kind === TypeKind.Struct || okT.kind === TypeKind.Ref)) {
 			if (args[0].nodeType === null || args[0].nodeType.kind === TypeKind.Unknown || args[0].nodeType.kind === TypeKind.GenericParam) {
-				args[0].nodeType = resType.typeReturn;
+				args[0].nodeType = okT;
 			}
 		}
 		const lit = makeObjectLiteral(["ok", "value"], [makeBool(true, loc), args[0]], loc);
@@ -184,7 +187,16 @@ function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node 
 		// if (!$result.ok) { return { ok: false, error: $result.error }; }
 		hoisted.push(makeErrorCheck(sym, resType, loc, ctx));
 
-		// Replace TryExpr with $result.value
+		// Replace TryExpr with $result.value. For `Result<void, E>` the v0
+		// variant has no `value` field — synthesize a void placeholder
+		// (`null as unknown as void`) which the codegen drops at field-write
+		// + sink-assign sites.
+		const okT = getResultOkType(resType);
+		if (okT !== null && okT.kind === TypeKind.Void) {
+			const voidLit = makeNull(loc);
+			voidLit.nodeType = okT;
+			return voidLit;
+		}
 		return makeResultMember(sym, resType, "value", loc);
 	});
 }

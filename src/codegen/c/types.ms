@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, unwrapRefNullUnion } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
 import { Node, CallExprData, Type, TypeKind, SymbolKind } from "../../ast/node";
@@ -196,6 +196,7 @@ export function typeKey(t: Type | null): string {
 		TypeKind.Char => "char",
 		TypeKind.CString => "cstring",
 		TypeKind.StringLiteral => "strlit:" + t.typeName,
+		TypeKind.BooleanLiteral => "boollit:" + t.typeName,
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
 		TypeKind.Enum => { return "enum:" + t.typeName; },
@@ -287,6 +288,7 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.Uint32 => "uint32_t",
 		TypeKind.Uint64 => "uint64_t",
 		TypeKind.Boolean => "MS_BOOL",
+		TypeKind.BooleanLiteral => "MS_BOOL",
 		TypeKind.Char => "char",
 		TypeKind.String | TypeKind.StringLiteral => "msString",
 		TypeKind.CString => "const char*",
@@ -582,7 +584,9 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 		typeCacheSet(g.typeCache, key, ptrType);
 		return ptrType;
 	}
-	if (isResult(t)) return genResultType(g, t);
+	// Result is a boolean-discriminated match-type Union (createResult builds it).
+	// Flow through the standard GenericInstance → Union path below; no bespoke
+	// codegen needed.
 	if (isAwaitable(t)) return genFutureType(g, t);
 	if (k === TypeKind.Union) {
 		// Union(Ref<T>, Null) / Union(Ptr<T>, Null) → bare pointer.
@@ -606,12 +610,10 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 		const cached = typeCacheGet(g.typeCache, cacheKey);
 		if (cached !== "") return cached;
 		typeCacheSet(g.typeCache, cacheKey, instName);
-		// Instantiate the base struct with concrete type args, then emit as a named struct
-		// Unwrap Ref for class/interface types (class = Ref<Struct> in C backend)
-		const rawBase = t.typeExtra;
-		const baseType: Type | null = (rawBase !== null && rawBase.kind === TypeKind.Ref && rawBase.typeReturn !== null)
-			? rawBase.typeReturn
-			: rawBase;
+		// Instantiate the base struct with concrete type args, then emit as a named struct.
+		// Peel Ref/GenericInstance to reach the underlying Struct/Union body
+		// (e.g. `Result<T, E> = Ref<ResultData<T, E>>` chains GI→Ref→GI→Union).
+		const baseType: Type | null = peelToStructOrUnion(t.typeExtra);
 		if (baseType !== null && baseType.kind === TypeKind.Struct) {
 			// Substitute generic params in fields with concrete type args
 			const genericDecl = getGenericDecl(t.typeName);
@@ -634,6 +636,27 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 					concType.typeName = instName;
 				}
 				return genObjectType(g, concType);
+			}
+		}
+		// Generic match-type alias: baseType is Union with discriminant metadata.
+		// Substitute generic params in variant struct fields, then emit as a named
+		// tagged union. Required for `Result<T, E> = Ref<ResultData<T, E>>` style
+		// types where ResultData is a generic match-type.
+		if (baseType !== null && baseType.kind === TypeKind.Union) {
+			const genericDecl = getGenericDecl(t.typeName);
+			if (genericDecl !== "") {
+				const paramNames = splitTopLevel(genericDecl, ",");
+				let concType: Type = baseType;
+				for (let pi = 0; pi < paramNames.length; pi += 1) {
+					if (pi < t.typeChildren.length) {
+						concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);
+					}
+				}
+				// Stamp instance name so genUnionType caches under it (Phase 1b emits typedef)
+				if (concType !== baseType) {
+					concType.typeName = instName;
+				}
+				return genUnionType(g, concType);
 			}
 		}
 		return instName;
@@ -743,39 +766,22 @@ function genUnionType(g: CGen, t: Type): string {
 		return "msString";
 	}
 
-	// Early return if already cached
+	// Single cache lookup via typeKey. Naming is unique per type:
+	//  - Named unions (incl. monomorphized generics): typeKey = "union:" + typeName.
+	//    Different instances (e.g. `Result<int, string>` vs `Either<string, int>`)
+	//    have distinct mangled typeNames even when structurally identical, so they
+	//    correctly get separate C typedefs.
+	//  - Anonymous unions (flow-narrowed shapes): typeKey = "union(<v0>|<v1>|...)"
+	//    — pure structural form, so two occurrences of `A | B` collapse to one
+	//    typedef.
+	// Variant structs ARE shared structurally via the per-variant typeCache below
+	// (Phase 1a) — that sharing is correct because variants are anonymous and
+	// reusing them across outer unions saves typedefs.
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached !== "") return cached;
 
-	// Also check structural key for anonymous copies of named unions
-	let structuralKey = "";
-	if (t.typeName.length > 0) {
-		let sk = "union(";
-		let ski = 0;
-		while (ski < t.typeChildren.length) {
-			if (ski > 0) sk = sk + "|";
-			sk = sk + typeKey(t.typeChildren[ski]);
-			ski = ski + 1;
-		}
-		structuralKey = sk + ")";
-		const structCached = typeCacheGet(g.typeCache, structuralKey);
-		if (structCached !== "") return structCached;
-	} else {
-		// Anonymous union: check if a named version was already generated
-		const namedKey = t.typeExtra !== null && t.typeExtra.typeName !== ""
-			? "union:" + t.typeExtra.typeName : "";
-		if (namedKey !== "") {
-			const namedCached = typeCacheGet(g.typeCache, namedKey);
-			if (namedCached !== "") return namedCached;
-		}
-	}
-
 	const name = (t.typeName.length > 0) ? mangle(t.typeName) : "msUnion_" + hashToBase36(key);
 	typeCacheSet(g.typeCache, key, name);
-	// Cross-cache: structural key → same name (prevents named/anonymous divergence)
-	if (structuralKey !== "") {
-		typeCacheSet(g.typeCache, structuralKey, name);
-	}
 	ensureForwardDecl(g, name);
 
 	const b = sec(g, CSection.Types);
@@ -791,7 +797,10 @@ function genUnionType(g: CGen, t: Type): string {
 	const canonicalNames: string[] = [];
 	let vi = 0;
 	while (vi < t.typeChildren.length) {
-		const variant = t.typeChildren[vi];
+		// Peel Ref/Ptr — interface variants are Ref<Struct> in the C backend.
+		// Without peel, variant.typeNames is empty and the variant struct emits
+		// no fields, breaking discriminated unions of named interfaces.
+		const variant = peelToStruct(t.typeChildren[vi]);
 		const varName = `${name}_v${vi}`;
 
 		// Cache variant Object type so getTypeDesc returns the variant struct name.
@@ -827,7 +836,8 @@ function genUnionType(g: CGen, t: Type): string {
 	// Phase 1b: Emit named variant structs (skip duplicates that reuse a canonical name)
 	vi = 0;
 	while (vi < t.typeChildren.length) {
-		const variant = t.typeChildren[vi];
+		// Same Ref-peel as Phase 1a — interface variants are Ref<Struct>.
+		const variant = peelToStruct(t.typeChildren[vi]);
 		const varName = `${name}_v${vi}`;
 		const fieldTypes = allFieldTypes[vi];
 
@@ -842,7 +852,11 @@ function genUnionType(g: CGen, t: Type): string {
 		if (variant !== null && variant.typeNames !== null) {
 			let fi = 0;
 			while (fi < variant.typeNames.length) {
-				addLine(b, `${fieldTypes[fi]} ${mangleFieldName(variant.typeNames[fi])};`);
+				// Skip void-typed fields (e.g. `Result<void, E>` v0 has `void value`)
+				// — emitting `void value;` is invalid C.
+				if (fieldTypes[fi] !== "void") {
+					addLine(b, `${fieldTypes[fi]} ${mangleFieldName(variant.typeNames[fi])};`);
+				}
 				fi += 1;
 			}
 		}
@@ -1088,38 +1102,10 @@ export function genClFullCast(g: CGen, t: Type): string { return genClosureCast(
 export function genClHalfCastNrvo(g: CGen, t: Type, nrvoType: string): string { return genClosureCast(g, t, false, nrvoType); }
 export function genClFullCastNrvo(g: CGen, t: Type, nrvoType: string): string { return genClosureCast(g, t, true, nrvoType); }
 
-// ===== Result Type Generation =====
-
-export function genResultType(g: CGen, t: Type): string {
-	const okType = getTypeDesc(g, getResultOkType(t));
-	const errType = getTypeDesc(g, getResultErrType(t));
-	const key = typeKey(t);
-
-	// Generate unique struct name
-	const name = `msResult_${mangle(okType)}_${mangle(errType)}`;
-	typeCacheSet(g.typeCache, key, name);
-
-	// Emit struct (guarded to avoid redefinition when cross-module protos exist)
-	ensureForwardDecl(g, name);
-	const b = sec(g, CSection.Types);
-	addLine(b, `#ifndef ${name}_DEFINED`);
-	addLine(b, `#define ${name}_DEFINED`);
-	addLine(b, `struct ${name} {`);
-	b.indent += 1;
-	addLine(b, "MS_BOOL ok;");
-	if (okType !== "void") {
-		addLine(b, okType + " value;");
-	}
-	if (errType !== "void") {
-		addLine(b, errType + " error;");
-	}
-	b.indent -= 1;
-	addLine(b, "};");
-	addLine(b, "#endif");
-	addNewline(b);
-
-	return name;
-}
+// `genResultType` (flat-struct codegen for `Result<T, E>`) was retired when
+// Result migrated to a boolean-discriminated match-type Union. The standard
+// `genUnionType` path in `getTypeDesc` now handles Result, with `void` payload
+// fields filtered at typedef + hook walk to avoid `void value;` declarations.
 
 // ===== Future Type Generation =====
 
@@ -1236,8 +1222,8 @@ export function genFutureType(g: CGen, t: Type): string {
 	const name = "msFuture_" + mangle(innerDesc);
 	typeCacheSet(g.typeCache, key, name + "*");
 
-	// Emit the future struct (guarded for cross-module safety, same pattern as
-	// genResultType). The matching MS_PROMISE_ALL_FOR instance is NOT auto-emitted
+	// Emit the future struct (guarded for cross-module safety, same `#ifndef
+	// _DEFINED` pattern as `genUnionType`). The matching MS_PROMISE_ALL_FOR instance is NOT auto-emitted
 	// here — it's emitted on-demand from expressions.ms when a Promise.all call
 	// site references `msPromiseAllFor_msFuture_<T>`, avoiding dead inline code
 	// for Promise<T> types that are never Promise.all'd.

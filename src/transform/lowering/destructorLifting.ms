@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, Type, TypeKind, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isResult, isAwaitable, instantiateGenericBody } from "../../checker/types";
+import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, instantiateGenericBody, peelToStruct } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
 import { walkNode } from "../walker";
@@ -112,17 +112,17 @@ function namedTypeHasHooks(typeName: string, lctx: LiftCtx): boolean {
 // Unwrap a GenericInstance to (mangledName, concreteStructBody) for hook generation.
 // Returns empty mangledName when body not yet instantiated — callers fall through.
 //
-// Skip boundary: Result / awaitable (Promise) have bespoke codegen — Result emits
-// `msResult_<ok>_<err>` (codegen/types.ms:1083) not `Result__<args>`, awaitable emits
-// `msFuture_<T>`. Emitting mangleMonoName-based hooks for them would reference a struct
-// type that codegen never produces → compile error. These types have their own lifecycle
-// (Result via codegen's genResultType inline, Promise via runtime msFuture ops).
+// Skip boundary: awaitable (Promise) has bespoke codegen — `msFuture_<T>` emitted
+// by runtime msFuture ops, not `Promise__<args>`. Emitting mangleMonoName-based
+// hooks would reference a struct type codegen never produces → compile error.
+// Result was historically here too, but post-migration it flows through the
+// standard Union path (boolean-discriminated tagged union).
 // Iterator (`TypeKind.Struct`) is already filtered by the GenericInstance kind check.
 function unwrapGenericInstance(gi: Type): { mangledName: string, body: Type } {
 	if (gi === null || gi.kind !== TypeKind.GenericInstance) {
 		return { mangledName: "", body: null as unknown as Type };
 	}
-	if (isResult(gi) || isAwaitable(gi)) {
+	if (isAwaitable(gi)) {
 		return { mangledName: "", body: null as unknown as Type };
 	}
 	// Lazy-instantiate body when encountering nested generics. Outer instantiation
@@ -138,9 +138,21 @@ function unwrapGenericInstance(gi: Type): { mangledName: string, body: Type } {
 	}
 	const mangledName = mangleMonoName(gi.typeName, gi.typeChildren);
 	const src = gi.typeReturn;
-	// Reuse createStruct (reference parity with codegen types.ms:617). Share field arrays
-	// — typeNames/typeChildren from `src` are already concrete post-substitution.
-	const body = createStruct(mangledName, src.typeNames, src.typeChildren, isStructType(src));
+	// Preserve src kind: Union bodies (match-type / TS-style DU) must NOT be
+	// wrapped as Struct — `generateHook` dispatches on `objType.kind` to route
+	// Unions through `generateUnionArms` (per-variant tag dispatch). Coercing
+	// to Struct here makes the hook walk `typeNames` (discriminator metadata)
+	// as if they were field names, emitting bogus `dest.ok = src.ok` accesses.
+	let body: Type;
+	if (src.kind === TypeKind.Union) {
+		body = createUnion(src.typeChildren);
+		body.typeName = mangledName;
+		body.typeNames = src.typeNames;
+		body.typeExtra = src.typeExtra;
+		body.typeFlags = src.typeFlags;
+	} else {
+		body = createStruct(mangledName, src.typeNames, src.typeChildren, isStructType(src));
+	}
 	return { mangledName, body };
 }
 
@@ -506,6 +518,11 @@ function runtimeOp(prefix: string, destroyName: string, copySuffix: string, wasM
 // Routes TypeKind to type family helper. No inline hook logic.
 
 function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: Type, lctx: LiftCtx, buf: NodeBuf, visited: NameSet, loc: SourceLocation): void {
+	if (fieldType === null) return;
+	// Skip void-typed fields (e.g. `Result<void, E>` variant has `void value`)
+	// — typedef emit drops them too, so generating copy/destroy for a missing
+	// field would produce invalid C (`(*dest).v0.value` on a void slot).
+	if (fieldType.kind === TypeKind.Void) return;
 	let xf = fieldName !== ""
 		? makeMember(x, fieldName, loc)
 		: x;
@@ -533,7 +550,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 
 	// Primitives fall through to _ => defaultOp (isPrimitiveKind is canonical list)
 	match (fieldType.kind) {
-		TypeKind.String => { stringOp(hook, xf, yf, fieldName, buf, loc); },
+		TypeKind.String | TypeKind.StringLiteral => { stringOp(hook, xf, yf, fieldName, buf, loc); },
 		TypeKind.Array => {
 			const elem = fieldType.typeReturn;
 			if (elem !== null) arrayOp(hook, elem, xf, yf, lctx, buf, loc);
@@ -610,9 +627,10 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 	if (objType.kind !== TypeKind.Struct && objType.kind !== TypeKind.Union) return false;
 	const probe = newBuf();
 	if (objType.kind === TypeKind.Union) {
-		// Probe each variant's fields
+		// Probe each variant's fields. Peel Ref/Ptr — interface variants are
+		// Ref<Struct> in the C backend.
 		for (let vi = 0; vi < objType.typeChildren.length; vi += 1) {
-			const variant = objType.typeChildren[vi];
+			const variant = peelToStruct(objType.typeChildren[vi]);
 			if (variant !== null && variant.typeNames !== null) {
 				for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
 					const visited: NameSet = createNameSet();
@@ -678,6 +696,14 @@ function getUserDefinedHookSym(typeName: string, hook: string, lctx: LiftCtx): S
 
 // ===== Union variant arm generation (if/else chain on _tag) =====
 
+// Emit `dest._tag = src._tag` (variant discriminator copy). Used by sink and
+// every non-unary hook that needs to mirror the source's active-variant tag.
+function emitTagCopy(buf: NodeBuf, dest: string, src: string, loc: SourceLocation): void {
+	const lhs = makeMember(makeIdent(dest, loc), "_tag", loc);
+	const rhs = makeMember(makeIdent(src, loc), "_tag", loc);
+	buf.items.push(makeExprStmt(makeAssign(lhs, rhs, loc), loc));
+}
+
 function generateUnionArms(hook: string, typeName: string, objType: Type, p1: string, p2: string, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const isUnary = hook === "destroy" || hook === "wasMoved" || hook === "trace";
 
@@ -687,7 +713,7 @@ function generateUnionArms(hook: string, typeName: string, objType: Type, p1: st
 		const destroyChain = buildVariantDispatch("destroy", typeName, objType, p1, p1, true, lctx, loc);
 		if (destroyChain !== null) buf.items.push(destroyChain);
 		// 2. Assign _tag
-		buf.items.push(makeExprStmt(makeAssign(makeMember(makeIdent(p1, loc), "_tag", loc), makeMember(makeIdent(p2, loc), "_tag", loc), loc), loc));
+		emitTagCopy(buf, p1, p2, loc);
 		// 3. Assign new fields (dispatch on src._tag, simple assign only)
 		const assignChain = buildVariantChain("sinkAssign", objType, p1, p2, false, lctx, loc);
 		if (assignChain !== null) buf.items.push(assignChain);
@@ -695,9 +721,7 @@ function generateUnionArms(hook: string, typeName: string, objType: Type, p1: st
 	}
 
 	// For copy: assign dest._tag = src._tag first
-	if (!isUnary) {
-		buf.items.push(makeExprStmt(makeAssign(makeMember(makeIdent(p1, loc), "_tag", loc), makeMember(makeIdent(p2, loc), "_tag", loc), loc), loc));
-	}
+	if (!isUnary) emitTagCopy(buf, p1, p2, loc);
 
 	// Build if/else chain dispatching on _tag via per-variant helpers
 	const chain = buildVariantDispatch(hook, typeName, objType, p1, p2, isUnary, lctx, loc);
@@ -716,7 +740,11 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, p1:
 	let chain = null as unknown as Node;
 	let vi = objType.typeChildren.length - 1;
 	while (vi >= 0) {
-		const variant = objType.typeChildren[vi];
+		// Peel Ref/Ptr — interface variants are Ref<Struct> in the C backend.
+		// Without peel, Phase 1a/1b skipped variant.typeNames (empty on Ref) and
+		// no per-variant Destroy helpers were emitted, leaving the wrapper hook
+		// (`<Union>Destroy`) calling undefined helpers at link time.
+		const variant = peelToStruct(objType.typeChildren[vi]);
 		if (variant !== null && variant.typeNames !== null) {
 			// Generate per-variant arm body
 			const armBuf = newBuf();
@@ -763,6 +791,24 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, p1:
 	return chain;
 }
 
+// Emit raw `dest.vN.field = src.vN.field` assignments for each variant field,
+// skipping void-typed slots (e.g. `Result<void, E>` v0 has no `value`). Used
+// for the `sinkAssign` hook by both inline and helper-extracted dispatch
+// patterns.
+function emitVariantSinkAssign(armBuf: NodeBuf, p1: string, p2: string, vName: string, variant: Type, loc: SourceLocation): void {
+	let fi = 0;
+	while (fi < variant.typeNames.length) {
+		const ft = fi < variant.typeChildren.length ? variant.typeChildren[fi] : null;
+		if (ft !== null && ft.kind === TypeKind.Void) { fi += 1; continue; }
+		const xBase = makeMember(makeIdent(p1, loc), vName, loc);
+		const yBase = makeMember(makeIdent(p2, loc), vName, loc);
+		armBuf.items.push(makeExprStmt(makeAssign(
+			makeMember(xBase, variant.typeNames[fi], loc),
+			makeMember(yBase, variant.typeNames[fi], loc), loc), loc));
+		fi += 1;
+	}
+}
+
 // Generate the body of a single variant's arm (used by both inline and helper patterns)
 function buildVariantArmBody(hook: string, objType: Type, p1: string, p2: string, vi: number, vName: string, variant: Type, isUnary: boolean, lctx: LiftCtx, armBuf: NodeBuf, loc: SourceLocation): void {
 	if (hook === "destroy") {
@@ -775,15 +821,7 @@ function buildVariantArmBody(hook: string, objType: Type, p1: string, p2: string
 			fi -= 1;
 		}
 	} else if (hook === "sinkAssign") {
-		let fi = 0;
-		while (fi < variant.typeNames.length) {
-			const xBase = makeMember(makeIdent(p1, loc), vName, loc);
-			const yBase = makeMember(makeIdent(p2, loc), vName, loc);
-			armBuf.items.push(makeExprStmt(makeAssign(
-				makeMember(xBase, variant.typeNames[fi], loc),
-				makeMember(yBase, variant.typeNames[fi], loc), loc), loc));
-			fi += 1;
-		}
+		emitVariantSinkAssign(armBuf, p1, p2, vName, variant, loc);
 	} else {
 		let fi = 0;
 		while (fi < variant.typeNames.length) {
@@ -807,40 +845,7 @@ function buildVariantChain(hook: string, objType: Type, p1: string, p2: string, 
 		const armBuf = newBuf();
 		if (variant !== null && variant.typeNames !== null) {
 			const vName = "v" + vi.toString();
-			if (hook === "destroy") {
-				// Reverse field order (LIFO)
-				let fi = variant.typeNames.length - 1;
-				while (fi >= 0) {
-					const xBase = makeMember(makeIdent(p1, loc), vName, loc);
-					const yBase = makeMember(makeIdent(p1, loc), vName, loc);
-					const visited: NameSet = createNameSet();
-					fillBody(hook, xBase, yBase, variant.typeNames[fi], variant.typeChildren[fi], lctx, armBuf, visited, loc);
-					fi -= 1;
-				}
-			} else if (hook === "sinkAssign") {
-				// Raw assign only (no RC ops — source ownership transferred)
-				let fi = 0;
-				while (fi < variant.typeNames.length) {
-					const xBase = makeMember(makeIdent(p1, loc), vName, loc);
-					const yBase = makeMember(makeIdent(p2, loc), vName, loc);
-					armBuf.items.push(makeExprStmt(makeAssign(
-						makeMember(xBase, variant.typeNames[fi], loc),
-						makeMember(yBase, variant.typeNames[fi], loc), loc), loc));
-					fi += 1;
-				}
-			} else {
-				// Forward field order for copy/wasMoved/trace
-				let fi = 0;
-				while (fi < variant.typeNames.length) {
-					const xBase = makeMember(makeIdent(p1, loc), vName, loc);
-					const yBase = (hook === "trace") ? makeIdent(p2, loc)
-						: isUnary ? makeMember(makeIdent(p1, loc), vName, loc)
-						: makeMember(makeIdent(p2, loc), vName, loc);
-					const visited: NameSet = createNameSet();
-					fillBody(hook, xBase, yBase, variant.typeNames[fi], variant.typeChildren[fi], lctx, armBuf, visited, loc);
-					fi += 1;
-				}
-			}
+			buildVariantArmBody(hook, objType, p1, p2, vi, vName, variant, isUnary, lctx, armBuf, loc);
 		}
 		if (armBuf.items.length > 0) {
 			const tagAccess = makeMember(makeIdent(p1, loc), "_tag", loc);
@@ -1559,7 +1564,13 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 		if (node.nodeType !== null) {
 			// Consumer path — emitTypeInfo=false so we don't duplicate TypeInfo
 			// with the defining module's emission or codegen's ensureTypeInfoDef.
-			if (node.nodeType.kind === TypeKind.Struct && node.nodeType.typeName !== "") {
+			//
+			// Skip match-type variant structs (typeName like "Alias.Key") — their
+			// hooks are emitted via the parent Union's `<Union>_v<N>` helper
+			// dispatch, not as standalone `<Alias.Key>Copy` (which would be an
+			// invalid C identifier anyway).
+			if (node.nodeType.kind === TypeKind.Struct && node.nodeType.typeName !== ""
+				&& node.nodeType.typeName.indexOf(".") < 0) {
 				ensureHooks(node.nodeType.typeName, node.nodeType, null as unknown as Type, false, lctx, node.location);
 			} else if (node.nodeType.kind === TypeKind.Ref && node.nodeType.typeReturn !== null
 				&& node.nodeType.typeReturn.kind === TypeKind.Struct && node.nodeType.typeReturn.typeName !== "") {

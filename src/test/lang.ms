@@ -17,10 +17,15 @@ import "./lang/controlFlow";
 import "./lang/interfaces";
 import "./lang/classes";
 import "./lang/result";
+import "./lang/discrim";
+import "./lang/json";
 import "./lang/trycatch";
 import "./lang/recursion";
 // Advanced tests require std/process FFI (exec, readFile, writeFile)
 // import "./lang/advanced";
 import "./lang/async";
+
+// -- regression suite (one file per fixed bug) --
+import "./fixedbugs/index";
 // syntax.ms requires: exponentiation lowering (** → pow), optional chain on value types, null coalescing on value types
 // import "./lang/syntax";

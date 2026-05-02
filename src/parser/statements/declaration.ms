@@ -520,9 +520,9 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 
 	advance(state);
 
-	// Discriminated union: type X = match (disc: EnumType) { EnumVal => { fields }, ... }
+	// Discriminated union: type X = match (disc: EnumOrBool) { Key => { fields }, ... }
 	if (current(state).kind === TokenKind.Match) {
-		return parseDiscriminatedUnionDecl(state, nameToken.value, typeToken, nameToken);
+		return parseDiscriminatedUnionDecl(state, nameToken.value, genericNames, typeToken, nameToken);
 	}
 
 	const typeStart = state.position;
@@ -552,9 +552,11 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 }
 
 // ===== Discriminated Union Declaration =====
-// syntax: type X = match (discName: EnumType) { EnumVal => { fields }, ... };
+// syntax: type X = match (discName: EnumOrBool) { Key => { fields }, ... };
+//   - Enum discriminator: keys are enum members (`MyKind.Ok`, `MyKind.Err`)
+//   - Boolean discriminator: keys are `true` / `false` literals
 
-function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, typeToken: Token, aliasNameToken: Token): NodeResult {
+function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, genericNames: string, typeToken: Token, aliasNameToken: Token): NodeResult {
 	advance(state); // consume 'match'
 
 	if (current(state).kind !== TokenKind.LParen) {
@@ -594,11 +596,14 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, type
 	const variantTypes: string[] = [];
 
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
-		// Parse variant key: EnumType.Member or just Member
-		if (!isIdentLike(current(state))) {
-			return Result.err(`Expected variant key at line ${current(state).line}`);
+		// Parse variant key: EnumType.Member, just Member, or boolean literal (true/false)
+		// Boolean literals are accepted for match-type unions over `boolean` discriminants.
+		const tok = current(state);
+		const isBoolLit = tok.kind === TokenKind.True || tok.kind === TokenKind.False;
+		if (!isBoolLit && !isIdentLike(tok)) {
+			return Result.err(`Expected variant key at line ${tok.line}`);
 		}
-		let key = current(state).value;
+		let key = isBoolLit ? (tok.kind === TokenKind.True ? "true" : "false") : tok.value;
 		advance(state); // consume first ident
 		// Handle dotted names like NodeKind.NumLit
 		while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
@@ -647,7 +652,7 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, type
 		aliasName,
 		aliasType,
 		aliasIsDistinct: false,
-		aliasGenericParams: "",
+		aliasGenericParams: genericNames,
 		discriminantName: discNameToken.value,
 		discriminantType,
 		variantKeys,

@@ -20,7 +20,7 @@ import {
 import {
 	createUnion, unknownType, nullType, neverType,
 	detectUnionDiscriminant, findVariantByDiscriminant,
-	findVariantByStringDiscriminant,
+	findVariantByStringDiscriminant, findFieldInVariant,
 } from "./types";
 import { typeRelation, TypeRelation } from "./compat";
 
@@ -823,7 +823,42 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 		}
 		return extractNullFromType(t);
 	}
+	// Boolean-discriminator DU narrowing: `if (r.ok)` where r is
+	// `{ ok: true, ... } | { ok: false, ... }` narrows r to the matching variant.
+	// The discriminator field carries a BooleanLiteral type per variant.
+	if (expr.kind === NodeKind.MemberExpr) {
+		const md = expr.data as MemberExprData;
+		if (isMatchingReference(md.object, refNode)) {
+			return narrowTypeByBooleanDiscriminant(t, md.property, assumeTrue);
+		}
+	}
 	return t;
+}
+
+// Narrow a discriminated union by a boolean-discriminator field's truthy/falsy state.
+// `assumeTrue=true` keeps variants whose discriminator field is `true`;
+// `assumeTrue=false` keeps the `false` variants. Falls through to original type
+// if the union doesn't have a boolean-literal discriminant on this property.
+//
+// When multiple variants share the same discriminator value, returns a Union of
+// all matching variants (TypeScript-parity narrowing). Single match returns the
+// variant directly to avoid pointless wrapping.
+function narrowTypeByBooleanDiscriminant(t: Type | null, propName: string, assumeTrue: boolean): Type | null {
+	if (t === null || t.kind !== TypeKind.Union) return t;
+	if (t.typeChildren === null) return t;
+	const matched: Type[] = [];
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		const variant = t.typeChildren[i];
+		if (variant === null) return t;
+		const ft = findFieldInVariant(variant, propName);
+		if (ft === null) return t;
+		if (ft.kind !== TypeKind.BooleanLiteral) return t;
+		const variantValue = ft.typeName === "true";
+		if (variantValue === assumeTrue) matched.push(variant);
+	}
+	if (matched.length === 0) return t;
+	if (matched.length === 1) return matched[0];
+	return createUnion(matched);
 }
 
 // Narrow by a type-predicate call. Reads the predicate sentinel off the
