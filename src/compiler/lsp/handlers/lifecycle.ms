@@ -628,6 +628,37 @@ test "no array size hint for empty new Array<T>()" {
 	assert r.indexOf("string[]") >= 0;
 }
 
+// Padding rules: Type hints have NO paddingLeft (label `: T` follows the
+// identifier whose source already ends with a separator). Exception hints DO
+// have paddingLeft (separate `throws E` from preceding `try` keyword or name).
+// Parameter hints have paddingRight (separate `name:` from following arg).
+test "type hint has no paddingLeft, no paddingRight" {
+	const db = testDb("file:///test.ms", "const x = 42;");
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
+	const r = handleInlayHint("46", params, db);
+	// JSON should contain `"paddingLeft":false` and `"paddingRight":false`
+	assert r.indexOf("\"paddingLeft\":false") >= 0;
+	assert r.indexOf("\"paddingRight\":false") >= 0;
+}
+
+test "parameter hint has paddingRight, no paddingLeft" {
+	const db = testDb("file:///test.ms", "function foo(name: number): void {}\nfoo(42);");
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
+	const r = handleInlayHint("47", params, db);
+	// At least one hint with kind=2 (Parameter) should have paddingRight=true
+	assert r.indexOf("\"label\":\"name:\"") >= 0;
+	assert r.indexOf("\"paddingRight\":true") >= 0;
+}
+
+test "exception hint has paddingLeft" {
+	const db = testDb("file:///test.ms", "function f(s: string) { return Result.ok(1) as Result<number, string>; }");
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
+	const r = handleInlayHint("48", params, db);
+	// Exception hint label starts with "throws " — verify it's present and padded
+	assert r.indexOf("\"label\":\"throws ") >= 0;
+	assert r.indexOf("\"paddingLeft\":true") >= 0;
+}
+
 test "finds all references to a variable" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst def = abc + 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";

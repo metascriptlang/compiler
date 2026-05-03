@@ -251,9 +251,13 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 		if (h.hintKind === SgInlayHintKind.Type || h.hintKind === SgInlayHintKind.Exception) {
 			lspKind = 1;
 		}
-		// Type + Exception hints: paddingLeft (space before label)
-		// Parameter hints: paddingRight (space after "name:")
-		const padLeft = h.hintKind === SgInlayHintKind.Type || h.hintKind === SgInlayHintKind.Exception;
+		// Type hints (`: T`) sit right after an identifier whose source already
+		// has a separator (space, `=`, `;`) following it — no extra padding.
+		// Exception hints (`throws E`) need a leading space to separate from
+		// the preceding identifier or `try` keyword.
+		// Parameter hints (`name:`) need a trailing space to separate from the
+		// following argument expression.
+		const padLeft = h.hintKind === SgInlayHintKind.Exception;
 		const padRight = h.hintKind === SgInlayHintKind.Parameter;
 		arr = arr + lspFmtInlayHint(h.line - 1, h.col - 1, h.label, lspKind, padLeft, padRight);
 	}

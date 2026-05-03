@@ -4,7 +4,7 @@
 // formatHover, collectDiagnostics. No I/O, no protocol knowledge.
 // Called by src/lsp/handlers.ms.
 
-import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, ArrayAccessData, BinaryExprData, ConditionalExprData, TypeAssertionData, UpdateExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, unknownType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable } from "./types";
 import { ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
@@ -2424,10 +2424,15 @@ function sgCollectCallParamHints(
 			argName = aid.name;
 		}
 		if (argName !== paramNames[j]) {
+			// Walk to leftmost expression — several node kinds anchor location
+			// at an internal operator (`(`, `.`, `[`, etc.), not at the
+			// expression start. Use `argInner` (post-HiddenStdConv unwrap) so
+			// implicit conversion wrappers don't shadow the real expression.
+			const startLoc = sgLeftmostLocation(argInner);
 			const hint: SgInlayHint = {
 				label: paramNames[j] + ":",
-				line: arg.location.line,
-				col: arg.location.column,
+				line: startLoc.line,
+				col: startLoc.column,
 				hintKind: SgInlayHintKind.Parameter,
 			};
 			hints.push(hint);
@@ -2438,6 +2443,50 @@ function sgCollectCallParamHints(
 	for (let j = 0; j < cd.arguments.length; j = j + 1) {
 		sgCollectHintsInNode(ctx, cd.arguments[j], startLine, endLine, hints);
 	}
+}
+
+// Several expression node kinds anchor their location at an internal operator
+// token rather than the leftmost source position:
+//   CallExpr        → `(`              walk to callee
+//   MemberExpr      → `.` / `?.`       walk to object
+//   ArrayAccess     → `[`              walk to array
+//   BinaryExpr      → operator         walk to left
+//   ConditionalExpr → `?`              walk to condition
+//   TypeAssertion   → `as`             walk to expr
+//   UpdateExpr      → `++` / `--`      walk to arg ONLY when postfix (`x++`);
+//                                       prefix (`++x`) has operator at leftmost.
+// For positioning inlay hints at the start of an expression we walk down the
+// leftmost child until we hit a node whose location is its true source start.
+function sgLeftmostLocation(node: Node): SourceLocation {
+	if (node.kind === NodeKind.CallExpr) {
+		const cd = node.data as CallExprData;
+		if (cd.callee !== null) return sgLeftmostLocation(cd.callee);
+	}
+	if (node.kind === NodeKind.MemberExpr) {
+		const md = node.data as MemberExprData;
+		if (md.object !== null) return sgLeftmostLocation(md.object);
+	}
+	if (node.kind === NodeKind.ArrayAccess) {
+		const ad = node.data as ArrayAccessData;
+		if (ad.array !== null) return sgLeftmostLocation(ad.array);
+	}
+	if (node.kind === NodeKind.BinaryExpr) {
+		const bd = node.data as BinaryExprData;
+		if (bd.left !== null) return sgLeftmostLocation(bd.left);
+	}
+	if (node.kind === NodeKind.ConditionalExpr) {
+		const td = node.data as ConditionalExprData;
+		if (td.ternaryCondition !== null) return sgLeftmostLocation(td.ternaryCondition);
+	}
+	if (node.kind === NodeKind.TypeAssertion) {
+		const asd = node.data as TypeAssertionData;
+		if (asd.asExpr !== null) return sgLeftmostLocation(asd.asExpr);
+	}
+	if (node.kind === NodeKind.UpdateExpr) {
+		const ud = node.data as UpdateExprData;
+		if (!ud.isPrefix && ud.updateArg !== null) return sgLeftmostLocation(ud.updateArg);
+	}
+	return node.location;
 }
 
 // ===== Exception Inlay Hints =====
@@ -2488,10 +2537,13 @@ function sgCollectExceptionHints(
 		return;
 	}
 
-	// FunctionDecl returning Result<T,E>: show "throws E" after function name
+	// FunctionDecl returning Result<T,E>: show "throws E" after function name.
+	// Skip when the return type is explicitly annotated — the user already
+	// sees `Result<T, E>` in source, so the hint would just repeat info.
 	if (node.kind === NodeKind.FunctionDecl) {
 		if (node.location.line < startLine || node.location.line > endLine) return;
 		const fd = node.data as FunctionDeclData;
+		if (fd.fnReturnType.length > 0) return;
 		const retType = node.nodeType;
 		if (retType !== null && retType.kind === TypeKind.Function && retType.typeReturn !== null) {
 			if (isResult(retType.typeReturn) && getResultErrType(retType.typeReturn) !== null) {
@@ -3301,6 +3353,99 @@ test "skip param hint when arg matches param name" {
 	assert paramHints === 0;
 }
 
+// Helper for the leftmost-position tests below: returns the column of the
+// parameter hint matching `paramName` on the given line, or -1 if not found.
+function sgFindParamHintCol(hints: SgInlayHint[], line: number, paramName: string): number {
+	for (let i = 0; i < hints.length; i = i + 1) {
+		const h = hints[i];
+		if (h.hintKind !== SgInlayHintKind.Parameter) continue;
+		if (h.line !== line) continue;
+		if (h.label !== paramName + ":") continue;
+		return h.col;
+	}
+	return -1;
+}
+
+test "param hint position — CallExpr arg lands at callee, not at lparen" {
+	// foo(bar(1)); → hint `x:` for bar(1) must be at col of `bar`, not `(`
+	const src = "function foo(x: number): void {}\nfunction bar(y: number): number { return y; }\nfoo(bar(1));";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
+	const col = sgFindParamHintCol(hints, 3, "x");
+	// Source: "foo(bar(1));" — `bar` starts at col 5 (1-based)
+	assert col === 5;
+}
+
+test "param hint position — MemberExpr arg lands at object" {
+	// foo(a.b); → hint at col of `a`, not `.`
+	const src = "function foo(x: number): void {}\nconst a = { b: 1 };\nfoo(a.b);";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
+	const col = sgFindParamHintCol(hints, 3, "x");
+	// "foo(a.b);" — `a` at col 5
+	assert col === 5;
+}
+
+test "param hint position — ArrayAccess arg lands at array" {
+	// foo(a[0]); → hint at col of `a`, not `[`
+	const src = "function foo(x: number): void {}\nconst a = [1, 2];\nfoo(a[0]);";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
+	const col = sgFindParamHintCol(hints, 3, "x");
+	assert col === 5;
+}
+
+test "param hint position — BinaryExpr arg lands at left" {
+	// foo(a + b); → hint at col of `a`, not `+`
+	const src = "function foo(x: number): void {}\nconst a = 1;\nconst b = 2;\nfoo(a + b);";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
+	const col = sgFindParamHintCol(hints, 4, "x");
+	assert col === 5;
+}
+
+test "param hint position — ConditionalExpr arg lands at condition" {
+	// foo(c ? 1 : 2); → hint at col of `c`, not `?`
+	const src = "function foo(x: number): void {}\nconst c = true;\nfoo(c ? 1 : 2);";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
+	const col = sgFindParamHintCol(hints, 3, "x");
+	assert col === 5;
+}
+
+test "param hint position — TypeAssertion arg lands at expr" {
+	// foo(v as number); → hint at col of `v`, not `as`
+	const src = "function foo(x: number): void {}\nconst v: number = 1;\nfoo(v as number);";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
+	const col = sgFindParamHintCol(hints, 3, "x");
+	assert col === 5;
+}
+
+test "param hint position — UpdateExpr postfix arg lands at operand" {
+	// foo(v++); → hint at col of `v`, not `++` (which is right of operand)
+	// Note: prefix `++v` already has operator at leftmost — only postfix needs walking.
+	const src = "function foo(x: number): void {}\nlet v = 1;\nfoo(v++);";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
+	const col = sgFindParamHintCol(hints, 3, "x");
+	assert col === 5;
+}
+
 // ===== Doc Comment Tests =====
 
 test "doc comment JSDoc single-line" {
@@ -3402,7 +3547,8 @@ test "find exported decl not found" {
 }
 
 test "exception hint for function returning Result" {
-	const src = "function parse(s: string): Result<number, string> { return Result.ok(1); }";
+	// No explicit return type annotation — hint fills inferred Result<_, string>
+	const src = "function parse(s: string) { return Result.ok(1) as Result<number, string>; }";
 	const pr = parseSource(src);
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
@@ -3412,6 +3558,20 @@ test "exception hint for function returning Result" {
 		if (hints[i].hintKind === SgInlayHintKind.Exception) exceptionCount = exceptionCount + 1;
 	}
 	assert exceptionCount >= 1;
+}
+
+test "no exception hint when return type explicitly annotated" {
+	// Explicit Result<T,E> annotation — hint would be redundant, must skip
+	const src = "function parse(s: string): Result<number, string> { return Result.ok(1); }";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
+	let exceptionCount = 0;
+	for (let i = 0; i < hints.length; i = i + 1) {
+		if (hints[i].hintKind === SgInlayHintKind.Exception) exceptionCount = exceptionCount + 1;
+	}
+	assert exceptionCount === 0;
 }
 
 test "no exception hint for non-Result function" {
