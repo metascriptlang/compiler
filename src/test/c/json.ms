@@ -52,3 +52,65 @@ function main(): void {
 	const c = compileToC(src);
 	assert c.ok;
 }
+
+test "E2E C: JSON.stringify nested struct compiles" {
+	// Regression: pre-fix, nested struct field hit `_ => jsonNumber` fallback
+	// in the synthesizer, producing `jsonNumber(value.b)` (struct → number)
+	// type error. Now: nested struct triggers `__jsonValueOf_<inner>` recursion.
+	const src = `
+interface Inner { c: number; }
+interface Outer { a: number; b: Inner; }
+
+function main(): void {
+	const o: Outer = { a: 1, b: { c: 2 } };
+	const s = JSON.stringify(o);
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: JSON.stringify enum field compiles" {
+	// Regression: pre-fix, enum field reached jsonInt(int64) but enum value
+	// wasn't auto-cast → type mismatch error. Now: needsCast wraps fieldAccess
+	// in `as int64` for sized-int / enum types on stringify side.
+	const src = `
+enum Color { Red, Green, Blue }
+interface Painted { c: Color; }
+
+function main(): void {
+	const p: Painted = { c: Color.Green };
+	const s = JSON.stringify(p);
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: JSON.stringify sized int fields compile" {
+	const src = `
+interface Sized { a: int8; b: int32; c: int64; d: uint16; }
+
+function main(): void {
+	const s: Sized = { a: 1, b: 1000, c: 99999, d: 65000 };
+	const r = JSON.stringify(s);
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: JSON.stringify rejects unsupported field type" {
+	// Array field has no JSON synthesis support yet — must produce explicit
+	// compile error (regression for the silent `_ => jsonNumber` fallback).
+	const src = `
+interface WithArr { items: number[]; }
+
+function main(): void {
+	const w: WithArr = { items: [1, 2, 3] };
+	const s = JSON.stringify(w);
+}
+`;
+	const c = compileToC(src);
+	assert !c.ok;  // expect explicit error, not silent miscompile
+}

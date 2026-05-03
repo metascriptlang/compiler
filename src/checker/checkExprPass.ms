@@ -2145,17 +2145,29 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 		unifyType(fnType.typeChildren[i], at, argBindings);
 	}
 
-	// Pass 2: contextual return type fills GAPS only (Nim's `inheritBindings`
-	// parity, semcall.nim:777-831). Args win — expected only binds generic
-	// params left unbound by Pass 1. GATED on non-naked-T to match TS naked-T
-	// rule: see comment above `isNakedGenericReturn`.
+	// Pass 2: combine contextual return type bindings with arg-bindings.
+	// GATED on non-naked-T to match TS naked-T rule (see `isNakedGenericReturn`).
+	//   - T unbound by args   → contextual fills the gap.
+	//   - T bound by args AND argType assignable to contextualType (contextual
+	//     is the SUPERTYPE) → prefer contextual. Mirrors TS contextual typing:
+	//     `let x: Result<number, string> = ok(int32_var)` must infer T=number
+	//     so the int32 arg widens via stdConv; otherwise the call emits
+	//     Result<int32, string> and fails at the assignment despite the types
+	//     being legitimately compatible via numeric widening.
+	//   - T bound by args AND NOT a subtype of contextual → keep arg-binding;
+	//     the assignment site surfaces the real type error.
 	if (hasExpected && !isNakedGenericReturn) {
 		const expBindings = createUnifyBindings();
 		unifyType(returnType, expectedType, expBindings);
 		for (let k = 0; k < expBindings.names.length; k += 1) {
-			if (!hasBindingName(argBindings, expBindings.names[k])) {
-				argBindings.names.push(expBindings.names[k]);
-				argBindings.types.push(expBindings.types[k]);
+			const name = expBindings.names[k];
+			const expType = expBindings.types[k];
+			const idx = findBindingIndex(argBindings, name);
+			if (idx === -1) {
+				argBindings.names.push(name);
+				argBindings.types.push(expType);
+			} else if (isAssignable(argBindings.types[idx], expType)) {
+				argBindings.types[idx] = expType;
 			}
 		}
 	}
@@ -2166,11 +2178,15 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 	return returnType;
 }
 
-function hasBindingName(b: UnifyBindings, name: string): boolean {
+function findBindingIndex(b: UnifyBindings, name: string): number {
 	for (let i = 0; i < b.names.length; i += 1) {
-		if (b.names[i] === name) return true;
+		if (b.names[i] === name) return i;
 	}
-	return false;
+	return -1;
+}
+
+function hasBindingName(b: UnifyBindings, name: string): boolean {
+	return findBindingIndex(b, name) !== -1;
 }
 
 // Resolve explicit type args from a CallExpr `f<T1, T2>(...)` against the
@@ -2922,13 +2938,6 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	// Generic match-type alias: peel GenericInstance through typeReturn/typeExtra
 	// to reach the underlying Union body. Required for field resolution +
 	// narrowing on `Result<T, E> = Ref<ResultData<T, E>>` style types.
-	//
-	// Snapshot the pre-peel form so we can recover concrete type args when
-	// resolving generic class field types (e.g. `b.items: T[]` where b: Box<T>
-	// and the receiver instance is Box<string>). The peeled struct loses the
-	// type arg slot — without this snapshot, generic field substitution falls
-	// through to GenericParam → `void*` in env structs.
-	const objTypeBeforePeel = resolvedObjType;
 	resolvedObjType = peelToStructOrUnion(resolvedObjType);
 	// Static access detection: when the object is a type name (class, type alias, interface, struct),
 	// skip instance field resolution — go to static method lookup.
@@ -2941,22 +2950,6 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			|| d.object.resolvedSym.symbolKind === SymbolKind.Interface
 			|| d.object.resolvedSym.symbolKind === SymbolKind.Struct);
 	let propType = isStaticClassAccess ? unknownType() : getProperty(resolvedObjType, d.property);
-	// Generic class field substitution: `b.items` where `b: Box<string>` and the
-	// class declares `items: T[]`. After `peelToStructOrUnion`, resolvedObjType is
-	// the un-parameterized inner Struct, so getProperty returns `Array<T>` with
-	// `T` as a GenericParam. Recover the concrete type args from the pre-peel GI
-	// snapshot and substitute. Without this, downstream passes (env-field typing
-	// in lambda lifting) see GenericParam → emit `void*`.
-	if (!isStaticClassAccess && propType.kind !== TypeKind.Unknown && hasGenericParams(propType)
-		&& objTypeBeforePeel !== null && objTypeBeforePeel.kind === TypeKind.GenericInstance) {
-		const genericStr = getGenericDecl(objTypeBeforePeel.typeName);
-		if (genericStr !== "") {
-			const genericNames = splitTopLevel(genericStr, ",");
-			for (let gi = 0; gi < genericNames.length && gi < objTypeBeforePeel.typeChildren.length; gi += 1) {
-				propType = substituteType(propType, genericNames[gi].trim(), objTypeBeforePeel.typeChildren[gi]);
-			}
-		}
-	}
 	// Actor isolation: block external field access (only message-passing allowed).
 	// Allow access from inside the actor's own methods (ctx.currentActorName matches).
 	// Allow @nonisolated fields for read access (Swift parity).
@@ -4104,9 +4097,18 @@ function jsonValueExprFor(fieldAccess: Node, fieldType: Type | null, ctx: Checke
 
 	const prim = classifyJsonPrimitive(t);
 	if (prim !== null) {
+		// `needsCast` means jsonInt's int64 param doesn't accept the field type
+		// directly (sized ints, enums). Cast field → int64 at the call site.
+		// Mirror of the parse-side widening: `intVal: int64 → typeNameOf(t)`.
+		let arg: Node = fieldAccess;
+		if (prim.needsCast) {
+			arg = createNode(NodeKind.TypeAssertion, {
+				asExpr: fieldAccess, asType: "int64",
+			}, syntheticTok);
+		}
 		return createNode(NodeKind.CallExpr, {
 			callee: createNode(NodeKind.Identifier, { name: prim.builder }, syntheticTok),
-			arguments: [fieldAccess],
+			arguments: [arg],
 			isDirectCall: true,
 		}, syntheticTok);
 	}

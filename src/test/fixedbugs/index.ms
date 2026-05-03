@@ -16,3 +16,4 @@
 
 import "./bug001";
 import "./bug002";
+import "./bug003";

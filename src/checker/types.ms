@@ -1485,9 +1485,17 @@ export function substituteType(t: Type | null, paramName: string, concrete: Type
 			TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Struct => substituteStruct(t, paramName, concrete),
 			TypeKind.GenericInstance => {
+				// Substitute typeChildren AND the substituted body (typeReturn).
+				// Pattern parity with all other compound kinds (Array/Union/Function/Ref/...):
+				// they substitute their inner type-children fully. Earlier code nulled
+				// typeReturn here, leaving callers to re-run instantiateGenericBody —
+				// most don't, so peelToStructOrUnion fell back to the un-substituted
+				// typeExtra and downstream (narrowing, getProperty) leaked GenericParam.
 				const gi = copyTypeForSubst(t);
-				gi.typeReturn = null as unknown as Type;
 				substituteChildrenInPlace(gi, paramName, concrete);
+				if (gi.typeReturn !== null) {
+					gi.typeReturn = substituteType(gi.typeReturn, paramName, concrete);
+				}
 				substituteClearFlag(t);
 				return gi;
 			},
