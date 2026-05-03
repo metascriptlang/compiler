@@ -1515,6 +1515,16 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`(*(${targetType}*)&(${expr}))`);
 			return;
 		}
+		// Value-struct → Ref/Ptr cast (e.g. test pattern `{} as unknown as Class`):
+		// the source is a stack struct, not a pointer. Take its address and reinterpret
+		// as the target pointer type. Without this, codegen emits `((Foo*)structVal)`
+		// which clang rejects (operand of pointer cast must be pointer/integer).
+		if (node.nodeType !== null && isPointerType(node.nodeType)
+			&& d.asExpr !== null && d.asExpr.nodeType !== null
+			&& isNilableValueType(d.asExpr.nodeType) && !isPointerType(d.asExpr.nodeType)) {
+			ctx.results.push(`((${targetType})&(${expr}))`);
+			return;
+		}
 		ctx.results.push(`((${targetType})${expr})`);
 		return;
 	}

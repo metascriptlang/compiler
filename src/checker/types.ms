@@ -1232,13 +1232,21 @@ export function unwrapRef(t: Type): Type {
 // pointer types (the null pointer is the natural sentinel — no Maybe wrapper needed).
 export function unwrapRefNullUnion(t: Type): Type | null {
 	if (t === null || t.kind !== TypeKind.Union) return null;
-	if (t.typeChildren === null || t.typeChildren.length !== 2) return null;
-	const a = t.typeChildren[0];
-	const b = t.typeChildren[1];
-	if (a === null || b === null) return null;
-	if ((a.kind === TypeKind.Ref || a.kind === TypeKind.Ptr) && b.kind === TypeKind.Null) return a;
-	if ((b.kind === TypeKind.Ref || b.kind === TypeKind.Ptr) && a.kind === TypeKind.Null) return b;
-	return null;
+	if (t.typeChildren === null || t.typeChildren.length < 2) return null;
+	// Find a single Ref/Ptr kid; all other kids must be Null. Tolerates flow-
+	// narrowing artefacts that produce `Union(Null, Null, Ref<T>)` (duplicate
+	// Null entries from convergent branches) — semantically still `T | null`.
+	let refKid: Type | null = null;
+	for (const k of t.typeChildren) {
+		if (k === null) return null;
+		if (k.kind === TypeKind.Ref || k.kind === TypeKind.Ptr) {
+			if (refKid !== null) return null;  // multiple non-Null pointers — not a simple T|null
+			refKid = k;
+		} else if (k.kind !== TypeKind.Null) {
+			return null;  // non-Null, non-Ref/Ptr kid — not a simple T|null
+		}
+	}
+	return refKid;
 }
 
 // ===== Needs RC =====

@@ -11,7 +11,7 @@
 
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { isSinkType, createPrimitive } from "../checker/types";
+import { isSinkType, createPrimitive, unwrapRefNullUnion } from "../checker/types";
 import { lookupSymbol, lookupLocal, hasFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { NameSet, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
@@ -702,6 +702,17 @@ function emitSaveAssignDestroySimple(stmt: Node, saveExpr: Node, rcInfo: RcInfo,
 	return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc, tmpSym)], loc);
 }
 
+// `Union(Ref<T>, Null)` collapses to bare `T*` in C codegen. DRC temp variables
+// (snapshot of the old value before reassign-then-destroy) must declare with the
+// unwrapped form so the C type of the temp matches the actual pointer value
+// being stored. Without this, codegen emits `msUnion_*` for the temp but assigns
+// a `T*` to it, producing C type-mismatch errors.
+function tempStorageType(t: Type | null): Type | null {
+	if (t === null) return null;
+	const unwrapped = unwrapRefNullUnion(t);
+	return unwrapped !== null ? unwrapped : t;
+}
+
 // genSink: ownership transfer — fresh/last-read values moved without copy.
 // Reference: genSink in injectdestructors
 function genSink(stmt: Node, dest: Node, destName: string, destSym: Symbol, rhs: Node, rcInfo: RcInfo,
@@ -761,14 +772,15 @@ function genCopy(stmt: Node, dest: Node, destName: string, destSym: Symbol, rhs:
 			}
 			return stmt;
 		}
-		// Save old → assign → incref(new) → destroy(old)
+		// Save old → assign → incref(new) → destroy(old).
+		const saveType = tempStorageType(dest.nodeType);
 		const saveExpr = resolveLhs(flags, dest, destName, destSym, loc);
-		if (saveExpr.nodeType === null) saveExpr.nodeType = dest.nodeType;
+		if (saveExpr.nodeType === null) saveExpr.nodeType = saveType;
 		const increfTarget = resolveLhs(flags, dest, destName, destSym, loc);
-		const tmpSym = freshTempSym(dctx.ctx, "oldRef", dest.nodeType);
+		const tmpSym = freshTempSym(dctx.ctx, "oldRef", saveType);
 		const tmpName = tmpSym.name;
 		const saveTmp = makeVarDecl(tmpName, saveExpr, DeclKind.Const, loc);
-		saveTmp.nodeType = dest.nodeType;
+		saveTmp.nodeType = saveType;
 		saveTmp.resolvedSym = tmpSym;
 		const increfCall = makeExprStmt(
 			makeCall(makeIdent(rcInfo.copyFn, loc), [increfTarget], loc), loc);
@@ -834,11 +846,12 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 				return makeBlock(hoisted, loc);
 			}
 			// Ref/Closure: save → assign → incref → destroy
+			const saveType = tempStorageType(dest.nodeType);
 			const saveExpr = resolveLhs(flags, dest, destName, destSym, loc);
-			const tmpSym = freshTempSym(dctx.ctx, "old", dest.nodeType);
+			const tmpSym = freshTempSym(dctx.ctx, "old", saveType);
 			const tmpName = tmpSym.name;
 			const saveTmp = makeVarDecl(tmpName, saveExpr, DeclKind.Const, loc);
-			saveTmp.nodeType = dest.nodeType;
+			saveTmp.nodeType = saveType;
 			saveTmp.resolvedSym = tmpSym;
 			const result: Node[] = [];
 			for (const p of preStmts) { result.push(p); }
@@ -867,10 +880,11 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 			// Aliased move: x = move x.field → destructiveMoveVar pattern
 			// Capture to temp, zero source, destroy old dest, assign from temp.
 			if (destName !== "" && deepAliases(dest, md.moveArg)) {
-				const moveTmpSym = freshTempSym(dctx.ctx, "moveTmp", dest.nodeType);
+				const captureType = tempStorageType(dest.nodeType);
+				const moveTmpSym = freshTempSym(dctx.ctx, "moveTmp", captureType);
 				const tmpName = moveTmpSym.name;
 				const captureDecl = makeVarDecl(tmpName, md.moveArg, DeclKind.Const, loc);
-				captureDecl.nodeType = dest.nodeType;
+				captureDecl.nodeType = captureType;
 				captureDecl.resolvedSym = moveTmpSym;
 				const moveResult: Node[] = [captureDecl];
 				// Zero source BEFORE destroying old dest

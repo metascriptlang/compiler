@@ -1241,6 +1241,24 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 
+		// Drain pending instances BEFORE monomorphize/transform — matches cmdBuildC
+		// (line ~906). On-demand monomorphized methods (e.g. `hashMapRawGet<string,T>`)
+		// must flow through monomorphize → expandMacros → transformProgram →
+		// transformForNative just like static decls. Draining after transforms means
+		// generic-instance bodies skip extensionMethodLower (UFCS `key.hash()` →
+		// `hash(key)`) and operatorLower (string `==` → msStringEquals), producing
+		// broken C with raw method calls and pointer comparisons.
+		const pendingInsts = drainPendingInstances();
+		if (pendingInsts.length > 0) {
+			const instPd = program.data as ProgramData;
+			for (const inst of pendingInsts) {
+				if (inst.nodeType === null && inst.resolvedSym !== null && inst.resolvedSym.symbolType !== null) {
+					inst.nodeType = inst.resolvedSym.symbolType;
+				}
+				instPd.programStmts.push(inst);
+			}
+		}
+
 		const monoed = monomorphizeProgram(program, ctx);
 		validateTypedAST(ctx, monoed);
 		ctx.errors = [];
@@ -1256,17 +1274,6 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			else if (opts.gcMode === "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode === "orc") ctx.gcMode = GcMode.Orc;
 		if (opts.osTarget !== "") ctx.osTarget = opts.osTarget;
-		// Drain pending instances (same as cmdBuildC)
-		const pendingInsts2 = drainPendingInstances();
-		if (pendingInsts2.length > 0) {
-			const instPd2 = program.data as ProgramData;
-			for (const inst of pendingInsts2) {
-				if (inst.nodeType === null && inst.resolvedSym !== null && inst.resolvedSym.symbolType !== null) {
-					inst.nodeType = inst.resolvedSym.symbolType;
-				}
-				instPd2.programStmts.push(inst);
-			}
-		}
 
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
