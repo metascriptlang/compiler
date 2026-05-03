@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { Node, NodeKind, NodeData, createNode, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
+import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
@@ -756,12 +756,20 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						? findUnionVariant(objExpected, d.keys, [])
 						: -1;
 					// Ambiguous? (e.g. { value: X } matches both NumberLiteral and StringLiteral)
-					// Check properties without expectedType to get actual types, then disambiguate.
+					// Check property CLONES without expectedType to get actual types — purely
+					// for variant selection. Original properties stay unchecked so the
+					// contextual second pass (line ~795) types them cleanly with the
+					// variant's field expected type. Same `cloneNodeForCheck` pattern as
+					// `cloneDefaultNode` (line ~1356): exploratory check on a clone leaves
+					// the live AST untouched, avoiding double-insert of HiddenDeref /
+					// coercion nodes that `checkExpr` is not idempotent against.
 					if (varIdx >= 0 && d.keys.length > 0 && isAmbiguousVariant(objExpected, varIdx, d.keys)) {
 						const propTypes: Type[] = [];
 						let pi = 0;
 						while (pi < d.properties.length) {
-							checkExpr(ctx, d.properties[pi], null); propTypes.push(d.properties[pi].nodeType);
+							const probe = cloneNodeForCheck(d.properties[pi]);
+							checkExpr(ctx, probe, null);
+							propTypes.push(probe.nodeType);
 							pi = pi + 1;
 						}
 						const refined = findUnionVariant(objExpected, d.keys, propTypes);
@@ -938,13 +946,6 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.nodeType = targetType;
 				node.flags = node.flags | NodeFlag.Sem;
 				return targetType;
-			}
-			// JsonValue as string/number/boolean/int32 → HiddenStdConv (lowered by jsonDynAccessLower)
-			else if (isJsonValueType(srcType) && isJsonConvertibleTarget(targetType)) {
-				node.nodeType = targetType;
-				node.kind = NodeKind.HiddenStdConv;
-				node.data = { convExpr: d.asExpr, convType: targetType };
-				node.flags = node.flags | NodeFlag.Sem;
 			}
 			// Reference parity: when narrowing a Union, resolve to the actual variant type.
 			else if (srcType !== null && srcType.kind === TypeKind.Union
@@ -1211,6 +1212,73 @@ function literalFitsInType(node: Node, target: Type): boolean {
 	};
 }
 
+// ===== Coercion Protocol — `as<TargetType>` convention =====
+// Compiler synthesizes `expr` → `expr.as<TargetType>()` when:
+//   - srcType not assignable to targetType, AND
+//   - srcType has an extension `as<TargetType>(this T): TargetType` registered.
+// Mirrors the toItems / getDynamicField synthesis pattern. Type opts in by
+// declaring the extension; non-opt-in types remain strict (fall through to error).
+//
+// Naming convention: `as` + PascalCase(targetTypeName).
+//   string  → asString          int8/16/32/64    → asInt8/asInt16/...
+//   number  → asNumber          uint8/16/32/64   → asUint8/...
+//   boolean => asBoolean         float32/64       → asFloat32/asFloat64
+//   User type Color  → asColor
+
+function coercionMethodName(t: Type): string {
+	return match (t.kind) {
+		TypeKind.String  => "asString",
+		TypeKind.Number  => "asNumber",
+		TypeKind.Boolean => "asBoolean",
+		TypeKind.Int8    => "asInt8",
+		TypeKind.Int16   => "asInt16",
+		TypeKind.Int32   => "asInt32",
+		TypeKind.Int64   => "asInt64",
+		TypeKind.Uint8   => "asUint8",
+		TypeKind.Uint16  => "asUint16",
+		TypeKind.Uint32  => "asUint32",
+		TypeKind.Uint64  => "asUint64",
+		TypeKind.Float32 => "asFloat32",
+		TypeKind.Float64 => "asFloat64",
+		_ => t.typeName !== ""
+			? "as" + t.typeName.slice(0, 1).toUpperCase() + t.typeName.slice(1, t.typeName.length)
+			: "",
+	};
+}
+
+// Try to synthesize `expr.as<TargetType>()` coercion. Returns the synthesized
+// CallExpr on success, or `null as unknown as Node` if no matching extension exists
+// or the synthesized call doesn't type-check.
+//
+// Caller (e.g. fitNode, checkCallExpr arg coercion) substitutes the returned Node
+// for `expr` at its slot. Result type matches targetType exactly.
+function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType: Type, targetType: Type): Node {
+	if (ctx.extensionRegistry === null) return null as unknown as Node;
+	const methodName = coercionMethodName(targetType);
+	if (methodName === "") return null as unknown as Node;
+	const exts = findAllExtensionsByName(ctx.extensionRegistry, methodName);
+	if (exts.length === 0) return null as unknown as Node;
+	const ext = findFirstMatchingExt(exts, srcType);
+	if (ext === null) return null as unknown as Node;
+	// Verify return type matches target exactly (asInt32 vs asInt64 disambiguation).
+	const extFnT = getExtFnType(ext);
+	if (extFnT.typeReturn === null) return null as unknown as Node;
+	if (extFnT.typeReturn.kind !== targetType.kind) return null as unknown as Node;
+	if (targetType.typeName !== "" && extFnT.typeReturn.typeName !== targetType.typeName) {
+		return null as unknown as Node;
+	}
+	const loc = expr.location;
+	const memberNode = createNodeAt(NodeKind.MemberExpr,
+		{ object: expr, property: methodName, isOptional: false }, loc);
+	const synthCall = createNodeAt(NodeKind.CallExpr,
+		{ callee: memberNode, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	checkExpr(ctx, synthCall, null);
+	if (synthCall.nodeType === null) return null as unknown as Node;
+	if (synthCall.nodeType.kind === TypeKind.Error) return null as unknown as Node;
+	if (synthCall.nodeType.kind === TypeKind.Unknown) return null as unknown as Node;
+	return synthCall;
+}
+
 // ===== fitNode — Central Implicit Conversion Insertion =====
 // Parity: standard reference's node fitting, conversion matching, and implicit conversion patterns
 // Called at every "value flows into typed slot" point:
@@ -1257,13 +1325,11 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		convNode.flags = convNode.flags | NodeFlag.Sem;
 		return convNode;
 	}
-	// JsonValue → primitive implicit conversion (lowered by jsonDynAccessLower)
-	if (isJsonValueType(exprType) && isJsonConvertibleTarget(formal)) {
-		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
-		const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal }, convTok);
-		convNode.nodeType = formal;
-		convNode.flags = convNode.flags | NodeFlag.Sem;
-		return convNode;
+	// Convention-based coercion protocol: try `expr.as<TargetType>()` synthesis.
+	// Opt-in for any type via extension methods named asString/asNumber/asBoolean/asInt32/etc.
+	const coercionCall = trySynthesizeAsCoercion(ctx, expr, exprType, formal);
+	if (coercionCall !== null as unknown as Node) {
+		return coercionCall;
 	}
 	return expr;
 }
@@ -1290,18 +1356,6 @@ function unwrapAsUnknown(node: Node): Node | null {
 		return unwrapAsUnknown(d.asExpr);
 	}
 	return null;
-}
-
-function isJsonValueType(t: Type): boolean {
-	if (t === null) return false;
-	const inner = unwrapRef(t);
-	return inner.kind === TypeKind.Struct && inner.typeName === "JsonValue";
-}
-
-function isJsonConvertibleTarget(t: Type): boolean {
-	if (t === null) return false;
-	return t.kind === TypeKind.String || t.kind === TypeKind.Number
-		|| t.kind === TypeKind.Boolean || t.kind === TypeKind.Int32;
 }
 
 // ===== Callee Name Extraction =====
@@ -1909,8 +1963,15 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 							addWarning(ctx, `implicit ${typeDisplayName(argTypes[pi])} → ${typeDisplayName(paramType)} narrowing in '${calleeName}' arg ${pi}`, node.location.line, node.location.column);
 						}
 					} else {
-						const calleeName = getCalleeName(d.callee);
-						addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType), node.location.line, node.location.column);
+						// Try `as<TargetType>` protocol coercion before erroring.
+						const coerced = trySynthesizeAsCoercion(ctx, d.arguments[pi], argTypes[pi], paramType);
+						if (coerced !== null as unknown as Node) {
+							d.arguments[pi] = coerced;
+							argTypes[pi] = coerced.nodeType;
+						} else {
+							const calleeName = getCalleeName(d.callee);
+							addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType), node.location.line, node.location.column);
+						}
 					}
 				}
 				// Reference parity: var/out params require lvalue argument
@@ -3240,16 +3301,54 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			return extFnT;
 		}
 	}
-	// JsonValue dynamic member access: any unknown property returns JsonValue (null-propagating)
-	// Placed AFTER extension registry so asString/asNumber/etc. resolve as extensions first.
-	// No HiddenDeref — get() extension takes JsonValue (pointer), not dereferenced value.
-	if (propType.kind === TypeKind.Unknown && (resolvedObjType.typeName === "JsonValue" || resolvedObjType.typeName === "JsonValueData")) {
-		const dynSym = makeSymbol(d.property, SymbolKind.Property, objType, false);
-		dynSym.state = SymbolState.Shaped;
-		dynSym.nativeName = "__jsonDynAccess";
-		node.resolvedSym = dynSym;
-		return objType;
+	// Convention-based dynamic field access protocol:
+	//   obj.foo  →  obj.getDynamicField("foo")
+	// when:
+	//   - foo is not a real field of obj's declared type, AND
+	//   - foo is not a registered extension method on obj's type, AND
+	//   - obj's type has an extension `getDynamicField(this T, key: string): U`.
+	// Mirrors the toItems / toString synthesis pattern (see checkPass.ms:770-790).
+	// Type opts in by declaring the extension; non-opt-in types remain strict.
+	if (propType.kind === TypeKind.Unknown
+			&& resolvedObjType.kind !== TypeKind.Unknown
+			&& resolvedObjType.kind !== TypeKind.Error
+			&& d.property !== "getDynamicField"
+			&& ctx.initTracker.leftPartOfAsgn === 0
+			&& !d.isOptional
+			&& ctx.extensionRegistry !== null) {
+		// Fast-fail: O(1) registry lookup — skip synthesis if no `getDynamicField` extension exists for this type.
+		const dynExts = findAllExtensionsByName(ctx.extensionRegistry, "getDynamicField");
+		if (dynExts.length > 0) {
+			const dynExt = findFirstMatchingExt(dynExts, objType);
+			if (dynExt !== null) {
+				const loc = node.location;
+				const memberNode = createNodeAt(NodeKind.MemberExpr,
+					{ object: d.object, property: "getDynamicField", isOptional: false }, loc);
+				const keyLit = createNodeAt(NodeKind.StringLiteral,
+					{ value: d.property }, loc);
+				const synthCall = createNodeAt(NodeKind.CallExpr,
+					{ callee: memberNode, arguments: [keyLit], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+				checkExpr(ctx, synthCall, null);
+				if (synthCall.nodeType !== null
+						&& synthCall.nodeType.kind !== TypeKind.Error
+						&& synthCall.nodeType.kind !== TypeKind.Unknown) {
+					// Rewrite this MemberExpr in-place to the synthesized CallExpr.
+					// Caller holds a reference to `node`; we mutate kind/data/type/flags so they see the call.
+					// Flags carry NodeFlag.ExtCall set by checkCallExpr — codegen reads it to emit
+					// extension-method calling convention instead of closure dispatch.
+					node.kind = NodeKind.CallExpr;
+					node.data = synthCall.data;
+					node.nodeType = synthCall.nodeType;
+					node.flags = synthCall.flags;
+					if (synthCall.resolvedSym !== null) {
+						node.resolvedSym = synthCall.resolvedSym;
+					}
+					return synthCall.nodeType;
+				}
+			}
+		}
 	}
+
 	// Universal .toString() — every type has a compiler-provided default.
 	// builtinLower resolves to the correct C function per type.
 	// Return the function type (not string) so CallExpr extracts the return type.
@@ -3994,9 +4093,9 @@ function generateJsonParseInstance(ctx: CheckerContext, node: Node, d: CallExprD
 		const ftype = structType.typeChildren[fi];
 		fieldKeys.push(fname);
 
-		// get($v, "fieldName")
+		// getDynamicField($v, "fieldName")
 		const getCall = createNode(NodeKind.CallExpr, {
-			callee: createNode(NodeKind.Identifier, { name: "get" }, syntheticTok),
+			callee: createNode(NodeKind.Identifier, { name: "getDynamicField" }, syntheticTok),
 			arguments: [
 				createNode(NodeKind.Identifier, { name: "$v" }, syntheticTok),
 				createNode(NodeKind.StringLiteral, { value: fname }, syntheticTok),
@@ -4302,7 +4401,7 @@ function ensureJsonFromValueHelper(structType: Type, ctx: CheckerContext, loc: S
 		fieldKeys.push(fname);
 
 		const getCall = createNode(NodeKind.CallExpr, {
-			callee: createNode(NodeKind.Identifier, { name: "get" }, syntheticTok),
+			callee: createNode(NodeKind.Identifier, { name: "getDynamicField" }, syntheticTok),
 			arguments: [
 				createNode(NodeKind.Identifier, { name: "jv" }, syntheticTok),
 				createNode(NodeKind.StringLiteral, { value: fname }, syntheticTok),

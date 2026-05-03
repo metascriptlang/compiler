@@ -1516,9 +1516,12 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			return;
 		}
 		// Value-struct → Ref/Ptr cast (e.g. test pattern `{} as unknown as Class`):
-		// the source is a stack struct, not a pointer. Take its address and reinterpret
-		// as the target pointer type. Without this, codegen emits `((Foo*)structVal)`
-		// which clang rejects (operand of pointer cast must be pointer/integer).
+		// source is a stack struct, target a pointer. Take address-of and
+		// reinterpret. Nim's `genCast` (ccgexprs.nim:2562) uses a C union for
+		// equivalent value↔pointer casts; ours is simpler and produces a
+		// stable stack address (zeroed for empty `{}`) instead of arbitrary
+		// struct bytes-as-pointer. Without this, codegen emits `((T*)structVal)`
+		// which clang rejects (pointer cast operand must be pointer/integer).
 		if (node.nodeType !== null && isPointerType(node.nodeType)
 			&& d.asExpr !== null && d.asExpr.nodeType !== null
 			&& isNilableValueType(d.asExpr.nodeType) && !isPointerType(d.asExpr.nodeType)) {

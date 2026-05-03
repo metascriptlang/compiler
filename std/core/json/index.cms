@@ -6,7 +6,7 @@ export { JsonKind, JsonValue, JsonValueData } from "./types";
 export { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonInt } from "./builder";
 export { stringify, stringifyPretty } from "./stringify";
 export { parseJson } from "./parser";
-export { asString, asNumber, asBool, asInt, at, length, get } from "./accessors";
+export { asString, asNumber, asBoolean, asInt32, at, length, getDynamicField } from "./accessors";
 
 // ===== Typed JSON API — @builtin monomorphizes at compile time via builtinLower =====
 

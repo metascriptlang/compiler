@@ -46,6 +46,7 @@ import "./c/buffer";
 import "./c/httpServer";
 import "./c/actor";
 import "./c/json";
+import "./c/protocols";
 import "./c/drcLifecycle";
 import "./js/basic";
 import "./js/result";

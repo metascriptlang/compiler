@@ -45,7 +45,7 @@ function main(): void {
 	if (r.ok) {
 		const v = r.value;
 		const _s = v.status.asString();
-		const _n = v.count.asInt(0);
+		const _n = v.count.asInt32(0);
 	}
 }
 `;

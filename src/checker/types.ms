@@ -433,9 +433,8 @@ export function createTypeRef(name: string): Type {
 
 export function createUnion(types: Type[]): Type {
 	// Flatten nested unions — `Union(Null, Union(A, B))` becomes `Union(Null, A, B)`.
-	// Nested unions can leak in via flow-graph join when one antecedent is itself a
-	// union. Without flattening, unwrapRefNullUnion (and other shape checks) miss
-	// the canonical 2-variant form and codegen falls back to a literal tagged union.
+	// Without flattening, downstream shape checks miss the canonical form and
+	// codegen falls back to a literal tagged union.
 	let needsFlatten = false;
 	for (const ut of types) {
 		if (ut !== null && ut.kind === TypeKind.Union) { needsFlatten = true; break; }
@@ -453,9 +452,24 @@ export function createUnion(types: Type[]): Type {
 			}
 		}
 	}
+	// Dedup AFTER flatten — a branch join like `Null` + `Union(Null, Ref<T>)` has
+	// distinct top-level antecedents (no top-level dedup possible upstream) but
+	// flatten unwraps the inner Null, producing `[Null, Null, Ref<T>]`. Without
+	// post-flatten dedup, `unwrapRefNullUnion` and other shape checks miss the
+	// canonical 2-variant form and DRC/codegen emit `msUnion_*` for what should
+	// collapse to a bare pointer.
+	const seen: Type[] = [];
+	for (const k of flat) {
+		if (k === null) continue;
+		let dup = false;
+		for (const u of seen) {
+			if (u === k) { dup = true; break; }
+		}
+		if (!dup) seen.push(k);
+	}
 	const t = emptyType();
 	t.kind = TypeKind.Union;
-	t.typeChildren = flat;
+	t.typeChildren = seen;
 	for (const ut of flat) { propagateToOwner(t, ut); }
 	return t;
 }
@@ -1232,21 +1246,13 @@ export function unwrapRef(t: Type): Type {
 // pointer types (the null pointer is the natural sentinel — no Maybe wrapper needed).
 export function unwrapRefNullUnion(t: Type): Type | null {
 	if (t === null || t.kind !== TypeKind.Union) return null;
-	if (t.typeChildren === null || t.typeChildren.length < 2) return null;
-	// Find a single Ref/Ptr kid; all other kids must be Null. Tolerates flow-
-	// narrowing artefacts that produce `Union(Null, Null, Ref<T>)` (duplicate
-	// Null entries from convergent branches) — semantically still `T | null`.
-	let refKid: Type | null = null;
-	for (const k of t.typeChildren) {
-		if (k === null) return null;
-		if (k.kind === TypeKind.Ref || k.kind === TypeKind.Ptr) {
-			if (refKid !== null) return null;  // multiple non-Null pointers — not a simple T|null
-			refKid = k;
-		} else if (k.kind !== TypeKind.Null) {
-			return null;  // non-Null, non-Ref/Ptr kid — not a simple T|null
-		}
-	}
-	return refKid;
+	if (t.typeChildren === null || t.typeChildren.length !== 2) return null;
+	const a = t.typeChildren[0];
+	const b = t.typeChildren[1];
+	if (a === null || b === null) return null;
+	if ((a.kind === TypeKind.Ref || a.kind === TypeKind.Ptr) && b.kind === TypeKind.Null) return a;
+	if ((b.kind === TypeKind.Ref || b.kind === TypeKind.Ptr) && a.kind === TypeKind.Null) return b;
+	return null;
 }
 
 // ===== Needs RC =====

@@ -968,21 +968,25 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 			"affine Promise cannot be returned from a function; every spawn result must be awaited in its creating scope (PARALOCK R3/E4)",
 			d.argument.location.line, d.argument.location.column);
 	}
-	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return
+	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return,
+	// or synthesize `as<TargetType>()` coercion via the protocol.
 	if (returnExpected !== null) {
 		d.argument = fitNode(ctx, d.argument, returnExpected, retType);
 	}
+	// Re-read the post-fitNode type so coercion-protocol substitutions
+	// (e.g. `expr` → `expr.asNumber()`) are reflected in downstream checks.
+	const finalRetType = d.argument !== null ? d.argument.nodeType : retType;
 	// Track inferred return type (first return wins)
 	if (ctx.matchExprDepth === 0 && ctx.inferredReturn !== null && ctx.inferredReturn.kind === TypeKind.Unknown) {
-		ctx.inferredReturn = retType;
+		ctx.inferredReturn = finalRetType;
 	}
 	// Assignability check against the (already-unwrapped) expected return type.
 	if (returnExpected !== null
-		&& retType !== null
-		&& retType.kind !== TypeKind.Unknown
-		&& retType.kind !== TypeKind.Error
-		&& !isAssignable(retType, returnExpected)) {
-		const got = formatTypeBrief(retType);
+		&& finalRetType !== null
+		&& finalRetType.kind !== TypeKind.Unknown
+		&& finalRetType.kind !== TypeKind.Error
+		&& !isAssignable(finalRetType, returnExpected)) {
+		const got = formatTypeBrief(finalRetType);
 		const expected = formatTypeBrief(returnExpected);
 		addError(ctx, "Return type mismatch in '" + ctx.currentFunction.name + "': expected " + expected + ", got " + got, node.location.line, node.location.column);
 	}

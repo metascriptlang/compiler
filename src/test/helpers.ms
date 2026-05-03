@@ -19,7 +19,7 @@ import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
 import { AliveSet, createAliveSet } from "../codegen/c/context";
-import { generateJS } from "../codegen/js/index";
+import { generateJS } from "../codegen/js/jsgen";
 import { MapEntry, createMapProvider, loadModuleGraph } from "../module/loader";
 import { Module, ModuleGraph, findModule } from "../module/graph";
 import { Node } from "../ast/node";

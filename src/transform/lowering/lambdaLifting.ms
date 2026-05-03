@@ -21,7 +21,7 @@
 //     const f = { fn: $lifted_outer_1, env: { x: x } };
 //   }
 
-import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, ObjectLiteralData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, ObjectLiteralData, TestDeclData, Type, TypeKind } from "../../ast/node";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
 import {
@@ -1250,6 +1250,34 @@ function walkLift(node: Node, state: LiftState): void {
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;
 			walkLift(d.decoratedNode, state);
+		},
+		NodeKind.TestDecl => {
+			// Test bodies compile to standalone C functions (one per `test "..."`
+			// block). Treat as a function boundary so arrows inside get lifted —
+			// without this, codegen sees raw ArrowFunction nodes and emits
+			// `0 /* unlowered ArrowFunction */`. Build mode never hits this path
+			// (DCE strips test bodies pre-lifting) but test mode keeps them.
+			//
+			// Save/restore the SAME state slots a FunctionDecl arm does, otherwise
+			// processing test bodies pollutes module-level state used by the next
+			// FunctionDecl.
+			const d = node.data as TestDeclData;
+			const savedName = state.currentFnName;
+			pushFuncBoundary(state.ss);
+			const savedParams = state.currentParams;
+			const savedActiveRewrites = state.activeEnvRewrites;
+			state.currentParams = createNameSet();
+			state.activeEnvRewrites = [];
+			const savedShared = saveSharedEnv(state);
+			const savedHoisted = state.hoistedEnvDecls;
+			state.hoistedEnvDecls = [];
+			walkLift(d.testBody, state);
+			state.hoistedEnvDecls = savedHoisted;
+			popFuncBoundary(state.ss);
+			state.currentParams = savedParams;
+			state.activeEnvRewrites = savedActiveRewrites;
+			restoreSharedEnv(state, savedShared);
+			state.currentFnName = savedName;
 		},
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;

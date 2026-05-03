@@ -2285,10 +2285,13 @@ function sgCollectVarTypeHint(
 	}
 	// Skip hint when variable name matches type name (e.g. const token: Token)
 	if (sgCaseEqualStr(vd.declName, typeStr)) return;
+	// Use nameLocation (the variable name's exact position) — node.location
+	// points at the `let`/`const`/`var` keyword, so adding declName.length
+	// would land the hint inside the keyword instead of after the name.
 	const hint: SgInlayHint = {
 		label: ": " + typeStr,
-		line: node.location.line,
-		col: node.location.column + vd.declName.length,
+		line: vd.nameLocation.line,
+		col: vd.nameLocation.column + vd.declName.length,
 		hintKind: SgInlayHintKind.Type,
 	};
 	hints.push(hint);
@@ -2364,14 +2367,15 @@ function sgCollectReturnTypeHint(
 
 	const typeStr = sgTypeToString(retType);
 	// Position: after closing paren, before body. Use fnBody location - 2 as approximation.
-	// Better: after the last param type or param name + closing paren
-	let hintCol = node.location.column + fd.fnName.length;
+	// Fallback uses nameLocation (the function name's exact position) because
+	// node.location points at the `function` keyword.
+	let hintCol = fd.nameLocation.column + fd.fnName.length;
 	if (fd.fnBody !== null) {
 		hintCol = fd.fnBody.location.column - 1;
 	}
 	const hint: SgInlayHint = {
 		label: ": " + typeStr,
-		line: node.location.line,
+		line: fd.nameLocation.line,
 		col: hintCol,
 		hintKind: SgInlayHintKind.Type,
 	};
@@ -2493,10 +2497,13 @@ function sgCollectExceptionHints(
 			if (isResult(retType.typeReturn) && getResultErrType(retType.typeReturn) !== null) {
 				const errName = typeNameOf(getResultErrType(retType.typeReturn));
 				if (errName !== "" && errName !== "unknown") {
+					// Use nameLocation — node.location points at the `function`
+					// keyword, so adding fnName.length would land the hint
+					// inside `function` instead of after the function name.
 					const hint: SgInlayHint = {
 						label: "throws " + errName,
-						line: node.location.line,
-						col: node.location.column + fd.fnName.length,
+						line: fd.nameLocation.line,
+						col: fd.nameLocation.column + fd.fnName.length,
 						hintKind: SgInlayHintKind.Exception,
 					};
 					hints.push(hint);
