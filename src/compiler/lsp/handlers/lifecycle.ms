@@ -659,6 +659,44 @@ test "exception hint has paddingLeft" {
 	assert r.indexOf("\"paddingLeft\":true") >= 0;
 }
 
+test "try-expr in var-decl produces no duplicate hints (real pipeline)" {
+	// Real-pipeline regression guard for VSCode duplicate-hint reports.
+	// Source mirrors std/fs/index.cms readLines shape.
+	// Concat-trick on `tr`+`y`: bun/transform.ts (test runtime, NOT the msc
+	// binary) rewrites the `try` keyword inside string literals via a regex
+	// that doesn't respect string boundaries. The split keeps the literal
+	// intact so the MS parser sees what msc on disk would see.
+	const tryKw = "tr" + "y";
+	const src = "import { Result } from \"std/core/system\";\n"
+		+ "interface IoError { msg: string; }\n"
+		+ "function readFile(p: string): Result<string, IoError> { return Result.ok(\"\"); }\n"
+		+ "export function readLines(path: string): Result<string[], IoError> {\n"
+		+ "\tconst content = " + tryKw + " readFile(path);\n"
+		+ "\treturn Result.ok([]);\n"
+		+ "}";
+	const db = testDb("file:///test.ms", src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":20,\"character\":0}}}";
+	const r = handleInlayHint("60", params, db);
+	let stringHintCount = 0;
+	let throwsHintCount = 0;
+	let i = 0;
+	while (i < r.length) {
+		const idx = r.indexOf("\"label\":\": string\"", i);
+		if (idx < 0) break;
+		stringHintCount = stringHintCount + 1;
+		i = idx + 1;
+	}
+	i = 0;
+	while (i < r.length) {
+		const idx = r.indexOf("\"label\":\"throws IoError\"", i);
+		if (idx < 0) break;
+		throwsHintCount = throwsHintCount + 1;
+		i = idx + 1;
+	}
+	assert stringHintCount === 1;
+	assert throwsHintCount === 1;
+}
+
 test "finds all references to a variable" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst def = abc + 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";

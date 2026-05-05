@@ -5,6 +5,13 @@
 //
 // All string methods (indexOf, charAt, slice) come from std/core/string prelude.
 
+// String value decoding delegates to the shared JSON parser so we honour
+// the full RFC 8259 escape spec (including `\uXXXX` + surrogate pairs).
+// Hand-rolled escape handling here would re-implement (and inevitably
+// drift from) std/core/json/parser.ms.
+import { parseJson } from "std/core/json/parser";
+import { JsonKind } from "std/core/json/types";
+
 
 // ===== JSON Building =====
 
@@ -62,8 +69,14 @@ export function lspJsonNull(): string {
 
 // ===== JSON Field Extraction =====
 
-// Find a simple string value for a key in a JSON object.
-// Uses native indexOf for O(n) pattern search instead of per-position sliceStr.
+// Find a string value for a key in a JSON object.
+// Uses native indexOf for O(n) pattern search to locate the field, then
+// delegates to the shared `parseJson` (std/core/json) to decode the string
+// token. This guarantees we honour the full RFC 8259 §7 escape spec —
+// `\"  \\  \/  \b  \f  \n  \r  \t  \uXXXX` (with UTF-16 surrogate pairs) —
+// without re-implementing it. LSP4IJ (IntelliJ) emits `=` as `=`, `>`
+// as `>`, etc.; the bug was invisible until then because VSCode/Neovim
+// send those characters raw.
 export function lspGetField(json: string, field: string): string {
 	const pattern = "\"" + field + "\":";
 	let pos = 0;
@@ -73,69 +86,34 @@ export function lspGetField(json: string, field: string): string {
 		// Skip whitespace after colon
 		let j = i + pattern.byteLength;
 		while (j < json.byteLength && (json.charAt(j) === " " || json.charAt(j) === "\t")) { j = j + 1; }
-		// Expect opening quote for string value
+		// Expect opening quote for string value (skip past non-string matches like nested keys)
 		if (j >= json.byteLength || json.charAt(j) !== "\"") {
 			pos = i + 1;
 			continue;
 		}
-		j = j + 1;  // skip opening quote
-
-		// Fast path: scan for end quote, check if any escapes exist
-		let hasEscapes = false;
-		let endPos = j;
-		while (endPos < json.byteLength) {
-			const c = json.charAt(endPos);
-			if (c === "\\") {
-				hasEscapes = true;
-				endPos = endPos + 2;  // skip escape pair
-			} else if (c === "\"") {
-				break;
-			} else {
-				endPos = endPos + 1;
-			}
-		}
-
-		// No escapes: single slice — O(1) concat
-		if (!hasEscapes) {
-			return json.slice(j, endPos);
-		}
-
-		// Has escapes: segment-based extraction
-		let result = "";
-		let segStart = j;
-		let k = j;
-		while (k < endPos) {
+		// Scan to closing quote, handling escapes (\uXXXX is 6 chars; others 2)
+		let k = j + 1;
+		while (k < json.byteLength) {
 			const c = json.charAt(k);
 			if (c === "\\") {
-				// Flush segment before this escape
-				if (k > segStart) {
-					result = result + json.slice(segStart, k);
-				}
-				// Decode escape
-				if (k + 1 < json.byteLength) {
-					const next = json.charAt(k + 1);
-					result = result + match (next) {
-						"\"" => "\"",
-						"\\" => "\\",
-						"n" => "\n",
-						"r" => "\r",
-						"t" => "\t",
-						_ => next,
-					};
-					k = k + 2;
+				if (k + 1 < json.byteLength && json.charAt(k + 1) === "u") {
+					k = k + 6;
 				} else {
-					k = k + 1;
+					k = k + 2;
 				}
-				segStart = k;
+			} else if (c === "\"") {
+				k = k + 1;
+				break;
 			} else {
 				k = k + 1;
 			}
 		}
-		// Flush final segment
-		if (k > segStart) {
-			result = result + json.slice(segStart, k);
-		}
-		return result;
+		// Hand the string token (with quotes) to the JSON parser for decoding
+		const token = json.slice(j, k);
+		const parsed = parseJson(token);
+		if (!parsed.ok) return "";
+		if (parsed.value.kind !== JsonKind.String) return "";
+		return parsed.value.strVal;
 	}
 	return "";
 }
@@ -390,6 +368,30 @@ test "missing field" {
 test "escaped value" {
 	const json = "{\"msg\":\"hello\\nworld\"}";
 	assert lspGetField(json, "msg") === "hello\nworld";
+}
+
+test "decodes \\uXXXX escape (LSP4IJ encodes = as \\u003d)" {
+	// LSP4IJ over-conservative: emits `=` as `=`. Server must decode.
+	const json = "{\"text\":\"const a \\u003d 1\"}";
+	assert lspGetField(json, "text") === "const a = 1";
+}
+
+test "decodes \\u with multiple escapes including arrows" {
+	// (req, res) => { ... }  →  (req, res) => { ... }
+	const json = "{\"text\":\"(req, res) \\u003d\\u003e {\"}";
+	assert lspGetField(json, "text") === "(req, res) => {";
+}
+
+test "decodes \\b \\f \\/ escapes (full JSON spec)" {
+	const json = "{\"x\":\"\\b\\f\\/\"}";
+	assert lspGetField(json, "x") === "\b\f/";
+}
+
+test "decodes UTF-16 surrogate pair (emoji 😀 = U+1F600)" {
+	// 😀 is the surrogate pair encoding of U+1F600
+	const json = "{\"x\":\"\\uD83D\\uDE00\"}";
+	const decoded = lspGetField(json, "x");
+	assert decoded === fromCodePoint(128512);
 }
 
 test "extract id" {

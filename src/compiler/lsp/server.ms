@@ -7,7 +7,7 @@
 
 import {
 	lspParseContentLength, lspFormatMessage, lspUriToPath,
-	lspGetField, lspGetNumberField, lspGetObjectField, lspJsonNumber,
+	lspGetField, lspGetNumberField, lspGetObjectField, lspJsonNumber, lspJsonString,
 	lspErrorResponse
 } from "./protocol";
 import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath } from "../transam/index";
@@ -254,7 +254,10 @@ export function lspRunServer(): void {
 export function processMessage(msg: string, state: LspServerState): string {
 	const method = lspGetField(msg, "method");
 	const idNum = lspGetNumberField(msg, "id");
-	const idStr = idNum >= 0 ? lspJsonNumber(idNum) : "";
+	// LSP spec allows `id` to be int OR string — VSCode/Neovim/Zed send int,
+	// IntelliJ (LSP4IJ) sends string. Fall back to string lookup when no int.
+	const idAsStr = idNum >= 0 ? "" : lspGetField(msg, "id");
+	const idStr = idNum >= 0 ? lspJsonNumber(idNum) : (idAsStr !== "" ? lspJsonString(idAsStr) : "");
 	const params = lspGetObjectField(msg, "params");
 
 	// Track lifecycle

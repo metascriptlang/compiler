@@ -29,6 +29,7 @@ import {
 	MacroInvocationData, TestDeclData, AssertStmtData,
 	QuoteExprData, ComptimeBlockData,
 	TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData,
+	SpliceManyData,
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 
@@ -372,13 +373,14 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.PropertyDecl => {
 			const d = node.data as PropertyDeclData;
-			h = hS(h, d.propName); h = hS(h, d.propType); h = hB(h, d.propIsStatic); if (d.propInitializer !== null) { h = hNodes(h, [d.propInitializer]); }
+			h = hS(h, d.propName); h = hS(h, d.propType); h = hB(h, d.propIsStatic); h = hB(h, d.propIsReadonly); h = hS(h, d.propVisibility); if (d.propInitializer !== null) { h = hNodes(h, [d.propInitializer]); }
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
 			h = hS(h, d.methodName); h = hStrings(h, d.methodParams); h = hStrings(h, d.methodParamTypes);
 			h = hN(h, d.methodBody); h = hB(h, d.methodIsStatic);
-			h = hS(h, d.methodFlags); h = hS(h, d.methodReturnType); h = hS(h, d.nativeName);
+			h = hS(h, d.methodFlags); h = hS(h, d.methodVisibility); h = hS(h, d.methodReturnType); h = hS(h, d.nativeName);
+			for (const dn of d.methodDefaults) { if (dn !== null) h = hN(h, dn); }
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
@@ -434,6 +436,11 @@ export function transAmHashNode(node: Node): number {
 		// === Program Root ===
 		NodeKind.Program => {
 			h = hNodes(h, (node.data as ProgramData).programStmts);
+		},
+
+		// === SpliceMany — A2 macro multi-decl emission ===
+		NodeKind.SpliceMany => {
+			h = hNodes(h, (node.data as SpliceManyData).spliceNodes);
 		},
 
 		// === Type Expression Nodes ===
