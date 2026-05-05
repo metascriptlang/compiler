@@ -8,24 +8,29 @@ import { registerNodePrinter, callPrintNode } from "./callbacks";
 
 import {
 	printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
+	printBigIntLiteral, printRegexLiteral,
 } from "./literals";
 import {
 	printBinaryExpr, printUnaryExpr, printUpdateExpr, printCallExpr,
 	printMemberExpr, printArrayAccess, printObjectLiteral, printArrayLiteral,
 	printArrowFunction, printConditionalExpr, printSpreadExpr, printNewExpr,
 	printTypeAssertion, printMatchExpr, printTryExpr, printMoveExpr,
+	printOutExpr, printSizeofExpr, printArrayPattern, printObjectPattern,
+	printObjectPatternProp, printMacroInvocation, printFunctionExpr,
+	printAwaitExpr, printYieldExpr,
 } from "./expressions";
 import {
 	printProgram, printBlock, printVariableDecl, printExprStmt,
 	printReturnStmt, printIfStmt, printWhileStmt, printForStmt,
-	printForOfStmt, printDoWhileStmt, printSwitchStmt, printMatchStmt,
+	printForOfStmt, printForInStmt, printDoWhileStmt, printSwitchStmt, printMatchStmt,
 	printFunctionDecl, printThrowStmt, printTryCatchStmt, printDeferStmt,
-	printBreakStmt, printContinueStmt,
+	printBreakStmt, printContinueStmt, printDestructuringDecl,
 } from "./statements";
 import {
 	printImportDecl, printExportDecl, printTypeAliasDecl, printEnumDecl,
 	printInterfaceDecl, printStructDecl, printClassDecl, printActorDecl, printExternDecl, printDecoratedDecl,
-	printTestDecl, printAssertStmt, printPropertyDecl, printMethodDecl,
+	printTestDecl, printAssertStmt, printPropertyDecl, printMethodDecl, printConstructorDecl,
+	printMacroDecl,
 } from "./declarations";
 
 export function printNode(node: Node, options: FormatOptions): Doc {
@@ -37,6 +42,8 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.StringLiteral => printStringLiteral(node, options),
 		NodeKind.BooleanLiteral => printBooleanLiteral(node),
 		NodeKind.NullLiteral => docText("null"),
+		NodeKind.BigIntLiteral => printBigIntLiteral(node),
+		NodeKind.RegexLiteral => printRegexLiteral(node),
 		NodeKind.Identifier => printIdentifier(node),
 
 		// ===== Expressions =====
@@ -56,8 +63,12 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.MatchExpr => printMatchExpr(node, options),
 		NodeKind.TryExpr => printTryExpr(node, options),
 		NodeKind.MoveExpr => printMoveExpr(node, options),
-		NodeKind.AwaitExpr => docGroup([docText("await "), callPrintNode((node.data as { awaitArg: Node }).awaitArg, options)]),
-		NodeKind.YieldExpr => docGroup([docText("yield "), callPrintNode((node.data as { yieldArg: Node }).yieldArg, options)]),
+		NodeKind.OutExpr => printOutExpr(node, options),
+		NodeKind.SizeofExpr => printSizeofExpr(node),
+		NodeKind.FunctionExpr => printFunctionExpr(node, options),
+		NodeKind.MacroInvocation => printMacroInvocation(node, options),
+		NodeKind.AwaitExpr => printAwaitExpr(node, options),
+		NodeKind.YieldExpr => printYieldExpr(node, options),
 
 		// ===== Statements =====
 		NodeKind.Program => printProgram(node, options),
@@ -69,6 +80,7 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.WhileStmt => printWhileStmt(node, options),
 		NodeKind.ForStmt => printForStmt(node, options),
 		NodeKind.ForOfStmt => printForOfStmt(node, options),
+		NodeKind.ForInStmt => printForInStmt(node, options),
 		NodeKind.DoWhileStmt => printDoWhileStmt(node, options),
 		NodeKind.SwitchStmt => printSwitchStmt(node, options),
 		NodeKind.MatchStmt => printMatchStmt(node, options),
@@ -78,6 +90,7 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.DeferStmt => printDeferStmt(node, options),
 		NodeKind.BreakStmt => printBreakStmt(node),
 		NodeKind.ContinueStmt => printContinueStmt(node),
+		NodeKind.UnreachableStmt => docText("unreachable;"),
 
 		// ===== Declarations =====
 		NodeKind.ImportDecl => printImportDecl(node, options),
@@ -94,29 +107,42 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.AssertStmt => printAssertStmt(node, options),
 		NodeKind.PropertyDecl => printPropertyDecl(node, options),
 		NodeKind.MethodDecl => printMethodDecl(node, options),
+		NodeKind.ConstructorDecl => printConstructorDecl(node, options),
+		NodeKind.MacroDecl => printMacroDecl(node, options),
+		NodeKind.ArrayPattern => printArrayPattern(node, options),
+		NodeKind.ObjectPattern => printObjectPattern(node, options),
+		NodeKind.ObjectPatternProp => printObjectPatternProp(node, options),
+		NodeKind.DestructuringDecl => printDestructuringDecl(node, options),
 
 		_ => docText("<unsupported node: " + node.kind.toString() + ">"),
 	};
 
-	// Wrap with comments if present
+	// Wrap with comments if present.
+	// 3 buckets by relative line:
+	//   - leading: comment.line < node.line (before)
+	//   - trailing: comment.line === node.line (same line, end-of-line comment)
+	//   - below: comment.line > node.line (standalone line(s) after the stmt)
 	if (node.comments.length > 0) {
 		const leading: Doc[] = [];
 		const trailing: Doc[] = [];
+		const below: Doc[] = [];
 		for (const comment of node.comments) {
 			if (comment.line < node.location.line) {
-				// Before the node — leading comment
 				leading.push(docText(comment.value));
 				leading.push(docHardLine());
-			} else {
-				// Same line or after — trailing comment
+			} else if (comment.line === node.location.line) {
 				trailing.push(docLineSuffix([docText(" " + comment.value)]));
+			} else {
+				below.push(docHardLine());
+				below.push(docText(comment.value));
 			}
 		}
-		if (leading.length > 0 || trailing.length > 0) {
+		if (leading.length > 0 || trailing.length > 0 || below.length > 0) {
 			const parts: Doc[] = [];
 			for (const l of leading) { parts.push(l); }
 			parts.push(innerDoc);
 			for (const t of trailing) { parts.push(t); }
+			for (const b of below) { parts.push(b); }
 			return docGroup(parts);
 		}
 	}

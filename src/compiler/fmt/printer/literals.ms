@@ -1,6 +1,6 @@
 // Literal Printers — number, string, boolean, identifier
 
-import { Node, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData } from "../../../ast/node";
+import { Node, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BigIntLiteralData, RegexLiteralData } from "../../../ast/node";
 import { FormatOptions } from "../options";
 import { Doc, docText } from "../doc";
 
@@ -31,6 +31,14 @@ function escapeString(s: string, quote: number): string {
 // Extract the raw string token from source text using node position.
 // Prettier pattern: work from raw source, never re-escape parsed values.
 // Returns the full token including quotes (e.g., `"hello \"world\""`), or "" if unavailable.
+//
+// Defensive: bails out for synthetic StringLiteral nodes whose position
+// points INSIDE a backtick template literal — there, an embedded `'` or
+// `"` is part of the content, not a token delimiter, and a naive scan
+// would scoop up the rest of the source. Heuristic: a real string-token
+// boundary is preceded by whitespace, punctuation, or start-of-file.
+// If the preceding character is `}` (close of `${...}` interpolation) or
+// `\`` itself, we're inside a template — fall through to re-escape.
 function extractRawStringToken(source: string, line: number, col: number): string {
 	if (source === "") return "";
 	// Find the byte offset of the target line:col in source
@@ -46,6 +54,12 @@ function extractRawStringToken(source: string, line: number, col: number): strin
 	// Expect a quote character at this position
 	const quote = source.byteAt(pos);
 	if (quote !== "\"".code && quote !== "'".code) return "";
+	// Reject if the preceding char would mean we're inside a template
+	// literal (between text/interpolation pieces in `\`...${x}'...\``).
+	if (pos > 0) {
+		const prev = source.byteAt(pos - 1);
+		if (prev === "}".code || prev === "`".code) return "";
+	}
 	// Scan forward to find the matching closing quote (respecting escapes)
 	let end = pos + 1;
 	while (end < source.byteLength) {
@@ -80,4 +94,14 @@ export function printBooleanLiteral(node: Node): Doc {
 export function printIdentifier(node: Node): Doc {
 	const d = node.data as IdentifierData;
 	return docText(d.name);
+}
+
+export function printBigIntLiteral(node: Node): Doc {
+	const d = node.data as BigIntLiteralData;
+	return docText(d.bigintValue);
+}
+
+export function printRegexLiteral(node: Node): Doc {
+	const d = node.data as RegexLiteralData;
+	return docText(d.regexPattern);
 }
