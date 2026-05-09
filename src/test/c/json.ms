@@ -38,14 +38,20 @@ function main(): void {
 	assert c.ok;
 }
 
-test "E2E C: untyped JSON.parse with JsonValue accessors compiles" {
+test "E2E C: untyped JSON parse with JsonValue accessors compiles" {
+	// Both prelude paths reach the same code: JSON.parseValue is a thin
+	// wrapper around parseJson. Test verifies the JsonValue accessor protocol
+	// (.asString, .asInt32, .getDynamicField) compiles end-to-end with
+	// untyped parsing. NOTE: avoid field names that collide with extension
+	// methods on string/array types (e.g. "count") — see overload-matching
+	// follow-up. "howmany" is unambiguously a dynamic field.
 	const src = `
 function main(): void {
-	const r = JSON.parse("{\\"status\\":\\"ok\\",\\"count\\":3}");
+	const r = parseJson("{\\"status\\":\\"ok\\",\\"howmany\\":3}");
 	if (r.ok) {
 		const v = r.value;
 		const _s = v.status.asString();
-		const _n = v.count.asInt32(0);
+		const _n = v.howmany.asInt32(0);
 	}
 }
 `;

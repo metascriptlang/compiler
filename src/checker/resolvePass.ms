@@ -6,8 +6,8 @@
 //   A. Parsing type annotation strings into Type objects
 //   B. Building proper Function/Object types for collected declarations
 
-import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "./types";
+import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -80,6 +80,42 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: number, co
 		}
 	}
 	return createClosureType(paramTypes, paramNames, returnType);
+}
+
+// Unwrap a Type to its underlying Struct (handles Ref<Struct> + GenericInstance).
+// Returns the original Type if no struct found at any unwrap level.
+// Used by field-merging paths (interface/struct extends, type alias intersection).
+function unwrapToStruct(t: Type): Type {
+	let s = t;
+	if (s.kind === TypeKind.Ref && s.typeReturn !== null) s = s.typeReturn;
+	if (s.kind === TypeKind.GenericInstance && s.typeReturn !== null) {
+		s = s.typeReturn;
+		if (s.kind === TypeKind.Ref && s.typeReturn !== null) s = s.typeReturn;
+	}
+	return s;
+}
+
+// Append fields from a struct-like operand into the accumulator arrays.
+// Collision policy: error on duplicate name (Nim-style). Operand label flows
+// into error message so user sees which parent / intersection operand introduced
+// the colliding field.
+function appendStructFields(operandStruct: Type, operandLabel: string, accumNames: string[], accumTypes: Type[], ctx: CheckerContext, line: number, col: number): void {
+	if (operandStruct.typeNames === null || operandStruct.typeChildren === null) return;
+	for (let pi = 0; pi < operandStruct.typeNames.length; pi += 1) {
+		const fname = operandStruct.typeNames[pi];
+		let collided = false;
+		for (const existingName of accumNames) {
+			if (existingName === fname) {
+				addError(ctx, "field '" + fname + "' from '" + operandLabel + "' collides with previously merged field", line, col);
+				collided = true;
+				break;
+			}
+		}
+		if (!collided && pi < operandStruct.typeChildren.length) {
+			accumNames.push(fname);
+			accumTypes.push(operandStruct.typeChildren[pi]);
+		}
+	}
 }
 
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: number, col: number): Type {
@@ -164,6 +200,48 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		}
 	}
 
+	// Check for intersection types (split on top-level &) — erasure tier.
+	// Intersection binds tighter than union, so checked BEFORE the union split.
+	// At runtime the type collapses to its left-most operand; downstream
+	// passes (checker / transform / codegen) never see an Intersection Type.
+	// Branded types like `string & { __brand: "X" }` resolve to `string`.
+	const intersectionParts = splitTopLevel(trimmed, "&");
+	if (intersectionParts.length >= 2) {
+		// Two-tier semantic:
+		//   - All operands object-like (struct/interface/anonymous object) →
+		//     synthesize a merged struct with all fields combined. Matches
+		//     TypeScript intersection field merging (LANG.md §5.3 example
+		//     `type Extended = IUser & { role: string }`).
+		//   - Any operand is primitive (e.g. `string & { __brand: "X" }`) →
+		//     erasure to first operand (branded primitives, Bug 1 path).
+		const operandTypes: Type[] = [];
+		const operandLabels: string[] = [];
+		let allObjectLike = true;
+		for (const ip of intersectionParts) {
+			const part = ip.trim();
+			if (part.length === 0) continue;
+			const opType = resolveAnnotation(part, ctx, line, col);
+			operandTypes.push(opType);
+			operandLabels.push(part);
+			if (unwrapToStruct(opType).kind !== TypeKind.Struct) {
+				allObjectLike = false;
+			}
+		}
+		if (operandTypes.length >= 2 && allObjectLike) {
+			const mergedNames: string[] = [];
+			const mergedTypes: Type[] = [];
+			for (let oi = 0; oi < operandTypes.length; oi += 1) {
+				appendStructFields(unwrapToStruct(operandTypes[oi]), operandLabels[oi], mergedNames, mergedTypes, ctx, line, col);
+			}
+			return createStruct("", mergedNames, mergedTypes, true);
+		}
+		// Erasure tier (primitive operand or single non-empty): first operand wins.
+		const firstPart = intersectionParts[0].trim();
+		if (firstPart.length > 0) {
+			return resolveAnnotation(firstPart, ctx, line, col);
+		}
+	}
+
 	// Check for union types (split on top-level |)
 	const unionParts = splitTopLevel(trimmed, "|");
 	if (unionParts.length >= 2) {
@@ -180,10 +258,10 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		// while the type checker keeps the union so flow narrowing can distinguish
 		// `Foo` from `Foo | null`.
 		if (members.length === 2) {
-			if (isStructType(members[0]) && members[1] !== null && members[1].kind === TypeKind.Null) {
+			if (isMaybeWrappable(members[0]) && members[1] !== null && members[1].kind === TypeKind.Null) {
 				return createMaybeType(members[0]);
 			}
-			if (members[0] !== null && members[0].kind === TypeKind.Null && isStructType(members[1])) {
+			if (members[0] !== null && members[0].kind === TypeKind.Null && isMaybeWrappable(members[1])) {
 				return createMaybeType(members[1]);
 			}
 		}
@@ -560,6 +638,15 @@ export function resolveTypeExpr(node: Node, ctx: CheckerContext): void {
 		},
 		NodeKind.TypeUnion => {
 			const d = node.data as TypeUnionData;
+			for (const member of d.typExprMembers) {
+				resolveTypeExpr(member, ctx);
+			}
+		},
+		NodeKind.TypeIntersection => {
+			// Erasure-tier: walk all operands so LSP records inner type identifiers.
+			// Resolution to a Type happens at the annotation-string level (Site B
+			// below) where intersection collapses to its first operand.
+			const d = node.data as TypeIntersectionData;
 			for (const member of d.typExprMembers) {
 				resolveTypeExpr(member, ctx);
 			}
@@ -1045,18 +1132,74 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	const fieldTypes = resolveTypeStrings(d.interfaceFieldTypes, d.interfaceFields.length, ctx, node.location.line, node.location.column);
 	resolveTypeExprs(node.typeExprs, ctx);
 
+	// Phase 2: Resolve parent type expressions (extends list / `= A & B` operands)
+	// inside generic scope so refs to T in parent (e.g. `extends Container<T>`)
+	// resolve to local generic param. See LANG.md §4.6 + §5.3.
+	// Phase 8: detect direct self-cycle (`interface A extends A`) — error.
+	const parentTypes: Type[] = [];
+	for (const parentExpr of d.interfaceExtends) {
+		const bareParentName = parentExpr.indexOf("<") >= 0
+			? parentExpr.slice(0, parentExpr.indexOf("<"))
+			: parentExpr;
+		if (bareParentName.trim() === d.interfaceName) {
+			addError(ctx, "'" + d.interfaceName + "' cannot extend itself (cyclic inheritance)", node.location.line, node.location.column);
+			parentTypes.push(unknownType());
+			continue;
+		}
+		const pt = resolveAnnotation(parentExpr, ctx, node.location.line, node.location.column);
+		parentTypes.push(pt);
+	}
+
 	if (hasGenerics) {
 		closeScope(ctx.table);
+	}
+
+	// Phase 2: Merge parent fields + own fields. Nim policy: error on duplicate.
+	// Helpers `unwrapToStruct` + `appendStructFields` shared with type alias
+	// intersection path (resolveAnnotation) — both apply the same field-merging
+	// algorithm at type resolution time.
+	const mergedNames: string[] = [];
+	const mergedTypes: Type[] = [];
+	for (let xi = 0; xi < d.interfaceExtends.length; xi += 1) {
+		const parentExpr = d.interfaceExtends[xi];
+		const pt = parentTypes[xi];
+		if (pt === null || pt.kind === TypeKind.Unknown) {
+			addError(ctx, "cannot resolve parent type '" + parentExpr + "'", node.location.line, node.location.column);
+			continue;
+		}
+		const parentStruct = unwrapToStruct(pt);
+		if (parentStruct.kind !== TypeKind.Struct) {
+			addError(ctx, "cannot extend non-object type '" + parentExpr + "'", node.location.line, node.location.column);
+			continue;
+		}
+		appendStructFields(parentStruct, parentExpr, mergedNames, mergedTypes, ctx, node.location.line, node.location.column);
+	}
+	// Append own fields with collision check against accumulated parent fields.
+	for (let oi = 0; oi < d.interfaceFields.length; oi += 1) {
+		const fname = d.interfaceFields[oi];
+		let collided = false;
+		for (const existingName of mergedNames) {
+			if (existingName === fname) {
+				addError(ctx, "field '" + fname + "' redefines inherited field", node.location.line, node.location.column);
+				collided = true;
+				break;
+			}
+		}
+		if (!collided && oi < fieldTypes.length) {
+			mergedNames.push(fname);
+			mergedTypes.push(fieldTypes[oi]);
+		}
 	}
 
 	// reference parity: self-referential value fields → auto-promote to Ref<T>
 	// C cannot embed struct T by value inside itself (infinite size).
 	// Standard reference requires explicit pointer types and errors otherwise. We auto-promote with a warning.
-	for (let fi = 0; fi < fieldTypes.length; fi += 1) {
-		const ft = fieldTypes[fi];
+	// NOTE: only checks own fields (inherited fields can't reference child by name — they were resolved in parent's scope).
+	for (let fi = 0; fi < mergedTypes.length; fi += 1) {
+		const ft = mergedTypes[fi];
 		if (ft !== null && isStructType(ft) && ft.typeName === d.interfaceName) {
-			fieldTypes[fi] = createRef(ft);
-			const fieldName = fi < d.interfaceFields.length ? d.interfaceFields[fi] : "?";
+			mergedTypes[fi] = createRef(ft);
+			const fieldName = fi < mergedNames.length ? mergedNames[fi] : "?";
 			addError(ctx, "warning: self-referential field '" + fieldName + "' in '" + d.interfaceName + "' auto-promoted to Ref<" + d.interfaceName + ">", node.location.line, 0);
 		}
 	}
@@ -1067,14 +1210,14 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	const target = sym.symbolType.kind === TypeKind.Ref ? unwrapRef(sym.symbolType) : sym.symbolType;
 	target.kind = TypeKind.Struct;
 	target.typeName = d.interfaceName;
-	target.typeNames = d.interfaceFields;
-	target.typeChildren = fieldTypes;
+	target.typeNames = mergedNames;
+	target.typeChildren = mergedTypes;
 	target.typeFlags = TypeFlag.IsStruct as int32;
-	for (const pt of fieldTypes) { propagateToOwner(target, pt); }
+	for (const pt of mergedTypes) { propagateToOwner(target, pt); }
 	node.nodeType = sym.symbolType;
-	// Record each interface field DEF for symbol graph.
-	// Parser stores per-field source locations in node.paramLocations (repurposed field).
-	// Falls back to node.location if paramLocations is missing (e.g., macro-generated nodes).
+	// Record each OWN interface field DEF for symbol graph (inherited fields
+	// already recorded by parent's resolveInterface). Parser stores per-field
+	// source locations in node.paramLocations.
 	for (let ri = 0; ri < d.interfaceFields.length; ri += 1) {
 		const fieldSym = makeSymbol(d.interfaceFields[ri], SymbolKind.Property, fieldTypes[ri], false);
 		fieldSym.state = SymbolState.Shaped;
@@ -1433,18 +1576,76 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 	const inner = unwrapRef(sym.symbolType);
 	inner.kind = TypeKind.Struct;
 	inner.typeName = d.className;
-	inner.typeNames = memberNames;
-	inner.typeChildren = memberTypes;
 	inner.typeFlags = TypeFlag.IsStruct as int32;
-	// Resolve base class TypeReference → concrete type (reference parity: no TypeRef in codegen)
+
+	// Phase 4: Class field flatten — merge parent fields into child's typeChildren.
+	// Mirrors interface/struct (Phases 1-3); for class we also keep typeExtra
+	// (used by static field chain + inheritance distance) and SET
+	// HasInheritedFields flag so destructorLifting suppresses parent destroy
+	// genCall (avoids double-free since fields walked inline by DRC walker).
+	let mergedNames = memberNames;
+	let mergedTypes = memberTypes;
+	let didMergeParent = false;
 	if (inner.typeExtra !== null && inner.typeExtra.kind === TypeKind.TypeReference) {
-		const baseSym = lookupSymbol(ctx.table, inner.typeExtra.typeName);
-		if (baseSym !== null) {
-			inner.typeExtra = baseSym.symbolType;
+		const parentExpr = inner.typeExtra.typeName;
+		// B6: ensure parent fully Shaped before reading its fields. lookupSymbol
+		// gets the bare-name symbol; for "Bar<T>" form, resolveAnnotation handles
+		// the GenericInstance path which itself ensures shapedness.
+		const bareParentName = parentExpr.indexOf("<") >= 0
+			? parentExpr.slice(0, parentExpr.indexOf("<"))
+			: parentExpr;
+		// Phase 8: detect direct self-cycle (`class A extends A`) — error.
+		if (bareParentName.trim() === d.className) {
+			addError(ctx, "'" + d.className + "' cannot extend itself (cyclic inheritance)", node.location.line, node.location.column);
+			inner.typeNames = memberNames;
+			inner.typeChildren = memberTypes;
+			for (const pt of memberTypes) { propagateToOwner(inner, pt); }
+			node.nodeType = sym.symbolType;
+			return;
+		}
+		const parentSym = lookupSymbol(ctx.table, bareParentName);
+		if (parentSym !== null) ensureShaped(parentSym, ctx);
+		// resolveAnnotation handles both "Bar" and "Bar<T>" forms (Phase 1c).
+		const parentType = resolveAnnotation(parentExpr, ctx, node.location.line, node.location.column);
+		if (parentType.kind !== TypeKind.Unknown) {
+			inner.typeExtra = parentType;
+			const parentStruct = unwrapToStruct(parentType);
+			// B8: only struct/class parents allowed.
+			if (parentStruct.kind !== TypeKind.Struct) {
+				addError(ctx, "class can only extend another class — '" + parentExpr + "' is not a class type", node.location.line, node.location.column);
+			} else {
+				const newNames: string[] = [];
+				const newTypes: Type[] = [];
+				appendStructFields(parentStruct, parentExpr, newNames, newTypes, ctx, node.location.line, node.location.column);
+				for (let oi = 0; oi < memberNames.length; oi += 1) {
+					const fname = memberNames[oi];
+					let collided = false;
+					for (const existingName of newNames) {
+						if (existingName === fname) {
+							addError(ctx, "field '" + fname + "' redefines inherited field", node.location.line, node.location.column);
+							collided = true;
+							break;
+						}
+					}
+					if (!collided) {
+						newNames.push(fname);
+						newTypes.push(memberTypes[oi]);
+					}
+				}
+				mergedNames = newNames;
+				mergedTypes = newTypes;
+				didMergeParent = true;
+			}
 		}
 	}
-	// Propagate HasAsgn from any managed field
-	for (const pt of memberTypes) { propagateToOwner(inner, pt); }
+
+	inner.typeNames = mergedNames;
+	inner.typeChildren = mergedTypes;
+	if (didMergeParent) {
+		inner.typeFlags = (inner.typeFlags | TypeFlag.HasInheritedFields) as int32;
+	}
+	// Propagate HasAsgn from any managed field (parent + own after merge)
+	for (const pt of mergedTypes) { propagateToOwner(inner, pt); }
 	node.nodeType = sym.symbolType;
 }
 
@@ -1844,12 +2045,16 @@ test "null | Ptr<boolean> stays Union(Null, Ptr)" {
 	assert inner1 !== null && inner1.kind === TypeKind.Boolean;
 }
 
-test "string | null stays Union (not pointer)" {
+test "string | null wraps as Maybe<string>" {
+	// Per LANG.md §6: non-pointer T | null wraps in Maybe<T> with `{ value, present }`.
+	// Pointers (Ref/Ptr) stay as Union (NULL is the natural sentinel).
 	const t = resolveWith("string | null");
-	assert t.kind === TypeKind.Union;
+	assert t.kind === TypeKind.Struct;
+	assert (t.typeFlags & TypeFlag.IsMaybe) !== 0;
 }
 
-test "number | null stays Union (not pointer)" {
+test "number | null wraps as Maybe<number>" {
 	const t = resolveWith("number | null");
-	assert t.kind === TypeKind.Union;
+	assert t.kind === TypeKind.Struct;
+	assert (t.typeFlags & TypeFlag.IsMaybe) !== 0;
 }

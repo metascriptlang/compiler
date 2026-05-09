@@ -1,11 +1,11 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
+import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion } from "./types";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames } from "./context";
+import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn } from "./context";
 import {
 	isAssignable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -16,6 +16,7 @@ import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, rec
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { expandMacroInvocation } from "../compiler/meta/expand";
+import { evalComptimeBlock } from "../compiler/meta/comptime";
 import { findChar, splitTopLevel } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 import { markConsumedName, isConsumedName, symbolConsumeKey } from "./spawnAffinity";
@@ -208,9 +209,31 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			return booleanType();
 		},
 		NodeKind.NullLiteral => nullType(),
-		NodeKind.RegexLiteral | NodeKind.QuoteExpr | NodeKind.ComptimeBlock => unknownType(),
+		NodeKind.RegexLiteral | NodeKind.QuoteExpr => unknownType(),
+		NodeKind.ComptimeBlock => {
+			// Eagerly fold @comptime block — mirrors Phase B+ macro eager
+			// expansion below. Without this, `const X = @comptime { ... }`
+			// fossilizes X's symbol type as `unknown`, emitting `void* X` in C
+			// codegen, because the post-check evaluateComptimeBlocks pass
+			// replaces the AST node AFTER the variable's symbol type is set.
+			const expanded = evalComptimeBlock(node);
+			node.kind = expanded.kind;
+			node.data = expanded.data;
+			if (expanded.location !== null) node.location = expanded.location;
+			node.nodeType = null as unknown as Type;
+			node.resolvedSym = null as unknown as Symbol;
+			node.flags = 0;
+			checkExpr(ctx, node, expectedType);
+			return node.nodeType;
+		},
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
+			// Phase 5: `super` resolves to parent class via enclosing `this`'s
+			// classType.typeExtra chain. Special-cased BEFORE lookupSymbol because
+			// `super` is never a regular declared symbol.
+			if (d.name === "super") {
+				return resolveSuper(ctx, node);
+			}
 			const sym = lookupSymbol(ctx.table, d.name);
 			if (sym === null) {
 					addError(ctx, `Undefined variable '${d.name}'`, node.location.line, node.location.column);
@@ -517,6 +540,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (objExpected !== null && objExpected.kind === TypeKind.Ref && objExpected.typeReturn !== null) {
 				objExpected = objExpected.typeReturn;
 			}
+			// Unwrap Maybe<T> for inner shape matching — `{ kind: 7 }` flowing into
+			// a `Token | null` slot matches Token's fields, not Maybe<Token>'s
+			// `{ value, present }` wrapper. fitNode at the call site inserts the
+			// wrap after this node is shape-checked. Mirrors the Ref/Union peels above.
+			if (objExpected !== null && isMaybeType(objExpected) && objExpected.typeReturn !== null) {
+				objExpected = objExpected.typeReturn;
+			}
 			// Map<K,V> literal (the insertion-ordered one — matches JS object literal
 			// key order): `{ "foo": 1 }` assigned to an ordered Map target is rewritten
 			// in-place to `mapFromPairs<K,V>([keys], [values])` — a call to a std
@@ -603,7 +633,16 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				// Reference parity: stamp literal with expected type, propagate field types
 				// For class types, keep Ref wrapper so codegen knows to heap-allocate.
 				// Skip ownership modifiers (Sink/Lent/Var) — transparent for codegen.
-				const stampType = skipModifier(expectedType);
+				let stampType = skipModifier(expectedType);
+				// Maybe<T> override: when expected is Maybe<T>, the literal's natural
+				// shape is the inner T (matched against T's fields above via the peel).
+				// Stamp the inner T so fitNode at the call site detects the T → Maybe<T>
+				// gap and inserts the wrap. Without this, node.nodeType = Maybe<T>
+				// short-circuits fitNode's same-kind check and no wrap is emitted —
+				// codegen then writes the literal's T-shape fields into Maybe<T>'s slot.
+				if (stampType !== null && isMaybeType(stampType)) {
+					stampType = objExpected;
+				}
 				node.nodeType = (stampType !== null) ? stampType : objExpected;
 				// Pin to consts so the inner while-loop body sees non-null typeNames/
 				// typeChildren — flow narrowing on `let objExpected` doesn't reach
@@ -1061,11 +1100,54 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					ai = ai + 1;
 				}
 			}
+			// SERIALIZE Bug 8: deferred user macros expand eagerly when re-checked
+			// with concrete types. After mono clones a generic body, replaceTypeVars
+			// substitutes T→concrete in arg.nodeType. The re-check then hits this
+			// MacroInvocation with concrete args and must expand — otherwise the
+			// surrounding ReturnStmt/VariableDecl gets voidType, breaking the
+			// declared-return-type assignability check.
+			//
+			// Mirrors the CallExpr eager path (line 1684-1700). Only fires for
+			// user macros (in registry); builtin directives (emit, include, ...)
+			// keep the voidType behavior. If args still contain GenericParam
+			// (defer convention), return unknownType — let the next mono level
+			// or post-mono expand pass handle it.
+			if (ctx.macroBodyRegistry.has(md.macroName)) {
+				if (ctx.macroExpansionDepth >= 16) {
+					addError(ctx, "macro expansion depth limit (16) exceeded for '" + md.macroName + "' — possible recursive macro",
+						node.location.line, node.location.column);
+					return unknownType();
+				}
+				if (anyArgIsParametric(md.macroArgs)) return unknownType();
+				ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
+				const expanded = expandMacroInvocation(node, ctx, 0);
+				node.kind = expanded.kind;
+				node.data = expanded.data;
+				if (expanded.location !== null) node.location = expanded.location;
+				node.nodeType = null as unknown as Type;
+				node.resolvedSym = null as unknown as Symbol;
+				node.flags = 0;
+				checkExpr(ctx, node, expectedType);
+				ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
+				return node.nodeType;
+			}
 			return voidType();
 		},
 		_ => unknownType(),
 	};
 	return result;
+}
+
+// True iff any arg's nodeType still carries a GenericParam — the marker
+// for "this call lives inside an un-instantiated generic body". Drives
+// the SERIALIZE A3 defer convention: macro invocations with parametric
+// args wait for monomorphization to substitute concrete types, then
+// re-check eagerly expands.
+function anyArgIsParametric(args: Node[]): boolean {
+	for (const arg of args) {
+		if (arg.nodeType !== null && hasGenericParams(arg.nodeType)) return true;
+	}
+	return false;
 }
 
 // ===== Operator Inference =====
@@ -1143,6 +1225,74 @@ function wrapInConv(expr: Node, targetType: Type): Node {
 	convNode.nodeType = targetType;
 	convNode.flags = convNode.flags | NodeFlag.Sem;
 	return convNode;
+}
+
+// Phase 5: resolve `super` identifier to the parent class symbol.
+// `super` is only valid inside an instance method (where "this" is in scope).
+// Walks: this → enclosing class type → typeExtra → parent class.
+// Sets node.resolvedSym to the parent class symbol so codegen can emit the
+// correct `ParentClassName_new` call. Returns parent class type.
+// Errors if used outside a method, in a static method, or if the enclosing
+// class has no `extends` clause.
+function resolveSuper(ctx: CheckerContext, node: Node): Type {
+	const thisSym = lookupSymbol(ctx.table, "this");
+	if (thisSym === null || thisSym.symbolType === null) {
+		addError(ctx, "'super' is only valid inside an instance method or constructor", node.location.line, node.location.column);
+		return errorType();
+	}
+	let classType = thisSym.symbolType;
+	if (classType.kind === TypeKind.Ref && classType.typeReturn !== null) {
+		classType = classType.typeReturn;
+	}
+	if (classType.kind !== TypeKind.Struct || classType.typeExtra === null) {
+		addError(ctx, "'super' requires the enclosing class to have an 'extends' clause", node.location.line, node.location.column);
+		return errorType();
+	}
+	let parentType = classType.typeExtra;
+	if (parentType.kind === TypeKind.Ref && parentType.typeReturn !== null) {
+		parentType = parentType.typeReturn;
+	}
+	const parentName = parentType.typeName;
+	if (parentName === "") {
+		addError(ctx, "'super' parent class has no resolvable name", node.location.line, node.location.column);
+		return errorType();
+	}
+	const parentSym = lookupSymbol(ctx.table, parentName);
+	if (parentSym === null) {
+		addError(ctx, "'super' parent class '" + parentName + "' not found", node.location.line, node.location.column);
+		return errorType();
+	}
+	ensureShaped(parentSym, ctx);
+	node.resolvedSym = parentSym;
+	return parentSym.symbolType;
+}
+
+// Synthesize T → Maybe<T> coercion at the checker layer. Used by both fitNode
+// (var-decl/return/assign/object-field) and checkCallExpr (call args). Mirrors
+// optionalCoercion.ms / nullableLower.ms's transform-layer wrap; kept separate
+// per checker/transform layering. Two cases:
+//   - null literal: retype as the Maybe wrapper so codegen emits `{0}` zero-init.
+//     Wrapping null into `{value: null, present: true}` would be wrong.
+//   - non-null:    `{ value: expr, present: true }` ObjectLiteral typed as wrapper.
+//     Direct struct construction (Nim parity), no runtime helper.
+// Caller is responsible for the gating check (`isMaybeType(formal) && !isMaybeType(exprType)`).
+function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
+	if (expr.kind === NodeKind.NullLiteral || exprType.kind === TypeKind.Null) {
+		expr.nodeType = formal;
+		return expr;
+	}
+	const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
+	const presentLit = createNode(NodeKind.BooleanLiteral, { boolValue: true } as NodeData, wrapTok);
+	presentLit.nodeType = booleanType();
+	presentLit.flags = presentLit.flags | NodeFlag.Sem;
+	const wrapped = createNode(NodeKind.ObjectLiteral, {
+		properties: [expr, presentLit],
+		keys: ["value", "present"],
+		keyLocations: [expr.location, expr.location],
+	} as NodeData, wrapTok);
+	wrapped.nodeType = formal;
+	wrapped.flags = wrapped.flags | NodeFlag.Sem;
+	return wrapped;
 }
 
 // ===== Bitwise Operator Validation =====
@@ -1315,6 +1465,14 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		wrapped.nodeType = formal;
 		wrapped.flags = wrapped.flags | NodeFlag.Closure | NodeFlag.Sem;
 		return wrapped;
+	}
+	// Implicit T → Maybe<T> coercion (Nim-parity `some(val)` / `none(T)`).
+	// MUST run BEFORE the same-kind early return below — both Token and
+	// Maybe<Token> have kind=Struct, so kind-equality alone wouldn't distinguish
+	// them. Skip when expr is already Maybe-typed (passthrough like
+	// `return otherMaybeFn()`).
+	if (isMaybeType(formal) && formal.typeReturn !== null && !isMaybeType(exprType)) {
+		return synthMaybeWrap(expr, formal, exprType);
 	}
 	if (formal.kind === exprType.kind) return expr;
 	// Narrowing integer conversion: wrap in HiddenStdConv
@@ -1609,6 +1767,26 @@ function checkTryExpr(ctx: CheckerContext, node: Node): Type | null {
 function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
 	checkExpr(ctx, d.callee, null);
+	// Phase 5: super(args) call — type-check args against parent class
+	// constructor signature. resolveSuper set callee.resolvedSym to the parent
+	// class symbol. Reuse getCtorParamTypes which returns user-only params (no
+	// synthetic "this" prepended — that's symbol-scope only, not on Type).
+	if (d.callee.kind === NodeKind.Identifier
+			&& (d.callee.data as IdentifierData).name === "super"
+			&& d.callee.resolvedSym !== null) {
+		const parentSym = d.callee.resolvedSym;
+		const ctorParamTypes = getCtorParamTypes(parentSym);
+		const expectedCount = ctorParamTypes !== null ? ctorParamTypes.length : 0;
+		if (d.arguments.length !== expectedCount) {
+			addError(ctx, "super() expects " + expectedCount.toString() + " arguments, got " + d.arguments.length.toString(), node.location.line, node.location.column);
+		}
+		for (let ai = 0; ai < d.arguments.length; ai += 1) {
+			const expected = (ctorParamTypes !== null && ai < ctorParamTypes.length) ? ctorParamTypes[ai] : null;
+			checkExpr(ctx, d.arguments[ai], expected);
+		}
+		node.nodeType = voidType();
+		return voidType();
+	}
 	let calleeType = d.callee.nodeType;
 	// Detect overloaded paths early — these need argTypes for scoring
 	let needsOverloadScoring = false;
@@ -1651,6 +1829,27 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			// Mutate node to MacroInvocation form so expandMacroInvocation can read it
 			node.kind = NodeKind.MacroInvocation;
 			node.data = { macroName: calleeName, macroArgs: macroArgsRef };
+			// SERIALIZE A3 — Defer convention: if any arg has parametric type
+			// (contains GenericParam), DON'T eager-expand. The MacroInvocation
+			// persists through monomorphize (clone.ms:191 preserves it), where
+			// generic type params get substituted. The post-mono expandMacros
+			// pass (compile.ms:934) then fires the macro with concrete types.
+			//
+			// This unblocks the codec pattern:
+			//   function save<T>(t: T) { bson.encode(t); }   // defers
+			//   save<User>(u);                                // post-mono: fires with t: User
+			if (anyArgIsParametric(macroArgsRef)) {
+				// Defer expansion until post-mono. Use unknownType (not void)
+				// so the deferred MacroInvocation doesn't break declared return
+				// types of enclosing generic functions: e.g.,
+				//   function wrap<T>(x: T): string { return macro(x); }
+				// The body return-stmt check sees `return <unknown>` against
+				// declared `string`, which assignability rules allow. After
+				// monomorphize substitutes T → concrete and re-checks the
+				// cloned body, the macro expands and produces the real type.
+				node.nodeType = unknownType();
+				return unknownType();
+			}
 			// Eagerly expand right now via the Raiser VM. Track depth across the
 			// re-check below so recursive macros hit the limit cleanly.
 			ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
@@ -1848,35 +2047,32 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			const me = d.callee.data as MemberExprData;
 			fillDefaultArgsForNode(ctx, node, me.property, calleeType.typeChildren.length, extDefaultOffset);
 		}
+		// Bug 10 (extended): static class methods need mono-instantiation
+		// for both explicit `<T>` AND arg-driven inference (e.g.
+		// `JSON.stringify(person)` without `<T>` should infer T=Person from
+		// the arg). The shared `tryInstantiateGenericCallee` helper handles
+		// both binding sources. Runs BEFORE the explicit-arg branch so the
+		// typed mono path is uniform regardless of `<T>` presence.
+		if (hasGenericParams(calleeType)
+				&& node.resolvedSym !== null && node.resolvedSym.declNode !== null
+				&& node.resolvedSym.declNode.kind === NodeKind.MethodDecl
+				&& (node.resolvedSym.declNode.data as MethodDeclData).methodIsStatic) {
+			const methodFlags = (node.resolvedSym.declNode.data as MethodDeclData).methodFlags;
+			const newCalleeType = tryInstantiateGenericCallee(ctx, node, calleeType, argTypes, methodFlags);
+			if (newCalleeType !== null) {
+				calleeType = newCalleeType;
+				return inferGenericReturn(calleeType, argTypes, expectedType);
+			}
+		}
 		// Explicit type arg resolution for generic methods (e.g. JSON.parse<Person>)
 		if (hasGenericParams(calleeType)) {
 			const explicitArg = findCallTypeArg(node);
 			if (explicitArg !== "") {
-				// JSON.parse<T> / JSON.stringify<T> — generate specialized function during checker
-				// (reference-aligned: generateInstance + semProcBody pattern)
-				if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonParse") {
-					const result = generateJsonParseInstance(ctx, node, d, explicitArg, node.location);
-					if (result !== null) return result;
-				}
-				if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonStringify") {
-					const result = generateJsonStringifyInstance(ctx, node, d, node.location);
-					if (result !== null) return result;
-				}
+				// Static class method mono is handled at the top of the
+				// extPreResolved block (uniform for both explicit `<T>` and
+				// arg-driven inference). If we reach here, mono didn't fire —
+				// fall through to standard explicit-arg return type computation.
 				return inferGenericReturnWithExplicit(calleeType, argTypes, expectedType, explicitArg, ctx, node);
-			}
-			// JSON.parse() without <T> → returns Result<JsonValue, string> (untyped)
-			if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonParse") {
-				const jvSym = lookupSymbol(ctx.table, "JsonValue");
-				if (jvSym !== null && jvSym.symbolType !== null && jvSym.symbolType.kind !== TypeKind.Unknown) {
-					const resultType = createResult(jvSym.symbolType, stringType());
-					node.nodeType = resultType;
-					return resultType;
-				}
-			}
-			// JSON.stringify(value) without <T> → infer T from argument, generate specialization
-			if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonStringify") {
-				const result = generateJsonStringifyInstance(ctx, node, d, node.location);
-				if (result !== null) return result;
 			}
 		}
 		// Sendable check for extension-resolved actor method calls
@@ -1890,13 +2086,6 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 	// Multi-overload extension — needs argTypes for scoring
 	if (extMultiFiltered.length > 1) {
 		return resolveExtensionOverloadCall(ctx, extMultiFiltered, argTypes, extMultiObjType, extMultiMethodName, node);
-	}
-	// @builtin("JsonStringify"): generate specialized function for struct/anon args
-	// Reference parity: magicsAfterOverloadResolution runs for ALL magic calls,
-	// not just generic/extension ones. Must check here for direct non-generic calls.
-	if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonStringify") {
-		const result = generateJsonStringifyInstance(ctx, node, d, node.location);
-		if (result !== null) return result;
 	}
 	// @builtin("PromiseSpawn"): infer affine `Promise<T>` from closure's return type.
 	// PARALOCK: spawn produces `Promise<T>` tagged with AwaitableAffine +
@@ -1955,6 +2144,21 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				&& paramType.kind !== TypeKind.Function
 				&& argTypes[pi].kind !== TypeKind.Unknown && argTypes[pi].kind !== TypeKind.Error
 				&& argTypes[pi].kind !== TypeKind.Function) {
+				// Maybe<T> coercion: f(42) / f(null) where f: (number | null) → ...
+				// Mirrors the fitNode wrap rule used for var-decl/return/assignment;
+				// call args go through this site instead of fitNode. Applied
+				// independently of isAssignable because (a) null IS assignable
+				// to struct (so isAssignable would skip the wrap), but codegen
+				// still needs a typed null to emit {0}, and (b) inner T is
+				// not directly assignable to Maybe<T> — we want a struct literal.
+				if (isMaybeType(paramType) && paramType.typeReturn !== null
+						&& !isMaybeType(argTypes[pi])
+						&& (d.arguments[pi].kind === NodeKind.NullLiteral
+							|| argTypes[pi].kind === TypeKind.Null
+							|| isAssignable(argTypes[pi], paramType.typeReturn))) {
+					d.arguments[pi] = synthMaybeWrap(d.arguments[pi], paramType, argTypes[pi]);
+					argTypes[pi] = paramType;
+				}
 				if (!isAssignable(argTypes[pi], paramType)) {
 					if (needsStdConv(argTypes[pi], paramType)) {
 						// Implicit numeric conversion — warn for float/number → integer narrowing
@@ -2029,29 +2233,19 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				}
 			}
 		}
-		// On-demand generic instantiation for direct calls (transitive instantiation)
-		// When a generic function is called with concrete arg types, instantiate it.
+		// On-demand generic instantiation for direct calls (transitive
+		// instantiation). Handles both regular FunctionDecl and STATIC class
+		// MethodDecl — non-static methods on generic classes go through the
+		// class-instantiation path. See `tryInstantiateGenericCallee` for the
+		// shared arg-unify + explicit-type-arg merge + sym/nodeType update.
 		if (node.resolvedSym !== null && node.resolvedSym.declNode !== null
-			&& node.resolvedSym.declNode.kind === NodeKind.FunctionDecl
-			&& node.resolvedSym.builtinKind === "") {  // skip builtins — they're rewritten, not instantiated
-			const directFlags = (node.resolvedSym.declNode.data as FunctionDeclData).fnFlags;
-			if (directFlags.indexOf("gen:", 0) >= 0) {
-				const deb = createUnifyBindings();
-				const dLimit = argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
-				for (let di = 0; di < dLimit; di += 1) {
-					if (argTypes[di] !== null) {
-						unifyType(calleeType.typeChildren[di], argTypes[di], deb);
-					}
-				}
-				if (deb.names.length > 0) {
-					const directInstSym = callInstantiateGeneric(node.resolvedSym, deb.names, deb.types, ctx);
-					if (directInstSym !== null) {
-						node.resolvedSym = directInstSym;
-						d.callee.resolvedSym = directInstSym;
-						calleeType = directInstSym.symbolType;
-					}
-				}
-			}
+			&& (node.resolvedSym.declNode.kind === NodeKind.FunctionDecl
+				|| node.resolvedSym.declNode.kind === NodeKind.MethodDecl)) {
+			const directFlags = node.resolvedSym.declNode.kind === NodeKind.FunctionDecl
+				? (node.resolvedSym.declNode.data as FunctionDeclData).fnFlags
+				: (node.resolvedSym.declNode.data as MethodDeclData).methodFlags;
+			const newCalleeType = tryInstantiateGenericCallee(ctx, node, calleeType, argTypes, directFlags);
+			if (newCalleeType !== null) calleeType = newCalleeType;
 		}
 		// If explicit type args (<T>) and generic params, resolve type args at checker time
 		if (hasGenericParams(calleeType)) {
@@ -2236,6 +2430,18 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 	for (let j = 0; j < argBindings.names.length; j += 1) {
 		returnType = substituteType(returnType, argBindings.names[j], argBindings.types[j]);
 	}
+	// Bug 16: eagerly instantiate body for concrete GenericInstance — mirrors
+	// inferGenericReturnWithExplicit. Without this, downstream peelToStructOrUnion
+	// falls back to the un-substituted typeExtra and `r.value.field` access
+	// leaks GenericParam (synthesizes getDynamicField against JsonValue).
+	// Built-in Result/Promise/Iterator get param names via the
+	// `getGenericDecl` fallback in `parser/context.ms`.
+	if (returnType.kind === TypeKind.GenericInstance && returnType.typeReturn === null) {
+		const declParams = getGenericDecl(returnType.typeName);
+		if (declParams !== "") {
+			instantiateGenericBody(returnType, declParams);
+		}
+	}
 	return returnType;
 }
 
@@ -2263,6 +2469,53 @@ function hasBindingName(b: UnifyBindings, name: string): boolean {
 // DRY anchor: any call-pipeline code that needs to honor explicit type args
 // (per-arg validation, mono pre-binding, return-type substitution) routes
 // through this helper instead of re-parsing/re-resolving.
+// Try to instantiate a generic callee for the call `node`. Combines two
+// binding sources:
+//   1. Argument-driven: unify each `argTypes[i]` against `calleeType.typeChildren[i]`
+//      to derive `T → ConcreteArg` bindings.
+//   2. Explicit type args: parse `f<Person, int32>(...)` syntax via
+//      `bindFromExplicitTypeArgs` to derive `T → Person` bindings even when
+//      args alone don't constrain T (e.g. `parseAs<T>(input: string)`).
+//
+// On success, mutates `node.resolvedSym`, `cd.callee.resolvedSym`, and
+// `cd.callee.nodeType` to point at the instantiated symbol. Codegen reads
+// `cd.callee.nodeType.typeReturn` (codegen/c/types.ms:440) for NRVO temp
+// typing, so updating it is required — without it, the call temp keeps
+// the generic `Result<unknown, …>` shape and the C build fails.
+//
+// Returns the new instantiated callee type, or null if instantiation
+// didn't fire (no bindings, builtin, instantiation refused, etc.). Caller
+// keeps `calleeType` unchanged on null return.
+function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string): Type {
+	if (!isGenericFn(flags)) return null as unknown as Type;
+	const sym = node.resolvedSym;
+	if (sym === null || sym.builtinKind !== "" || sym.declNode === null) return null as unknown as Type;
+	const cd = node.data as CallExprData;
+
+	// Pass 1: unify args against params to derive bindings.
+	const eb = createUnifyBindings();
+	const limit = argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
+	for (let i = 0; i < limit; i += 1) {
+		if (argTypes[i] !== null) {
+			unifyType(calleeType.typeChildren[i], argTypes[i], eb);
+		}
+	}
+	// Pass 2: merge explicit type args. Required when args don't bind T
+	// (e.g., `parseAs<T>(input: string): Result<T, …>` — `string` doesn't
+	// constrain T, only the explicit `<Person>` does).
+	const genericNames = extractGenericNames(flags);
+	mergeUnifyBindings(eb, bindFromExplicitTypeArgs(node, genericNames, ctx));
+	if (eb.names.length === 0) return null as unknown as Type;
+
+	const instSym = callInstantiateGeneric(sym, eb.names, eb.types, ctx);
+	if (instSym === null) return null as unknown as Type;
+
+	node.resolvedSym = instSym;
+	cd.callee.resolvedSym = instSym;
+	cd.callee.nodeType = instSym.symbolType;
+	return instSym.symbolType;
+}
+
 function bindFromExplicitTypeArgs(node: Node, paramNames: string[], ctx: CheckerContext): UnifyBindings {
 	const result = createUnifyBindings();
 	if (paramNames.length === 0) return result;
@@ -3279,7 +3532,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			if (!ext.isStatic && extFnT.typeChildren.length > 0) {
 				let srcType = extFnT;
 				// Check for generics: either type-level (hasGenericParams) or flag-level (gen: in fnFlags)
-				const symHasGenerics = hasGenericParams(srcType) || (ext.sym !== null && ext.sym.declNode !== null && ext.sym.declNode.kind === NodeKind.FunctionDecl && (ext.sym.declNode.data as FunctionDeclData).fnFlags.indexOf("gen:", 0) >= 0);
+				const symHasGenerics = hasGenericParams(srcType) || (ext.sym !== null && ext.sym.declNode !== null && ext.sym.declNode.kind === NodeKind.FunctionDecl && isGenericFn((ext.sym.declNode.data as FunctionDeclData).fnFlags));
 				if (symHasGenerics) {
 					const eb = createUnifyBindings();
 					// GenericInstance unification — structural matching, no string parsing
@@ -3973,10 +4226,7 @@ import { getIdentId } from "./idents";
 
 // Lower-level: register a freshly-synthesized FunctionDecl as a root-scope symbol,
 // re-check its body, and queue it for the next instantiation drain. Returns the
-// symbol. No call-site rewrite — callers that need to wire up `d.callee` should
-// use `registerJsonInstance`. ensureJsonValueOf/FromValue helpers use this
-// directly because they aren't tied to a specific call site (they're called by
-// the parent helper at re-check time).
+// symbol. No call-site rewrite — callers wire up `d.callee` themselves.
 function registerSynthesizedFunction(
 	ctx: CheckerContext, helperName: string, params: string[], paramTypes: Type[],
 	body: Node, fnReturnType: Type, fnNode: Node
@@ -3997,512 +4247,6 @@ function registerSynthesizedFunction(
 	return instSym;
 }
 
-// Shared: register a generated JSON instance (symbol + checker + pending + callee rewrite)
-function registerJsonInstance(
-	ctx: CheckerContext, helperName: string, params: string[], paramTypes: Type[],
-	body: Node, fnReturnType: Type, fnNode: Node, node: Node, d: CallExprData, loc: SourceLocation
-): Symbol {
-	const syntheticTok = createSyntheticToken(loc);
-	const instSym = registerSynthesizedFunction(ctx, helperName, params, paramTypes, body, fnReturnType, fnNode);
-
-	const callIdent = createNode(NodeKind.Identifier, { name: helperName }, syntheticTok);
-	callIdent.resolvedSym = instSym;
-	callIdent.nodeType = instSym.symbolType;
-	d.callee = callIdent;
-	node.resolvedSym = instSym;
-	return instSym;
-}
-
-// JSON.parse<Person>(input) → generate __jsonParse_Person, run checker on it, return call
-function generateJsonParseInstance(ctx: CheckerContext, node: Node, d: CallExprData, typeArgStr: string, loc: SourceLocation): Type | null {
-	const sym = lookupSymbol(ctx.table, typeArgStr);
-	if (sym === null || sym.symbolType === null) return null;
-	const structType = unwrapRef(sym.symbolType);
-	if (structType.kind !== TypeKind.Struct || structType.typeNames === null || structType.typeChildren === null) return null;
-
-	const isRef = sym.symbolType.kind === TypeKind.Ref;
-	const resultOkType = isRef ? sym.symbolType : structType;
-	const resultType = createResult(resultOkType, stringType());
-	const helperName = "__jsonParse_" + typeArgStr;
-	const syntheticTok = createSyntheticToken(loc);
-
-	// Cache check — skip if already generated
-	const existing = lookupSymbol(ctx.table, helperName);
-	if (existing !== null) {
-		const callIdent = createNode(NodeKind.Identifier, { name: helperName }, syntheticTok);
-		callIdent.resolvedSym = existing;
-		callIdent.nodeType = existing.symbolType;
-		d.callee = callIdent;
-		node.nodeType = resultType;
-		return resultType;
-	}
-
-	// Generate function body AST:
-	//   const $r = parseJson(input);
-	//   if (!$r.ok) { return { ok: false, error: $r.error }; }
-	//   const $v = $r.value;
-	//   return { ok: true, value: { name: get($v, "name").strVal, ... } };
-	// Result migrated to a boolean-discriminated match-type — variants have
-	// disjoint fields (`{ok, value}` vs `{ok, error}`), so the synthesized
-	// literals must NOT include the inactive variant's field.
-	const stmts: Node[] = [];
-
-	// const $r = parseJson(input)
-	stmts.push(createNode(NodeKind.VariableDecl, {
-		declName: "$r", declType: "", initializer: createNode(NodeKind.CallExpr, {
-			callee: createNode(NodeKind.Identifier, { name: "parseJson" }, syntheticTok),
-			arguments: [createNode(NodeKind.Identifier, { name: "input" }, syntheticTok)],
-			isDirectCall: true,
-		}, syntheticTok), declKind: DeclKind.Const, nameLocation: loc,
-	}, syntheticTok));
-
-	// if (!$r.ok) { return { ok: false, error: $r.error }; }
-	const errObj = createNode(NodeKind.ObjectLiteral, {
-		keys: ["ok", "error"],
-		properties: [
-			createNode(NodeKind.BooleanLiteral, { boolValue: false }, syntheticTok),
-			createNode(NodeKind.MemberExpr, { object: createNode(NodeKind.Identifier, { name: "$r" }, syntheticTok), property: "error" }, syntheticTok),
-		],
-		keyLocations: [],
-	}, syntheticTok);
-	errObj.nodeType = resultType;
-	stmts.push(createNode(NodeKind.IfStmt, {
-		condition: createNode(NodeKind.UnaryExpr, {
-			unaryOp: "!",
-			operand: createNode(NodeKind.MemberExpr, { object: createNode(NodeKind.Identifier, { name: "$r" }, syntheticTok), property: "ok" }, syntheticTok),
-		}, syntheticTok),
-		consequent: createNode(NodeKind.BlockStmt, { statements: [
-			createNode(NodeKind.ReturnStmt, { argument: errObj }, syntheticTok),
-		] }, syntheticTok),
-		alternate: createNode(NodeKind.BlockStmt, { statements: [] }, syntheticTok),
-	}, syntheticTok));
-
-	// const $v = $r.value
-	stmts.push(createNode(NodeKind.VariableDecl, {
-		declName: "$v", declType: "", initializer: createNode(NodeKind.MemberExpr, {
-			object: createNode(NodeKind.Identifier, { name: "$r" }, syntheticTok), property: "value",
-		}, syntheticTok), declKind: DeclKind.Const, nameLocation: loc,
-	}, syntheticTok));
-
-	// Build field extraction: { name: get($v, "name").strVal, age: get($v, "age").numVal }
-	const fieldKeys: string[] = [];
-	const fieldProps: Node[] = [];
-	let fi = 0;
-	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
-		const fname = structType.typeNames[fi];
-		const ftype = structType.typeChildren[fi];
-		fieldKeys.push(fname);
-
-		// getDynamicField($v, "fieldName")
-		const getCall = createNode(NodeKind.CallExpr, {
-			callee: createNode(NodeKind.Identifier, { name: "getDynamicField" }, syntheticTok),
-			arguments: [
-				createNode(NodeKind.Identifier, { name: "$v" }, syntheticTok),
-				createNode(NodeKind.StringLiteral, { value: fname }, syntheticTok),
-			],
-			isDirectCall: true,
-		}, syntheticTok);
-
-		// Use the shared dispatcher: jsonExtractExprFor handles primitive
-		// accessors + sized-int casts + nested struct recursion via
-		// `__jsonFromValue_<inner>(getCall)`. No silent fallback — unsupported
-		// field types report an explicit error and abort synthesis.
-		const fieldVal = jsonExtractExprFor(getCall, ftype, ctx, loc);
-		if (fieldVal === null) {
-			addError(ctx, "JSON deserialization: unsupported field type for '" + fname + "' in struct '" + typeArgStr + "' (kind " + (ftype !== null ? ftype.kind.toString() : "?") + ")",
-				loc.line, loc.column);
-			return null;
-		}
-
-		fieldProps.push(fieldVal);
-		fi = fi + 1;
-	}
-
-	// return { ok: true, value: { fields... } }
-	// Result migrated to a boolean-discriminated match-type — the ok=true
-	// variant has only `value`; emitting `error` here would access a field
-	// that doesn't exist on the v0 variant struct.
-	const resultObj = createNode(NodeKind.ObjectLiteral, {
-		keys: ["ok", "value"],
-		properties: [
-			createNode(NodeKind.BooleanLiteral, { boolValue: true }, syntheticTok),
-			createNode(NodeKind.ObjectLiteral, { keys: fieldKeys, properties: fieldProps, keyLocations: [] }, syntheticTok),
-		],
-		keyLocations: [],
-	}, syntheticTok);
-	resultObj.nodeType = resultType;
-	// Also stamp the inner value object with the target struct type
-	resultObj.data.properties[1].nodeType = resultOkType;
-	stmts.push(createNode(NodeKind.ReturnStmt, { argument: resultObj }, syntheticTok));
-
-	const body = createNode(NodeKind.BlockStmt, { statements: stmts }, syntheticTok);
-	const fnNode = createNode(NodeKind.FunctionDecl, {
-		fnName: helperName, params: ["input"], fnParamTypes: ["string"],
-		fnBody: body, fnFlags: "", fnReturnType: "",
-		fnDefaults: [], nativeName: "", nameLocation: loc,
-	}, syntheticTok);
-
-	registerJsonInstance(ctx, helperName, ["input"], [stringType()], body, resultType, fnNode, node, d, loc);
-	node.nodeType = resultType;
-	return resultType;
-}
-
-// Lookup the JsonValue type symbol — return type of __jsonValueOf_T helpers.
-// Returns null when stdlib `std/core/json` hasn't been loaded into scope (e.g.
-// a check pass that doesn't import json — caller short-circuits gracefully).
-function getJsonValueType(ctx: CheckerContext): Type | null {
-	const sym = lookupSymbol(ctx.table, "JsonValue");
-	if (sym === null || sym.symbolType === null) return null;
-	if (sym.symbolType.kind === TypeKind.Unknown) return null;
-	return sym.symbolType;
-}
-
-// Single source of truth for "what does the JSON system know about this
-// primitive type". Returned shape carries BOTH directions (builder for
-// stringify, accessor for parse) so adding a new primitive type kind requires
-// exactly one edit here — keeps the two dispatch sites in sync.
-interface JsonPrimDispatch {
-	builder: string;       // jsonString / jsonBool / jsonNumber / jsonInt
-	accessor: string;      // strVal / boolVal / numVal / intVal
-	needsCast: boolean;    // intVal is int64 — sized-int field reads need a cast
-}
-
-function classifyJsonPrimitive(t: Type): JsonPrimDispatch | null {
-	if (t === null) return null;
-	if (t.kind === TypeKind.String) return { builder: "jsonString", accessor: "strVal", needsCast: false };
-	if (t.kind === TypeKind.Boolean) return { builder: "jsonBool", accessor: "boolVal", needsCast: false };
-	if (t.kind === TypeKind.Number || t.kind === TypeKind.Float64 || t.kind === TypeKind.Float32) {
-		return { builder: "jsonNumber", accessor: "numVal", needsCast: false };
-	}
-	if (t.kind === TypeKind.Int8 || t.kind === TypeKind.Int16 || t.kind === TypeKind.Int32 || t.kind === TypeKind.Int64
-		|| t.kind === TypeKind.Uint8 || t.kind === TypeKind.Uint16 || t.kind === TypeKind.Uint32 || t.kind === TypeKind.Uint64
-		|| t.kind === TypeKind.Enum) {
-		return { builder: "jsonInt", accessor: "intVal", needsCast: true };
-	}
-	return null;
-}
-
-// Build a `JsonValue`-producing AST expression for a struct field of type
-// `fieldType`. Returns null on UNSUPPORTED types — caller MUST emit a clear
-// compiler error (no silent fallback, that was the prior bug). Recursive:
-// nested struct fields trigger sub-helper synthesis via
-// `ensureJsonValueOfHelper`, so deep struct trees compose without losing type
-// fidelity.
-function jsonValueExprFor(fieldAccess: Node, fieldType: Type | null, ctx: CheckerContext, loc: SourceLocation): Node | null {
-	if (fieldType === null) return null;
-	const t = unwrapRef(fieldType);
-	if (t === null) return null;
-	const syntheticTok = createSyntheticToken(loc);
-
-	const prim = classifyJsonPrimitive(t);
-	if (prim !== null) {
-		// `needsCast` means jsonInt's int64 param doesn't accept the field type
-		// directly (sized ints, enums). Cast field → int64 at the call site.
-		// Mirror of the parse-side widening: `intVal: int64 → typeNameOf(t)`.
-		let arg: Node = fieldAccess;
-		if (prim.needsCast) {
-			arg = createNode(NodeKind.TypeAssertion, {
-				asExpr: fieldAccess, asType: "int64",
-			}, syntheticTok);
-		}
-		return createNode(NodeKind.CallExpr, {
-			callee: createNode(NodeKind.Identifier, { name: prim.builder }, syntheticTok),
-			arguments: [arg],
-			isDirectCall: true,
-		}, syntheticTok);
-	}
-
-	// Nested struct: synthesize sibling helper, call it. The helper returns
-	// JsonValue, so it composes inside `jsonObject(keys, values)` like any
-	// other element — no `jsonRaw` / re-stringify intermediary needed.
-	if (t.kind === TypeKind.Struct && t.typeName !== "") {
-		const innerSym = ensureJsonValueOfHelper(t, ctx, loc);
-		if (innerSym === null) return null;
-		const helperName = "__jsonValueOf_" + t.typeName;
-		const callIdent = createNode(NodeKind.Identifier, { name: helperName }, syntheticTok);
-		callIdent.resolvedSym = innerSym;
-		callIdent.nodeType = innerSym.symbolType;
-		return createNode(NodeKind.CallExpr, {
-			callee: callIdent,
-			arguments: [fieldAccess],
-			isDirectCall: true,
-		}, syntheticTok);
-	}
-
-	return null;
-}
-
-// Synthesize `__jsonValueOf_<TypeName>(value: T): JsonValue` if not cached.
-// Returns the helper's Symbol, or null on failure (unsupported field type or
-// missing JsonValue stdlib). Failures emit a compiler error before returning.
-function ensureJsonValueOfHelper(structType: Type, ctx: CheckerContext, loc: SourceLocation): Symbol | null {
-	const typeName = structType.typeName;
-	if (typeName === "") return null;
-	const helperName = "__jsonValueOf_" + typeName;
-
-	// Cache: already synthesized → reuse.
-	const existing = lookupSymbol(ctx.table, helperName);
-	if (existing !== null) return existing;
-
-	if (structType.typeNames === null || structType.typeChildren === null) return null;
-	// JsonValue may not be in scope when this is invoked from a minimal-prelude
-	// test harness. Fall back to `unknown` for the return slot — the body's
-	// re-check below will surface real type errors when stdlib IS present, while
-	// keeping the symbol registered so the parent's callee rename still works.
-	const jvLookup = getJsonValueType(ctx);
-	const jvType = jvLookup !== null ? jvLookup : unknownType();
-
-	const syntheticTok = createSyntheticToken(loc);
-
-	// Pre-pass: synthesize sub-helpers depth-first. The body's re-check below
-	// resolves identifier symbols by name — they must already be in scope.
-	let fi = 0;
-	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
-		const ftype = unwrapRef(structType.typeChildren[fi]);
-		if (ftype !== null && ftype.kind === TypeKind.Struct && ftype.typeName !== "") {
-			const sub = ensureJsonValueOfHelper(ftype, ctx, loc);
-			if (sub === null) return null;
-		}
-		fi = fi + 1;
-	}
-
-	// Build body: return jsonObject([k1, k2, ...], [expr1, expr2, ...]);
-	const keyNodes: Node[] = [];
-	const valNodes: Node[] = [];
-	fi = 0;
-	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
-		const fname = structType.typeNames[fi];
-		const ftype = structType.typeChildren[fi];
-		keyNodes.push(createNode(NodeKind.StringLiteral, { value: fname }, syntheticTok));
-
-		const fieldAccess = createNode(NodeKind.MemberExpr, {
-			object: createNode(NodeKind.Identifier, { name: "value" }, syntheticTok),
-			property: fname,
-		}, syntheticTok);
-
-		const expr = jsonValueExprFor(fieldAccess, ftype, ctx, loc);
-		if (expr === null) {
-			addError(ctx, "JSON serialization: unsupported field type for '" + fname + "' in struct '" + typeName + "' (kind " + (ftype !== null ? ftype.kind.toString() : "?") + ")",
-				loc.line, loc.column);
-			return null;
-		}
-		valNodes.push(expr);
-		fi = fi + 1;
-	}
-
-	const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticTok);
-	const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, syntheticTok);
-	const objCall = createNode(NodeKind.CallExpr, {
-		callee: createNode(NodeKind.Identifier, { name: "jsonObject" }, syntheticTok),
-		arguments: [keysArr, valsArr],
-		isDirectCall: true,
-	}, syntheticTok);
-
-	const body = createNode(NodeKind.BlockStmt, { statements: [
-		createNode(NodeKind.ReturnStmt, { argument: objCall }, syntheticTok),
-	] }, syntheticTok);
-
-	const fnNode = createNode(NodeKind.FunctionDecl, {
-		fnName: helperName,
-		params: ["value"],
-		fnParamTypes: [typeName],
-		fnBody: body,
-		fnFlags: "",
-		fnReturnType: "JsonValue",
-		fnDefaults: [],
-		nativeName: "",
-		nameLocation: loc,
-	}, syntheticTok);
-
-	return registerSynthesizedFunction(ctx, helperName, ["value"], [structType], body, jvType, fnNode);
-}
-
-// Mirror of `jsonValueExprFor` for the parse direction — pulls a typed field
-// value out of a JsonValue subexpression. Primitive fields read JsonValue's
-// kind-specific accessor (`.strVal`, `.boolVal`, `.numVal`, `.intVal`) plus a
-// type cast for sized integers; nested struct fields recurse through
-// `__jsonFromValue_<inner>(jvExpr)`. No silent fallback — unsupported types
-// return null and the caller emits an explicit error.
-function jsonExtractExprFor(jvExpr: Node, fieldType: Type | null, ctx: CheckerContext, loc: SourceLocation): Node | null {
-	if (fieldType === null) return null;
-	const t = unwrapRef(fieldType);
-	if (t === null) return null;
-	const syntheticTok = createSyntheticToken(loc);
-
-	const prim = classifyJsonPrimitive(t);
-	if (prim !== null) {
-		let expr: Node = createNode(NodeKind.MemberExpr, {
-			object: jvExpr, property: prim.accessor,
-		}, syntheticTok);
-		if (prim.needsCast) {
-			expr = createNode(NodeKind.TypeAssertion, {
-				asExpr: expr, asType: typeNameOf(t),
-			}, syntheticTok);
-		}
-		return expr;
-	}
-
-	// Nested struct: `__jsonFromValue_<inner>(jvExpr)` returns the typed inner.
-	if (t.kind === TypeKind.Struct && t.typeName !== "") {
-		const innerSym = ensureJsonFromValueHelper(t, ctx, loc);
-		if (innerSym === null) return null;
-		const helperName = "__jsonFromValue_" + t.typeName;
-		const callIdent = createNode(NodeKind.Identifier, { name: helperName }, syntheticTok);
-		callIdent.resolvedSym = innerSym;
-		callIdent.nodeType = innerSym.symbolType;
-		return createNode(NodeKind.CallExpr, {
-			callee: callIdent,
-			arguments: [jvExpr],
-			isDirectCall: true,
-		}, syntheticTok);
-	}
-
-	return null;
-}
-
-// Synthesize `__jsonFromValue_<TypeName>(jv: JsonValue): T` if not cached.
-// T is the *plain* struct (Ref-handling lives at the top-level
-// `__jsonParse_T` only — for now nested Ref<Struct> fields are unsupported).
-// Returns the helper Symbol or null on failure (failures emit an error first).
-function ensureJsonFromValueHelper(structType: Type, ctx: CheckerContext, loc: SourceLocation): Symbol | null {
-	const typeName = structType.typeName;
-	if (typeName === "") return null;
-	const helperName = "__jsonFromValue_" + typeName;
-
-	const existing = lookupSymbol(ctx.table, helperName);
-	if (existing !== null) return existing;
-
-	if (structType.typeNames === null || structType.typeChildren === null) return null;
-
-	const jvLookup = getJsonValueType(ctx);
-	const jvType = jvLookup !== null ? jvLookup : unknownType();
-
-	const syntheticTok = createSyntheticToken(loc);
-
-	// Depth-first synthesis of nested helpers so symbols are in scope when this
-	// helper's body re-checks.
-	let fi = 0;
-	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
-		const ftype = unwrapRef(structType.typeChildren[fi]);
-		if (ftype !== null && ftype.kind === TypeKind.Struct && ftype.typeName !== "") {
-			const sub = ensureJsonFromValueHelper(ftype, ctx, loc);
-			if (sub === null) return null;
-		}
-		fi = fi + 1;
-	}
-
-	// Build body: return { f1: extract(get(jv, "f1")), f2: extract(get(jv, "f2")), ... };
-	const fieldKeys: string[] = [];
-	const fieldProps: Node[] = [];
-	fi = 0;
-	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
-		const fname = structType.typeNames[fi];
-		const ftype = structType.typeChildren[fi];
-		fieldKeys.push(fname);
-
-		const getCall = createNode(NodeKind.CallExpr, {
-			callee: createNode(NodeKind.Identifier, { name: "getDynamicField" }, syntheticTok),
-			arguments: [
-				createNode(NodeKind.Identifier, { name: "jv" }, syntheticTok),
-				createNode(NodeKind.StringLiteral, { value: fname }, syntheticTok),
-			],
-			isDirectCall: true,
-		}, syntheticTok);
-
-		const expr = jsonExtractExprFor(getCall, ftype, ctx, loc);
-		if (expr === null) {
-			addError(ctx, "JSON deserialization: unsupported field type for '" + fname + "' in struct '" + typeName + "' (kind " + (ftype !== null ? ftype.kind.toString() : "?") + ")",
-				loc.line, loc.column);
-			return null;
-		}
-		fieldProps.push(expr);
-		fi = fi + 1;
-	}
-
-	const resultObj = createNode(NodeKind.ObjectLiteral, {
-		keys: fieldKeys, properties: fieldProps, keyLocations: [],
-	}, syntheticTok);
-	resultObj.nodeType = structType;
-
-	const body = createNode(NodeKind.BlockStmt, { statements: [
-		createNode(NodeKind.ReturnStmt, { argument: resultObj }, syntheticTok),
-	] }, syntheticTok);
-
-	const fnNode = createNode(NodeKind.FunctionDecl, {
-		fnName: helperName,
-		params: ["jv"],
-		fnParamTypes: ["JsonValue"],
-		fnBody: body,
-		fnFlags: "",
-		fnReturnType: typeName,
-		fnDefaults: [],
-		nativeName: "",
-		nameLocation: loc,
-	}, syntheticTok);
-
-	return registerSynthesizedFunction(ctx, helperName, ["jv"], [jvType], body, structType, fnNode);
-}
-
-// JSON.stringify(person) → wraps `__jsonValueOf_Person(value)` with `stringify(...)`.
-// The recursive-helper structure (`__jsonValueOf_T` returning JsonValue) means
-// nested struct fields just call sibling helpers and compose into the parent's
-// `jsonObject(keys, values)` array — no special-casing per nesting depth.
-function generateJsonStringifyInstance(ctx: CheckerContext, node: Node, d: CallExprData, loc: SourceLocation): Type | null {
-	if (d.arguments.length < 1) return null;
-	const argType = d.arguments[0].nodeType;
-	if (argType === null) return null;
-	const structType = unwrapRef(argType);
-	if (structType.kind !== TypeKind.Struct || structType.typeNames === null || structType.typeChildren === null) return null;
-	const typeName = structType.typeName;
-	if (typeName === "") return null;
-
-	const isRef = argType.kind === TypeKind.Ref;
-	const helperName = "__jsonStringify_" + typeName;
-	const syntheticTok = createSyntheticToken(loc);
-
-	// Cache: a prior call site already synthesized — rewire and return.
-	const existing = lookupSymbol(ctx.table, helperName);
-	if (existing !== null) {
-		const callIdent = createNode(NodeKind.Identifier, { name: helperName }, syntheticTok);
-		callIdent.resolvedSym = existing;
-		callIdent.nodeType = existing.symbolType;
-		d.callee = callIdent;
-		node.resolvedSym = existing;
-		node.nodeType = stringType();
-		return stringType();
-	}
-
-	// Drive the recursive synthesis. `null` means an unsupported field type
-	// was encountered — `ensureJsonValueOfHelper` already reported the error.
-	if (ensureJsonValueOfHelper(structType, ctx, loc) === null) return null;
-
-	// Body: return stringify(__jsonValueOf_T(value), false);
-	const valueOfCall = createNode(NodeKind.CallExpr, {
-		callee: createNode(NodeKind.Identifier, { name: "__jsonValueOf_" + typeName }, syntheticTok),
-		arguments: [createNode(NodeKind.Identifier, { name: "value" }, syntheticTok)],
-		isDirectCall: true,
-	}, syntheticTok);
-	const strCall = createNode(NodeKind.CallExpr, {
-		callee: createNode(NodeKind.Identifier, { name: "stringify" }, syntheticTok),
-		arguments: [valueOfCall, createNode(NodeKind.BooleanLiteral, { boolValue: false }, syntheticTok)],
-		isDirectCall: true,
-	}, syntheticTok);
-
-	const body = createNode(NodeKind.BlockStmt, { statements: [
-		createNode(NodeKind.ReturnStmt, { argument: strCall }, syntheticTok),
-	] }, syntheticTok);
-
-	const fnNode = createNode(NodeKind.FunctionDecl, {
-		fnName: helperName, params: ["value"], fnParamTypes: [typeName],
-		fnBody: body, fnFlags: "", fnReturnType: "string",
-		fnDefaults: [], nativeName: "", nameLocation: loc,
-	}, syntheticTok);
-
-	const paramType = isRef ? argType : structType;
-	registerJsonInstance(ctx, helperName, ["value"], [paramType], body, stringType(), fnNode, node, d, loc);
-	node.nodeType = stringType();
-	return stringType();
-}
 
 function createSyntheticToken(loc: SourceLocation): Token {
 	return createToken(TokenKind.Ident, "", loc.line);

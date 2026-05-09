@@ -9,8 +9,8 @@
 //
 // This is an AST-to-AST transform — codegen sees only plain calls.
 //
-// Typed JSON (JsonParse/JsonStringify): specialization handled in checker phase
-// (generateJsonParseInstance/generateJsonStringifyInstance). Transform handles untyped + primitives.
+// JSON serialization is now user-land via std/serialize/json macros — no @builtin
+// kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, Type, TypeKind } from "../../ast/node";
 import { isNumeric, createResult, createArray, createPrimitive, stringType, unknownType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType } from "../../checker/types";
@@ -200,13 +200,6 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	const promiseRewrite = tryLowerPromiseBuiltin(node, builtinKind, ctx);
 	if (promiseRewrite !== null) return promiseRewrite;
 
-	if (builtinKind === "JsonParse") {
-		return rewriteJsonParse(node, ctx);
-	}
-	if (builtinKind === "JsonStringify") {
-		return rewriteJsonStringify(node, ctx);
-	}
-
 	if (builtinKind === "Echo") {
 		return rewriteEcho(node, ctx);
 	}
@@ -277,90 +270,6 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 	const literal = makeObjectLiteral(keys, values, loc);
 	literal.nodeType = resType;
 	return literal;
-}
-
-// ===== Typed JSON — @builtin("JsonParse") / @builtin("JsonStringify") =====
-// Typed struct paths handled by checker. This handles untyped parse + primitive stringify.
-
-function rewriteJsonParse(node: Node, ctx: TransformContext): Node {
-	const cd = node.data as CallExprData;
-	const loc = node.location;
-
-	const typeArgStr = findCallTypeArg(node);
-	// No explicit type arg → untyped JSON.parse(str) returning JsonValue
-	if (typeArgStr === "") {
-		return rewriteUntypedJsonParse(node, ctx);
-	}
-
-	// Typed path: already handled by checker (generateJsonParseInstance)
-	return node;
-}
-
-// Untyped JSON.parse(str) — returns Result<JsonValue, string>
-// Rewrites to parseJson(str) from std/core/json/parser.ms.
-function rewriteUntypedJsonParse(node: Node, ctx: TransformContext): Node {
-	const cd = node.data as CallExprData;
-	const loc = node.location;
-	if (cd.arguments.length < 1) return node;
-
-	// Pure MetaScript: JSON.parse(str) → parseJson(str)
-	// Resolve symbol so codegen emits the correct mangled name
-	const parseIdent = makeIdent("parseJson", loc);
-	if (ctx.checkerCtx !== null) {
-		const parseSym = lookupSymbol(ctx.checkerCtx.table, "parseJson");
-		if (parseSym !== null) {
-			parseIdent.resolvedSym = parseSym;
-			if (parseSym.symbolType !== null) parseIdent.nodeType = parseSym.symbolType;
-		}
-	}
-	const call = makeCall(parseIdent, cd.arguments, loc);
-	if (ctx.checkerCtx !== null) {
-		const jvSym = lookupSymbol(ctx.checkerCtx.table, "JsonValue");
-		if (jvSym !== null && jvSym.symbolType !== null && jvSym.symbolType.kind !== TypeKind.Unknown) {
-			call.nodeType = createResult(jvSym.symbolType, stringType());
-		}
-	}
-	return call;
-}
-
-function rewriteJsonStringify(node: Node, ctx: TransformContext): Node {
-	const cd = node.data as CallExprData;
-	const loc = node.location;
-
-	// Infer argument type
-	if (cd.arguments.length === 0) return node;
-	const argType = cd.arguments[0].nodeType !== null ? unwrapRef(cd.arguments[0].nodeType) : null;
-	if (argType === null) return node;
-
-	// Primitive types: stringify(jsonString/jsonNumber/jsonBool(value))
-	const primWrapper = match (argType.kind) {
-		TypeKind.String => "jsonString",
-		TypeKind.Boolean => "jsonBool",
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "jsonNumber",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
-			| TypeKind.Enum => "jsonInt",
-		_ => "",
-	};
-	if (primWrapper !== "") {
-		const wrapIdent = makeIdent(primWrapper, loc);
-		if (ctx.checkerCtx !== null) {
-			const ws = lookupSymbol(ctx.checkerCtx.table, primWrapper);
-			if (ws !== null) { wrapIdent.resolvedSym = ws; if (ws.symbolType !== null) wrapIdent.nodeType = ws.symbolType; }
-		}
-		const wrapped = makeCall(wrapIdent, cd.arguments, loc);
-		const strIdent = makeIdent("stringify", loc);
-		if (ctx.checkerCtx !== null) {
-			const ss = lookupSymbol(ctx.checkerCtx.table, "stringify");
-			if (ss !== null) { strIdent.resolvedSym = ss; if (ss.symbolType !== null) strIdent.nodeType = ss.symbolType; }
-		}
-		const result = makeCall(strIdent, [wrapped], loc);
-		result.nodeType = stringType();
-		return result;
-	}
-
-	// Typed struct/array stringify: already handled by checker (generateJsonStringifyInstance)
-	return node;
 }
 
 // ===== Tests =====
@@ -481,20 +390,3 @@ test "extern from identifier callee left for codegen" {
 	assert result === "parseInt";
 }
 
-test "anonymous object stringify basic" {
-	const prelude = "@builtin(\"JsonStringify\") extern function jsonStringify(value: number): string;";
-	const result = preludeLowerCallee(prelude, "jsonStringify({ x: 1, y: 2 });");
-	assert result === "__jsonStringify___anon2__xi__yi";
-}
-
-test "anonymous object stringify string field" {
-	const prelude = "@builtin(\"JsonStringify\") extern function jsonStringify(value: number): string;";
-	const result = preludeLowerCallee(prelude, "jsonStringify({ name: \"hi\" });");
-	assert result === "__jsonStringify___anon1__names";
-}
-
-test "anonymous object stringify mixed types" {
-	const prelude = "@builtin(\"JsonStringify\") extern function jsonStringify(value: number): string;";
-	const result = preludeLowerCallee(prelude, "jsonStringify({ a: 1, b: \"x\" });");
-	assert result === "__jsonStringify___anon2__ai__bs";
-}

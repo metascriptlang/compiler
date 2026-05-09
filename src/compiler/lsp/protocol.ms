@@ -9,8 +9,8 @@
 // the full RFC 8259 escape spec (including `\uXXXX` + surrogate pairs).
 // Hand-rolled escape handling here would re-implement (and inevitably
 // drift from) std/core/json/parser.ms.
-import { parseJson } from "std/core/json/parser";
-import { JsonKind } from "std/core/json/types";
+import { parseJson } from "std/serialize/json/parser";
+import { JsonKind } from "std/serialize/json/types";
 
 
 // ===== JSON Building =====

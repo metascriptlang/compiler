@@ -122,7 +122,7 @@ export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, 
 		}
 	}
 
-	return createRaiserFunction(fnName, s.code, s.constants, arity, 0, s.nextReg);
+	return createRaiserFunction(fnName, s.code, s.constants, arity, 0, s.maxRegSeen);
 }
 
 // --- Class constructor compilation ---
@@ -183,7 +183,7 @@ function compileClassConstructor(
 	// Always return this
 	emitRet(s, thisReg);
 
-	return createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.nextReg);
+	return createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.maxRegSeen);
 }
 
 // --- Project-level compilation ---
@@ -385,7 +385,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], checkerCtx: 
 			}
 		}
 
-		const initFunc = createRaiserFunction("__init_" + mi, s.code, s.constants, 0, 0, s.nextReg);
+		const initFunc = createRaiserFunction("__init_" + mi, s.code, s.constants, 0, 0, s.maxRegSeen);
 		functions.push(initFunc);
 		initIndices.push(functions.length - 1);
 	}
@@ -403,7 +403,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], checkerCtx: 
 		emitLoadConst(entryS, 0, raiserNil());
 	}
 	emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 0, 0));
-	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.nextReg);
+	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.maxRegSeen);
 	functions.push(entryFunc);
 
 	return createRaiserModule("project", functions, functions.length - 1);

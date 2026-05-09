@@ -493,7 +493,19 @@ export function getGenericDecl(name: string): string {
 		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].val;
 		i = i + 1;
 	}
-	return "";
+	// Built-in generic types — never parsed, so never registered via
+	// addGenericDecl. Hardcode their param names so instantiateGenericBody
+	// can populate typeReturn for them. Without this, peelToStructOrUnion
+	// falls back to the un-substituted typeExtra and downstream narrowing
+	// leaks GenericParam (Bug 16). The alternative — substituting typeExtra
+	// inside substituteType — costs ~20× compile time on self-host and is
+	// rejected.
+	return match (name) {
+		"Result" => "T,E",
+		"Promise" => "T",
+		"Iterator" => "T",
+		_ => "",
+	};
 }
 
 // Get "|"-joined field names for a generic interface/class

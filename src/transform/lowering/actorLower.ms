@@ -324,6 +324,7 @@ function emitActorStruct(node: Node, d: ActorDeclData, loc: SourceLocation): Nod
 		propType: "int64",
 		propIsStatic: false,
 		propIsReadonly: true,
+		propVisibility: "",
 		propInitializer: null as unknown as Node,
 	}, syntheticToken(loc));
 	pidProp.nodeType = getSysType(TypeKind.Int64);

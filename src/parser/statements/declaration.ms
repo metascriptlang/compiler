@@ -4,6 +4,7 @@
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
+import { splitTopLevel } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike, isPropertyName } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
@@ -737,10 +738,24 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	}
 
 	// Optional extends: interface X extends Y, Z { ... }
+	// Capture each parent type expression (e.g. "Y", "Container<int>", "A<T>")
+	// as a raw string. Comma-separated at top level; `<>` nesting tracked.
+	const extendsList: string[] = [];
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
 		advance(state);
 		while (!isAtEnd(state) && current(state).kind !== TokenKind.LBrace) {
-			advance(state);
+			const parentStart = state.position;
+			let depth = 0;
+			while (!isAtEnd(state)) {
+				const tk = current(state).kind;
+				if (depth === 0 && (tk === TokenKind.Comma || tk === TokenKind.LBrace)) break;
+				if (tk === TokenKind.Lt) depth = depth + 1;
+				else if (tk === TokenKind.Gt) depth = depth - 1;
+				advance(state);
+			}
+			const parentExpr = collectTokenText(state, parentStart, state.position).trim();
+			if (parentExpr !== "") extendsList.push(parentExpr);
+			if (!isAtEnd(state) && current(state).kind === TokenKind.Comma) advance(state);
 		}
 	}
 
@@ -795,6 +810,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		interfaceName: name,
 		interfaceFields: fields,
 		interfaceFieldTypes: fieldTypes,
+		interfaceExtends: extendsList,
 		// nameLoc (from nameToken) is preferred; fall back to keyword token for legacy callers.
 		nameLocation: nameLoc !== null ? nameLoc : makeLocFromToken(token),
 	}, token);
@@ -818,6 +834,43 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 	let genericNames = "";
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
 		genericNames = captureGenericParams(state);
+	}
+
+	// Alias form: `struct X = TypeExpr;` or `struct X = A & B;` — composes
+	// fields from the RHS type expressions. Body is implicit empty; parent
+	// list captured into interfaceExtends. See LANG.md §4.6.
+	// Brace depth tracked so anonymous object operands `{ role: string; }` —
+	// which contain semicolons — don't terminate the RHS prematurely.
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
+		advance(state);
+		const rhsStart = state.position;
+		let braceDepth = 0;
+		while (!isAtEnd(state)) {
+			const tk = current(state).kind;
+			if (tk === TokenKind.LBrace) braceDepth = braceDepth + 1;
+			else if (tk === TokenKind.RBrace) braceDepth = braceDepth - 1;
+			else if (tk === TokenKind.Semicolon && braceDepth === 0) break;
+			advance(state);
+		}
+		const rhsExpr = collectTokenText(state, rhsStart, state.position).trim();
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) advance(state);
+		const parts = splitTopLevel(rhsExpr, "&");
+		const aliasExtends: string[] = [];
+		for (const p of parts) {
+			const tp = p.trim();
+			if (tp !== "") aliasExtends.push(tp);
+		}
+		if (genericNames !== "") addGenericDecl(nameToken.value, genericNames);
+		const aliasNode = createNode(nodeKind, {
+			interfaceName: nameToken.value,
+			interfaceFields: [],
+			interfaceFieldTypes: [],
+			interfaceExtends: aliasExtends,
+			nameLocation: nameLoc,
+		}, token);
+		aliasNode.typeExprs = [];
+		aliasNode.paramLocations = [];
+		return Result.ok(aliasNode);
 	}
 
 	return parseInterfaceBody(state, nameToken.value, token, genericNames, nodeKind, nameLoc);
@@ -861,16 +914,26 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		}
 	}
 
-	// Optional extends: class Foo extends Bar
+	// Optional extends: class Foo extends Bar / class Foo extends Bar<T>
 	let extendsName = "";
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
 		advance(state);
+		const extStart = state.position;
 		if (isIdentLike(current(state))) {
-			extendsName = current(state).value;
 			advance(state);
+			// Capture generic args via depth-tracked skip — preserved in extendsName.
+			if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+				let depth = 1;
+				advance(state);
+				while (!isAtEnd(state) && depth > 0) {
+					const tk = current(state).kind;
+					if (tk === TokenKind.Lt) depth = depth + 1;
+					else if (tk === TokenKind.Gt) depth = depth - 1;
+					advance(state);
+				}
+			}
+			extendsName = collectTokenText(state, extStart, state.position).trim();
 		}
-		// Skip generic args on base class: extends Bar<T>
-		skipGenericParams(state);
 	}
 
 	// Optional implements: class Foo implements Bar, Baz — skip
@@ -990,10 +1053,16 @@ function parseClassMember(state: ParserState): NodeResult {
 		}, memberToken));
 	}
 
-	// Skip access modifiers: public, private, protected
-	if (current(state).kind === TokenKind.Public ||
-		current(state).kind === TokenKind.Private ||
-		current(state).kind === TokenKind.Protected) {
+	// Capture access modifiers: public, private, protected
+	let memberVisibility = "";
+	if (current(state).kind === TokenKind.Public) {
+		memberVisibility = "public";
+		advance(state);
+	} else if (current(state).kind === TokenKind.Private) {
+		memberVisibility = "private";
+		advance(state);
+	} else if (current(state).kind === TokenKind.Protected) {
+		memberVisibility = "protected";
 		advance(state);
 	}
 
@@ -1046,7 +1115,7 @@ function parseClassMember(state: ParserState): NodeResult {
 	// Lookahead must use peek() to skip comments, not raw state.tokens[pos+1]
 	if ((current(state).kind === TokenKind.Get || current(state).kind === TokenKind.Set) &&
 		isIdentLike(peek(state, 1))) {
-		return parseClassAccessor(state, memberIsStatic, memberFlags);
+		return parseClassAccessor(state, memberIsStatic, memberFlags, memberVisibility);
 	}
 
 	// Regular member: name followed by ( for method, or : / = / ; for property
@@ -1063,7 +1132,7 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Method — early return (LParen for regular, Lt for generic like parse<T>(...))
 	if (!isAtEnd(state) && (current(state).kind === TokenKind.LParen || current(state).kind === TokenKind.Lt)) {
-		return parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags);
+		return parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags, memberVisibility);
 	}
 
 	// Property — capture type and optional initializer
@@ -1081,6 +1150,7 @@ function parseClassMember(state: ParserState): NodeResult {
 		propType,
 		propIsStatic: memberIsStatic,
 		propIsReadonly: memberIsReadonly,
+		propVisibility: memberVisibility,
 		propInitializer: propInit,
 	}, nameToken);
 	propNode.typeExpr = propTypeExpr;
@@ -1111,7 +1181,7 @@ function parseClassConstructor(state: ParserState): NodeResult {
 	return Result.ok(ctorNode);
 }
 
-function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string): NodeResult {
+function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string, visibility: string): NodeResult {
 	const accToken = current(state);
 	const accKind = current(state).value;
 	advance(state);
@@ -1121,6 +1191,7 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 	const raw = parseParamList(state, `${accKind}_${accName}`);
 	const accParamTypeExprs = getLastParamTypeExprs();
 	const accParamLocs = getLastParamLocations();
+	const accDefaults = getLastParsedDefaults();
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
 	const methodReturnType = captureOptionalType(state);
@@ -1134,7 +1205,10 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 		methodIsStatic: isStatic,
 		nameLocation: makeLocFromToken(accNameToken),
 		methodFlags: flags,
+		methodVisibility: visibility,
 		methodReturnType,
+		methodDefaults: accDefaults,
+		nativeName: "",
 	}, accToken);
 	accNode.typeExpr = methodReturnTypeExpr;
 	accNode.typeExprs = accParamTypeExprs;
@@ -1142,7 +1216,7 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 	return Result.ok(accNode);
 }
 
-function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean, flags: string): NodeResult {
+function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean, flags: string, visibility: string): NodeResult {
 	// Capture optional generic params: method<T>(...) — same as regular function parser
 	const genericNames = captureGenericParams(state);
 	if (genericNames !== "") {
@@ -1152,6 +1226,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 	const raw = parseParamList(state, nameToken.value);
 	const methodParamTypeExprs = getLastParamTypeExprs();
 	const methodParamLocs = getLastParamLocations();
+	const methodDefaults = getLastParsedDefaults();
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
 	// Optional return type
@@ -1174,7 +1249,9 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 			methodBody: createNode(NodeKind.BlockStmt, { statements: [] }, nameToken),
 			methodIsStatic: isStatic,
 			methodFlags: flags,
+			methodVisibility: visibility,
 			methodReturnType,
+			methodDefaults,
 			nativeName: methodNativeName,
 			nameLocation: makeLocFromToken(nameToken),
 		}, nameToken);
@@ -1194,7 +1271,9 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 			methodBody: createNode(NodeKind.BlockStmt, { statements: [] }, nameToken),
 			methodIsStatic: isStatic,
 			methodFlags: flags,
+			methodVisibility: visibility,
 			methodReturnType,
+			methodDefaults,
 			nativeName: "",
 			nameLocation: makeLocFromToken(nameToken),
 		}, nameToken);
@@ -1211,7 +1290,9 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 		methodBody: body,
 		methodIsStatic: isStatic,
 		methodFlags: flags,
+		methodVisibility: visibility,
 		methodReturnType,
+		methodDefaults,
 		nativeName: "",
 		nameLocation: makeLocFromToken(nameToken),
 	}, nameToken);

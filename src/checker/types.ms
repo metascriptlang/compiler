@@ -831,30 +831,41 @@ export function findVariantByStringDiscriminant(unionType: Type | null, discFiel
 	return findVariantByLiteralDiscriminant(unionType, discFieldName, TypeKind.StringLiteral, litValue);
 }
 
-// Maybe<T> — Reference: Maybe/Option parity. Wrapper struct { value: T, present: bool }.
-// Only for value-type structs. Ref/Ptr types are inherently nullable (NULL pointer). Cached by name.
+// Maybe<T> — Reference: Nim's Option[T] (~/projects/nim/lib/pure/options.nim).
+// Wrapper struct { value: T, present: bool } for non-pointer types.
+// Ref/Ptr types are inherently nullable (NULL pointer = sentinel) — no wrapper.
+// Cached per-inner-type identity.
 const _maybeCache: Type[] = [];
 const _maybeCacheNames: string[] = [];
+
+// Stable cache key for Maybe<T> dedup. Named types (struct, interface, class,
+// generic instances) have a non-empty typeName — use it. Primitives created via
+// createPrimitive() have typeName === "" — disambiguate via TypeKind ordinal so
+// Maybe<int32> ≠ Maybe<float64> ≠ Maybe<string> etc.
+function maybeCacheKey(inner: Type): string {
+	if (inner.typeName !== "") return inner.typeName;
+	return "p" + (inner.kind as number);
+}
 
 export function createMaybeType(inner: Type): Type {
 	// Pointer types are inherently nullable — no wrapper needed (reference parity: nullable pointers)
 	if (inner.kind === TypeKind.Ref || inner.kind === TypeKind.Ptr) return inner;
-	const name = inner.typeName;
+	const key = maybeCacheKey(inner);
 	let i = 0;
 	while (i < _maybeCacheNames.length) {
-		if (_maybeCacheNames[i] === name) return _maybeCache[i];
+		if (_maybeCacheNames[i] === key) return _maybeCache[i];
 		i += 1;
 	}
 	const t = emptyType();
 	t.kind = TypeKind.Struct;
-	t.typeName = "Maybe_" + name;
+	t.typeName = "Maybe_" + key;
 	t.typeNames = ["value", "present"];
 	t.typeChildren = [inner, booleanType()];
 	t.typeFlags = (TypeFlag.IsStruct | TypeFlag.IsMaybe) as int32;
 	t.typeReturn = inner;    // store inner type for unwrapping
 	propagateToOwner(t, inner);
 	_maybeCache.push(t);
-	_maybeCacheNames.push(name);
+	_maybeCacheNames.push(key);
 	return t;
 }
 
@@ -1225,6 +1236,22 @@ export function isMaybeType(t: Type | null): boolean {
 	return (t.typeFlags & TypeFlag.IsMaybe) !== 0;
 }
 
+// Whether `t | null` should wrap into Maybe<T> at the resolver. Pointers
+// (Ref/Ptr) stay as Union — codegen unwraps to a bare pointer using NULL
+// as the natural sentinel. Null itself is degenerate. Everything else
+// (struct, primitive, string) needs the `{ value, present }` wrapper
+// because there is no spare bit pattern for "absent". Mirrors Nim's
+// SomePointer-vs-value-type split (~/projects/nim/lib/pure/options.nim:90-99).
+export function isMaybeWrappable(t: Type | null): boolean {
+	if (t === null) return false;
+	if (t.kind === TypeKind.Null) return false;
+	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return false;
+	if (isStructType(t)) return true;
+	if (isPrimitiveKind(t.kind)) return true;
+	if (t.kind === TypeKind.String) return true;
+	return false;
+}
+
 export function unwrapMaybeType(t: Type): Type {
 	const inner = t.typeReturn;
 	return inner !== null ? inner : t;
@@ -1499,12 +1526,15 @@ export function substituteType(t: Type | null, paramName: string, concrete: Type
 			TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Struct => substituteStruct(t, paramName, concrete),
 			TypeKind.GenericInstance => {
-				// Substitute typeChildren AND the substituted body (typeReturn).
-				// Pattern parity with all other compound kinds (Array/Union/Function/Ref/...):
-				// they substitute their inner type-children fully. Earlier code nulled
-				// typeReturn here, leaving callers to re-run instantiateGenericBody —
-				// most don't, so peelToStructOrUnion fell back to the un-substituted
-				// typeExtra and downstream (narrowing, getProperty) leaked GenericParam.
+				// Substitute typeChildren and typeReturn (the instantiated body
+				// produced by instantiateGenericBody). typeExtra (the
+				// un-instantiated base) is intentionally NOT walked here — that
+				// would cost ~20× compile time on self-host. Bug 16's narrowing
+				// leak is fixed at the read site instead: callers like
+				// inferGenericReturnWithExplicit + peelToStructOrUnion populate
+				// typeReturn lazily via instantiateGenericBody, which now has
+				// param-name entries for built-in Result/Promise/Iterator
+				// (see parser/context.ms `getGenericDecl` fallbacks).
 				const gi = copyTypeForSubst(t);
 				substituteChildrenInPlace(gi, paramName, concrete);
 				if (gi.typeReturn !== null) {
@@ -1547,6 +1577,21 @@ export interface UnifyBindings {
 
 export function createUnifyBindings(): UnifyBindings {
 	return { names: [], types: [] };
+}
+
+// Merge `from` into `into`, skipping any name already present. Stable union:
+// arg-driven bindings keep priority, explicit-type-arg bindings fill gaps.
+export function mergeUnifyBindings(into: UnifyBindings, from: UnifyBindings): void {
+	for (let i = 0; i < from.names.length; i += 1) {
+		let alreadyBound = false;
+		for (const existing of into.names) {
+			if (existing === from.names[i]) { alreadyBound = true; break; }
+		}
+		if (!alreadyBound) {
+			into.names.push(from.names[i]);
+			into.types.push(from.types[i]);
+		}
+	}
 }
 
 let unifyDepth = 0;
@@ -2265,6 +2310,39 @@ test "instantiateGeneric multi-param" {
 	assert ok !== null && ok.kind === TypeKind.Number;
 	const err = getResultErrType(result);
 	assert err !== null && err.kind === TypeKind.String;
+}
+
+// Bug 16 regression: substituteType keeps typeExtra un-substituted (would cost
+// ~20× compile time on self-host), so callers that need the substituted body
+// must invoke instantiateGenericBody themselves. Built-in Result/Promise/Iterator
+// have no parser-side addGenericDecl entry — they get their param names from
+// the hardcoded fallback in `parser/context.ms:getGenericDecl`.
+//
+// Pre-fix, callers like inferGenericReturn / inferGenericReturnWithExplicit
+// either skipped the populate or had no way to look up "T,E" for Result, so
+// peelToStructOrUnion fell back to the un-substituted typeExtra and downstream
+// narrowing leaked GenericParam — forcing getDynamicField synthesis on
+// `r.value.field` accesses (visible warning: `incompatible pointer types
+// passing 'Person **' to parameter of type 'JsonValueData *'`).
+test "instantiateGenericBody populates substituted Result body" {
+	const r = createResult(createGenericParam("T"), stringType());
+	// Bare Result<T, string> — typeReturn is null (no eager body).
+	assert r.typeReturn === null;
+	assert r.typeExtra !== null;
+	const sub = substituteType(r, "T", numberType());
+	assert sub.typeChildren[0].kind === TypeKind.Number;
+	// substituteType is intentionally cheap — typeReturn stays null.
+	assert sub.typeReturn === null;
+	// Caller-side populate (mirrors the fix in inferGenericReturn /
+	// inferGenericReturnWithExplicit). After this, peelToStructOrUnion sees
+	// the substituted body via typeReturn.
+	instantiateGenericBody(sub, "T,E");
+	assert sub.typeReturn !== null;
+	const body = peelToStructOrUnion(sub);
+	assert body !== null && body.kind === TypeKind.Union;
+	const okVariant = body.typeChildren[0];
+	const valueField = findFieldInVariant(okVariant, "value");
+	assert valueField !== null && valueField.kind === TypeKind.Number;
 }
 
 test "primitive unchanged" {

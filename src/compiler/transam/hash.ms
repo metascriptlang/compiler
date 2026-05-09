@@ -28,7 +28,7 @@ import {
 	DeferStmtData, ThrowStmtData, TryCatchStmtData,
 	MacroInvocationData, TestDeclData, AssertStmtData,
 	QuoteExprData, ComptimeBlockData,
-	TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData,
+	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
 	SpliceManyData,
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
@@ -454,6 +454,9 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.TypeUnion => {
 			h = hNodes(h, (node.data as TypeUnionData).typExprMembers);
+		},
+		NodeKind.TypeIntersection => {
+			h = hNodes(h, (node.data as TypeIntersectionData).typExprMembers);
 		},
 		NodeKind.TypeFunction => {
 			const d = node.data as TypeFunctionData;

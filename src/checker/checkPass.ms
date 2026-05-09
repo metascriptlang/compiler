@@ -7,7 +7,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { unknownType, charType, float64Type, voidType, nullType, createFunction, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
-import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords } from "./context";
+import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
@@ -353,7 +353,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	// They're stored as raw AST and only checked when instantiated with concrete types
 	// (via instantiateGenericFunction → checkFunctionBody). This prevents creating
 	// bad instantiations (push__unknown) from unresolved GenericParam types.
-	const isGeneric = d.fnFlags !== "" && d.fnFlags.indexOf("gen:") >= 0;
+	const isGeneric = isGenericFn(d.fnFlags);
 	if (isGeneric) {
 		sym.state = SymbolState.Checked;
 		return;
@@ -1550,11 +1550,63 @@ function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string,
 	}
 }
 
-// Load prelude sub-modules referenced by re-exports (export { X } from "./sub")
-// Reference-aligned: each sub-module is fully compiled (3 passes) before the parent.
-// Exports are registered in ExportRegistry so the parent's collectImport resolves them.
-// Note: compile.ms loadPreludeModules also loads these into the module graph for codegen.
-// Both paths are needed: checker needs types early, codegen needs compiled C later.
+// Strip the trailing module extension to recover the bare path. The bare
+// form is what `resolveImportSourcePath` and relative-import resolution
+// produce, so the registry must accept both. Order matters: longer
+// suffixes (`/index.ms`) must precede shorter ones (`.ms`) so the
+// `/index` form isn't misread as a bare `.ms`.
+function stripModuleExtension(path: string): string {
+	for (const suffix of ["/index.ms", "/index.cms", ".ms", ".cms"]) {
+		if (path.endsWith(suffix)) return path.slice(0, path.byteLength - suffix.byteLength);
+	}
+	return path;
+}
+
+// Resolve a sub-module specifier to (sourcePath, sourceText). Handles both
+// relative (`./sub`, `../sub`) and absolute std paths (`std/serialize/json/decode`).
+// Returns ("", "") if the file isn't readable. Centralized so both relative
+// re-exports and absolute direct imports share the same resolution rules.
+function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: string): { path: string, source: string } {
+	let basePath = "";
+	if (specifier.length >= 2 && specifier.charAt(0) === ".") {
+		// Relative: resolve against the index file's directory
+		let rel = specifier;
+		if (rel.length > 2 && rel.slice(0, 2) === "./") {
+			rel = rel.slice(2, rel.length);
+		}
+		basePath = indexDir + "/" + rel;
+	} else if (specifier.length > 4 && specifier.slice(0, 4) === "std/" && stdPath !== "") {
+		// Absolute std path: stdPath is the std/ root
+		basePath = stdPath + "/" + specifier.slice(4, specifier.length);
+	} else {
+		return { path: "", source: "" };
+	}
+
+	for (const ext of [".ms", ".cms", "/index.ms", "/index.cms"]) {
+		const path = basePath + ext;
+		const src = try readFile(path) catch "";
+		if (src.length > 0) return { path, source: src };
+	}
+	if (basePath.endsWith(".h")) {
+		const hSrc = try readFile(basePath) catch "";
+		if (hSrc.length > 0) return { path: basePath, source: translateCHeader(hSrc, []) };
+	}
+	return { path: "", source: "" };
+}
+
+// Load prelude sub-modules referenced by:
+//   - relative re-exports: `export { X } from "./sub"`
+//   - relative direct imports: `import { X } from "./sub"`
+//   - absolute direct imports from std/: `import { X } from "std/serialize/json/decode"`
+//
+// Each sub-module is fully compiled (3 passes) before the parent runs its
+// own checking. Exports are registered in ExportRegistry so the parent's
+// collectImport resolves macro symbols (kind, body, params) instead of
+// falling back to Variable. Reference-aligned: matches the dep-first
+// ordering compile.ms's loadPreludeModules uses for the module graph.
+//
+// Cycle/dedup: skips if subResolved is already in ExportRegistry (compiled
+// earlier) — preludes form a DAG, not a tree.
 function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: string, stdPath: string): void {
 	if (program.kind !== NodeKind.Program) return;
 	const pd = program.data as ProgramData;
@@ -1562,39 +1614,39 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 	if (dir === "") return;
 
 	for (const stmt of pd.programStmts) {
-		if (stmt.kind !== NodeKind.ExportDecl) continue;
-		const ed = stmt.data as ExportDeclData;
-		if (ed.exportedDecl === null) continue;
-		if (ed.exportedDecl.kind !== NodeKind.ImportDecl) continue;
-		const id = ed.exportedDecl.data as ImportDeclData;
-		// Only relative imports (./sub or ../sub)
-		if (id.importSource.length < 2 || id.importSource.charAt(0) !== ".") continue;
-
-		// Resolve path relative to index file (strip ./ prefix)
-		let importRel = id.importSource;
-		if (importRel.length > 2 && importRel.slice(0, 2) === "./") {
-			importRel = importRel.slice(2, importRel.length);
-		}
-		const subPath = dir + "/" + importRel;
-		let subSrc = try readFile(subPath + ".ms") catch "";
-		let subResolved = subPath + ".ms";
-		if (subSrc.length === 0) {
-			subSrc = try readFile(subPath + ".cms") catch "";
-			subResolved = subPath + ".cms";
-		}
-		// .h fallback: translate C header to MetaScript extern declarations
-		if (subSrc.length === 0 && subPath.endsWith(".h")) {
-			const hSrc = try readFile(subPath) catch "";
-			if (hSrc.length > 0) {
-				subSrc = translateCHeader(hSrc, []);
-				subResolved = subPath;
+		// Two shapes carry an import specifier we may need to pre-load:
+		//   ExportDecl wrapping ImportDecl  →  re-export (`export { X } from`)
+		//   ImportDecl directly             →  direct import (`import { X } from`)
+		let importDeclNode: Node = null as unknown as Node;
+		if (stmt.kind === NodeKind.ExportDecl) {
+			const ed = stmt.data as ExportDeclData;
+			if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.ImportDecl) {
+				importDeclNode = ed.exportedDecl;
 			}
+		} else if (stmt.kind === NodeKind.ImportDecl) {
+			importDeclNode = stmt;
 		}
+		if (importDeclNode === null) continue;
+
+		const id = importDeclNode.data as ImportDeclData;
+		const resolved = resolvePreludeSubSource(id.importSource, dir, stdPath);
+		const subResolved = resolved.path;
+		let subSrc = resolved.source;
 		if (subSrc.length === 0) continue;
+
+		// Dedup: if already loaded into the shared registry, skip. Preludes
+		// can reference the same module via different paths (e.g., one prelude
+		// imports std/serialize/json/decode, another re-exports it relatively).
+		if (findModuleExports(ctx.exportRegistry, subResolved) !== null) continue;
 		// Inline .h imports in sub-module source before parsing
 		subSrc = inlineHeaderImports(subSrc, subResolved, createFileSystemProvider());
 		const subPr = parseSource(subSrc);
 		if (!subPr.ok) continue;
+		// Recurse: pre-load THIS sub-module's own prelude-resolvable imports
+		// before running its 3 passes. Ensures e.g. std/serialize/json/decode's import
+		// of std/meta is loaded before std/serialize/json/decode is checked, so its
+		// macro body has the type-meta symbols resolved.
+		loadPreludeSubModules(ctx, subPr.value, subResolved, stdPath);
 
 		// Compile sub-module in a temporary context (separate scope, shared cache)
 		const subCtx = createContextWithCache(ctx.table.identCache);
@@ -1632,8 +1684,12 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 			}
 		}
 		registerModuleExports(ctx.exportRegistry, subResolved, subExports);
-		// Also register without extension so collectImport's relative path resolution finds it
-		registerModuleExports(ctx.exportRegistry, subPath, subExports);
+		// Also register the bare path so collectImport's relative resolution
+		// (which strips the extension) hits the same entry.
+		const bare = stripModuleExtension(subResolved);
+		if (bare !== subResolved) {
+			registerModuleExports(ctx.exportRegistry, bare, subExports);
+		}
 
 		// Also register sub-module extensions into parent context
 		if (subCtx.extensionRegistry !== null && ctx.extensionRegistry !== null) {

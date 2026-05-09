@@ -21,6 +21,7 @@ import {
 	createUnion, unknownType, nullType, neverType,
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
+	isMaybeType, unwrapMaybeType,
 } from "./types";
 import { typeRelation, TypeRelation } from "./compat";
 
@@ -967,11 +968,14 @@ function narrowTypeByInstanceof(t: Type | null, left: Node, right: Node, refNode
 // ===== Truthiness helpers =====
 
 // Remove Null variants from a type. For unions, filters out TypeKind.Null
-// members and reconstructs. Non-union, non-null types pass through unchanged
-// (non-nullable values aren't affected by truthiness narrowing).
+// members and reconstructs. For Maybe<T> wrappers (resolver collapses
+// non-pointer T|null into Maybe<T>), peels to inner T. Non-union, non-null,
+// non-maybe types pass through unchanged (non-nullable values aren't affected
+// by truthiness narrowing).
 function removeNullFromType(t: Type | null): Type | null {
 	if (t === null) return t;
 	if (t.kind === TypeKind.Null) return neverType();
+	if (isMaybeType(t)) return unwrapMaybeType(t);
 	if (t.kind !== TypeKind.Union || t.typeChildren === null) return t;
 	const remaining: Type[] = [];
 	for (const v of t.typeChildren) {
@@ -984,10 +988,13 @@ function removeNullFromType(t: Type | null): Type | null {
 }
 
 // Extract the Null variant from a type. For unions, returns the Null member
-// if present. Non-union types or unions without Null return t unchanged.
+// if present. For Maybe<T> wrappers, returns Null (the falsy branch in
+// `if (!x)` narrows the Maybe to its absent state). Non-union/non-maybe types
+// or unions without Null return t unchanged.
 function extractNullFromType(t: Type | null): Type | null {
 	if (t === null) return t;
 	if (t.kind === TypeKind.Null) return t;
+	if (isMaybeType(t)) return nullType();
 	if (t.kind !== TypeKind.Union || t.typeChildren === null) return t;
 	for (const v of t.typeChildren) {
 		if (v.kind === TypeKind.Null) return v;
@@ -1229,37 +1236,11 @@ export function narrowTypeByDiscriminantProperty(
 function narrowByLiteralEquality(t: Type | null, literal: Node, assumeTrue: boolean): Type | null {
 	if (t === null) return t;
 	if (isNullLiteral(literal)) {
-		if (t.kind !== TypeKind.Union) {
-			// Simple nullable: x: T | null. Filter by assumeTrue.
-			if (t.kind === TypeKind.Null) {
-				return assumeTrue ? t : neverType();
-			}
-			return t;
-		}
-		// Union: filter out (or keep) the null variant.
-		const remaining: Type[] = [];
-		let hasNull = false;
-		let nullVariant: Type | null = null;
-		if (t.typeChildren !== null) {
-			for (const v of t.typeChildren) {
-				if (v === null) continue;
-				if (v.kind === TypeKind.Null) {
-					hasNull = true;
-					nullVariant = v;
-				} else {
-					remaining.push(v);
-				}
-			}
-		}
-		if (!hasNull) return t;  // nothing to narrow
-		if (assumeTrue) {
-			// x === null: narrow to just the null variant
-			return nullVariant;
-		}
-		// x !== null: drop the null variant
-		if (remaining.length === 0) return t;
-		if (remaining.length === 1) return remaining[0];
-		return createUnion(remaining);
+		// Delegate to the shared helpers — they uniformly handle Union(T,null),
+		// Maybe<T> wrappers, bare Null, and inert non-nullable types.
+		// assumeTrue (=== null) keeps the null branch via extractNullFromType;
+		// !assumeTrue (!== null) removes it via removeNullFromType.
+		return assumeTrue ? extractNullFromType(t) : removeNullFromType(t);
 	}
 	// Other literal kinds: no narrowing in Phase 2 (Phase 6 adds string/number literal narrowing)
 	return t;

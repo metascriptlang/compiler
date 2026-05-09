@@ -307,7 +307,7 @@ test "E2E C: JsonValue dynamic access via protocol after migration" {
 	// resolves through the protocol synthesis (not the deleted hardcoded path).
 	const src = `
 function main(): void {
-	const r = JSON.parse("{\\"name\\":\\"Alice\\"}");
+	const r = JSON.parseValue("{\\"name\\":\\"Alice\\"}");
 	if (r.ok) {
 		const v = r.value;
 		// dynamic access via protocol

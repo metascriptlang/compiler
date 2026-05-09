@@ -276,6 +276,7 @@ export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[
 export function makeInterfaceDeclFromTypes(name: string, fields: string[], fieldTypes: string[], resolvedTypes: Type[], loc: SourceLocation): Node {
 	const n = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: name, interfaceFields: fields, interfaceFieldTypes: fieldTypes,
+		interfaceExtends: [] as string[],
 		nameLocation: loc,
 	}, syntheticToken(loc));
 	n.nodeType = createStruct(name, fields, resolvedTypes, true);

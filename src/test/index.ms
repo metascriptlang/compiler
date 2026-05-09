@@ -33,6 +33,9 @@ import "./lang/multimod/main";
 // -- regression suite (one file per fixed bug) --
 import "./fixedbugs/index";
 
+// -- formatter roundtrip (parse(src) === parse(fmt(src))) --
+import "./fmt/index";
+
 // -- E2E pipeline tests --
 import "./c/variables";
 import "./c/functions";
@@ -47,6 +50,9 @@ import "./c/httpServer";
 import "./c/actor";
 import "./c/json";
 import "./c/protocols";
+import "./c/typeIntrospection";
+import "./c/multidecl";
+import "./c/toycodec";
 import "./c/drcLifecycle";
 import "./js/basic";
 import "./js/result";

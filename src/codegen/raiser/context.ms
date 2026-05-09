@@ -70,6 +70,13 @@ export interface RaiserCompState {
 	code: RaiserInstruction[];
 	constants: RaiserValue[];
 	nextReg: number;
+	// High-water mark of registers ever allocated. resetTemps shrinks
+	// nextReg back to (max local reg + 1) between statements, so the
+	// final value of nextReg reflects only the live locals, NOT the peak
+	// register count needed at runtime. The VM uses this to size each
+	// function's call frame — without an accurate peak, it would either
+	// over-allocate (waste) or under-allocate (out-of-bounds on temp regs).
+	maxRegSeen: number;
 	locals: RaiserLocals;
 	loopStack: RaiserLoopStack;
 	funcMap: RaiserFuncMap;
@@ -94,7 +101,7 @@ export function createCompState(): RaiserCompState {
 	const floatFlags: number[] = [];
 	for (let i = 0; i < 256; i = i + 1) { floatFlags.push(0); }
 	const regFlags: RaiserRegFlags = { isFloat: floatFlags };
-	return { code, constants, nextReg: 0, locals, loopStack, funcMap, enumMap, builtins, regFlags };
+	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack, funcMap, enumMap, builtins, regFlags };
 }
 
 export function emitInst(s: RaiserCompState, inst: RaiserInstruction): void {
@@ -110,13 +117,28 @@ export function addConst(s: RaiserCompState, val: RaiserValue): number {
 export function allocReg(s: RaiserCompState): number {
 	const r = s.nextReg;
 	s.nextReg = s.nextReg + 1;
+	// Track high-water mark — resetTemps() will lower nextReg back, but the
+	// VM needs to know the peak we ever reached to size each call frame.
+	if (s.nextReg > s.maxRegSeen) s.maxRegSeen = s.nextReg;
 	return r;
 }
 
 // Reset temporary registers after each statement.
-// Locals (R[0..localsCount-1]) are preserved; temps above are reclaimed.
+// Locals are preserved (their registers remain bound); temps above the
+// highest live local register are reclaimed for reuse on the next statement.
+//
+// IMPORTANT: locals are NOT guaranteed to occupy contiguous registers
+// R[0..localsCount-1]. A `const k = t.nodeType.kind;` chained MemberExpr
+// allocates an intermediate temp at R1 (for the inner LoadField result)
+// before declaring `k` at R2 — leaving R1 as a live-but-anonymous slot.
+// Using `locals.items.length` would set nextReg=2 and clobber R2 (`k`)
+// on the next statement. Compute max(local.reg)+1 instead.
 export function resetTemps(s: RaiserCompState): void {
-	s.nextReg = s.locals.items.length;
+	let maxReg = -1;
+	for (const local of s.locals.items) {
+		if (local.reg > maxReg) maxReg = local.reg;
+	}
+	s.nextReg = maxReg + 1;
 }
 
 // --- Typed emit helpers ---

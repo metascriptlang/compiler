@@ -26,8 +26,15 @@ import { RaiserContext } from "../../raiser/context";
 import { valueToNode, synthToken } from "./bridge";
 
 // --- Evaluate a single ComptimeBlock node ---
+// Exported so the checker can eagerly fold @comptime blocks during type
+// checking (mirrors Phase B+ macro eager expansion). Without eager folding,
+// `const X = @comptime { ... }` fossilizes the variable's symbol type as
+// `unknown` (checker doesn't know the block's result type yet), which then
+// emits `void* X = ...` in C codegen — see checkExprPass.ms ComptimeBlock
+// handler. Also keeps `evaluateComptimeBlocks` as a safety net for blocks
+// introduced by transforms after checking.
 
-function evalComptimeBlock(node: Node): Node {
+export function evalComptimeBlock(node: Node): Node {
 	const d = node.data as ComptimeBlockData;
 	const body = d.comptimeBody;
 	const loc = node.location;

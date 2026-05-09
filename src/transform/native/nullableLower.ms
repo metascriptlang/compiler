@@ -10,19 +10,36 @@
 //   5. Value wrapping (assign): x = tok → x = { value: tok, present: true }
 
 import { Node, NodeKind, SourceLocation, MemberExprData, VariableDeclData, BinaryExprData, Type } from "../../ast/node";
-import { isStructType, isMaybeType } from "../../checker/types";
+import { isStructType, isMaybeType, getProperty } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeBool, makeNull, makeTypedObjectLiteral } from "../util";
 import { isNullExpr } from "../lowering/operatorLower";
 
-// Wrap a non-Maybe value for assignment to a Maybe variable.
-// tok → { value: tok, present: true }
-// null/NullLiteral → unchanged (codegen emits {0})
-// Already-Maybe → unchanged
-function wrapMaybeValue(init: Node, maybeType: Type, loc: SourceLocation): Node {
+// Wrap a value for assignment/return into a Maybe<T> slot. Canonical entry
+// point for transform-layer Maybe construction — used by nullableLower
+// (var-decl/assign) and optionalCoercion (return). Mirrors the checker-layer
+// `synthMaybeWrap` in checkExprPass.ms; kept separate per checker/transform
+// layering. Three cases:
+//   - Already Maybe-typed:      passthrough (avoid Maybe<Maybe<T>>)
+//   - Null in any form:         retype/canonicalize as Maybe wrapper, codegen
+//                               emits `{0}` zero-init (present=false).
+//   - Non-null value:           `{ value: init, present: true }` ObjectLiteral
+//                               typed as wrapper. Direct struct construction
+//                               (Nim parity).
+export function wrapMaybeValue(init: Node, maybeType: Type, loc: SourceLocation): Node {
 	if (init.nodeType !== null && isMaybeType(init.nodeType)) return init;
-	if (init.kind === NodeKind.NullLiteral || isNullExpr(init)) return init;
+	if (init.kind === NodeKind.NullLiteral) {
+		init.nodeType = maybeType;
+		return init;
+	}
+	if (isNullExpr(init)) {
+		// TypeAssertion-wrapped null (`null as unknown as T`): canonicalize to
+		// a fresh NullLiteral so codegen's null-of-struct path fires uniformly.
+		const nullNode = makeNull(loc);
+		nullNode.nodeType = maybeType;
+		return nullNode;
+	}
 	return makeTypedObjectLiteral(
 		["value", "present"],
 		[init, makeBool(true, loc)],
@@ -48,6 +65,28 @@ function lowerNullableNode(node: Node): Node {
 		const member = makeMember(node, "value", loc);
 		member.nodeType = node.nodeType;
 		return member;
+	}
+
+	// 1b. Narrowed member access: c.cursor where the field type in c's struct
+	//     is Maybe<T> but the checker narrowed nodeType to inner T (e.g. inside
+	//     `if (c.cursor !== null) { ... c.cursor ... }`). Rewrite to
+	//     c.cursor.value so codegen reads the inner value, not the Maybe struct.
+	//     Skip when property is "value"/"present" (already accessing the wrapper
+	//     directly) or when accessing through an already-Maybe object (handled
+	//     by rule 2 below).
+	if (node.kind === NodeKind.MemberExpr) {
+		const d = node.data as MemberExprData;
+		if (d.object !== null && d.object.nodeType !== null
+				&& d.property !== "value" && d.property !== "present"
+				&& !isMaybeType(d.object.nodeType)
+				&& node.nodeType !== null && !isMaybeType(node.nodeType)) {
+			const fieldType = getProperty(d.object.nodeType, d.property);
+			if (isMaybeType(fieldType)) {
+				const member = makeMember(node, "value", loc);
+				member.nodeType = node.nodeType;
+				return member;
+			}
+		}
 	}
 
 	// 2. Member access on Maybe object: x.field → x.value.field

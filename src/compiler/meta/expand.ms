@@ -35,12 +35,20 @@ import {
 	ArrowFunctionData, FunctionExprData,
 	MethodDeclData, ConstructorDeclData, ClassDeclData, PropertyDeclData,
 	ThrowStmtData, DeferStmtData,
+	// Strip checker-inserted wrappers when serializing macro args
+	HiddenDerefData, HiddenStdConvData,
+	// Type AST — Step 3 SERIALIZE: emit nodeType + type-AST kind fields
+	TypeObjectData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeGenericData, TypeFunctionData,
+	// SERIALIZE A2 — macro multi-decl emission
+	SpliceManyData,
 } from "../../ast/node";
 import { CheckerContext, addError, addErrorFullRange, createContext } from "../../checker/context";
+import { walkNode, mapChildren } from "../../transform/walker";
+import { hasGenericParams } from "../../checker/types";
 import { callMacroEvaluator } from "./callbacks";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
-import { valueToNode, mkNumber, mkString, mkBool, mkNull, synthToken } from "./bridge";
+import { valueToNode, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst } from "./bridge";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
 
@@ -124,6 +132,19 @@ function lowerQuoteExpr(node: Node): Node {
 function nodeToASTLiteral(node: Node, loc: SourceLocation): Node {
 	if (node === null) return mkNull(loc);
 
+	// Strip checker-inserted wrappers (HiddenDeref/HiddenAddr/HiddenStdConv/
+	// HiddenSubConv) so macros see the source-form AST. The wrappers are a
+	// C-codegen detail — auto-deref of class pointers, implicit numeric casts.
+	// Without stripping, post-expansion re-check crashes on reconstructed
+	// HiddenDeref nodes whose .expr field wasn't serialized by addKindFields.
+	while (node !== null && (node.kind === NodeKind.HiddenDeref || node.kind === NodeKind.HiddenAddr)) {
+		node = (node.data as HiddenDerefData).expr;
+	}
+	if (node !== null && (node.kind === NodeKind.HiddenStdConv || node.kind === NodeKind.HiddenSubConv)) {
+		node = (node.data as HiddenStdConvData).convExpr;
+	}
+	if (node === null) return mkNull(loc);
+
 	const keys: string[] = [];
 	const values: Node[] = [];
 	const kindNum = node.kind as number;
@@ -143,6 +164,40 @@ function nodeToASTLiteral(node: Node, loc: SourceLocation): Node {
 
 	// Append kind-specific fields
 	addKindFields(node, keys, values, loc);
+
+	// Type introspection (SERIALIZE Phase A1): if the host node has resolved
+	// type info, synthesize the type AST and embed it as `nodeType` field.
+	// Macros read `value.nodeType.kind`, `value.nodeType.typExprFieldNames`, etc.
+	// Synthesized type-AST nodes have nodeType=null (createNode default), so
+	// recursion terminates one level deep.
+	//
+	// Fallback to nodeTypeAst (a Node-form type-AST cached during macro VM
+	// round-trip) when nodeType (the Type form) is null. This propagates
+	// type info through nested macro expansion chains where readNodeFromObject
+	// can reconstruct the type-AST as Node but not as Type. Fixes Bug 6.
+	if (node.nodeType !== null) {
+		const typeAst = mapTypeToAst(node.nodeType, loc);
+		keys.push("nodeType");
+		values.push(nodeToASTLiteral(typeAst, loc));
+	} else if (node.nodeTypeAst !== null) {
+		keys.push("nodeType");
+		values.push(nodeToASTLiteral(node.nodeTypeAst, loc));
+	}
+
+	// Symbol introspection: surface name + kind for nodes the checker bound
+	// to a Symbol. Forward-only — macros read `value.resolvedSym.name`.
+	// declNode skipped to avoid Symbol↔Node cycle (V2 if codecs need decl site).
+	if (node.resolvedSym !== null) {
+		const symKeys: string[] = ["name", "kind"];
+		const symValues: Node[] = [
+			mkString(node.resolvedSym.name, loc),
+			mkNumber(node.resolvedSym.symbolKind as number, loc),
+		];
+		keys.push("resolvedSym");
+		values.push(createNodeAt(NodeKind.ObjectLiteral, {
+			properties: symValues, keys: symKeys, keyLocations: [],
+		}, loc));
+	}
 
 	return createNodeAt(NodeKind.ObjectLiteral, {
 		properties: values, keys, keyLocations: [],
@@ -193,7 +248,28 @@ function addStrArrayField(keys: string[], values: Node[], name: string, arr: str
 	values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
 }
 
-// Dispatcher for kind-specific fields. Mirrors nodeToValue.
+// V2 — emit Node[][] as ArrayLiteral of ArrayLiteral of Node-AST-literals.
+// Macro reads `arr[i][j]` to get the j-th decorator of the i-th field.
+function addNodeArrayArrayField(keys: string[], values: Node[], name: string, arr: Node[][], loc: SourceLocation): void {
+	const outerElements: Node[] = [];
+	for (const inner of arr) {
+		const innerElements: Node[] = [];
+		for (const child of inner) {
+			innerElements.push(nodeToASTLiteral(child, loc));
+		}
+		outerElements.push(createNodeAt(NodeKind.ArrayLiteral, { elements: innerElements }, loc));
+	}
+	keys.push(name);
+	values.push(createNodeAt(NodeKind.ArrayLiteral, { elements: outerElements }, loc));
+}
+
+// Dispatcher for kind-specific fields. Source-form serialization for the
+// macro arg-passing path — converts Node data into ObjectLiteral source code
+// inlined into the wrapper Program. (Distinct from the heap-based serialization
+// in bridge.ms `nodeToValue`; both must cover the same NodeKinds but produce
+// different output shapes. Update BOTH when adding new NodeKinds, or macros
+// will see undefined fields.)
+//
 // For v1, we cover the most commonly-used NodeKinds. Others get only
 // kind/line/column written — if a macro reads a field we don't handle here,
 // it'll see undefined and the wrapper Program will fail at runtime.
@@ -322,6 +398,49 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrField(keys, values, "arrowReturnType", d.arrowReturnType, loc);
 		return;
 	}
+
+	// Type AST kinds — synthesized by mapTypeToAst when nodeType is emitted.
+	// Macros walk these to introspect types (typExprFieldNames, typExprBase, etc.).
+	if (k === NodeKind.TypeObject) {
+		const d = node.data as TypeObjectData;
+		addStrArrayField(keys, values, "typExprFieldNames", d.typExprFieldNames, loc);
+		addNodeArrayField(keys, values, "typExprFieldTypes", d.typExprFieldTypes, loc);
+		if (d.typExprIndexKey !== null) addNodeField(keys, values, "typExprIndexKey", d.typExprIndexKey, loc);
+		if (d.typExprIndexValue !== null) addNodeField(keys, values, "typExprIndexValue", d.typExprIndexValue, loc);
+		addNodeArrayArrayField(keys, values, "typExprFieldDecorators", d.typExprFieldDecorators, loc);
+		addStrField(keys, values, "typExprTypeName", d.typExprTypeName, loc);
+		return;
+	}
+	if (k === NodeKind.TypeArray) {
+		const d = node.data as TypeArrayData;
+		addNodeField(keys, values, "typExprElement", d.typExprElement, loc);
+		addNumField(keys, values, "typExprSize", d.typExprSize, loc);
+		return;
+	}
+	if (k === NodeKind.TypeUnion) {
+		const d = node.data as TypeUnionData;
+		addNodeArrayField(keys, values, "typExprMembers", d.typExprMembers, loc);
+		return;
+	}
+	if (k === NodeKind.TypeIntersection) {
+		const d = node.data as TypeIntersectionData;
+		addNodeArrayField(keys, values, "typExprMembers", d.typExprMembers, loc);
+		return;
+	}
+	if (k === NodeKind.TypeGeneric) {
+		const d = node.data as TypeGenericData;
+		addNodeField(keys, values, "typExprBase", d.typExprBase, loc);
+		addNodeArrayField(keys, values, "typExprArgs", d.typExprArgs, loc);
+		return;
+	}
+	if (k === NodeKind.TypeFunction) {
+		const d = node.data as TypeFunctionData;
+		addNodeArrayField(keys, values, "typExprParams", d.typExprParams, loc);
+		addNodeField(keys, values, "typExprReturn", d.typExprReturn, loc);
+		addStrArrayField(keys, values, "typExprParamNames", d.typExprParamNames, loc);
+		return;
+	}
+
 	// Other NodeKinds: kind/line/column only. Extend here as macro authors
 	// need more NodeKinds in quote bodies.
 }
@@ -590,6 +709,21 @@ function nodeKindOrdinal(name: string): number {
 		"ComptimeBlock" => NodeKind.ComptimeBlock as number,
 		"Program" => NodeKind.Program as number,
 		"ActorDecl" => NodeKind.ActorDecl as number,
+		// Type-AST kinds (synthesized by mapTypeToAst, read by codec macros)
+		"TypeGeneric" => NodeKind.TypeGeneric as number,
+		"TypeArray" => NodeKind.TypeArray as number,
+		"TypeUnion" => NodeKind.TypeUnion as number,
+		"TypeIntersection" => NodeKind.TypeIntersection as number,
+		"TypeFunction" => NodeKind.TypeFunction as number,
+		"TypeObject" => NodeKind.TypeObject as number,
+		// SERIALIZE A2 — multi-decl emission
+		"SpliceMany" => NodeKind.SpliceMany as number,
+		// Self-hosting / hidden conversions (rare but technically constructable)
+		"SizeofExpr" => NodeKind.SizeofExpr as number,
+		"HiddenDeref" => NodeKind.HiddenDeref as number,
+		"HiddenAddr" => NodeKind.HiddenAddr as number,
+		"HiddenStdConv" => NodeKind.HiddenStdConv as number,
+		"HiddenSubConv" => NodeKind.HiddenSubConv as number,
 		_ => -1,
 	};
 }
@@ -752,75 +886,14 @@ function tryRewriteCompileError(node: Node): Node {
 	return createNodeAt(NodeKind.ExprStmt, { expr: logCall }, loc);
 }
 
-// Walk the macro body in place, rewriting recognized patterns.
-// Order: recurse into children FIRST, then try rewrites at this node.
-// This ensures `createNodeAt(NodeKind.X, ...)` has its NodeKind.X already
-// rewritten to an integer by the time tryRewriteCreateNodeAt sees it.
-function preprocessNode(node: Node): Node {
+// Apply preprocess rewrites to a single node (post-order — assumes children
+// already preprocessed). Pulls out the per-node post-rewrites previously inline
+// in `preprocessNode`'s tail so the recursion can be delegated to walkNode.
+function applyPreprocessRewrites(node: Node): Node {
 	if (node === null) return node;
 
-	// Recurse into children first (in-place mutation)
-	const k = node.kind;
-
-	if (k === NodeKind.VariableDecl) {
-		const d = node.data as VariableDeclData;
-		d.initializer = preprocessNode(d.initializer);
-	} else if (k === NodeKind.ExprStmt) {
-		const d = node.data as ExprStmtData;
-		d.expr = preprocessNode(d.expr);
-	} else if (k === NodeKind.ReturnStmt) {
-		const d = node.data as ReturnStmtData;
-		d.argument = preprocessNode(d.argument);
-	} else if (k === NodeKind.ThrowStmt) {
-		const d = node.data as ThrowStmtData;
-		d.throwArg = preprocessNode(d.throwArg);
-	} else if (k === NodeKind.BlockStmt) {
-		const d = node.data as BlockStmtData;
-		preprocessArray(d.statements);
-	} else if (k === NodeKind.IfStmt) {
-		const d = node.data as IfStmtData;
-		d.condition = preprocessNode(d.condition);
-		d.consequent = preprocessNode(d.consequent);
-		d.alternate = preprocessNode(d.alternate);
-	} else if (k === NodeKind.WhileStmt) {
-		const d = node.data as WhileStmtData;
-		d.whileCondition = preprocessNode(d.whileCondition);
-		d.whileBody = preprocessNode(d.whileBody);
-	} else if (k === NodeKind.BinaryExpr) {
-		const d = node.data as BinaryExprData;
-		d.left = preprocessNode(d.left);
-		d.right = preprocessNode(d.right);
-	} else if (k === NodeKind.UnaryExpr) {
-		const d = node.data as UnaryExprData;
-		d.operand = preprocessNode(d.operand);
-	} else if (k === NodeKind.CallExpr) {
-		const d = node.data as CallExprData;
-		d.callee = preprocessNode(d.callee);
-		preprocessArray(d.arguments);
-	} else if (k === NodeKind.MemberExpr) {
-		const d = node.data as MemberExprData;
-		d.object = preprocessNode(d.object);
-	} else if (k === NodeKind.ObjectLiteral) {
-		const d = node.data as ObjectLiteralData;
-		preprocessArray(d.properties);
-	} else if (k === NodeKind.ArrayLiteral) {
-		const d = node.data as ArrayLiteralData;
-		preprocessArray(d.elements);
-	} else if (k === NodeKind.ConditionalExpr) {
-		const d = node.data as ConditionalExprData;
-		d.ternaryCondition = preprocessNode(d.ternaryCondition);
-		d.ternaryConsequent = preprocessNode(d.ternaryConsequent);
-		d.ternaryAlternate = preprocessNode(d.ternaryAlternate);
-	} else if (k === NodeKind.ArrayAccess) {
-		const d = node.data as ArrayAccessData;
-		d.array = preprocessNode(d.array);
-		d.index = preprocessNode(d.index);
-	}
-
-	// Now try rewrites at THIS node — children are already preprocessed
-
 	// Phase C: quote { } lowering — convert to ObjectLiteral tree
-	if (k === NodeKind.QuoteExpr) {
+	if (node.kind === NodeKind.QuoteExpr) {
 		return lowerQuoteExpr(node);
 	}
 
@@ -839,12 +912,19 @@ function preprocessNode(node: Node): Node {
 	return node;
 }
 
-function preprocessArray(arr: Node[]): void {
-	let i = 0;
-	while (i < arr.length) {
-		arr[i] = preprocessNode(arr[i]);
-		i = i + 1;
-	}
+// Walk the macro body in place, rewriting recognized patterns.
+// Order: recurse into children FIRST (via walkNode's post-order), then
+// applyPreprocessRewrites at each node. This ensures
+// `createNodeAt(NodeKind.X, ...)` has its NodeKind.X already rewritten to
+// an integer by the time tryRewriteCreateNodeAt sees it.
+//
+// Reuses src/transform/walker.ms walkNode/mapChildren — single source of
+// truth for AST traversal across all NodeKinds (including ForOfStmt/MatchCase
+// /TryCatchStmt etc.). Avoids the historical drift where preprocessNode
+// silently skipped kinds and caused NodeKind.X access inside for..of bodies
+// to evaluate as a runtime MemberExpr (returning nil).
+function preprocessNode(node: Node): Node {
+	return walkNode(node, applyPreprocessRewrites);
 }
 
 // Public preprocessing entry: rewrite the macro body's recognized patterns
@@ -852,6 +932,45 @@ function preprocessArray(arr: Node[]): void {
 function preprocessMacroBody(body: Node): void {
 	if (body === null) return;
 	preprocessNode(body);
+}
+
+// ===== rewriteCallExprToMacroInvocation: post-expansion macro-call detection =====
+//
+// SERIALIZE Bug 6: when a deferred macro (held by A3 defer) expands post-mono,
+// `valueToNode` reconstructs the AST as fresh nodes. Inner macro references
+// in the result come back as `CallExpr(Identifier(macroName))` rather than
+// `MacroInvocation`. The CallExpr→MacroInvocation rewrite normally lives in
+// `checkExprPass.ms:1652` (checkCallExpr) which runs ONLY during eager
+// expansion. Post-mono `expandMacros` skips the checker, so without this
+// helper the inner macro reaches codegen as an undeclared function call.
+//
+// This walks the freshly-deserialized result and mutates any
+// `CallExpr(Identifier(name))` whose name is in `macroBodyRegistry` to
+// `MacroInvocation`. The existing re-walk loop (depth < 16 + walkExpand)
+// then handles the nested expansion.
+function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node {
+	if (node === null) return node;
+	if (node.kind === NodeKind.CallExpr) {
+		const cd = node.data as CallExprData;
+		if (cd.callee.kind === NodeKind.Identifier) {
+			const calleeName = (cd.callee.data as IdentifierData).name;
+			if (ctx.macroBodyRegistry.has(calleeName)) {
+				// Recurse into args first — nested macro calls inside args
+				// also need the rewrite.
+				let i = 0;
+				while (i < cd.arguments.length) {
+					cd.arguments[i] = rewriteCallExprToMacroInvocation(cd.arguments[i], ctx);
+					i = i + 1;
+				}
+				// Mutate in place: CallExpr → MacroInvocation.
+				node.kind = NodeKind.MacroInvocation;
+				node.data = { macroName: calleeName, macroArgs: cd.arguments };
+				return node;
+			}
+		}
+	}
+	mapChildren(node, (child: Node): Node => rewriteCallExprToMacroInvocation(child, ctx));
+	return node;
 }
 
 // ===== expandMacroInvocation: run a single macro =====
@@ -883,6 +1002,20 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 			+ " args, got " + d.macroArgs.length.toString(),
 			node.location.line, node.location.column);
 		return node;
+	}
+
+	// SERIALIZE A3 defer check — mirror of checkExprPass.ms:1663-1672. If any
+	// arg's type still contains a GenericParam, the surrounding function isn't
+	// monomorphized yet (we're inside a generic body that wasn't instantiated).
+	// Don't expand — let monomorphize generate concrete instances; a later
+	// expandMacros pass post-mono will fire on those with concrete types.
+	// Without this, expanding here would feed Identifier("T") (the generic
+	// param's type-AST name) to the macro, which would mis-classify T as an
+	// atomic type and emit garbage.
+	for (const arg of d.macroArgs) {
+		if (arg.nodeType !== null && hasGenericParams(arg.nodeType)) {
+			return node;
+		}
 	}
 
 	// Build wrapper Program:
@@ -1004,6 +1137,22 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	clearArrayHeap(vmCtx.arrayHeap);
 	vmCtx = null;
 
+	// Bug 6 fix: deserialized result has fresh CallExpr nodes for any nested
+	// macro references — the checker's CallExpr→MacroInvocation rewrite at
+	// checkExprPass.ms:1652 only ran on the original AST, not on this freshly
+	// reconstructed tree. Walk the result and rewrite so the re-walk loop
+	// below picks them up.
+	//
+	// Only apply in POST-MONO context. ctx.macroExpansionDepth > 0 indicates
+	// we're inside the checker's eager-expansion path (incremented at
+	// checkExprPass.ms:1684 before calling us). In eager path, the checker's
+	// re-check at line 1686 already re-traverses the result and converts
+	// CallExpr-of-macro to MacroInvocation via its normal flow — applying
+	// the rewrite here too would double-expand nested macros.
+	if (ctx.macroExpansionDepth === 0) {
+		result = rewriteCallExprToMacroInvocation(result, ctx);
+	}
+
 	// Re-expand if result contains more macros (depth-limited)
 	if (depth < 16 && hasUserMacroInvocation(result, ctx)) {
 		result = walkExpand(result, ctx, depth + 1);
@@ -1017,11 +1166,40 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 
 // Walks an array of nodes, replacing each with its expansion in place.
 function walkExpandArray(arr: Node[], ctx: CheckerContext, depth: int32): void {
+	// SERIALIZE A2: macros may return NodeKind.SpliceMany to emit multiple
+	// statements at the parent position. We splice spliceNodes into the array
+	// (replacing the SpliceMany element). Other returns replace 1:1 as before.
+	//
+	// Strategy: 2-pass — walk + tag positions on first pass; rebuild flat
+	// array on second pass only if any SpliceMany seen. No-splice case stays
+	// O(n) with no extra allocation.
+	//
+	// V1 limit: ONE-LEVEL flatten. If a spliceNode is itself SpliceMany,
+	// it stays as-is (codegen will likely crash). Macro authors must emit
+	// flat SpliceMany. V2 may add recursive flatten.
+	let needsRebuild = false;
 	let i = 0;
 	while (i < arr.length) {
-		arr[i] = walkExpand(arr[i], ctx, depth);
+		const expanded = walkExpand(arr[i], ctx, depth);
+		if (expanded.kind === NodeKind.SpliceMany) {
+			needsRebuild = true;
+		}
+		arr[i] = expanded;
 		i = i + 1;
 	}
+	if (!needsRebuild) return;
+	// Rebuild flat array — flatten any SpliceMany entries.
+	const flat: Node[] = [];
+	for (const item of arr) {
+		if (item.kind === NodeKind.SpliceMany) {
+			const sd = item.data as SpliceManyData;
+			for (const child of sd.spliceNodes) flat.push(child);
+		} else {
+			flat.push(item);
+		}
+	}
+	arr.length = 0;
+	for (const n of flat) arr.push(n);
 }
 
 // In-place mutation strategy: for non-MacroInvocation nodes, recursively expand
@@ -1512,8 +1690,8 @@ test "hasUserMacroInvocation detects macro in ClassDecl body" {
 	const method = createNode(NodeKind.MethodDecl, {
 		methodName: "m", methodParams: [], methodParamTypes: [],
 		methodBody: createNode(NodeKind.BlockStmt, { statements: [stmt] }, synthToken(loc)),
-		methodIsStatic: false, methodFlags: "", methodReturnType: "",
-		nativeName: "", nameLocation: loc,
+		methodIsStatic: false, methodFlags: "", methodVisibility: "", methodReturnType: "",
+		methodDefaults: [], nativeName: "", nameLocation: loc,
 	}, synthToken(loc));
 	const cls = createNode(NodeKind.ClassDecl, {
 		className: "C", classExtends: "", classBody: [method], nameLocation: loc,
@@ -1528,11 +1706,117 @@ test "hasUserMacroInvocation detects macro in DecoratedDecl decorators" {
 	ctx.macroParamsRegistry.set("derive", []);
 	const inv = createNode(NodeKind.MacroInvocation, { macroName: "derive", macroArgs: [] }, synthToken(loc));
 	const inner = createNode(NodeKind.InterfaceDecl, {
-		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], nameLocation: loc,
+		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc,
 	}, synthToken(loc));
 	const dec = createNode(NodeKind.DecoratedDecl, {
 		decorators: [inv], decoratedNode: inner,
 	}, synthToken(loc));
 	assert hasUserMacroInvocation(dec, ctx);
+}
+
+// ===== A2 — walkExpandArray SpliceMany splice mechanics =====
+
+test "walkExpandArray flattens SpliceMany returned at array position" {
+	const loc = makeLoc(1, 0);
+	// Build: [VarDecl, SpliceMany([VarDecl_a, VarDecl_b]), ReturnStmt]
+	// After walk: [VarDecl, VarDecl_a, VarDecl_b, ReturnStmt]
+	const v0 = createNode(NodeKind.VariableDecl, {
+		declName: "v0", declType: "", initializer: mkNumber(0, loc),
+		declKind: DeclKind.Const, nameLocation: loc,
+	}, synthToken(loc));
+	const va = createNode(NodeKind.VariableDecl, {
+		declName: "va", declType: "", initializer: mkNumber(1, loc),
+		declKind: DeclKind.Const, nameLocation: loc,
+	}, synthToken(loc));
+	const vb = createNode(NodeKind.VariableDecl, {
+		declName: "vb", declType: "", initializer: mkNumber(2, loc),
+		declKind: DeclKind.Const, nameLocation: loc,
+	}, synthToken(loc));
+	const splice = createNodeAt(NodeKind.SpliceMany, { spliceNodes: [va, vb] }, loc);
+	const ret = createNode(NodeKind.ReturnStmt, { argument: mkNumber(0, loc) }, synthToken(loc));
+	const arr: Node[] = [v0, splice, ret];
+	const ctx = createContext();
+	walkExpandArray(arr, ctx, 0);
+	assert arr.length === 4;
+	assert (arr[0].data as VariableDeclData).declName === "v0";
+	assert (arr[1].data as VariableDeclData).declName === "va";
+	assert (arr[2].data as VariableDeclData).declName === "vb";
+	assert arr[3].kind === NodeKind.ReturnStmt;
+}
+
+test "walkExpandArray flattens empty SpliceMany (removes the slot)" {
+	const loc = makeLoc(1, 0);
+	const v0 = createNode(NodeKind.VariableDecl, {
+		declName: "v0", declType: "", initializer: mkNumber(0, loc),
+		declKind: DeclKind.Const, nameLocation: loc,
+	}, synthToken(loc));
+	const splice = createNodeAt(NodeKind.SpliceMany, { spliceNodes: [] }, loc);
+	const v1 = createNode(NodeKind.VariableDecl, {
+		declName: "v1", declType: "", initializer: mkNumber(1, loc),
+		declKind: DeclKind.Const, nameLocation: loc,
+	}, synthToken(loc));
+	const arr: Node[] = [v0, splice, v1];
+	const ctx = createContext();
+	walkExpandArray(arr, ctx, 0);
+	assert arr.length === 2;
+	assert (arr[0].data as VariableDeclData).declName === "v0";
+	assert (arr[1].data as VariableDeclData).declName === "v1";
+}
+
+test "walkExpandArray no-op when no SpliceMany present" {
+	const loc = makeLoc(1, 0);
+	const v0 = createNode(NodeKind.VariableDecl, {
+		declName: "v0", declType: "", initializer: mkNumber(0, loc),
+		declKind: DeclKind.Const, nameLocation: loc,
+	}, synthToken(loc));
+	const v1 = createNode(NodeKind.VariableDecl, {
+		declName: "v1", declType: "", initializer: mkNumber(1, loc),
+		declKind: DeclKind.Const, nameLocation: loc,
+	}, synthToken(loc));
+	const arr: Node[] = [v0, v1];
+	const ctx = createContext();
+	walkExpandArray(arr, ctx, 0);
+	assert arr.length === 2;
+	assert (arr[0].data as VariableDeclData).declName === "v0";
+	assert (arr[1].data as VariableDeclData).declName === "v1";
+}
+
+// Regression: preprocessNode rewrites `NodeKind.X` member access to integer
+// ordinals throughout the macro body. Previously had its own ad-hoc walker
+// that missed ForOfStmt/SwitchStmt/MatchExpr etc. — `kind: NodeKind.NumberLiteral`
+// inside `for (const f of fields) { ... }` stayed as MemberExpr at runtime,
+// returning nil, so heap objects had no `kind` field and valueToNode fell back
+// to deserializeObjectLiteral. Now uses walker.ms walkNode (single source of
+// truth). This test verifies preprocessNode descends into a ForOfStmt body.
+test "preprocessNode rewrites NodeKind.X inside ForOfStmt body" {
+	const loc = makeLoc(1, 1);
+	// Build: for (const f of fields) { let x = NodeKind.NumberLiteral; }
+	// Using literal ObjectLiteral construction to avoid parser dependency.
+	const memberExpr = createNodeAt(NodeKind.MemberExpr, {
+		object: createNodeAt(NodeKind.Identifier, { name: "NodeKind" }, loc),
+		property: "NumberLiteral",
+		isOptional: false,
+	}, loc);
+	const innerDecl = createNodeAt(NodeKind.VariableDecl, {
+		declName: "x", declType: "", initializer: memberExpr,
+		declKind: DeclKind.Let, nameLocation: loc,
+	}, loc);
+	const body = createNodeAt(NodeKind.BlockStmt, { statements: [innerDecl] }, loc);
+	const fields = createNodeAt(NodeKind.Identifier, { name: "fields" }, loc);
+	const forOf = createNodeAt(NodeKind.ForOfStmt, {
+		forOfBinding: "f", forOfIsConst: true,
+		forOfIterable: fields, forOfBody: body,
+		forOfPattern: null as unknown as Node, bindingLocation: loc,
+	}, loc);
+
+	preprocessMacroBody(forOf);
+
+	// After preprocessing, the inner VariableDecl's initializer should be a
+	// NumberLiteral with value === NodeKind.NumberLiteral ordinal (=0), not a
+	// MemberExpr. If preprocessNode still skipped ForOfStmt body, this would
+	// remain a MemberExpr and the assertion fails.
+	const rewrittenInit = (innerDecl.data as VariableDeclData).initializer;
+	assert rewrittenInit.kind === NodeKind.NumberLiteral;
+	assert (rewrittenInit.data as NumberLiteralData).value === (NodeKind.NumberLiteral as number);
 }
 

@@ -18,12 +18,25 @@ type NodeResult = Result<Node, string>;
 
 // ===== Type Annotation Skipping =====
 
+// Skip the trailing `& T & U` of an intersection chain after an atom has already
+// been consumed. Reused by the top-level skipper and by each union member.
+// Erasure-tier — accepted by parser, collapsed by resolver to first operand.
+function skipIntersectionTail(state: ParserState): void {
+	while (!isAtEnd(state) && current(state).kind === TokenKind.Amp) {
+		advance(state);
+		skipTypeAtom(state);
+	}
+}
+
 export function skipTypeAnnotation(state: ParserState): void {
 	// Leading pipe for discriminated union types: | { ... } | { ... }
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
 		advance(state);
 	}
 	skipTypeAtom(state);
+
+	// Intersection: T & U & V (binds tighter than union and conditional)
+	skipIntersectionTail(state);
 
 	// Tier 3: Conditional type: T extends U ? A : B
 	// Must be checked BEFORE union pipe so `T extends U ? A : B` isn't split as `T extends U ? A` | `B`
@@ -42,10 +55,11 @@ export function skipTypeAnnotation(state: ParserState): void {
 		return;
 	}
 
-	// Union types: T | U | V
+	// Union types: T | U | V — each member may itself be an intersection (T & U).
 	while (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
 		advance(state);
 		skipTypeAtom(state);
+		skipIntersectionTail(state);
 	}
 }
 
@@ -72,20 +86,36 @@ function isTypeIdent(token: Token): boolean {
 	return (k as number) >= (TokenKind.Abstract as number) && k !== TokenKind.Comment && k !== TokenKind.Eof;
 }
 
+// Given an already-parsed leading atom, fold any trailing `& T & U` into a
+// TypeIntersection node. If no `&` follows, returns `first` unchanged.
+// Reused by parseTypeExpr at the top level and within each union member.
+function parseIntersectionTail(state: ParserState, first: Node): Node {
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Amp) {
+		const members: Node[] = [];
+		members.push(first);
+		while (!isAtEnd(state) && current(state).kind === TokenKind.Amp) {
+			advance(state);
+			members.push(parseTypeAtom(state));
+		}
+		return createNodeAt(NodeKind.TypeIntersection, { typExprMembers: members }, members[0].location);
+	}
+	return first;
+}
+
 export function parseTypeExpr(state: ParserState): Node {
 	// Leading pipe for discriminated union types: | { ... } | { ... }
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
 		advance(state);
 	}
-	const first = parseTypeAtom(state);
+	const first = parseIntersectionTail(state, parseTypeAtom(state));
 
-	// Union types: T | U | V → TypeUnion
+	// Union types: T | U | V → TypeUnion. Each union member may itself be an intersection.
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
 		const members: Node[] = [];
 		members.push(first);
 		while (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
 			advance(state);
-			members.push(parseTypeAtom(state));
+			members.push(parseIntersectionTail(state, parseTypeAtom(state)));
 		}
 		return createNodeAt(NodeKind.TypeUnion, { typExprMembers: members }, first.location);
 	}
@@ -339,11 +369,18 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 		advance(state);
 	}
 
+	// Anonymous object types in source can't carry decorators on fields —
+	// parser only accepts `name: Type;` syntax. Per-field decorators are
+	// only sourced from `class` declarations (see bridge.ms collectFieldDecorators).
+	const emptyDecorators: Node[][] = [];
+	for (let i = 0; i < fieldNames.length; i = i + 1) emptyDecorators.push([]);
 	return createNode(NodeKind.TypeObject, {
 		typExprFieldNames: fieldNames,
 		typExprFieldTypes: fieldTypes,
 		typExprIndexKey: indexKey,
 		typExprIndexValue: indexValue,
+		typExprFieldDecorators: emptyDecorators,
+		typExprTypeName: "",
 	}, braceToken);
 }
 
@@ -513,6 +550,16 @@ test "three types" { assert skipsType("string | number | boolean"); }
 
 test "union with array" { assert skipsType("string[] | number"); }
 
+test "intersection two types" { assert skipsType("A & B"); }
+
+test "intersection three types" { assert skipsType("A & B & C"); }
+
+test "intersection with generics" { assert skipsType("Result<A, B> & Error"); }
+
+test "intersection branded primitive" { assert skipsType("string & { __brand: \"X\" }"); }
+
+test "intersection mixed with union" { assert skipsType("A | B & C"); }
+
 test "simple optional" { assert skipsType("string?"); }
 
 test "generic optional" { assert skipsType("Array<number>?"); }
@@ -605,6 +652,16 @@ test "typeExpr array" {
 
 test "typeExpr union" {
 	assert typeExprKind("string | number") === NodeKind.TypeUnion;
+}
+
+test "typeExpr intersection" {
+	assert typeExprKind("A & B") === NodeKind.TypeIntersection;
+}
+
+test "typeExpr branded primitive" {
+	// Branded type pattern: `string & { __brand: "X" }` parses as TypeIntersection.
+	// Resolver collapses to `string` at type-check time (erasure tier).
+	assert typeExprKind("string & { __brand: \"X\" }") === NodeKind.TypeIntersection;
 }
 
 test "typeExpr function type" {

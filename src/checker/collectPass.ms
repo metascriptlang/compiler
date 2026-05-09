@@ -494,15 +494,32 @@ function resolveImportSourcePath(ctx: CheckerContext, specifier: string): string
 			if (imp.sourceSpecifier === specifier) return imp.sourcePath;
 		}
 	}
-	// Prelude context fallback: resolve relative specifier using modulePath
-	if (specifier.length >= 2 && specifier.charAt(0) === "." && ctx.modulePath !== "") {
-		const dir = getModuleDir(ctx.modulePath);
-		if (dir !== "") {
-			let rel = specifier;
-			if (rel.length > 2 && rel.slice(0, 2) === "./") {
-				rel = rel.slice(2, rel.length);
+	// Prelude context (no currentModule): derive paths from modulePath.
+	// Prelude files have modulePath like `/path/to/std/core/json/index.cms`.
+	if (ctx.modulePath !== "") {
+		// Relative specifier (`./sub`, `../sub`) → resolve against index dir
+		if (specifier.length >= 2 && specifier.charAt(0) === ".") {
+			const dir = getModuleDir(ctx.modulePath);
+			if (dir !== "") {
+				let rel = specifier;
+				if (rel.length > 2 && rel.slice(0, 2) === "./") {
+					rel = rel.slice(2, rel.length);
+				}
+				return dir + "/" + rel;
 			}
-			return dir + "/" + rel;
+		}
+		// Absolute std path (`std/serialize/json/decode`) → derive std root from modulePath
+		// and rebase. Required for prelude .cms files to import from sibling std
+		// modules (e.g., std/core/json/index.cms importing std/serialize/json/decode for
+		// macro-based codecs). Without this, sourcePath is "" and the import
+		// falls back to creating a Variable symbol.
+		if (specifier.length > 4 && specifier.slice(0, 4) === "std/") {
+			const stdMarker = "/std/";
+			const idx = ctx.modulePath.indexOf(stdMarker, 0);
+			if (idx >= 0) {
+				const stdRoot = ctx.modulePath.slice(0, idx + stdMarker.byteLength);
+				return stdRoot + specifier.slice(4, specifier.byteLength);
+			}
 		}
 	}
 	return "";
@@ -571,6 +588,57 @@ export function importSymFromRegistry(
 	defineOrError(ctx, sym, defNode);
 	sgRecordSym(ctx, nameLoc.line, nameLoc.column, nameLoc.column + alias.length, sym, exportInfo.symType, exportInfo.kind, alias, "", false);
 	return sym;
+}
+
+// Propagate extension-method dispatch entries from an imported/re-exported
+// symbol's exportInfo into the current module's extensionRegistry. Single
+// path used by:
+//   - collectImport's named-import primary registration (line ~715)
+//   - collectExport's named re-export (`export { x } from "./y"`)
+//   - collectExport's star re-export (`export * from "./y"`)
+//
+// Skips silently when:
+//   - extension registry not initialized (LSP minimal context)
+//   - primary symbol is null (e.g., circular import deferred resolution)
+//     — without this guard, registerExtension's sym-identity dedup misses
+//     the null case and would produce duplicate entries.
+//
+// Idempotent via registerExtension's sym dedup. Safe to call multiple times
+// for the same (alias, expInfo) pair across re-export chains.
+function propagateImportedExtensions(
+	ctx: CheckerContext, alias: string, expInfo: ExportedSymInfo,
+	sourcePath: string, primary: Symbol,
+): void {
+	if (ctx.extensionRegistry === null) return;
+	if (primary === null) return;
+
+	// Per-overload extensions
+	if (expInfo.overloadExtReceiverTypes !== null
+			&& expInfo.overloadTypes !== null) {
+		let ovIdx = 0;
+		while (ovIdx < expInfo.overloadExtReceiverTypes.length
+				&& ovIdx < expInfo.overloadTypes.length) {
+			if (expInfo.overloadExtReceiverTypes[ovIdx] !== "") {
+				const ovSym = ovIdx < primary.overloads.length
+					? primary.overloads[ovIdx]
+					: (null as unknown as Symbol);
+				if (ovSym !== null) {
+					registerExtension(ctx.extensionRegistry, createExtMethod(
+						alias, expInfo.overloadExtReceiverTypes[ovIdx], sourcePath,
+						expInfo.overloadTypes[ovIdx], expInfo.overloadExtIsStatic[ovIdx],
+						ovSym, 1));
+				}
+			}
+			ovIdx = ovIdx + 1;
+		}
+	}
+
+	// Primary extension
+	if (expInfo.extReceiverType !== "") {
+		registerExtension(ctx.extensionRegistry, createExtMethod(
+			alias, expInfo.extReceiverType, sourcePath,
+			expInfo.symType, expInfo.extIsStatic, primary, 1));
+	}
 }
 
 function collectImport(ctx: CheckerContext, node: Node): void {
@@ -736,6 +804,15 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 						methSym.modulePath = expInfo.definingModule !== "" ? expInfo.definingModule : sourcePath;
 						if (expInfo.nativeName !== "") methSym.nativeName = expInfo.nativeName;
 						if (expInfo.location !== null) methSym.location = expInfo.location;
+						// Carry default-param info — without this, member-call dispatch
+						// resolves to a sym that has no defaults, then the call site
+						// emits N-1 args expecting N parameters. Manifests as C error
+						// "too few arguments to function call". Discovered when the hub
+						// re-export fix (#73) made auto-prop run for accessors that
+						// previously only registered via direct import.
+						if (expInfo.defaultParams !== null && expInfo.defaultParams.length > 0) {
+							methSym.defaultParams = expInfo.defaultParams;
+						}
 						methSym.state = SymbolState.Shaped;
 						registerExtension(ctx.extensionRegistry, createExtMethod(methName, expInfo.extReceiverType, sourcePath, expInfo.symType, expInfo.extIsStatic, methSym, 0));
 					}
@@ -798,6 +875,8 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 										sym.overloads.push(ovSym);
 									}
 								}
+								// Star re-export: propagate extension-method dispatch.
+								propagateImportedExtensions(ctx, expInfo.name, expInfo, sourcePath, sym);
 							}
 						}
 					} else {
@@ -825,6 +904,24 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 						if (exportInfo !== null) {
 							const reNameLoc = imp.nameLocations !== null && i < imp.nameLocations.length ? imp.nameLocations[i] : d.exportedDecl.location;
 							importSymFromRegistry(ctx, alias, importName, exportInfo, sourcePath, reNameLoc, node);
+							// Phase E re-export parity: when re-exporting a macro through a
+							// hub (`export { jsonStringify } from "./encode"`), populate the
+							// hub's macroBodyRegistry too. Without this, the hub's own
+							// exportInfo (built later by buildExportInfo from this ctx) carries
+							// macroBody=null, so downstream importers get a Macro sym with no
+							// body — recursive expansion fails on the empty registry. Mirrors
+							// the same population in collectImport (line 633-635).
+							if (exportInfo.kind === SymbolKind.Macro
+									&& exportInfo.macroBody !== null
+									&& exportInfo.macroParams !== null) {
+								ctx.macroBodyRegistry.set(alias, exportInfo.macroBody);
+								ctx.macroParamsRegistry.set(alias, exportInfo.macroParams);
+							}
+							// Re-export parity: propagate extension-method dispatch via
+							// shared helper. Same path used by collectImport's primary
+							// reg, named re-export, and star re-export.
+							const primaryNamed = lookupLocal(ctx.table, alias);
+							propagateImportedExtensions(ctx, alias, exportInfo, sourcePath, primaryNamed !== null ? primaryNamed : (null as unknown as Symbol));
 						} else {
 							const isCirc = ctx.moduleGraph !== null
 								&& ctx.currentModule !== null

@@ -26,7 +26,7 @@ function monoEmitOneTypeInst(program: Node, idx: number): void {
 		fieldTypes.push(getGenericTypeInstFieldTypeAt(idx, fi));
 	}
 	const loc = makeLoc(0, 0);
-	const data: NodeData = { interfaceName: mangledName, interfaceFields: fieldNames, interfaceFieldTypes: fieldTypes, nameLocation: loc };
+	const data: NodeData = { interfaceName: mangledName, interfaceFields: fieldNames, interfaceFieldTypes: fieldTypes, interfaceExtends: [] as string[], nameLocation: loc };
 	const declNode = createNodeAt(NodeKind.InterfaceDecl, data, loc);
 	const pd = program.data as ProgramData;
 	pd.programStmts.push(declNode);

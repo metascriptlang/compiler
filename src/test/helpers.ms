@@ -12,6 +12,7 @@ import { checkModuleGraph, getPreludeContext } from "../checker/orchestrator";
 import { computeAliveSet } from "../checker/reachability";
 import { hasErrors } from "../checker/context";
 import { monomorphizeProgram } from "../monomorphize/collect";
+import { expandMacros } from "../compiler/meta/expand";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { transformForNative } from "../transform/native/index";
@@ -23,6 +24,10 @@ import { generateJS } from "../codegen/js/jsgen";
 import { MapEntry, createMapProvider, loadModuleGraph } from "../module/loader";
 import { Module, ModuleGraph, findModule } from "../module/graph";
 import { Node } from "../ast/node";
+// Side-effect import — registers the Raiser-VM-backed macro evaluator so
+// macros encountered in compileToC sources actually expand. Without this,
+// any macro invocation fails check with "evaluator unavailable".
+import "../codegen/raiser/eval";
 
 export { MapEntry } from "../module/loader";
 
@@ -63,7 +68,11 @@ export function compileToC(source: string): CompileResult {
 	validateTypedAST(checkerCtx, monoed);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "validate:"));
 
-	const transformed = transformProgram(monoed, checkerCtx, false);
+	// SERIALIZE A2: program-wide macro expansion runs after mono in main pipeline
+	// (compile.ms:934). Mirror it here so module-top SpliceMany splices fire.
+	const macroExpanded = expandMacros(monoed, checkerCtx);
+
+	const transformed = transformProgram(macroExpanded, checkerCtx, false);
 	const nativeCtx = createTransformContextWithChecker(checkerCtx);
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);

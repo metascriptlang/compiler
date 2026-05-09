@@ -309,3 +309,40 @@ test "recursive function cross-module" {
 	const ctx = evalProject(["return fact(5);", "function fact(n) { if (n <= 1) { return 1; } return n * fact(n - 1); }"]);
 	assert ctx.lastResult.intVal === 120;
 }
+
+// Regression: chained MemberExpr through nested ObjectLiteral.
+// Was broken because Raiser's resetTemps used locals.length, assuming locals
+// pack at R[0..length-1] — but chained `t.nodeType.kind` allocates an
+// intermediate temp at R1 (inner LoadField result) before declaring `k` at R2,
+// leaving R1 as a non-local slot. Next stmt's allocReg returned R2, clobbering
+// the local. Fix: nextReg = max(local.reg)+1 (context.ms resetTemps).
+test "regression: chained MemberExpr through nested ObjectLiteral" {
+	const ctx = evalFull(`
+const t = { kind: 6, nodeType: { kind: 76, name: "Ref" } };
+return t.nodeType.kind;
+`);
+	assert ctx.lastResult.intVal === 76;
+}
+
+test "regression: split MemberExpr through nested ObjectLiteral (control)" {
+	const ctx = evalFull(`
+const t = { kind: 6, nodeType: { kind: 76, name: "Ref" } };
+const nt = t.nodeType;
+return nt.kind;
+`);
+	assert ctx.lastResult.intVal === 76;
+}
+
+// Reproduces the original chained-vs-clobber scenario more precisely:
+// declare `t` (R0), do chained `k = t.nodeType.kind` (R1 temp, R2=k local with
+// R1 gap), then declare another local — pre-fix R2 was clobbered. Verifies
+// k's value survives through the next statement.
+test "regression: local at non-contiguous register survives next stmt" {
+	const ctx = evalFull(`
+const t = { kind: 6, nodeType: { kind: 76, name: "Ref" } };
+const k = t.nodeType.kind;
+const filler = "anything";
+return k;
+`);
+	assert ctx.lastResult.intVal === 76;
+}

@@ -14,10 +14,10 @@ import { Node, NodeKind, DeclKind,
 	MatchStmtData, TryCatchStmtData, UnreachableStmtData, TypeAnnotationData,
 	MacroInvocationData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData,
 	InterfaceDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData,
-	ExternDeclData, ExternKind, MacroDeclData, DecoratedDeclData, ProgramData,
+	ExternDeclData, ExternKind, MacroDeclData, DecoratedDeclData, ProgramData, SpliceManyData,
 	TestDeclData, AssertStmtData,
 	HiddenStdConvData,
-	TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData,
+	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
 } from "./node";
 
 // ===== Indentation Helper =====
@@ -508,6 +508,13 @@ export function printNode(node: Node, level: number): void {
 				printNode(stmt, level + 1);
 			}
 		},
+		NodeKind.SpliceMany => {
+			const data = node.data as SpliceManyData;
+			console.log(`${pad}SpliceMany: (${data.spliceNodes.length.toString()} nodes)`);
+			for (const child of data.spliceNodes) {
+				printNode(child, level + 1);
+			}
+		},
 		NodeKind.ForInStmt => {
 			const data = node.data as ForInStmtData;
 			const keyword = match (data.forInIsConst) { true => "const", _ => "let" };
@@ -622,6 +629,11 @@ export function printNode(node: Node, level: number): void {
 			console.log(`${pad}TypeUnion:`);
 			for (const m of data.typExprMembers) { printNode(m, level + 1); }
 		},
+		NodeKind.TypeIntersection => {
+			const data = node.data as TypeIntersectionData;
+			console.log(`${pad}TypeIntersection:`);
+			for (const m of data.typExprMembers) { printNode(m, level + 1); }
+		},
 		NodeKind.TypeFunction => {
 			const data = node.data as TypeFunctionData;
 			console.log(`${pad}TypeFunction:`);
@@ -640,6 +652,13 @@ export function printNode(node: Node, level: number): void {
 			for (let i = 0; i < data.typExprFieldNames.length; i += 1) {
 				console.log(`${indent(level + 1)}${data.typExprFieldNames[i]}:`);
 				if (i < data.typExprFieldTypes.length) { printNode(data.typExprFieldTypes[i], level + 2); }
+				// Per-field decorators (V2)
+				if (i < data.typExprFieldDecorators.length && data.typExprFieldDecorators[i].length > 0) {
+					console.log(`${indent(level + 2)}[decorators]:`);
+					for (const dec of data.typExprFieldDecorators[i]) {
+						printNode(dec, level + 3);
+					}
+				}
 			}
 			if (data.typExprIndexKey !== null) {
 				console.log(`${indent(level + 1)}[indexKey]:`);

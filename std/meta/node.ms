@@ -48,6 +48,7 @@ export enum TypeFlag {
 	HasAsgn = 32,                // bit 5
 	AwaitableAffine = 64,        // bit 6 — PARALOCK affine (spawn-origin Promise)
 	AwaitableScopeBound = 128,   // bit 7 — PARALOCK R3/E4 (cannot escape creating scope)
+	HasInheritedFields = 256,    // bit 8 — class has flattened parent fields (suppresses DRC parent-call)
 	Substituting = 1048576,      // bit 20 (high to avoid SizedArray size collision)
 }
 
@@ -222,6 +223,13 @@ export enum NodeKind {
 	Program,
 	// Actor (appended at end to preserve enum discriminant ordering)
 	ActorDecl,
+	// SERIALIZE A2: macro multi-decl emission. Splices into parent stmt array.
+	SpliceMany,
+	// Type expression node — intersection types (T & U). Appended at end
+	// to preserve enum discriminant ordering. Erasure-tier: resolver
+	// collapses to first operand at type-checking time; downstream sees
+	// the erased type. See docs/LANG.md §5.3.
+	TypeIntersection,
 }
 
 // ===== Declaration Kind Enum =====
@@ -330,11 +338,11 @@ export type NodeData =
 	| { exportedDecl: Node }                                       // ExportDecl
 	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation } // TypeAliasDecl
 	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[] } // EnumDecl
-	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation } // InterfaceDecl
-	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation } // StructDecl
+	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation } // InterfaceDecl
+	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation } // StructDecl
 	| { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation } // ClassDecl
-	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propInitializer: Node }  // PropertyDecl
-	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string, nameLocation: SourceLocation } // MethodDecl
+	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }  // PropertyDecl
+	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // MethodDecl
 	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] } // ConstructorDecl
 	// Error handling variants
 	| { throwArg: Node }                                           // ThrowStmt
@@ -356,12 +364,17 @@ export type NodeData =
 	| { typExprBase: Node, typExprArgs: Node[] }                   // TypeGeneric
 	| { typExprElement: Node, typExprSize: number }                // TypeArray (-1 = unsized)
 	| { typExprMembers: Node[] }                                   // TypeUnion
+	// TypeIntersection reuses the same data shape as TypeUnion (Node[] of operands).
+	// Discriminated by NodeKind only.
+	| { typExprMembers: Node[] }                                   // TypeIntersection
 	| { typExprParams: Node[], typExprReturn: Node, typExprParamNames: string[] } // TypeFunction
-	| { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node }   // TypeObject
+	| { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node, typExprFieldDecorators: Node[][], typExprTypeName: string }   // TypeObject
 	// Program root
 	| { programStmts: Node[] }                                     // Program
 	// Actor (appended after Program to preserve union discriminant ordering)
 	| { actorName: string, actorBody: Node[], nameLocation: SourceLocation } // ActorDecl
+	// SERIALIZE A2 — macro multi-decl emission
+	| { spliceNodes: Node[] }                                      // SpliceMany
 
 // ===== Flow Graph (TypeScript-go parity) =====
 //
@@ -453,6 +466,14 @@ export class Node {
 	paramLocations: SourceLocation[]; // Per-param source locations for DEF recording
 	typeArg: string; // Explicit generic type arg string (e.g. "Person" from parse<Person>()) — stored on AST, not side-channel
 	flowNode: FlowNode; // Flow graph node for narrowing queries (TypeScript-go parity). Null until binder runs; null for non-reference nodes.
+	// Type-AST hint preserved across macro VM round-trip. When nodeToASTLiteral
+	// serializes a Node into the macro VM's heap, it embeds the type info as
+	// a type-AST. valueToNode → readNodeFromObject reconstructs the Node but
+	// can't restore nodeType (a Type, not a Node). It stores the type-AST
+	// here instead. Subsequent nodeToASTLiteral calls (for nested macro
+	// re-expansion) check this field as a fallback when nodeType is null,
+	// preserving type info through the chain.
+	nodeTypeAst: Node;
 }
 
 export type Expression = Node;
@@ -524,17 +545,18 @@ export type ImportDeclData = { importNames: string[], importAliases: string[], i
 export type ExportDeclData = { exportedDecl: Node };
 export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation };
 export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[] };
-export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation };
-export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation };
+export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation };
+export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation };
 export type ClassDeclData = { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation };
 export type ActorDeclData = { actorName: string, actorBody: Node[], nameLocation: SourceLocation };
-export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propInitializer: Node };
-export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string, nameLocation: SourceLocation };
+export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }; // propVisibility: "" | "public" | "private" | "protected"
+export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation };
 export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] };
 export type ExternDeclData = { externKind: ExternKind, externName: string, nativeName: string, externType: string };
 export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclBody: Node };
 export type DecoratedDeclData = { decorators: Node[], decoratedNode: Node };
 export type ProgramData = { programStmts: Node[] };
+export type SpliceManyData = { spliceNodes: Node[] };
 export type DeferStmtData = { deferExpr: Node };
 export type ThrowStmtData = { throwArg: Node };
 export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation };
@@ -550,11 +572,13 @@ export type ComptimeBlockData = { comptimeBody: Node };
 export type TypeGenericData = { typExprBase: Node, typExprArgs: Node[] };
 export type TypeArrayData = { typExprElement: Node, typExprSize: number };
 export type TypeUnionData = { typExprMembers: Node[] };
+// TypeIntersectionData has the same shape as TypeUnionData; discriminated by NodeKind.
+export type TypeIntersectionData = { typExprMembers: Node[] };
 export type TypeFunctionData = { typExprParams: Node[], typExprReturn: Node, typExprParamNames: string[] };
 // typExprIndexKey / typExprIndexValue are non-null ONLY when the type is an index signature
 // like { [key: K]: V }. After checker normalization this becomes Map<K, V>. Mixed (named fields
 // + index signature in the same type) is rejected by the parser. See docs and plan for details.
-export type TypeObjectData = { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node };
+export type TypeObjectData = { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node, typExprFieldDecorators: Node[][], typExprTypeName: string };
 
 // ===== Constructors =====
 
@@ -572,6 +596,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	n.paramLocations = null;
 	n.typeArg = "";
 	n.flowNode = null as unknown as FlowNode;
+	n.nodeTypeAst = null as unknown as Node;
 	return n;
 }
 
@@ -674,10 +699,13 @@ export function createNodeAt(kind: NodeKind.ComptimeBlock, data: ComptimeBlockDa
 export function createNodeAt(kind: NodeKind.TypeGeneric, data: TypeGenericData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.TypeArray, data: TypeArrayData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.TypeUnion, data: TypeUnionData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.TypeIntersection, data: TypeIntersectionData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.TypeFunction, data: TypeFunctionData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.TypeObject, data: TypeObjectData, loc: SourceLocation): Node;
 // Program
 export function createNodeAt(kind: NodeKind.Program, data: ProgramData, loc: SourceLocation): Node;
+// SpliceMany — A2 macro multi-decl emission
+export function createNodeAt(kind: NodeKind.SpliceMany, data: SpliceManyData, loc: SourceLocation): Node;
 
 // Implementation — widest signature, accepts any NodeKind and the NodeData union.
 // This is the body; all overload signatures above delegate here via the checker's
@@ -697,6 +725,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	n.paramLocations = null;
 	n.typeArg = "";
 	n.flowNode = null as unknown as FlowNode;
+	n.nodeTypeAst = null as unknown as Node;
 	return n;
 }
 

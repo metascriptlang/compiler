@@ -4,7 +4,7 @@
 // immediately clone the function body, substitute types, and register
 // the specialized version. No separate monomorphize pass needed.
 
-import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, VariableDeclData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, NewExprData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, VariableDeclData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, NewExprData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { instantiateGeneric, substituteType, createFunction } from "./types";
 import { resolveAnnotation } from "./resolvePass";
@@ -183,13 +183,44 @@ function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
 }
 
 
-// Unwrap ExportDecl/DecoratedDecl to get the inner FunctionDecl
+// Unwrap ExportDecl/DecoratedDecl to get the inner FunctionDecl. For
+// generic STATIC class methods, synthesize an equivalent FunctionDecl from
+// the MethodDecl so the existing instantiation flow can drive mono on it.
+//
+// Limitation: only static methods are handled. Generic INSTANCE methods on
+// non-generic classes (e.g., `class Foo { method<T>(x: T): T }`) fall
+// through to null — the call site won't mono and the body emits with
+// T=Unknown. Reference parity (Nim's seminst.nim handles skMethod natively
+// alongside skProc); long-term fix is to extend instantiateGenericFunction
+// to dispatch on declNode.kind directly instead of synthesizing.
 function unwrapToFunctionDecl(node: Node): Node {
 	if (node === null) return null as unknown as Node;
 	let n = node;
 	if (n.kind === NodeKind.ExportDecl) n = (n.data as ExportDeclData).exportedDecl;
 	if (n !== null && n.kind === NodeKind.DecoratedDecl) n = (n.data as DecoratedDeclData).decoratedNode;
 	if (n !== null && n.kind === NodeKind.FunctionDecl) return n;
+	if (n !== null && n.kind === NodeKind.MethodDecl) {
+		const md = n.data as MethodDeclDataLocal;
+		if (!md.methodIsStatic) return null as unknown as Node;
+		// Synthesize a FunctionDecl-shaped Node mirroring this method. The class
+		// name is woven in through the symbol's name (set by collectMethodMember
+		// as `${className}_${methodName}`) — mangleMonoName uses sym.name, so no
+		// need to repeat the prefix here.
+		const fnData: NodeData = {
+			fnName: md.methodName,
+			params: md.methodParams,
+			fnParamTypes: md.methodParamTypes,
+			fnBody: md.methodBody,
+			fnFlags: md.methodFlags,
+			fnReturnType: md.methodReturnType,
+			fnDefaults: [],
+			nativeName: md.nativeName,
+			nameLocation: md.nameLocation,
+		};
+		const synth = createNodeAt(NodeKind.FunctionDecl, fnData, n.location);
+		synth.nodeType = n.nodeType;
+		return synth;
+	}
 	return null as unknown as Node;
 }
 

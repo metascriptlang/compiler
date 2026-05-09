@@ -349,7 +349,7 @@ export function printContinueStmt(node: Node): Doc {
 // `defaults` may be shorter than `names`/`types` (or contain null entries) —
 // missing defaults emit just the bare param. Pass an empty array to suppress
 // defaults entirely (e.g. macro decls don't have defaults).
-export function buildParamList(names: string[], types: string[], defaults: Node[], options: FormatOptions): Doc[] {
+export function buildParamList(names: string[], types: string[], defaults: (Node | null)[], options: FormatOptions): Doc[] {
 	const out: Doc[] = [];
 	for (let i = 0; i < names.length; i += 1) {
 		let p = names[i];

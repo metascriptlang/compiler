@@ -1,26 +1,25 @@
-// Optional Coercion — wraps T returns for Maybe<T> (struct | null) return types in C
+// Optional Coercion — wraps T returns for Maybe<T> return types in C.
 //
-// Only fires for value-type structs wrapped as Maybe (struct has no null sentinel,
-// so it needs a `{ value, present }` wrapper). Ref<T>|Null / Ptr<T>|Null stay as
-// Union — codegen emits them as bare pointer with NULL sentinel, no wrapping needed.
-// Primitive | null stays as Union too — wrapping helpers for primitives don't exist.
+// Fires for any non-pointer Maybe<T> (struct, primitive, string). Ref/Ptr/null
+// types stay as Union — codegen emits bare pointers with NULL as the sentinel.
 //
 // Detection: resolved return type has the IsMaybe flag (set by resolvePass when
-// collapsing struct | null → Maybe<T>). The string-based detection used previously
-// was unsafe — it fired on every "|" annotation including ref unions.
+// collapsing T | null → Maybe<T> for any non-pointer T).
 //
-// All return statements in the body are transformed:
-//   return null   → return msOptionalNull()
-//   return expr   → return msOptionalWrap(expr)
+// All return statements in the body are transformed via direct struct construction
+// (Nim-parity: ~/projects/nim/lib/pure/options.nim's `some(val)` returns
+// `Option[T](has: true, val: val)` — a struct literal, no runtime helper):
+//   return null   → return <NullLiteral typed as Maybe<T>>     // codegen emits {0}
+//   return expr   → return { value: expr, present: true }      // direct struct literal
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, Type,
 	FunctionDeclData, ReturnStmtData, BlockStmtData, IfStmtData,
 } from "../../ast/node";
 import { isMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent } from "../util";
+import { wrapMaybeValue } from "./nullableLower";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { createTransformContext } from "../context";
 
@@ -35,47 +34,41 @@ function optionalVisitor(node: Node): Node {
 	if (node.kind !== NodeKind.FunctionDecl) return node;
 	const d = node.data as FunctionDeclData;
 
-	// Only fire when the resolved return type is Maybe<T> (struct | null).
-	// Ref/Ptr/primitive unions skip this transform — codegen handles them directly.
+	// Only fire when the resolved return type is Maybe<T>.
+	// Ref/Ptr/null unions skip this transform — codegen handles them directly.
 	const sym = node.resolvedSym;
 	if (sym === null || sym.symbolType === null || sym.symbolType.typeReturn === null) return node;
-	if (!isMaybeType(sym.symbolType.typeReturn)) return node;
+	const maybeType = sym.symbolType.typeReturn;
+	if (!isMaybeType(maybeType)) return node;
 
 	// Walk the function body and transform return statements
-	transformReturnsInBody(d.fnBody, d.fnReturnType);
+	transformReturnsInBody(d.fnBody, maybeType);
 
 	return node;
 }
 
 // Walk body and transform returns in T|null functions
-function transformReturnsInBody(body: Node, retType: string): void {
+function transformReturnsInBody(body: Node, maybeType: Type): void {
 	match (body.kind) {
 		NodeKind.ReturnStmt => {
 			const rd = body.data as ReturnStmtData;
-			const loc = body.location;
-			if (rd.argument.kind === NodeKind.NullLiteral) {
-				// return null → return msOptionalNull()
-				rd.argument = makeCall(makeIdent("msOptionalNull", loc), [], loc);
-			} else {
-				// return expr → return msOptionalWrap(expr)
-				const args: Node[] = [];
-				args.push(rd.argument);
-				rd.argument = makeCall(makeIdent("msOptionalWrap", loc), args, loc);
-			}
+			// Canonical Maybe coercion. Handles all three cases internally:
+			// already-Maybe passthrough, null retype, non-null wrap.
+			rd.argument = wrapMaybeValue(rd.argument, maybeType, body.location);
 		},
 		NodeKind.BlockStmt => {
 			const bd = body.data as BlockStmtData;
 			let i = 0;
 			while (i < bd.statements.length) {
-				transformReturnsInBody(bd.statements[i], retType);
+				transformReturnsInBody(bd.statements[i], maybeType);
 				i += 1;
 			}
 		},
 		NodeKind.IfStmt => {
 			const id = body.data as IfStmtData;
-			transformReturnsInBody(id.consequent, retType);
+			transformReturnsInBody(id.consequent, maybeType);
 			if (id.alternate !== null) {
-				transformReturnsInBody(id.alternate, retType);
+				transformReturnsInBody(id.alternate, maybeType);
 			}
 		},
 		_ => {},

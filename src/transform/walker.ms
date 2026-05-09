@@ -20,7 +20,8 @@ import {
 	TypeAssertionData, DestructuringDeclData, QuoteExprData, ComptimeBlockData,
 	MacroInvocationData, TestDeclData, AssertStmtData, PropertyDeclData,
 	ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
-	TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData,
+	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
+	SpliceManyData,
 } from "../ast/node";
 import { TransformContext } from "./context";
 
@@ -53,6 +54,15 @@ export function mapChildren(node: Node, f: Visitor): void {
 			let i = 0;
 			while (i < d.programStmts.length) {
 				d.programStmts[i] = f(d.programStmts[i]);
+				i += 1;
+			}
+		},
+		// SpliceMany — A2 macro multi-decl emission
+		NodeKind.SpliceMany => {
+			const d = node.data as SpliceManyData;
+			let i = 0;
+			for (const child of d.spliceNodes) {
+				d.spliceNodes[i] = f(child);
 				i += 1;
 			}
 		},
@@ -399,6 +409,12 @@ export function mapChildren(node: Node, f: Visitor): void {
 				i += 1;
 			}
 		},
+		NodeKind.TypeIntersection => {
+			const d = node.data as TypeIntersectionData;
+			for (let i = 0; i < d.typExprMembers.length; i += 1) {
+				d.typExprMembers[i] = f(d.typExprMembers[i]);
+			}
+		},
 		NodeKind.TypeFunction => {
 			const d = node.data as TypeFunctionData;
 			let i = 0;
@@ -417,6 +433,17 @@ export function mapChildren(node: Node, f: Visitor): void {
 			}
 			if (d.typExprIndexKey !== null) { d.typExprIndexKey = f(d.typExprIndexKey); }
 			if (d.typExprIndexValue !== null) { d.typExprIndexValue = f(d.typExprIndexValue); }
+			// Per-field decorators (V2): walk each decorator node in place
+			let di = 0;
+			while (di < d.typExprFieldDecorators.length) {
+				const decs = d.typExprFieldDecorators[di];
+				let dj = 0;
+				while (dj < decs.length) {
+					decs[dj] = f(decs[dj]);
+					dj += 1;
+				}
+				di += 1;
+			}
 		},
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
 		// adding a new NodeKind forces an exhaustiveness error here — keeping

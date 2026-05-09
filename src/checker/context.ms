@@ -535,6 +535,13 @@ export function isExtensionFlag(flags: string): boolean {
 	return findFlagSegment(flags, "ext:") !== "";
 }
 
+// True iff `flags` carries the `gen:T,U,...` segment. Single source of
+// truth for "is this a generic decl?" — used by checker (mono dispatch),
+// codegen (skip generic body emission), and extension resolution.
+export function isGenericFn(flags: string): boolean {
+	return findFlagSegment(flags, "gen:") !== "";
+}
+
 export function isStaticExtensionFlag(flags: string): boolean {
 	return findFlagSegment(flags, "sext:") !== "";
 }

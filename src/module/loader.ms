@@ -28,7 +28,8 @@ import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../
 import { readFile } from "std/fs";
 import { translateCHeader } from "./cimport/emit";
 import { resolveRuntimeDir } from "../utils/path";
-import { isAbsolute, dirname } from "std/fs/path";
+import { isAbsolute, dirname, join, normalize } from "std/fs/path";
+import { cwd } from "std/process";
 // (utils/string imports removed — using native .slice)
 
 // ===== Source Provider =====
@@ -375,8 +376,21 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	return true;
 }
 
+// Canonicalize a module path: relative paths get joined with cwd so the
+// graph keys every file by its absolute path. Without this, a file resolved
+// via different code paths (e.g. entry passed as `src/index.ms` vs prelude
+// loaded via absolute stdPath) gets two distinct graph entries → two .o
+// files emitted with overlapping global symbols → linker duplicate-symbol
+// error. Map-provider test paths like `/src/a.ms` already absolute → pass
+// through unchanged.
+function canonicalModulePath(path: string): string {
+	if (isAbsolute(path)) return path;
+	return normalize(join(cwd(), path));
+}
+
 // useConfig: 0 = bare (skip std, .ms only), 1 = full (use ResolverConfig)
 export function loadModule(graph: ModuleGraph, path: string, provider: SourceProvider, config: ResolverConfig, useConfig: number): Result<boolean, string> {
+	path = canonicalModulePath(path);
 	// Already in graph — check if still loading (circular import)
 	if (hasModule(graph, path)) {
 		const existing = findModule(graph, path);

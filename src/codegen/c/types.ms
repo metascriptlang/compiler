@@ -7,7 +7,7 @@
 import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
-import { Node, CallExprData, Type, TypeKind, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, SymbolKind } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
@@ -414,6 +414,27 @@ export function isNrvoReturnType(retType: Type | null, funcType: Type | null): b
 // Centralized two-source callee type lookup. Reference implementation uses a single isInvalidReturnType()
 // in reference types called from 10 locations across 4 files.
 
+// Peek inside an ObjectLiteral closure pair for the wrapped function's
+// type info. lambdaLifting builds `{ fn: <typed-Identifier>, env: null }`
+// where the Identifier's nodeType is the original arrow's Function type
+// (set in liftNonCapturing). Without this peek, IIFE callees report null
+// Function type and genClosureCall emits `void(*)(void)` casts.
+function closurePairFuncType(callee: Node): Type | null {
+	if (callee === null || callee.kind !== NodeKind.ObjectLiteral) return null;
+	if ((callee.flags & NodeFlag.Closure) === 0) return null;
+	const od = callee.data as ObjectLiteralData;
+	if (od.properties.length === 0) return null;
+	const fnProp = od.properties[0];
+	if (fnProp.nodeType !== null && fnProp.nodeType.kind === TypeKind.Function) {
+		return fnProp.nodeType;
+	}
+	if (fnProp.resolvedSym !== null && fnProp.resolvedSym.symbolType !== null
+		&& fnProp.resolvedSym.symbolType.kind === TypeKind.Function) {
+		return fnProp.resolvedSym.symbolType;
+	}
+	return null;
+}
+
 export function getCalleeReturnType(callNode: Node): Type | null {
 	const cd = callNode.data as CallExprData;
 	if (cd.callee !== null && cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
@@ -423,6 +444,8 @@ export function getCalleeReturnType(callNode: Node): Type | null {
 		const st = callNode.resolvedSym.symbolType;
 		if (st.kind === TypeKind.Function) return st.typeReturn;
 	}
+	const cpType = closurePairFuncType(cd.callee);
+	if (cpType !== null) return cpType.typeReturn;
 	return null;
 }
 
@@ -435,6 +458,8 @@ export function getCalleeFuncType(callNode: Node): Type | null {
 		const st = callNode.resolvedSym.symbolType;
 		if (st.kind === TypeKind.Function) return st;
 	}
+	const cpType = closurePairFuncType(cd.callee);
+	if (cpType !== null) return cpType;
 	return null;
 }
 

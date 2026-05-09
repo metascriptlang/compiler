@@ -1,19 +1,59 @@
-// JSON Prelude — auto-loaded, no import needed
+// JSON Prelude — auto-loaded ECMAScript-style facade.
+// All codec infrastructure lives in std/serialize/json/. This file is the
+// user-facing surface (re-exports + JSON class) so existing JSON.parse<T> /
+// JSON.stringify<T> patterns work without explicit imports.
 
-// ===== Core Types (from sub-modules, loaded dependency-first) =====
+export { JsonKind, JsonValue, JsonValueData } from "std/serialize/json/types";
+export {
+	jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonInt,
+	jsonArrayOfStrings, jsonArrayOfBooleans, jsonArrayOfNumbers, jsonArrayOfFloat32,
+	jsonArrayOfInt8, jsonArrayOfInt16, jsonArrayOfInt32, jsonArrayOfInt64,
+	jsonArrayOfUint8, jsonArrayOfUint16, jsonArrayOfUint32,
+} from "std/serialize/json/builder";
+export { stringify, stringifyPretty } from "std/serialize/json/stringify";
+export { parseJson } from "std/serialize/json/parser";
+export {
+	asString, asNumber, asBoolean, asInt32, asInt64, at, length, getDynamicField,
+	jsonToStringArray, jsonToBooleanArray, jsonToNumberArray, jsonToFloat32Array,
+	jsonToInt8Array, jsonToInt16Array, jsonToInt32Array, jsonToInt64Array,
+	jsonToUint8Array, jsonToUint16Array, jsonToUint32Array,
+} from "std/serialize/json/accessors";
 
-export { JsonKind, JsonValue, JsonValueData } from "./types";
-export { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonInt } from "./builder";
-export { stringify, stringifyPretty } from "./stringify";
-export { parseJson } from "./parser";
-export { asString, asNumber, asBoolean, asInt32, at, length, getDynamicField } from "./accessors";
+// Macro system constraint: when macro X's expansion result contains a call
+// to macro Y, the importing module must also have Y in its macroBodyRegistry
+// — recursive expansion looks up each name in the LOCAL registry, not the
+// defining module's. Here `jsonStringify` body emits `jsonValueOf(...)`
+// calls, so we must import `jsonValueOf` even though we never call it
+// directly. Same for the other two macros.
+import { jsonStringify, jsonValueOf, jsonValueToStruct } from "std/serialize/json";
 
-// ===== Typed JSON API — @builtin monomorphizes at compile time via builtinLower =====
+function _jsonStringifyTyped<T>(value: T): string {
+	return jsonStringify(value);
+}
+
+function _jsonParseTyped<T>(input: string, witness: T | null): Result<T, string> {
+	const pr = parseJson(input);
+	if (!pr.ok) return Result.err(pr.error);
+	return Result.ok(jsonValueToStruct(pr.value, witness));
+}
 
 export class JSON {
-	@builtin("JsonParse")
-	static extern parse<T>(input: string): Result<T, string>;
+	static stringify<T>(value: T): string {
+		return _jsonStringifyTyped<T>(value);
+	}
 
-	@builtin("JsonStringify")
-	static extern stringify<T>(value: T): string;
+	// Typed parse — `JSON.parse<Person>(s)` returns Result<Person, string>.
+	// Macro-driven decode via `_jsonParseTyped`. T must be specified.
+	static parse<T>(input: string): Result<T, string> {
+		return _jsonParseTyped<T>(input, null);
+	}
+
+	// Untyped parse — `JSON.parseValue(s)` returns Result<JsonValue, string>.
+	// Implementation of the SERIALIZE UntypedTree<JsonValue> capability
+	// (see std/serialize/contracts.ms). Use when JSON shape is unknown
+	// (e.g., third-party API responses); access fields via getDynamicField
+	// protocol: `r.value.user.name.asString()`.
+	static parseValue(input: string): Result<JsonValue, string> {
+		return parseJson(input);
+	}
 }

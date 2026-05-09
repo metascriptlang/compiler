@@ -54,13 +54,31 @@ export interface RaiserVM {
 	error: string;    // Non-empty when VM stopped due to error
 }
 
+// Initial register file size. The slots array grows on demand via
+// `ensureSlots` at function-call entry — this constant only sets the
+// starting capacity to avoid most early reallocations. NOT a hard cap.
+const RAISER_INITIAL_SLOTS = 256;
+
+// Grow the register file to hold at least `count` slots. Pads new slots
+// with fresh nil values so direct indexing (`slots[i]`) is always safe up
+// to the high-water mark. Called at every function-call entry with
+// `baseReg + callee.maxRegs` so the callee's frame is fully reserved
+// before any opcode in it accesses a register.
+export function ensureSlots(regs: RaiserRegFile, count: number): void {
+	while (regs.slots.length < count) {
+		regs.slots.push(raiserNil());
+	}
+}
+
 export function createVM(mod: RaiserModule): RaiserVM {
 	const slots: RaiserValue[] = [];
-	for (let i = 0; i < 256; i = i + 1) {
-		const nil = raiserNil();
-		slots.push(nil);
-	}
 	const regs: RaiserRegFile = { slots };
+	// Reserve the entry function's frame up-front (and at least the initial
+	// capacity) so the entry's first opcode can write to its locals without
+	// hitting an empty register file.
+	const entryFunc = getModuleFunc(mod, mod.entry);
+	const entryReserve = entryFunc.maxRegs > RAISER_INITIAL_SLOTS ? entryFunc.maxRegs : RAISER_INITIAL_SLOTS;
+	ensureSlots(regs, entryReserve);
 	const nilVal = raiserNil();
 	const callFrames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: callFrames };
@@ -71,11 +89,19 @@ export function createVM(mod: RaiserModule): RaiserVM {
 
 // --- Register access via helper functions (DRC-safe) ---
 
+// Slot accessors. Pre-condition: every Call/CallIndirect calls
+// ensureSlots(regs, baseReg + callee.maxRegs) before transferring control,
+// so any in-frame reg access fits in the array. A defensive grow here
+// guards against codegen bugs (e.g. a function whose maxRegs metadata
+// underestimates its actual usage) — better to allocate one nil than
+// crash with a low-level array bounds error from the runtime.
 function getReg(vm: RaiserVM, idx: number): RaiserValue {
+	if (idx >= vm.regs.slots.length) ensureSlots(vm.regs, idx + 1);
 	return vm.regs.slots[idx];
 }
 
 function setReg(vm: RaiserVM, idx: number, val: RaiserValue): void {
+	if (idx >= vm.regs.slots.length) ensureSlots(vm.regs, idx + 1);
 	vm.regs.slots[idx] = val;
 }
 
@@ -310,11 +336,14 @@ function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
 		vmError(vm, `function index out of bounds: ${calleeFuncIdx}`); return;
 	}
 
-	// Check register overflow BEFORE pushing frame (avoid corrupted state on error)
+	// Reserve the callee's frame: starting at newBase, up to its maxRegs.
+	// Without this pre-allocation, the first opcode in the callee that
+	// accesses a register beyond the current slots length would crash with
+	// `index N out of bounds (length M)` from the runtime array bounds
+	// check — there's no per-opcode guard.
 	const newBase = vm.baseReg + destReg + 1;
-	if (newBase >= vm.regs.slots.length) {
-		vmError(vm, `register file overflow: base ${newBase} exceeds ${vm.regs.slots.length} slots`); return;
-	}
+	const callee = getModuleFunc(vm.mod, calleeFuncIdx);
+	ensureSlots(vm.regs, newBase + callee.maxRegs);
 
 	// Push caller's frame (save current function name for stack traces)
 	const callerFunc = getModuleFunc(vm.mod, vm.funcIdx);
@@ -371,11 +400,10 @@ function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
 		vmError(vm, `function index out of bounds: ${calleeFuncIdx}`); return;
 	}
 
-	// Check register overflow BEFORE pushing frame
+	// Reserve the callee's frame (same rationale as vmHandleCall).
 	const newBase = vm.baseReg + destReg + 1;
-	if (newBase >= vm.regs.slots.length) {
-		vmError(vm, `register file overflow: base ${newBase} exceeds ${vm.regs.slots.length} slots`); return;
-	}
+	const callee = getModuleFunc(vm.mod, calleeFuncIdx);
+	ensureSlots(vm.regs, newBase + callee.maxRegs);
 
 	// Push caller's frame
 	const callerFunc = getModuleFunc(vm.mod, vm.funcIdx);

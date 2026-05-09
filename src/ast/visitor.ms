@@ -23,7 +23,8 @@ import {
 	TypeAssertionData, DestructuringDeclData, QuoteExprData, ComptimeBlockData,
 	MacroInvocationData, TestDeclData, AssertStmtData,
 	ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
-	TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData,
+	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
+	SpliceManyData,
 } from "./node";
 
 type ChildVisitor = (child: Node) => void;
@@ -40,6 +41,11 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 				cb(d.programStmts[i]);
 				i += 1;
 			}
+		},
+		// SpliceMany — A2 macro multi-decl emission
+		NodeKind.SpliceMany => {
+			const d = node.data as SpliceManyData;
+			for (const child of d.spliceNodes) cb(child);
 		},
 		// Block
 		NodeKind.BlockStmt => {
@@ -384,6 +390,12 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 				i += 1;
 			}
 		},
+		NodeKind.TypeIntersection => {
+			const d = node.data as TypeIntersectionData;
+			for (const member of d.typExprMembers) {
+				cb(member);
+			}
+		},
 		NodeKind.TypeFunction => {
 			const d = node.data as TypeFunctionData;
 			let i = 0;
@@ -402,6 +414,17 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			}
 			if (d.typExprIndexKey !== null) { cb(d.typExprIndexKey); }
 			if (d.typExprIndexValue !== null) { cb(d.typExprIndexValue); }
+			// Per-field decorators (V2): each inner array holds 0+ decorator nodes
+			let di = 0;
+			while (di < d.typExprFieldDecorators.length) {
+				const decs = d.typExprFieldDecorators[di];
+				let dj = 0;
+				while (dj < decs.length) {
+					cb(decs[dj]);
+					dj += 1;
+				}
+				di += 1;
+			}
 		},
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
 		// adding a new NodeKind forces an exhaustiveness error here, preventing

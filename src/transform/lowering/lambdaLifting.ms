@@ -715,7 +715,16 @@ function liftNonCapturing(body: Node, params: string[], paramTypes: string[], fl
 	state.liftedFunctions.push(fnNode);
 	// Wrap in closure pair { fn: liftedName, env: null } so codegen emits
 	// (msClosure){ .fn = (void*)ptr, .env = NULL } instead of raw function pointer.
-	return wrapFnAsClosure(makeIdent(liftedName, loc), loc);
+	// IMPORTANT: set the lifted Identifier's nodeType to the original arrow's
+	// Function type. genClosureCall (in C codegen) reads this via
+	// getCalleeFuncType to emit correct type casts (return type + param
+	// types) for `((RetType(*)(Params))fn)(args)`. Without this, the cast
+	// defaults to `void(*)(void)` and IIFE fails to compile.
+	const fnIdent = makeIdent(liftedName, loc);
+	if (originalNodeType !== null && originalNodeType.kind === TypeKind.Function) {
+		fnIdent.nodeType = originalNodeType;
+	}
+	return wrapFnAsClosure(fnIdent, loc);
 }
 
 // Reference parity: look up original Identifier node for a captured name
@@ -1281,7 +1290,22 @@ function walkLift(node: Node, state: LiftState): void {
 		},
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			walkLift(d.callee, state);
+			// IIFE — `((s) => { ... })(arg)` — has ArrowFunction at the
+			// callee position. walkLift alone doesn't lift, leaving the
+			// arrow unlowered for codegen which emits
+			// `0 /* unlowered ArrowFunction */`. walkOrLift handles both
+			// the IIFE case (lift the arrow → closure pair) and the normal
+			// case (just walk).
+			const calleeWasArrow = d.callee.kind === NodeKind.ArrowFunction
+				|| d.callee.kind === NodeKind.FunctionExpr;
+			d.callee = walkOrLift(d.callee, state);
+			// After lifting an arrow callee, the call must use the closure-call
+			// convention: `callee.fn(args, callee.env)`. closureCallMarker only
+			// detects MemberExpr-typed callees with Function nodeType, so it'd
+			// miss our ObjectLiteral closure-pair callee. Mark it here.
+			if (calleeWasArrow && d.callee.kind === NodeKind.ObjectLiteral) {
+				d.isDirectCall = false;
+			}
 			let i = 0;
 			while (i < d.arguments.length) {
 				const arg = d.arguments[i];

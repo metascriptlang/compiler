@@ -1040,6 +1040,32 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void
 	const cd = node.data as CallExprData;
 	const sym = node.resolvedSym;
 
+	// Phase 5: super(args) → emit ParentClass_init((Parent*)this, args).
+	// Reuses the parent's _init function (split out from _new in genConstructor).
+	// The cast is C-ABI-correct because Phase 4 flattens parent fields into the
+	// child struct prefix in field-declaration order (parent first, then child).
+	if (cd.callee.kind === NodeKind.Identifier
+			&& (cd.callee.data as IdentifierData).name === "super"
+			&& cd.callee.resolvedSym !== null) {
+		const parentSym = cd.callee.resolvedSym;
+		let parentName = "";
+		if (parentSym.symbolType !== null && parentSym.symbolType.kind === TypeKind.Ref && parentSym.symbolType.typeReturn !== null) {
+			parentName = getTypeDesc(g, parentSym.symbolType.typeReturn);
+		} else if (parentSym.symbolType !== null) {
+			parentName = getTypeDesc(g, parentSym.symbolType);
+		}
+		if (parentName !== "") {
+			let argList = `(${parentName}*)this`;
+			let ai = 0;
+			while (ai < cd.arguments.length) {
+				argList = argList + ", " + genExpr(g, p, cd.arguments[ai]);
+				ai += 1;
+			}
+			ctx.results.push(`${parentName}_init(${argList})`);
+			return;
+		}
+	}
+
 	// extern from "c_name" — useHeader propagates #include to consuming module.
 	// Runtime externs (no headerPath) already have headers always included (system.h, core/*.h).
 	// User externs (with headerPath) get their @include propagated to this module.
@@ -2073,8 +2099,16 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 
 	// C varargs: msNumberArrayFrom(count, (double)(e1), ...) — va_arg reads 8 bytes for double
 	const isNumberArrayFrom = callee === "msNumberArrayFrom";
-	// Resolve callee's function type for parameter type checking
-	const calleeType = sym !== null && sym.symbolType !== null ? sym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null);
+	// Resolve callee's function type for parameter type checking. For
+	// closure-pair callees (post-lift IIFE), neither sym.symbolType nor
+	// cd.callee.nodeType holds the Function type (callee is an ObjectLiteral
+	// whose nodeType is a struct). Fall back to getCalleeFuncType which
+	// peeks inside the closure pair's `fn` property's nodeType.
+	let calleeType = sym !== null && sym.symbolType !== null ? sym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null);
+	if (calleeType === null || calleeType.kind !== TypeKind.Function) {
+		const cpType = getCalleeFuncType(node);
+		if (cpType !== null) calleeType = cpType;
+	}
 	const hasParamTypes = calleeType !== null && calleeType.kind === TypeKind.Function && calleeType.typeChildren !== null;
 	let argsStr = "";
 	let i = 1;

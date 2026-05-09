@@ -303,12 +303,16 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 
 	// Pre-resolve field types (ensures nested type definitions are emitted before struct body)
 	// For interface (Ref<Struct>), unwrap to get inner struct's fields. For struct (plain Struct), use directly.
+	// Read fields from the RESOLVED type (typeNames + typeChildren) — this includes
+	// fields inherited via `extends` / `= A & B` after Phase 2 field merging in
+	// resolveInterface. d.interfaceFields holds only own-declared fields.
 	let ifaceType = node.nodeType;
 	if (ifaceType !== null && ifaceType.kind === TypeKind.Ref && ifaceType.typeReturn !== null) {
 		ifaceType = ifaceType.typeReturn;
 	}
+	const fieldNames: string[] = ifaceType !== null && ifaceType.typeNames !== null ? ifaceType.typeNames : d.interfaceFields;
 	const fieldTypes: string[] = [];
-	for (let i = 0; i < d.interfaceFields.length; i += 1) {
+	for (let i = 0; i < fieldNames.length; i += 1) {
 		const ft = (ifaceType !== null && i < ifaceType.typeChildren.length) ? getTypeDesc(g, ifaceType.typeChildren[i]) : "void*";
 		fieldTypes.push(ft);
 	}
@@ -316,8 +320,8 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 	// Full struct definition (all referenced types already emitted above)
 	const types = sec(g, CSection.Types);
 	addLine(types, `struct ${name} {`);
-	for (let i = 0; i < d.interfaceFields.length; i += 1) {
-		addLine(types, `  ${fieldTypes[i]} ${mangleFieldName(d.interfaceFields[i])};`);
+	for (let i = 0; i < fieldNames.length; i += 1) {
+		addLine(types, `  ${fieldTypes[i]} ${mangleFieldName(fieldNames[i])};`);
 	}
 	addLine(types, "};");
 	addNewline(types);
@@ -353,9 +357,24 @@ function genClassDecl(g: CGen, node: Node): void {
 		// Forward declaration
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${name} ${name};`);
 
-		// Pre-resolve ALL field types, then emit struct atomically
+		// Pre-resolve ALL field types, then emit struct atomically.
+		// Phase 4: read flat field list from RESOLVED Type (includes parent fields
+		// after resolveClass merge in resolvePass.ms). Walk d.classBody only for
+		// static field globals + initializers (AST-decl-only concerns).
 		const fieldTypes: string[] = [];
 		const fieldNames: string[] = [];
+		let classStructType = node.nodeType;
+		if (classStructType !== null && classStructType.kind === TypeKind.Ref && classStructType.typeReturn !== null) {
+			classStructType = classStructType.typeReturn;
+		}
+		if (classStructType !== null && classStructType.typeNames !== null && classStructType.typeChildren !== null) {
+			for (let i = 0; i < classStructType.typeNames.length; i += 1) {
+				fieldNames.push(mangleFieldName(classStructType.typeNames[i]));
+				fieldTypes.push(getTypeDesc(g, classStructType.typeChildren[i]));
+			}
+		}
+		// Static field globals + initializer emission (own decls only — parent's
+		// statics emitted by parent's genClassDecl).
 		for (const member of d.classBody) {
 			if (member.kind === NodeKind.PropertyDecl) {
 				const pd = member.data as PropertyDeclData;
@@ -383,10 +402,7 @@ function genClassDecl(g: CGen, node: Node): void {
 							},
 						};
 					}
-					continue;
 				}
-				fieldTypes.push(getTypeDesc(g, member.nodeType));
-				fieldNames.push(mangleFieldName(pd.propName));
 			}
 		}
 
@@ -423,22 +439,47 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 	const methodOvIdx = node.resolvedSym !== null ? node.resolvedSym.overloadIdx : 0;
 	const methodName = mangledFunctionName(node.resolvedSym, (node.resolvedSym !== null && node.resolvedSym.name !== "") ? node.resolvedSym.name : fallbackName, methodOvIdx);
 	const methodType = node.nodeType;
+	// Bug 11: skip emission of generic method bodies (mirror line 150 guard in
+	// genFunctionDecl). When a generic static method is mono-instantiated for
+	// concrete T (Bug 10 fix), the mono instance lands in `_pendingInstances`
+	// as a synthesized FunctionDecl and gets emitted by the regular function
+	// path. The original generic method body — with deferred MacroInvocation
+	// or `void*` typed params from unresolved T — would otherwise emit broken
+	// C alongside the working mono instance. Type-level (GenericParam in
+	// tree) plus flag-level (`gen:` marker on methodFlags) — either skips.
+	if (hasGenericParams(methodType)) return;
+	if (isGenericFn(d.methodFlags)) return;
 	const cRetType = getTypeDesc(g, methodType.typeReturn);
+	// NRVO: methods returning large value-types (Result<T,E>, struct, tuple)
+	// must be emitted with `void` return + first param `Type* __result`. Caller
+	// codegen unconditionally injects `&dest` as the first argument when the
+	// return type is NRVO-qualified — without this, the function signature
+	// mismatches the call ABI and the receiver gets a stack pointer that
+	// dereferences into garbage. Mirrors `genFunctionDecl` line ~154.
+	const nrvo = isNrvoReturnType(methodType.typeReturn, methodType);
+	const actualRetType = nrvo ? "void" : cRetType;
 
-	// Build params from d.methodParams — "this" is already at index 0 for instance methods
+	// Build params from d.methodParams — "this" is already at index 0 for instance methods.
+	// NRVO inserts `Type* __result` as the synthetic first parameter (before any
+	// user params, including any `this` receiver).
 	let paramList = "";
+	if (nrvo) {
+		paramList = cRetType + "* __result";
+		if (d.methodParams.length > 0) paramList = paramList + ", ";
+	}
 	for (let i = 0; i < d.methodParams.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
 		const pType = getTypeDesc(g, methodType.typeChildren[i]);
 		paramList = paramList + `${pType} ${safeName(d.methodParams[i])}`;
 	}
-	if (d.methodParams.length === 0) paramList = "void";
+	if (paramList === "") paramList = "void";
 
-	const proto = `${cRetType} ${methodName}(${paramList})`;
+	const proto = `${actualRetType} ${methodName}(${paramList})`;
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
 
 	if (d.methodBody !== null) {
 		const p = createProc(methodName, null);
+		if (nrvo) p.isNrvo = true;
 		genStmt(g, p, d.methodBody);
 		const locals = readProcLocals(p);
 		const stmts = readProcStmts(p);
@@ -456,41 +497,59 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 function genConstructor(g: CGen, node: Node, className: string): void {
 	const d = node.data as ConstructorDeclData;
 	const ctorName = className + "_new";
+	const initName = className + "_init";
 
+	// Build user param list — shared by _init and _new.
 	const ctorType = node.nodeType;
-	let paramList = "";
+	let userParams = "";
 	for (let i = 0; i < d.ctorParams.length; i += 1) {
-		if (i > 0) paramList = paramList + ", ";
+		if (i > 0) userParams = userParams + ", ";
 		const pType = getTypeDesc(g, ctorType.typeChildren[i]);
-		paramList = paramList + `${pType} ${safeName(d.ctorParams[i])}`;
+		userParams = userParams + `${pType} ${safeName(d.ctorParams[i])}`;
 	}
-	if (d.ctorParams.length === 0) paramList = "void";
 
-	const proto = `${className}* ${ctorName}(${paramList})`;
-	addLine(sec(g, CSection.ProcHeaders), proto + ";");
+	// Phase 5 split: ClassName_init(this, params) runs the user ctor body;
+	// ClassName_new(params) allocates + delegates to _init. This split lets
+	// `super(args)` in derived ctors call ParentClass_init((Parent*)this, args)
+	// to run parent's init logic on the SAME `this` (no new allocation).
+	const initParamList = userParams === "" ? `${className}* this` : `${className}* this, ${userParams}`;
+	const initProto = `void ${initName}(${initParamList})`;
+	addLine(sec(g, CSection.ProcHeaders), initProto + ";");
+
+	const newParamList = userParams === "" ? "void" : userParams;
+	const newProto = `${className}* ${ctorName}(${newParamList})`;
+	addLine(sec(g, CSection.ProcHeaders), newProto + ";");
 
 	// Multi-module dedup: each constructor emitted once (same as generic function instances).
-	// Second module gets forward declaration only.
+	// Second module gets forward declarations only.
 	if (isInstanceEmitted(ctorName)) return;
 	markInstanceEmitted(ctorName);
 
 	const procs = sec(g, CSection.Procs);
-	addLine(procs, proto + " {");
-	// Ensure typeInfo is declared in this translation unit
-	ensureTypeInfoDef(g, className);
-	// Allocate with RTTI (DRC) or NULL (manual gc — TypeInfo not emitted)
-	const typeInfoArg = (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) ? "NULL" : `&${className}TypeInfo`;
-	addLine(procs, `  ${className}* this = (${className}*)msAllocTyped(sizeof(${className}), ${typeInfoArg});`);
 
+	// Emit _init first (called by _new and by super(args)).
+	addLine(procs, initProto + " {");
 	if (d.ctorBody !== null) {
-		const p = createProc(ctorName, null);
+		const p = createProc(initName, null);
 		genStmt(g, p, d.ctorBody);
 		const locals = readProcLocals(p);
 		const stmts = readProcStmts(p);
 		if (locals.length > 0) add(procs, locals);
 		add(procs, stmts);
 	}
+	addLine(procs, "}");
+	addNewline(procs);
 
+	// Emit _new wrapper: alloc + call _init + return this.
+	addLine(procs, newProto + " {");
+	ensureTypeInfoDef(g, className);
+	const typeInfoArg = (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) ? "NULL" : `&${className}TypeInfo`;
+	addLine(procs, `  ${className}* this = (${className}*)msAllocTyped(sizeof(${className}), ${typeInfoArg});`);
+	let initArgList = "this";
+	for (let pi = 0; pi < d.ctorParams.length; pi += 1) {
+		initArgList = initArgList + ", " + safeName(d.ctorParams[pi]);
+	}
+	addLine(procs, `  ${initName}(${initArgList});`);
 	addLine(procs, "  return this;");
 	addLine(procs, "}");
 	addNewline(procs);
@@ -712,7 +771,7 @@ function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
 // ===== Tests =====
 
 import { createCGen, assembleOutput, scopeMangledParam } from "./context";
-import { CheckerContext, GcMode } from "../../checker/context";
+import { CheckerContext, GcMode, isGenericFn } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 

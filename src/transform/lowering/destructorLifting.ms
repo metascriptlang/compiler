@@ -21,7 +21,7 @@
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 //   TypeInfo   TypeName_typeInfo                  — msTypeInfo for ORC runtime
 
-import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, Type, TypeKind, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, instantiateGenericBody, peelToStruct } from "../../checker/types";
@@ -924,6 +924,12 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 		const x1 = isRef ? makeHiddenDeref(makeIdent(p1, loc), loc) : makeIdent(p1, loc);
 		const x2 = (isRef && !isTrace) ? makeHiddenDeref(makeIdent(p2, loc), loc) : makeIdent(p2, loc);
 
+		// Phase 4: when child class has flattened parent fields (HasInheritedFields
+		// flag set in resolveClass), suppress parent hook genCall — fields are
+		// walked inline by the per-field loops below, so calling parent destroy
+		// would double-free. ensureHooksByName above is preserved (parent type
+		// still needs hooks emitted for cross-module references).
+		const fieldsFlattened = (objType.typeFlags & TypeFlag.HasInheritedFields) !== 0;
 		if (objType.kind === TypeKind.Union) {
 			generateUnionArms(hook, typeName, objType, p1, p2, lctx, buf, loc);
 		} else if (hook === "destroy") {
@@ -932,12 +938,12 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 				const visited: NameSet = createNameSet();
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
-			if (baseTypeName !== "" && namedTypeHasHooks(baseTypeName, lctx)) {
+			if (!fieldsFlattened && baseTypeName !== "" && namedTypeHasHooks(baseTypeName, lctx)) {
 				genCall(baseTypeName + "Destroy", hook, x1, x2, buf, loc);
 			}
 		} else {
 			// Copy/sink/trace/wasMoved: base class first, then fields (standard pattern)
-			if (baseTypeName !== "" && namedTypeHasHooks(baseTypeName, lctx)) {
+			if (!fieldsFlattened && baseTypeName !== "" && namedTypeHasHooks(baseTypeName, lctx)) {
 				genCall(baseTypeName + hookSuffix(hook), hook, x1, x2, buf, loc);
 			}
 			for (let i = 0; i < objType.typeNames.length; i += 1) {

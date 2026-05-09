@@ -1,55 +1,156 @@
 # Raiser VM — Self-Hosted Bytecode Backend
 
-Statically-typed bytecode VM for MetaScript. Alternative backend to C and JS codegen. Leverages full compiler analysis (type info, transforms, DRC classification) to emit optimized typed opcodes with zero runtime type dispatch.
+Statically-typed bytecode VM for MetaScript. **Three product roles**, in priority order:
 
-Architecture: **Wasm-inspired typed stacks** + **LuaJIT-inspired instruction encoding** + **switch dispatch** (ASM dispatch is a future layer).
+1. **Comptime engine** — executes `@comptime` blocks and macros during compilation (working today)
+2. **IDE eval-loop backend** — long-running runtime for inline-eval / hot-redefine / watch-style IDE experience (planned)
+3. **Embeddable scripting / REPL** — small-footprint runtime for sandboxed eval (small)
+
+Explicit non-goals: JIT compiler, general-purpose VM competing with browser engines, AAA game runtime, large stdlib.
+
+For shipping native binaries use the **C backend**. For browser/edge use the **JS backend**. Raiser only fills the iteration-loop / sandbox / comptime niche those two cannot cover.
+
+---
+
+## Why static types let us skip JIT
+
+Dynamic-language JITs exist primarily to **infer types at runtime**: observe actual operand types, generate specialized code, deopt on type change. ~80% of a production JIT's complexity is type-speculation + deopt machinery. MetaScript types are resolved **at compile time** — `int32 + int32` is statically `AddI32`, no runtime guessing required.
+
+Performance bands (typical, vs C native, integer-heavy):
+
+| Runtime kind | Cost |
+|---|---|
+| Dynamic interpreter, no JIT | ~30–50× of C |
+| Dynamic with JIT | ~2–3× of C |
+| Static-typed interpreter, untagged registers | **~3–5× of C** ← Raiser target |
+| Static-typed JIT | ~1.5–2× of C |
+
+The static-type path closes most of the gap to JIT without the engineering cost. Raiser targets the third band.
+
+---
+
+## Performance Roadmap
+
+### Phase 0 — Working baseline (DONE)
+
+52 opcodes; generic boxed `RaiserValue` register file; computed-goto C dispatch via `vm_dispatch.c`; 1959 tests across rgen + eval. Sufficient for comptime macro execution and small REPL programs. Rough perf: ~50× of C — dominated by per-op heap allocation and pointer indirection.
+
+### Phase 1 — Untagged typed registers (SPIKED — see `spike/`)
+
+**Problem (audited)**:
+
+| # | Issue | Where |
+|---|---|---|
+| 1 | Register file is `RaiserValue[]` (33-byte heap struct + pointer per slot) | `value.ms`, `vm.ms` |
+| 2 | `intVal: number` is f64 internally — integer math goes through FPU | `value.ms` |
+| 3 | Every arithmetic op heap-allocates a fresh value (`raiserInt(...)`) | `vm.ms` AddI64 etc. |
+| 4 | `Move` allocates + `copyValueInto` instead of pointer copy | `vm.ms` |
+| 5 | Each `RaiserInstruction` compiles to ~32 bytes of C struct | `vm_dispatch.c` |
+| 6 | `LoadField` does linear-scan + string compare on object fields | `value.ms:319` |
+| 7 | I32/F32 typed opcodes documented but unimplemented; only I64/F64 exist | `vm.ms` dispatch |
+
+**Sub-phases**:
+
+- **1a** — untagged register file (`union { int64; double; ptr }[]` or per-type slots)
+- **1b** — native `int64`, drop double-as-int
+- **1c** — eliminate per-op alloc (write into existing slot)
+- **1d** — pack instruction layout (current 32B → 4–8B target)
+
+**Spike result (this session)**: 1a alone — register file becomes `number[]` (untagged), constants pre-extracted, alloc-free hot loop:
+
+**Spike sub-phases measured** (`spike/` dir):
+- **1a** — register file `number[]` (untagged), constants pre-extracted, alloc-free hot loop. File: `spike/vmFast.ms`.
+- **1d** — instructions packed into single `number` per inst (8 bytes vs ~32-byte heap struct + pointer). Decode is shift+mask in dispatch. File: `spike/vmPacked.ms`.
+
+```
+=== sum(1..20000) ===
+  vm.ms (boxed)        : 13.11ms
+  vmFast (1a)          :  3.58ms   (3.66x)
+  vmPacked (1a+1d)     :  2.41ms   (5.43x)
+  packing alone        :  1.48x    (1a → 1a+1d)
+
+=== sum(1..60000) ===
+  vm.ms (boxed)        : 38.85ms
+  vmFast (1a)          : 11.29ms   (3.52x)
+  vmPacked (1a+1d)     :  7.19ms   (5.40x)
+  packing alone        :  1.53x
+
+=== fibIter(45) ===
+  vm.ms (boxed)        :  0.73ms
+  vmFast (1a)          :  0.22ms   (3.36x)
+  vmPacked (1a+1d)     :  0.17ms   (4.11x)
+  packing alone        :  1.22x
+```
+
+**Validates the thesis**: untagged registers + packed instructions delivers ~5× over the boxed baseline. Sub-phase 1b (native `int64` instead of f64-as-int via MS sized-int types) expected to add another 1.3–1.5×. Full Phase 1 target is **6–8× faster than current vm.ms on numeric loops**, putting Raiser within ~5–8× of native C — typed-bytecode-interpreter range, on track for the 3–5× of-C goal after Phase 2/3.
+
+Spike files: `spike/vmFast.ms` (1a), `spike/vmPacked.ms` (1a+1d), `spike/bench.ms` (3-way harness).
+
+### Phase 2 — Field offsets (PLANNED)
+
+Replace `LoadField reg, base, "fieldName"` (linear scan + string compare) with `LoadFieldOffset reg, base, k` (single mov). Codegen layout pass assigns per-struct field offsets. Expected speedup: 10–50× on object-heavy code.
+
+### Phase 3 — Type-specialized opcodes (PLANNED)
+
+Implement I32/U32/U64/F32 variants currently only on paper. Compiler `kind` info already drives selection; need handlers + dispatch entries. Expected speedup: 1.3–2× on mixed-numeric code.
+
+### Phase 4 — Threaded dispatch (PLANNED)
+
+Tighten `vm_dispatch.c` to direct-threaded code (next-instruction loaded inside each handler, no central `while` loop). Expected speedup: 1.3×.
+
+---
+
+## Light Table IDE Backend (PLANNED)
+
+Second product reason for Raiser's existence. Architecture:
+
+```
+Editor ──socket──> Long-running Raiser process
+   │                       │
+   │  evalForm("x+1") ──→  Parse → Check (lenient) → Compile → Execute in-VM
+   │                       │
+   ←──── result + watches ─┘
+```
+
+Required additions (~2 months on top of Phase 1):
+
+| Feature | Mechanism |
+|---|---|
+| `evalForm(text) → Value` | Reentrant parser/checker + persistent VM globals |
+| Function hot-swap | Patch `module.functions[idx]` — callers via `funcIdx` pick up new bytecode automatically |
+| Watch instrumentation | New `Watch reg, watchId` opcode pushes values to editor stream |
+| Reflection API | Expose frame stack + globals + types via socket |
+| Type-change strategy | Soft restart (Phase 1) on incompatible struct layout change |
+
+Open questions deferred until Phase 1 ships:
+- Lenient incremental check (eval `foo(x)` with undefined `x` → soft error, not block)
+- Migration vs restart on struct field changes
+- Source-map for inline value rendering
+
+---
+
+## Out of scope (intentional)
+
+| Feature | Why skipped |
+|---|---|
+| JIT (x64/aarch64 codegen) | 18–30 month investment; static types close most of the perf gap without it |
+| Precise generational GC | Comptime VM lifetime is short; IDE state lives across edits via different model |
+| Threading runtime, sockets, regex, file I/O | Use C/JS backends — Raiser is not a general runtime |
+| Async/await event loop | Synchronous eval is sufficient for comptime + IDE eval-form |
+| 60fps frame-budget gameplay | Wrong target — that needs JIT |
+| Bytecode binary (`.rsr` files) | Defer until opcode numbering stabilizes after Phase 1–3 |
 
 ---
 
 ## Pipeline Position
 
 ```
-Source.ms --> [1 Parse] --> [2 Check] --> [3 Transform] --> [4 Analyze] --> [5 Raiser] --> Execute
-                              |                               |               |
-                         Type info                    Type classification   Compile + Run
-                         (TypeKind,                   (RcKind, scope        (bytecode)
-                          Scope)                       analysis)
+Source.ms → [1 Parse] → [2 Check] → [3 Transform] → src/codegen/raiser/ → RaiserModule → src/raiser/ (this dir, the VM)
+                                                          ↑                                    ↑
+                                                       AST→bytecode                       executes bytecode
 ```
 
-The Raiser compiler consumes the **post-analyze AST** (same as C backend) and uses:
-- **CheckerContext** type info — determines which typed opcodes to emit (add_i32 vs add_i64 vs add_f64)
-- **Type classification** — RC types get runtime refcounting ops, primitives get direct register operations
-- **Transform results** — match/defer/for-of already lowered to if-else/try-finally/while
-
----
-
-## Lessons from Reference (Problems → Solutions)
-
-| Problem | Reference (~19K lines) | Self-Hosted Fix |
-|---------|----------------------|----------------|
-| **Bloat** | AOT native compilation, NaN-boxing, promises, async, event loop, peephole — all day-1 | Layered bring-up: switch dispatch first, each layer adds one concern |
-| **Monolithic ASM** | 2045-line `vm_arm64.s`, 728-line `vm_dispatch_x64.s` — all handlers in one file | One `.ms` file per opcode family (~100-200 lines), independently testable |
-| **Slow iteration** | External Zig test files, full rebuild required, 7 execution tests for 127 opcodes | Inline `testGroup` per file, hand-constructed bytecode tests, `bun run test-ms` in <1s |
-
----
-
-## Layered Architecture
-
-```
-Layer 0: Bytecode format     — RvOpcode, RvInstruction, RvValue, RvModule        (~400 lines)
-Layer 1: Switch interpreter  — dispatch loop + i64 ops (arithmetic/memory/branch) (~500 lines)
-Layer 2: Full numeric types  — add i32, f32, f64 handlers + type conversions      (~400 lines)
-Layer 3: Bytecode compiler   — AST→bytecode using CheckerContext type info        (~800 lines)
-Layer 4: Objects & arrays    — new_object, field access, array indexing           (~300 lines)
-────────────────── Day-1 scope above, future scope below ──────────────────────────
-Layer 5: Strings             — string concat, comparison, RC                      (~200 lines)
-Layer 6: Closures            — env struct, indirect calls, capture analysis       (~400 lines)
-Layer 7: ORC integration     — runtime refcounting, cycle detection               (~300 lines)
-Layer 8: Peephole optimizer  — strength reduction, constant folding               (~300 lines)
-Layer 9: ASM dispatch        — hand-written ARM64/x64 dispatch (separate dir)     (~TBD)
-```
-
-Each layer is fully testable before the next begins. Layer 0 tests encoding round-trips. Layer 1 tests execute hand-built bytecode. Layer 3 tests parse source → compile → execute.
+Skips Phase 4 (DRC analyzer) and Phase 5 (C/JS codegen). The VM has its own memory model — heap-recycle between comptime evaluations, no per-value RC. AST→bytecode lives in `src/codegen/raiser/` and imports types from this directory; this directory knows nothing about AST nodes.
 
 ---
 
@@ -57,249 +158,50 @@ Each layer is fully testable before the next begins. Layer 0 tests encoding roun
 
 ```
 src/raiser/
-  CLAUDE.md                  -- this file
-  index.ms                   -- Hub: compileToRaiser, executeRaiser, evalSource, E2E tests
-  bytecode.ms                -- RvOpcode enum (~90 opcodes), RvInstruction, encoding helpers
-  value.ms                   -- RvValue interface, RvValueKind enum, constructors
-  module.ms                  -- RvFunction, RvModule, RvConstPool, RvFunctionList
-  compiler/
-    index.ms                 -- Hub: compileProgram
-    context.ms               -- RvCompiler state, register allocator, scope stack, struct layouts
-    expressions.ms           -- compileExpression: AST expression → typed bytecode
-    statements.ms            -- compileStatement: variable decls, if/while/block/return
-    declarations.ms          -- function/struct collection (two-phase), function compilation
-  vm/
-    index.ms                 -- Hub: executeModule
-    context.ms               -- RvVM, RvCallFrame, typed register files, call stack
-    dispatch.ms              -- Main while loop + if/else dispatch to op handlers
-    ops/
-      index.ms               -- Hub: re-exports all op families
-      arithmeticI64.ms       -- add/sub/mul/div/mod/neg for i64
-      arithmeticI32.ms       -- add/sub/mul/div/mod/neg for i32
-      arithmeticF64.ms       -- add/sub/mul/div/neg for f64
-      arithmeticF32.ms       -- add/sub/mul/div/neg for f32
-      memory.ms              -- load_const, load_local, store_local (all types), move
-      control.ms             -- jump, call, ret, halt, print
-      compare.ms             -- fused compare-branch for all 4 types
-      convert.ms             -- i32↔i64, i32↔f64, f32↔f64, etc. (12 ops)
-      objects.ms             -- new_object, load_field, store_field (Layer 4)
-      arrays.ms              -- new_array, load_index, store_index (Layer 4)
+  CLAUDE.md          -- this file
+  bytecode.ms        -- RaiserOpcode (52 ops), RaiserInstruction, ABC/ABx/Ax encoding
+  value.ms           -- RaiserValue (boxed today, target untagged), array/object heaps
+  module.ms          -- RaiserFunction, RaiserModule, accessors
+  vm.ms              -- if/else dispatch loop, boxed register file (Phase 0)
+  vm_dispatch.c      -- computed-goto C dispatch (mirrors vm.ms layout exactly)
+  disasm.ms          -- bytecode pretty-printer
+  repl.ms            -- REPL skeleton — to be expanded into IDE backend (Phase 2/3)
+  spike/
+    vmFast.ms        -- Phase 1 prototype: untagged register VM (i64 hot path only)
+    bench.ms         -- side-by-side bench: vm.ms vs vmFast
 ```
 
-**19 files total.** Each ops file ~100-150 lines with inline tests. Run any file independently:
-```bash
-rm -rf out && bun run test-ms src/raiser/vm/ops/arithmeticI64.ms
-```
+Codegen lives in `src/codegen/raiser/` (separate dir): `context.ms`, `expressions.ms`, `statements.ms`, `rgen.ms`, `eval.ms`. See its CLAUDE.md.
 
 ---
 
 ## Bytecode Format
 
-### Instruction Encoding — 32-bit, Lua-style
+### Instruction encoding (Lua-style, ABC/ABx/Ax)
 
-```
-ABC  format:  [op:8][A:8][B:8][C:8]         — 3 operands
-ABx  format:  [op:8][A:8][Bx:16]            — operand + 16-bit immediate
-Ax   format:  [op:8][Ax:24]                 — 24-bit signed immediate (jumps)
-```
+- **ABC**: `[op:8][A:8][B:8][C:8]` — 3 operands
+- **ABx**: `[op:8][A:8][Bx:16]` — operand + 16-bit immediate
+- **Ax**: `[op:8][Ax:24]` — 24-bit signed immediate (jumps)
 
-`RvInstruction` is a flat interface with `op`, `a`, `b`, `c` fields. Encoding/decoding helpers: `rvABC()`, `rvABx()`, `rvAx()`, `getBx()`, `getSignedBx()`, `getSignedAx()`.
+`RaiserInstruction` is a flat interface today. Phase 1d goal: pack to ≤8 bytes per instruction.
 
-### Opcode Table
+### Opcode table (52 today)
 
-**Arithmetic (22 opcodes)**
+| Family | Count | Notes |
+|---|---|---|
+| Memory | 3 | LoadConst (ABx), Move, LoadNil |
+| i64 arithmetic | 6 | Add/Sub/Mul/Div/Mod/Neg |
+| i64 compare-branch | 6 | Beq/Bne/Blt/Ble/Bgt/Bge — "if cond, skip C instructions" |
+| f64 arithmetic | 5 | Add/Sub/Mul/Div/Neg |
+| f64 compare-branch | 6 | symmetric to i64 |
+| Bitwise | 6 | And/Or/Xor/Not/Shl/Shr — int32 internally |
+| Control | 5 | Jump (Ax), Call, Ret, Halt, Print |
+| Array | 5 | NewArray, LoadIndex, StoreIndex, ArrayLen, ArrayPush |
+| Object | 3 | NewObject, LoadField (string-keyed today), StoreField |
+| String | 6 | ConcatStr, EqStr, NeStr, StrLen, StrCharAt, StrSlice |
+| Indirect | 1 | CallIndirect (func index from register) |
 
-| Op | i32 | i64 | f32 | f64 | Format | Semantics |
-|----|-----|-----|-----|-----|--------|-----------|
-| Add | AddI32 | AddI64 | AddF32 | AddF64 | ABC | T[A] = T[B] + T[C] |
-| Sub | SubI32 | SubI64 | SubF32 | SubF64 | ABC | T[A] = T[B] - T[C] |
-| Mul | MulI32 | MulI64 | MulF32 | MulF64 | ABC | T[A] = T[B] * T[C] |
-| Div | DivI32 | DivI64 | DivF32 | DivF64 | ABC | T[A] = T[B] / T[C] |
-| Mod | ModI32 | ModI64 | — | — | ABC | T[A] = T[B] % T[C] |
-| Neg | NegI32 | NegI64 | NegF32 | NegF64 | ABC | T[A] = -T[B] |
-
-**Typed Memory (12 opcodes)**
-
-| Op | Format | Semantics |
-|----|--------|-----------|
-| LoadConst{I32,I64,F32,F64} | ABx | T[A] = constants[Bx] |
-| LoadLocal{I32,I64,F32,F64} | ABx | T[A] = locals[Bx] |
-| StoreLocal{I32,I64,F32,F64} | ABx | locals[Bx] = T[A] |
-
-**Typed Compare-Branch (24 opcodes)**
-
-| Op | i32 | i64 | f32 | f64 | Format | Semantics |
-|----|-----|-----|-----|-----|--------|-----------|
-| Beq | BeqI32 | BeqI64 | BeqF32 | BeqF64 | ABC | if T[A] == T[B] skip C |
-| Bne | BneI32 | BneI64 | BneF32 | BneF64 | ABC | if T[A] != T[B] skip C |
-| Blt | BltI32 | BltI64 | BltF32 | BltF64 | ABC | if T[A] < T[B] skip C |
-| Ble | BleI32 | BleI64 | BleF32 | BleF64 | ABC | if T[A] <= T[B] skip C |
-| Bgt | BgtI32 | BgtI64 | BgtF32 | BgtF64 | ABC | if T[A] > T[B] skip C |
-| Bge | BgeI32 | BgeI64 | BgeF32 | BgeF64 | ABC | if T[A] >= T[B] skip C |
-
-**Type Conversions (12 opcodes)**
-
-```
-I32ToI64  I32ToF32  I32ToF64
-I64ToI32  I64ToF32  I64ToF64
-F32ToI32  F32ToI64  F32ToF64
-F64ToI32  F64ToI64  F64ToF32
-```
-Format: ABC — T_dest[A] = convert(T_src[B])
-
-**Control Flow (5 opcodes)**
-
-| Op | Format | Semantics |
-|----|--------|-----------|
-| Jump | Ax | pc += sAx (24-bit signed offset) |
-| Call | ABC | R[A] = call func[B] with C args from R[A+1] |
-| Ret | ABC | return T[A] (typed by function return type) |
-| Halt | ABC | stop execution, exit value = R[A] |
-| Print | ABC | debug print R[A] |
-
-**Generic Memory (5 opcodes)**
-
-| Op | Format | Semantics |
-|----|--------|-----------|
-| Move | ABC | R[A] = R[B] |
-| LoadNil | ABC | R[A] = nil |
-| NewObject | ABC | R[A] = new object with B fields |
-| NewArray | ABC | R[A] = new array from R[A+1..A+B] |
-| LoadConst | ABx | R[A] = constants[Bx] (generic Value) |
-
-**Object/Array Access (4 opcodes)**
-
-| Op | Format | Semantics |
-|----|--------|-----------|
-| LoadField | ABC | R[A] = R[B].fields[C] |
-| StoreField | ABC | R[A].fields[B] = R[C] |
-| LoadIndex | ABC | R[A] = R[B][R[C]] |
-| StoreIndex | ABC | R[A][R[B]] = R[C] |
-
-**RC Operations (3 opcodes, Layer 7)**
-
-| Op | Semantics |
-|----|-----------|
-| Incref | R[A].refcount++ |
-| Decref | R[A].refcount-- (deferred) |
-| FlushRc | Process deferred decrements |
-
-**Total: ~87 opcodes** (vs reference's 127). Growth path: super-instructions, string ops, closure ops added in later layers.
-
----
-
-## Type Interfaces
-
-All Raiser VM types use `Rv` prefix to avoid C namespace collision.
-
-### Core Data Types (`bytecode.ms`, `value.ms`, `module.ms`)
-
-```ms
-// bytecode.ms
-export enum RvOpcode { AddI32, AddI64, AddF32, AddF64, ... }  // ~87 members
-
-export interface RvInstruction {
-    op: number;        // RvOpcode value
-    a: number;         // 8-bit operand A
-    b: number;         // 8-bit operand B
-    c: number;         // 8-bit operand C
-}
-
-// value.ms
-export enum RvValueKind { Int32, Int64, Float32, Float64, Bool, Nil, String, Object, Array }
-
-export interface RvValue {
-    kind: RvValueKind;
-    intVal: number;      // i32/i64
-    floatVal: number;    // f32/f64
-    boolVal: boolean;    // Bool
-    strVal: string;      // String (future)
-}
-
-// module.ms
-export interface RvConstPool { values: RvValue[]; }
-export interface RvCodeBuf { items: RvInstruction[]; }
-
-export interface RvFunction {
-    name: string;
-    code: RvCodeBuf;
-    constants: RvConstPool;
-    arity: number;
-    localsCount: number;
-    maxRegs: number;
-    returnType: RvValueKind;    // typed return
-}
-
-export interface RvFunctionList { items: RvFunction[]; }
-export interface RvModule { name: string; functions: RvFunctionList; entry: number; }
-```
-
-### VM State (`vm/context.ms`)
-
-```ms
-export interface RvRegI32 { slots: number[]; }    // i32 register file
-export interface RvRegI64 { slots: number[]; }    // i64 register file
-export interface RvRegF32 { slots: number[]; }    // f32 register file
-export interface RvRegF64 { slots: number[]; }    // f64 register file
-export interface RvRegVal { slots: RvValue[]; }   // generic Value register file
-
-export interface RvCallFrame {
-    funcIdx: number;
-    ip: number;
-    baseI32: number;     // base offset into i32 register file
-    baseI64: number;     // base offset into i64 register file
-    baseF32: number;     // base offset into f32 register file
-    baseF64: number;     // base offset into f64 register file
-    baseVal: number;     // base offset into Value register file
-    retReg: number;      // caller's return register
-    retKind: RvValueKind;  // which register file gets the return value
-}
-
-export interface RvCallStack { frames: RvCallFrame[]; }
-
-export interface RvVM {
-    module: RvModule;
-    regI32: RvRegI32;
-    regI64: RvRegI64;
-    regF32: RvRegF32;
-    regF64: RvRegF64;
-    regVal: RvRegVal;
-    callStack: RvCallStack;
-    halted: boolean;
-    exitValue: RvValue;
-}
-```
-
-### Compiler State (`compiler/context.ms`)
-
-```ms
-export interface RvLocal {
-    name: string;
-    reg: number;
-    depth: number;
-    kind: RvValueKind;    // type determines which register file
-}
-
-export interface RvLocalList { items: RvLocal[]; }
-export interface RvStructLayout { name: string; fieldNames: string[]; fieldKinds: RvValueKind[]; }
-export interface RvStructLayouts { items: RvStructLayout[]; }
-export interface RvFuncEntry { name: string; index: number; }
-export interface RvFuncMap { items: RvFuncEntry[]; }
-
-export interface RvCompiler {
-    code: RvCodeBuf;
-    constants: RvConstPool;
-    locals: RvLocalList;
-    scopeDepth: number;
-    localsCount: number;
-    nextTemp: number;
-    maxReg: number;
-    functions: RvFuncMap;
-    structLayouts: RvStructLayouts;
-    currentFuncName: string;
-    checkerCtx: CheckerContext;   // from Phase 2+4 — drives typed opcode selection
-}
-```
+Phase 3 will add I32/U32/U64/F32 variants (~30 more opcodes).
 
 ---
 
@@ -307,164 +209,71 @@ export interface RvCompiler {
 
 ### if/else chain (NOT match)
 
-The dispatch loop uses `if/else` because `break`/`continue` in match arms targets the generated switch, not the enclosing `while` loop.
+Dispatch uses `if/else` because `break`/`continue` in match arms targets the generated switch, not the enclosing `while` loop.
 
 ```ms
-// vm/dispatch.ms
-export function executeModule(vm: RvVM): RvValue {
-    while (!vm.halted) {
-        const frame = currentFrame(vm);
-        const func = getFunc(vm, frame.funcIdx);
-        const inst = func.code.items[frame.ip];
-        frame.ip = frame.ip + 1;
-        const op = inst.op;
-
-        // Arithmetic i64
-        if (op === RvOpcode.AddI64) { execAddI64(vm, frame, inst); }
-        else if (op === RvOpcode.SubI64) { execSubI64(vm, frame, inst); }
-        // ... all opcodes via if/else ...
-        else if (op === RvOpcode.Halt) { vm.halted = true; vm.exitValue = getRegVal(vm, frame, inst.a); }
-        else { vm.halted = true; }
-    }
-    return vm.exitValue;
+while (!vm.halted) {
+    const inst = func.code[vm.ip];
+    vm.ip = vm.ip + 1;
+    const op = inst.op;
+    if (op === RaiserOpcode.AddI64) { /* ... */ }
+    else if (op === RaiserOpcode.SubI64) { /* ... */ }
+    /* ... */
 }
 ```
 
-### Typed Register Access
+### Computed-goto fast path (`vm_dispatch.c`)
 
-Each ops handler accesses the correct register file based on the opcode's type:
-
-```ms
-// In arithmeticI64.ms
-export function execAddI64(vm: RvVM, frame: RvCallFrame, inst: RvInstruction): void {
-    const base = frame.baseI64;
-    const lhs = vm.regI64.slots[base + inst.b];
-    const rhs = vm.regI64.slots[base + inst.c];
-    vm.regI64.slots[base + inst.a] = lhs + rhs;
-}
-
-// In arithmeticF64.ms
-export function execAddF64(vm: RvVM, frame: RvCallFrame, inst: RvInstruction): void {
-    const base = frame.baseF64;
-    const lhs = vm.regF64.slots[base + inst.b];
-    const rhs = vm.regF64.slots[base + inst.c];
-    vm.regF64.slots[base + inst.a] = lhs + rhs;
-}
-```
-
-No runtime type dispatch — the opcode itself determines which register file is accessed.
+`vm_dispatch.c` mirrors `vm.ms`/`value.ms`/`module.ms` struct layout exactly (see `_RD_*` typedefs in the file). Any field change in those `.ms` files breaks the C dispatch — keep them in sync. Opcode numeric values are mirrored at the top of the C file.
 
 ---
 
-## Compiler Architecture
+## Compiler State (codegen, in `src/codegen/raiser/`)
 
-### Typed Opcode Selection
+Two-phase compilation: collect functions/classes/enums first, then compile bodies. See `src/codegen/raiser/CLAUDE.md` for full architecture and NodeKind coverage.
 
-The compiler uses `CheckerContext` type info to select the right opcode variant:
+---
 
-```ms
-// compiler/expressions.ms
-function compileBinaryExpr(comp: RvCompiler, node: Node): CompileResult {
-    const d = node.data as BinaryExprData;
-    const lReg = try compileExpression(comp, d.left);
-    const rReg = try compileExpression(comp, d.right);
-    const dest = allocTemp(comp);
-    const kind = resolveNumericKind(comp, node);  // uses checker type info
+## DRC Workarounds (live in this code)
 
-    if (d.operator === "+") {
-        if (kind === RvValueKind.Int32) { emitABC(comp, RvOpcode.AddI32, dest, lReg, rReg); }
-        else if (kind === RvValueKind.Int64) { emitABC(comp, RvOpcode.AddI64, dest, lReg, rReg); }
-        else if (kind === RvValueKind.Float32) { emitABC(comp, RvOpcode.AddF32, dest, lReg, rReg); }
-        else { emitABC(comp, RvOpcode.AddF64, dest, lReg, rReg); }
-    }
-    // ... other operators ...
-    return Result.ok(dest);
-}
-```
+| Rule | Application |
+|------|------------|
+| Arrays by pointer | Bare `T[]` types throughout |
+| No try in match arms | Dispatch uses if/else chain |
+| `const` before function arg | Store `RaiserValue` in const before pushing to arrays |
+| No C-style `for` in match | Use `while` loops everywhere |
+| Interface name prefix | `Raiser*` to avoid C namespace collision |
+| No `indexOf`/`includes` | Use `slice`, `length`, `findChar` from `utils/string.ms` |
+| `null as unknown as T` | For nullable fields in frames/compiler |
 
-### Register Allocation — Lua Model
+---
 
-- Locals: `R[0..localsCount-1]` — permanent for function lifetime
-- Temps: `R[localsCount..maxReg]` — scratch per statement, reset after each statement
-- Parameters: `R[0..arity-1]` — declared as locals before compilation
-- Each typed register file has independent allocation
+## Testing
 
-### Two-Phase Compilation
+```bash
+# Per-file (fast)
+rm -rf out && bun run test-ms src/raiser/value.ms
 
-1. **Collect phase**: Walk top-level statements, extract interface/enum definitions into `structLayouts` (field name → offset mapping)
-2. **Compile phase**: Compile all statements to bytecode using collected layouts
+# Full VM
+rm -rf out && bun run test-ms src/raiser/vm.ms
 
-### Conditional Branch Pattern — Inverse Skip + Jump
+# Codegen + VM end-to-end (in src/codegen/raiser/)
+rm -rf out && bun run test-ms src/codegen/raiser/eval.ms
 
-```ms
-// Compiling: if (a > b) { ... } else { ... }
-emitABC(comp, RvOpcode.BgtI64, aReg, bReg, 1);   // if a > b, skip 1
-emitJumpPlaceholder(comp);                          // else: jump to false branch
-// ... true branch ...
-patchJump(comp, jumpIdx);                           // patch jump target
-// ... false branch ...
+# Phase 1 spike bench
+rm -rf out && bun run run-ms run src/raiser/spike/bench.ms
 ```
 
 ---
 
-## DRC Workarounds
+## Status Summary
 
-| Rule | Application in Raiser |
-|------|----------------------|
-| Arrays by pointer | Wrappers removed — bare `T[]` types (`RaiserInstruction[]`, `RaiserValue[]`, etc.) |
-| No try in match arms | Dispatch uses if/else chain, never match |
-| const before function arg | Store `RvValue` in const before pushing to arrays |
-| No C-style for in match | Use while loops everywhere |
-| Interface name prefix | All types use `Rv` prefix: RvVM, RvValue, RvOpcode, etc. |
-| No indexOf/includes | Use slice, length, findChar from utils/string.ms |
-| `null as unknown as T` | For nullable fields in RvCallFrame, RvCompiler |
-
----
-
-## Integration Point
-
-```ms
-// src/index.ms — add alongside compileToJS
-import { compileToRaiser, executeRaiser } from "./raiser/index";
-
-export function evalSource(input: string): RvValue {
-    const parseResult = parseSource(input);
-    if (!parseResult.ok) return rvNil();
-    const program = parseResult.value;
-    const checkerCtx = checkProgram(program);
-    const transformed = transformProgram(program, checkerCtx);
-    const analyzed = analyzeProgram(transformed, checkerCtx);
-    const mod = compileToRaiser(analyzed, checkerCtx);
-    return executeRaiser(mod);
-}
-```
-
----
-
-## NOT Day-1 (Future Layers)
-
-| Feature | Why Deferred | Layer |
-|---------|-------------|-------|
-| String operations | Need RC integration | 5 |
-| Closures | Need env struct + indirect call | 6 |
-| ORC / RC | Need cycle detection, deferred decref | 7 |
-| Peephole optimizer | Need correctness first | 8 |
-| ASM dispatch | Need switch dispatch proven first | 9 |
-| NaN-boxing | Optimization — profile before deciding | 9+ |
-| AOT native compilation | Way later, if ever | 10+ |
-| Async/await | Need event loop, promise runtime | 10+ |
-| Super-instructions | Need profiling data to choose which | 8+ |
-| .msb binary format | Need stable opcode numbering first | 5+ |
-
----
-
-## Reference Cross-Reference
-
-| Self-Hosted | Reference File | What to Adapt |
-|------------|---------------|---------------|
-| `bytecode.ms` | `bytecode.zig` (2550 lines) | Opcode enum, Instruction encoding — NOT Value/Object/SSOString |
-| `value.ms` | `bytecode.zig` Value union | Flat interface, not tagged union. Day-1: numeric kinds only |
-| `module.ms` | `bytecode.zig` Function/Module | Same structure, DRC-safe wrappers |
-| `compiler/*.ms` | `compiler.zig` (4891 lines) | Register alloc model, two-phase — NOT async/constant-prop |
-| `vm/dispatch.ms` | `vm_x64.zig` (304 lines) | Switch dispatch pattern — NOT ASM |
-| `vm/ops/*.ms` | `vm_arm64.s` (2045 lines) | Opcode semantics — NOT assembly |
+| Component | State |
+|---|---|
+| Phase 0 baseline | DONE — 1959 tests, comptime engine working |
+| Phase 1 spike | DONE — 4–5× speedup confirmed on numeric loops |
+| Phase 1 commit (1a–1d) | NEXT — estimated 5 weeks for full untagged + packed pipeline |
+| Phase 2 (field offsets) | PLANNED |
+| Phase 3 (typed ops I32/F32) | PLANNED |
+| Phase 4 (threaded dispatch) | PLANNED |
+| Light Table IDE backend | PLANNED — depends on Phase 1 |
