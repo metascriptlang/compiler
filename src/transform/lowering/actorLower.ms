@@ -737,7 +737,7 @@ function findWireInfo(infos: ActorWireInfo[], actorName: string): ActorWireInfo 
 
 // ===== Generate actor pid wiring statements for a variable =====
 
-function generateActorWiring(varName: string, actorName: string, dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], loc: SourceLocation, newExprNode: Node): Node[] {
+function generateActorWiring(varName: string, varSym: Symbol, actorName: string, dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], loc: SourceLocation, newExprNode: Node): Node[] {
 	const result: Node[] = [];
 	let dSym: Symbol = null as unknown as Symbol;
 	for (let di = 0; di < dispatchNames.length; di = di + 1) {
@@ -746,27 +746,37 @@ function generateActorWiring(varName: string, actorName: string, dispatchSyms: S
 	const dispatchRef = dSym !== null
 		? makeIdentResolved(dSym, loc)
 		: makeIdent(actorName + "_dispatch", loc);
+	// Use makeIdentResolved when we have the variable's symbol — required for
+	// module-top-level vars whose mangled name is `<name>__Z85<modulePath>`.
+	// makeIdent emits the bare identifier, which only works for function-local
+	// variables (no mangle prefix). At module scope the bare name is undeclared
+	// in the generated C and the build fails to link the actor wiring stmts.
+	const varRef = function(): Node {
+		return varSym !== null
+			? makeIdentResolved(varSym, loc)
+			: makeIdent(varName, loc);
+	};
 	const createCall = makeCall(makeIdent("msActorCreatePid", loc), [
-		makeIdent(varName, loc),
+		varRef(),
 		dispatchRef,
 	], loc);
 	const assignActor = makeBinary(
-		makeMember(makeIdent(varName, loc), "pid", loc),
+		makeMember(varRef(), "pid", loc),
 		"=", createCall, loc
 	);
 	result.push(makeExprStmt(assignActor, loc));
-	const pidRef = makeMember(makeIdent(varName, loc), "pid", loc);
+	const pidRef = makeMember(varRef(), "pid", loc);
 	const registerCall = makeCall(makeIdent("msActorRegister", loc), [
 		makeCall(makeIdent("msActorFromPid", loc), [pidRef], loc),
 	], loc);
 	result.push(makeExprStmt(registerCall, loc));
 	const increfCall = makeCall(makeIdent("msIncRef", loc), [
-		makeIdent(varName, loc),
+		varRef(),
 	], loc);
 	result.push(makeExprStmt(increfCall, loc));
 	const wi = findWireInfo(wireInfos, actorName);
 	if (wi !== null && wi.hasOnTerminate) {
-		const pidRef2 = makeMember(makeIdent(varName, loc), "pid", loc);
+		const pidRef2 = makeMember(varRef(), "pid", loc);
 		const setTermCall = makeCall(makeIdent("msActorSetOnTerminate", loc), [
 			makeCall(makeIdent("msActorFromPid", loc), [pidRef2], loc),
 			makeIdent(actorName + "_onTerminate_impl", loc),
@@ -774,7 +784,7 @@ function generateActorWiring(varName: string, actorName: string, dispatchSyms: S
 		result.push(makeExprStmt(setTermCall, loc));
 	}
 	if (wi !== null && wi.hasSysMsg) {
-		const pidRef3 = makeMember(makeIdent(varName, loc), "pid", loc);
+		const pidRef3 = makeMember(varRef(), "pid", loc);
 		const setSysCall = makeCall(makeIdent("msActorSetSystemMsgHandler", loc), [
 			makeCall(makeIdent("msActorFromPid", loc), [pidRef3], loc),
 			makeIdent(actorName + "_systemMsg_impl", loc),
@@ -783,14 +793,14 @@ function generateActorWiring(varName: string, actorName: string, dispatchSyms: S
 	}
 	if (wi !== null && wi.hasTrapExits) {
 		const trapCall = makeCall(makeIdent("msActorTrapExits", loc), [
-			makeMember(makeIdent(varName, loc), "pid", loc),
+			makeMember(varRef(), "pid", loc),
 			makeNumber(1, loc),
 		], loc);
 		result.push(makeExprStmt(trapCall, loc));
 	}
 	if (wi !== null && wi.hasCtor && newExprNode !== null) {
 		const ne = newExprNode.data as NewExprData;
-		const ctorArgs: Node[] = [makeIdent(varName, loc)];
+		const ctorArgs: Node[] = [varRef()];
 		if (ne.newArguments !== null) {
 			for (const arg of ne.newArguments) ctorArgs.push(arg);
 		}
@@ -841,7 +851,7 @@ function extractActorNewExprs(stmt: Node, names: string[], dispatchSyms: Symbol[
 		const tmpDecl = makeVarDecl(tmpName, node, DeclKind.Const, loc);
 		tmpDecl.resolvedSym = tmpSym;
 		preStmts.push(tmpDecl);
-		const wiring = generateActorWiring(tmpName, actorName, dispatchSyms, dispatchNames, wireInfos, loc, node);
+		const wiring = generateActorWiring(tmpName, tmpSym, actorName, dispatchSyms, dispatchNames, wireInfos, loc, node);
 		for (const w of wiring) preStmts.push(w);
 		return makeIdentResolved(tmpSym, loc);
 	};
@@ -881,7 +891,11 @@ function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[]
 						if (n === id.name) actorName = n;
 					}
 					if (actorName !== "") {
-						const wiring = generateActorWiring(vd.declName, actorName, dispatchSyms, dispatchNames, wireInfos, stmt.location, vd.initializer);
+						// Pass stmt.resolvedSym so the wiring stmts reference the
+						// var via its mangled name (top-level vars get a module
+						// suffix; bare `makeIdent(name)` would emit the unmangled
+						// form and the C compiler would see an undeclared identifier).
+						const wiring = generateActorWiring(vd.declName, stmt.resolvedSym, actorName, dispatchSyms, dispatchNames, wireInfos, stmt.location, vd.initializer);
 						for (const w of wiring) out.push(w);
 					}
 				}

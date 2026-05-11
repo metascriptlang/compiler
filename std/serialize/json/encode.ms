@@ -19,23 +19,79 @@ export macro jsonValueOf(t: Node): Node {
 		tt = tt.typExprArgs[0];
 	}
 
-	// Array field — emit a call to a per-element-type runtime helper that
-	// builds JsonValue[] then wraps in jsonArray. Atomic-element arrays only
-	// in V1.5 (string[], boolean[], number[], int*[], uint*[], float*[]).
-	// Struct-element arrays (`Person[]`) deferred to V2 (need multi-decl
-	// macro emission to define per-T wrapper that calls jsonValueOf inline).
+	// Array field — emit a call to a per-element-type runtime helper.
+	// V2 (2026-05-10): atomic-builtin, enum/alias, struct/interface elements.
+	// Builtin elements → per-type fast helpers (jsonArrayOfX).
+	// Non-builtin Identifier (enum / type alias) → `_jsonArrayOfInts<T>` generic.
+	// TypeObject element (struct/interface) → `_jsonArrayOfStructs<T>` generic.
+	// IIFE-closure / function / union element types remain rejected.
 	if (tt.kind === NodeKind.TypeArray) {
 		const elemType: Node = tt.typExprElement;
-		if (elemType.kind !== NodeKind.Identifier) {
-			error("jsonValueOf: V1.5 array fields support atomic-element types only (string/boolean/number/intN/uintN/floatN); struct-element arrays deferred to V2 (got element kind=" + elemType.kind + ")", t);
+		// Identifier element name — empty if elem is TypeObject (struct).
+		let en: string = "";
+		let elemIsStruct: boolean = false;
+		if (elemType.kind === NodeKind.Identifier) {
+			en = elemType.name;
+		} else if (elemType.kind === NodeKind.TypeObject) {
+			elemIsStruct = true;
+			en = elemType.typExprTypeName;
+			if (en === "") {
+				error("jsonValueOf: anonymous struct element arrays unsupported (must name struct via interface/class)", t);
+			}
+		} else if (elemType.kind === NodeKind.TypeGeneric) {
+			// Ref<Struct> wrapper around struct element
+			const peeled: Node = elemType.typExprArgs[0];
+			if (peeled.kind === NodeKind.TypeObject) {
+				elemIsStruct = true;
+				en = peeled.typExprTypeName;
+				if (en === "") {
+					error("jsonValueOf: anonymous struct element arrays unsupported", t);
+				}
+			} else {
+				error("jsonValueOf: unsupported array element kind (TypeGeneric inner kind=" + peeled.kind + ")", t);
+			}
+		} else {
+			error("jsonValueOf: unsupported array element kind=" + elemType.kind + " (only Identifier or TypeObject supported)", t);
 		}
-		const en: string = elemType.name;
-		// Per-sized-int / per-float-precision dispatch — array-level cast
-		// would reinterpret bytes wrong (different element strides). Each
-		// helper widens per-element internally.
-		// IF-ELSE not match: macro VM has a string-match dispatch bug (always
+		const isBuiltin: boolean = en === "string" || en === "boolean"
+			|| en === "number" || en === "float32" || en === "float64"
+			|| en === "int8" || en === "int16" || en === "int32" || en === "int64"
+			|| en === "uint8" || en === "uint16" || en === "uint32";
+
+		// Struct/interface element → generic struct helper (recursive macro re-expansion at mono-time).
+		if (elemIsStruct) {
+			return {
+				kind: NodeKind.CallExpr,
+				line: t.line,
+				column: t.column,
+				callee: {
+					kind: NodeKind.Identifier,
+					line: t.line,
+					column: t.column,
+					name: "_jsonArrayOfStructs",
+				},
+				arguments: [t],
+			};
+		}
+		// Non-builtin Identifier (enum / type alias) → generic int helper.
+		if (!isBuiltin) {
+			return {
+				kind: NodeKind.CallExpr,
+				line: t.line,
+				column: t.column,
+				callee: {
+					kind: NodeKind.Identifier,
+					line: t.line,
+					column: t.column,
+					name: "_jsonArrayOfInts",
+				},
+				arguments: [t],
+			};
+		}
+		// Builtin atomic element → per-element-type fast helper.
+		// IF-ELSE not match: macro VM string-match dispatch bug (always
 		// picks `_` arm). See memory project_macro_vm_string_match_bug.
-		let helperName: string = "jsonArrayOfInt64";   // default for enum/alias
+		let helperName: string = "jsonArrayOfInt64";
 		if (en === "string") helperName = "jsonArrayOfStrings";
 		else if (en === "boolean") helperName = "jsonArrayOfBooleans";
 		else if (en === "number") helperName = "jsonArrayOfNumbers";

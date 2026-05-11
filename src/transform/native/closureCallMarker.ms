@@ -46,6 +46,19 @@ function markCall(node: Node): Node {
 		}
 	}
 
+	// ArrayAccess callee with Function nodeType: `arr[i](args)` where the
+	// element type is a function/closure. Same closure-call dispatch as the
+	// MemberExpr branch above — Nim parity is "dispatch by callee TYPE, not
+	// syntactic shape". Without this, codegen emits the raw `expr(args)`
+	// form which lowers to `msArrayAccess(arr, i)(args)` — calling an
+	// `msClosure` struct directly, which C rejects with "called object type
+	// 'msClosure' is not a function or function pointer".
+	if (cd.callee.kind === NodeKind.ArrayAccess && cd.callee.nodeType !== null
+		&& cd.callee.nodeType.kind === TypeKind.Function) {
+		cd.isDirectCall = false;
+		cd.callee.nodeType.callConv = CallingConvention.CcClosure;
+	}
+
 	// Reference parity: thunk generation — wrap named functions passed as
 	// closure-typed args into {fn, env:null} thunks. Runs in transform, not checker.
 	wrapFuncArgsAsThunks(cd);

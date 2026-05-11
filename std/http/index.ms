@@ -17,10 +17,11 @@ export {
 	isRetryable, isConnectionError, isProtocolError,
 } from "./errors";
 
-// Headers
+// Headers — low-level HttpHeaders ops. The matching ServerResponse
+// extension methods (res.setHeader(...) etc.) come from "./server" below;
+// at call sites, MS dispatches by first-arg type so both can coexist.
 export {
-	createHeaders, setHeader, addHeader, getHeader, hasHeader,
-	removeHeader, getHeaderValues, serializeHeaders,
+	createHeaders, addHeader, getHeaderValues, serializeHeaders,
 	getContentLength, isChunked, isKeepAlive,
 } from "./headers";
 
@@ -35,6 +36,8 @@ export {
 export {
 	HttpServer, createServer, createServerAsync, listen, serve, serveConcurrent, serveConcurrentAsync, serveN, stop,
 	sendText, sendJson, sendHtml, sendError, sendRaw, getClientFd,
+	// Phase 4 — Node-style extension methods on ServerResponse
+	setHeader, getHeader, removeHeader, hasHeader, writeHead, end, json,
 } from "./server";
 
 // Plain HTTP client (matches Node's `http` module). Importing these does
@@ -49,3 +52,13 @@ export {
 	HttpClient, createClient,
 	request, requestWithRedirects,
 } from "./client";
+
+// WebSocket client (RFC 6455). Real types/functions live in `std/core/websocket`
+// (a prelude); these re-exports expose them through the explicit-import path.
+// `sendText`/`recv`/`close` aren't re-exported by name to avoid colliding with
+// the HTTP server names — call them as extension methods on a `WsClient`
+// instance instead (e.g. `client.sendText("hi")`).
+export {
+	WsClient, WsMessage, WsState, WsMessageKind, WsCloseCode,
+	connect,
+} from "std/core/websocket";

@@ -37,33 +37,29 @@ export function jsonInt(n: int64): JsonValue {
 // be a function reference). Atomic-element coverage only — struct-element
 // arrays deferred to V2 (need multi-decl macro to emit per-T wrapper).
 
+// NOTE: while-loop form retained intentionally — for..of triggers a DCE bug
+// where these helpers (called via macro-emitted Identifier) get pruned from
+// the link, despite being typed-checked OK. Compiler bug, not idiomatic.
+// TODO: refactor to for..of once DCE walks for..of-lowered bodies.
+
 export function jsonArrayOfStrings(arr: string[]): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
-	while (i < arr.length) {
-		items.push(jsonString(arr[i]));
-		i = i + 1;
-	}
+	while (i < arr.length) { items.push(jsonString(arr[i])); i = i + 1; }
 	return jsonArray(items);
 }
 
 export function jsonArrayOfBooleans(arr: boolean[]): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
-	while (i < arr.length) {
-		items.push(jsonBool(arr[i]));
-		i = i + 1;
-	}
+	while (i < arr.length) { items.push(jsonBool(arr[i])); i = i + 1; }
 	return jsonArray(items);
 }
 
 export function jsonArrayOfNumbers(arr: number[]): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
-	while (i < arr.length) {
-		items.push(jsonNumber(arr[i]));
-		i = i + 1;
-	}
+	while (i < arr.length) { items.push(jsonNumber(arr[i])); i = i + 1; }
 	return jsonArray(items);
 }
 

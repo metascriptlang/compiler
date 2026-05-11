@@ -23,6 +23,7 @@ import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testU
 
 // Get the receiver type of a node — tries nodeType, resolvedSym, then symbol table.
 function getReceiverType(ctx: TransformContext, node: Node): Type {
+	if (node === null) return null as unknown as Type;
 	if (node.nodeType !== null) return node.nodeType;
 	if (node.resolvedSym !== null && node.resolvedSym.symbolType !== null) {
 		return node.resolvedSym.symbolType;

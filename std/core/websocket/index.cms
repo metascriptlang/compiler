@@ -1,0 +1,49 @@
+// std/core/websocket — WebSocket client (RFC 6455).
+//
+// Auto-imported via prelude. Exposes a small client-only API for talking to
+// `ws://` endpoints: `connect`, `sendText`, `sendBinary`, `recv`, `close`,
+// plus their synchronous counterparts for tests / simple scripts.
+//
+// Self-contained: this index file only re-exports from RELATIVE paths. The
+// transport (./client.cms) carries its own @compile chain (std/crypto +
+// std/net) and becomes alive only when its exports are reachable.
+
+export {
+	WsErrorKind, WsError,
+	wsError, wsConnectionFailed, wsTimeout, wsHandshakeFailed, wsProtocolError,
+	wsPayloadTooLarge, wsInvalidUrl, wsClosed, wsSocketError, wsInternalError,
+	isWsProtocolError, isWsTransportError,
+} from "./errors";
+
+export {
+	OPCODE_CONTINUATION, OPCODE_TEXT, OPCODE_BINARY, OPCODE_CLOSE, OPCODE_PING, OPCODE_PONG,
+	MAX_PAYLOAD_BYTES,
+	isControlOpcode, isReservedOpcode, isWireValidCloseCode,
+	ParsedFrame, ParseFrameResult, CloseInfo,
+	maskPayload, buildFrame, buildFrameUnmasked, parseFrame,
+	encodeClosePayload, decodeClosePayload,
+} from "./frame";
+
+export {
+	WS_MAGIC_GUID, WS_VERSION,
+	WsUrl, UpgradeResponse,
+	parseWsUrl, makeClientKey, deriveAcceptKey,
+	buildUpgradeRequest, parse101Response,
+} from "./handshake";
+
+export {
+	WsState, WsMessageKind, WsCloseCode,
+	WsMessage, FragState, FrameDecision,
+	newFragState, processFrame,
+	appendBytes, dropPrefix, sliceBytes, findCRLFCRLF,
+	decisionContinue, decisionDeliver, decisionDeliveredClose, decisionError,
+} from "./state";
+
+export {
+	WsClient, ConnectOptions,
+	stringToBytes, bytesToString,
+	connect, connectSync,
+	sendText, sendBinary, sendTextSync, sendBinarySync,
+	recv, recvSync,
+	close, closeSync,
+} from "./client";

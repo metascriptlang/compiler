@@ -112,6 +112,7 @@ export function statusText(code: int32): string {
 		405 => "Method Not Allowed",
 		408 => "Request Timeout",
 		409 => "Conflict",
+		411 => "Length Required",
 		413 => "Payload Too Large",
 		415 => "Unsupported Media Type",
 		422 => "Unprocessable Entity",

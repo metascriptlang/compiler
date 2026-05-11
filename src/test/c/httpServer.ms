@@ -63,3 +63,24 @@ function main(): void {
 	const c = compileToC(src);
 	assert c.ok;
 }
+
+// Blocking path uses handleBlocking — exercises the body framing helpers
+// (frameRequest, parseHeadersInline, buildErrorResponse).
+test "E2E C: blocking HTTP server with body access compiles" {
+	const src = `
+import { HttpRequest, ServerResponse } from "std/http";
+import { createServer, sendText, sendJson, serve } from "std/http/server";
+
+function main(): void {
+	const server = createServer((req: HttpRequest, res: ServerResponse): void => {
+		// Reads request body — exercises the body framer.
+		sendJson(res, req.body);
+	});
+	const lr = server.listen("127.0.0.1", 9999);
+	if (!lr.ok) { return; }
+	serve(server);
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}

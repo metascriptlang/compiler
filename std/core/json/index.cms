@@ -37,6 +37,77 @@ function _jsonParseTyped<T>(input: string, witness: T | null): Result<T, string>
 	return Result.ok(jsonValueToStruct(pr.value, witness));
 }
 
+// ===== V2 — generic helpers for non-atomic-builtin element arrays =====
+//
+// `_jsonArrayOfInts<T>` covers enum + type-alias element arrays (T must be
+// castable to int64). `_jsonArrayOfStructs<T>` covers struct/interface
+// element arrays — body calls `jsonValueOf(arr[i])` recursively, which
+// re-expands at monomorphization time when T is concrete.
+//
+// While-loop deliberate: for..of in macro-target prelude helpers triggers a
+// DCE bug (helpers get pruned from link). See memory
+// project_serialize_v15_array_support.
+//
+// `_jsonToIntArray<T>` / `_jsonToStructArray<T>` are the decode-side mirrors
+// (used by jsonValueToStruct macro).
+
+export function _jsonArrayOfInts<T>(arr: T[]): JsonValue {
+	const items: JsonValue[] = [];
+	let i = 0;
+	while (i < arr.length) {
+		items.push(jsonInt(arr[i] as int64));
+		i = i + 1;
+	}
+	return jsonArray(items);
+}
+
+export function _jsonArrayOfStructs<T>(arr: T[]): JsonValue {
+	const items: JsonValue[] = [];
+	let i = 0;
+	while (i < arr.length) {
+		items.push(jsonValueOf(arr[i]));
+		i = i + 1;
+	}
+	return jsonArray(items);
+}
+
+export function _jsonToIntArray<T>(jv: JsonValue, witness: T | null): T[] {
+	const out: T[] = [];
+	if (jv === null || jv.kind !== JsonKind.Array) return out;
+	let i = 0;
+	while (i < jv.items.length) {
+		out.push(asInt64(jv.items[i]) as T);
+		i = i + 1;
+	}
+	return out;
+}
+
+// Witness via T[] — needed for value-type T (enum, primitive alias) where
+// `T | null` would canonicalize to Maybe<T> and fail to match the helper's
+// `T | null` arg type. Caller passes `[] as <Elem>[]` and T binds from
+// the element type.
+export function _jsonToIntArrayWitness<T>(jv: JsonValue, witness: T[]): T[] {
+	const out: T[] = [];
+	if (jv === null || jv.kind !== JsonKind.Array) return out;
+	let i = 0;
+	while (i < jv.items.length) {
+		out.push(asInt64(jv.items[i]) as T);
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToStructArray<T>(jv: JsonValue, witness: T | null): T[] {
+	const out: T[] = [];
+	if (jv === null || jv.kind !== JsonKind.Array) return out;
+	let i = 0;
+	while (i < jv.items.length) {
+		out.push(jsonValueToStruct(jv.items[i], witness));
+		i = i + 1;
+	}
+	return out;
+}
+
 export class JSON {
 	static stringify<T>(value: T): string {
 		return _jsonStringifyTyped<T>(value);

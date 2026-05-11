@@ -17,3 +17,17 @@
 import "./bug001";
 import "./bug002";
 import "./bug003";
+import "./bug004";
+import "./bug005";
+import "./bug006";
+import "./bug007";
+import "./bug008";
+import "./bug009";
+import "./bug010";
+import "./bug011";
+import "./bug013";
+import "./bug014";
+import "./bug015";
+import "./bug016";
+import "./bug017";
+import "./bug018";

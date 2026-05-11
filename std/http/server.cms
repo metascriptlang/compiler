@@ -62,6 +62,8 @@ import {
 	statusText,
 } from "./types";
 import { HttpError, socketError } from "./errors";
+import * as hdrs from "./headers";
+import { frameRequest, FrameResult } from "./parser";
 extern function msOsCpuCount(): int32;
 
 // ===== Server =====
@@ -83,7 +85,7 @@ export function createServer(handler: RequestHandler): HttpServer {
 	return {
 		fd: -1, handler: handler, running: false,
 		address: "0.0.0.0", port: 0,
-		keepAlive: true, keepAliveTimeout: 5000,
+		keepAlive: true, keepAliveTimeout: 65000,
 		maxRequestsPerConnection: 0, maxHeaderSize: 8192, maxBodySize: 1048576,
 	};
 }
@@ -113,11 +115,58 @@ export function stop(server: HttpServer): void {
 // ===== Response Helpers =====
 
 // Build HTTP response in one C-level allocation (httpbeast pattern).
-// snprintf header + memcpy body — zero template literal overhead.
+// Used as fast path when res.headers is empty — zero template literal overhead.
 extern function msBuildResponse(status: int32, statusText: string, contentType: string, body: string): string;
 
+// Slow path: build response in MS code, honoring user-set res.headers
+// (CORS, custom auth, cookies, etc.). Fast path skipped when res.headers
+// has entries beyond what sendBody would auto-set.
 function sendBody(res: ServerResponse, contentType: string, body: string): void {
-	res._responseData.buildResponseReuse(res.status, statusText(res.status), contentType, body);
+	if (!hdrs.hasHeader(res.headers, "content-type")) {
+		hdrs.setHeader(res.headers, "content-type", contentType);
+	}
+	endResponse(res, body);
+}
+
+// Module-level mirror of the server's current keep-alive timeout, in seconds.
+// Set by serve()/serveConcurrent() before the event loop starts; read by
+// endResponse to emit the `Keep-Alive: timeout=N` header. Without this,
+// browsers default to ~300s (Chrome) or longer pool TTL — they reuse sockets
+// long after the server closes them, causing a multi-second stall on the
+// first request that lands on a dead pooled socket.
+let kaTimeoutSeconds: int32 = 60;
+
+// Internal: build wire response from res.status + res.headers + body.
+// Honors any user-set headers (Access-Control-*, etc.). Auto Content-Length
+// if not already set — note: uses string length, not UTF-8 byte length, so
+// non-ASCII bodies need explicit Content-Length until byteLength helper exists.
+//
+// RFC 7230 §3.3.2: 1xx/204/304 responses MUST NOT carry Content-Length.
+// Chrome blocks the next request on a CORS-preflight connection for ~5s if
+// the 204 OPTIONS response includes Content-Length — strict parser waits
+// thinking the response is malformed.
+//
+// RFC 7234 §5.2 / Node http: emit `Keep-Alive: timeout=<seconds>` so the
+// client's connection pool aligns with the server's idle timeout. Without
+// this, browsers reuse sockets long after the server has closed them,
+// stalling the next request ~5s on dead-socket detection.
+function endResponse(res: ServerResponse, data: string): void {
+	if (res._finished) return;
+	const status = res.status;
+	const noBodyAllowed = status === 204 || status === 304 || (status >= 100 && status < 200);
+	if (noBodyAllowed) {
+		// Strip body-related headers — even if user set them, they're invalid here.
+		hdrs.removeHeader(res.headers, "content-length");
+		hdrs.removeHeader(res.headers, "content-type");
+	} else if (!hdrs.hasHeader(res.headers, "content-length")) {
+		hdrs.setHeader(res.headers, "content-length", data.length.toString());
+	}
+	if (!hdrs.hasHeader(res.headers, "keep-alive") && !hdrs.hasHeader(res.headers, "connection")) {
+		hdrs.setHeader(res.headers, "keep-alive", "timeout=" + kaTimeoutSeconds.toString());
+	}
+	const headerStr = hdrs.serializeHeaders(res.headers);
+	const body = noBodyAllowed ? "" : data;
+	res._responseData = "HTTP/1.1 " + status.toString() + " " + statusText(status) + "\r\n" + headerStr + "\r\n" + body;
 	res.headersSent = true;
 	res._finished = true;
 }
@@ -141,10 +190,57 @@ export function sendError(res: ServerResponse, status: int32, msg: string): void
 
 // Raw response — send pre-built response string directly (zero overhead).
 // For users who build their own HTTP response (custom headers, status, etc.).
+// NOTE: under multi-loop event loop this can desync fd state — prefer
+// res.setHeader(...) + sendJson/sendText which honor headers automatically.
 export function sendRaw(res: ServerResponse, raw: string): void {
 	res._responseData = raw;
 	res.headersSent = true;
 	res._finished = true;
+}
+
+// ===== Node-style extension methods on ServerResponse =====
+// res.setHeader / getHeader / removeHeader / hasHeader / writeHead / end / json
+// All resolve at call site to direct function calls (no v-table).
+
+export function setHeader(this res: ServerResponse, name: string, value: string): void {
+	hdrs.setHeader(res.headers, name, value);
+}
+
+export function getHeader(this res: ServerResponse, name: string): string {
+	return hdrs.getHeader(res.headers, name);
+}
+
+export function removeHeader(this res: ServerResponse, name: string): void {
+	hdrs.removeHeader(res.headers, name);
+}
+
+export function hasHeader(this res: ServerResponse, name: string): boolean {
+	return hdrs.hasHeader(res.headers, name);
+}
+
+// Set status + merge headers, no body sent yet.
+export function writeHead(this res: ServerResponse, status: int32, headers: HttpHeaders = null as unknown as HttpHeaders): void {
+	res.status = status;
+	if (headers !== null) {
+		let i = 0;
+		while (i < headers._names.length) {
+			hdrs.setHeader(res.headers, headers._names[i], headers._values[i]);
+			i = i + 1;
+		}
+	}
+}
+
+// End the response with optional body. Honors all res.headers set so far.
+export function end(this res: ServerResponse, data: string = ""): void {
+	endResponse(res, data);
+}
+
+// Express-style sugar: set content-type to application/json + end with body.
+export function json(this res: ServerResponse, body: string): void {
+	if (!hdrs.hasHeader(res.headers, "content-type")) {
+		hdrs.setHeader(res.headers, "content-type", "application/json");
+	}
+	endResponse(res, body);
 }
 
 // Direct fd access — for advanced socket ops (setsockopt, shutdown, etc.)
@@ -171,12 +267,12 @@ function initClient(fd: int32): ClientState {
 		data: msStringNewCap(4096), sendQueue: "", bytesSent: 0, headersEndPos: -1, asyncPending: false,
 		request: {
 			method: HttpMethod.GET, path: msStringNewCap(256), version: "1.1",
-			headers: null as unknown as HttpHeaders, body: "", clientFd: fd,
+			headers: hdrs.createHeaders(), body: "", clientFd: fd,
 		},
 		response: {
 			fd: fd, status: 200,
-			headers: null as unknown as HttpHeaders,
-			_chunks: null as unknown as string[],
+			headers: hdrs.createHeaders(),
+			_chunks: [],
 			headersSent: false, _finished: false, _chunked: false,
 			_responseData: msStringNewCap(4096),
 		},
@@ -191,11 +287,15 @@ function resetClient(client: ClientState, fd: int32): void {
 	client.request.method = HttpMethod.GET;
 	client.request.clientFd = fd;
 	client.request.body = "";
+	client.request.headers._names.length = 0;
+	client.request.headers._values.length = 0;
 	client.response.fd = fd;
 	client.response.status = 200;
 	client.response.headersSent = false;
 	client.response._finished = false;
 	client.response._chunked = false;
+	client.response.headers._names.length = 0;
+	client.response.headers._values.length = 0;
 	client.response._responseData.setLength(0);
 }
 
@@ -204,6 +304,11 @@ function resetRequest(client: ClientState, fd: int32, method: int32): void {
 	// path is set by parsePathInto (zero-alloc) — not reset here
 	client.request.clientFd = fd;
 	client.request.body = "";
+	// Headers MUST be cleared — frameRequest reads CL/TE from this struct.
+	// Stale headers from a previous pipelined request would mislead framing
+	// (e.g. a GET reusing a POST connection sees Content-Length=5 → needMore).
+	client.request.headers._names.length = 0;
+	client.request.headers._values.length = 0;
 }
 
 function resetResponse(client: ClientState, fd: int32): void {
@@ -212,6 +317,8 @@ function resetResponse(client: ClientState, fd: int32): void {
 	client.response.headersSent = false;
 	client.response._finished = false;
 	client.response._chunked = false;
+	client.response.headers._names.length = 0;
+	client.response.headers._values.length = 0;
 	client.response._responseData.setLength(0);  // preserves buffer (= "" would free it)
 }
 
@@ -225,9 +332,43 @@ function findHeaderEnd(data: string): int32 {
 	return msSlowHeadersCheck(data);
 }
 
+// Parse request-line headers from `data[0..endPos)` into `headers`.
+// Skips the request line (first CRLF). No fold-line / continuation support,
+// no validation. Sufficient to expose Content-Length / Transfer-Encoding /
+// Authorization / etc. to the body framer and handlers.
+function parseHeadersInline(data: string, endPos: int32, headers: HttpHeaders): void {
+	let lineStart: int32 = 0;
+	while (lineStart < endPos) {
+		let lineEnd = lineStart;
+		while (lineEnd + 1 < endPos && !(data.charCodeAt(lineEnd) === "\r".code && data.charCodeAt(lineEnd + 1) === "\n".code)) {
+			lineEnd = lineEnd + 1;
+		}
+		if (lineEnd === lineStart) break;  // empty line = end of headers
+		// Skip first line (request line "METHOD path HTTP/1.1")
+		if (lineStart > 0) {
+			let colon = lineStart;
+			while (colon < lineEnd && data.charCodeAt(colon) !== ":".code) colon = colon + 1;
+			if (colon < lineEnd) {
+				const name = data.slice(lineStart, colon);
+				let valStart = colon + 1;
+				while (valStart < lineEnd && (data.charCodeAt(valStart) === " ".code || data.charCodeAt(valStart) === "\t".code)) valStart = valStart + 1;
+				hdrs.addHeader(headers, name, data.slice(valStart, lineEnd));
+			}
+		}
+		lineStart = (lineEnd + 2) as int32;
+	}
+}
+
+// Build minimal HTTP error response (no body, Connection: close).
+// Used by body framer rejects (400 / 411 / 413) before handler dispatch.
+function buildErrorResponse(status: int32): string {
+	return "HTTP/1.1 " + status.toString() + " " + statusText(status) + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+}
+
 export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 	const n = threads > 0 ? threads : msOsCpuCount();
 	server.running = true;
+	kaTimeoutSeconds = server.keepAliveTimeout / 1000;
 	if (server.fd >= 0) { msNetClose(server.fd); server.fd = -1; }
 
 	const addr = server.address;
@@ -261,12 +402,21 @@ export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 }
 
 // After send completes: check for pipelined data or reset to READ.
-function resetOrPipeline(client: ClientState, fd: int32, sel: int64, handler: RequestHandler): void {
+function resetOrPipeline(server: HttpServer, client: ClientState, fd: int32, sel: int64, handler: RequestHandler): void {
+	// Honor server-side keep-alive setting: if disabled, close the connection
+	// after sending a response (Connection: close semantics). Without this,
+	// eventLoop always re-arms read regardless, leaving sockets in a state
+	// where reused connections (curl --next, browser pool) can stall.
+	if (!server.keepAlive) {
+		msSelectorRemove(sel, fd);
+		msNetClose(fd);
+		return;
+	}
 	if (client.data.length > 0) {
 		const nextEnd = findHeaderEnd(client.data);
 		if (nextEnd >= 0) {
 			client.headersEndPos = nextEnd;
-			dispatch(client, fd, sel, handler);
+			dispatch(server, client, fd, sel, handler);
 			return;
 		}
 	}
@@ -320,7 +470,7 @@ function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler)
 					const endPos = findHeaderEnd(client.data);
 					if (endPos >= 0) {
 						client.headersEndPos = endPos;
-						dispatch(client, fd, sel, handler);
+						dispatch(server, client, fd, sel, handler);
 					}
 				}
 			} else if ((flags & 2) !== 0) {
@@ -336,7 +486,7 @@ function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler)
 						client.bytesSent = client.bytesSent + sent;
 						if (client.bytesSent >= resp.length) {
 							client.bytesSent = 0;
-							resetOrPipeline(client, fd, sel, handler);
+							resetOrPipeline(server, client, fd, sel, handler);
 						}
 					}
 				}
@@ -352,25 +502,72 @@ function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler)
 	msSelectorClose(sel);
 }
 
-function dispatch(client: ClientState, fd: int32, sel: int64, handler: RequestHandler): void {
+// Sync send error response + close fd. Used when frameRequest rejects
+// (400/411/413). Error response is small (~80 bytes) so msNetSend rarely
+// blocks; acceptable for v1 in the non-blocking event loop.
+function sendErrorAndClose(fd: int32, sel: int64, status: int32): void {
+	msNetSend(fd, buildErrorResponse(status));
+	msSelectorRemove(sel, fd);
+	msNetClose(fd);
+}
+
+function dispatch(server: HttpServer, client: ClientState, fd: int32, sel: int64, handler: RequestHandler): void {
 	const data = client.data;
-	const endPos = client.headersEndPos;
+	let endPos = client.headersEndPos;
+
+	// Fast header check (msFastHeadersCheck) returns `len` when buffer ends
+	// with \r\n\r\n. Chunked terminator (`0\r\n\r\n`) and pipelined GET both
+	// satisfy this — false-match leaves bufferAfter empty (chunked) or eats
+	// the next request (pipelined). Validate with slow scan when fast claims
+	// end-of-buffer; if slow finds an earlier CRLFCRLF, that's the real end.
+	if (endPos === (data.length as int32)) {
+		const slowEnd = msSlowHeadersCheck(data);
+		if (slowEnd >= 0 && slowEnd < endPos) {
+			endPos = slowEnd;
+			client.headersEndPos = slowEnd;
+		}
+	}
 
 	const methodInt = msFastParseMethod(data);
-	if (methodInt < 0) { client.data.setLength(0); return; }
+	if (methodInt < 0) { client.data.setLength(0); client.headersEndPos = -1; return; }
 
 	// Zero-alloc path parse: writes into pre-allocated request.path buffer
 	client.request.path.parsePathInto(data);
-	if (client.request.path.length === 0) { client.data.setLength(0); return; }
+	if (client.request.path.length === 0) { client.data.setLength(0); client.headersEndPos = -1; return; }
 
 	// Reuse pre-allocated request/response (zero heap alloc)
 	resetRequest(client, fd, methodInt);
 	resetResponse(client, fd);
+	parseHeadersInline(data, endPos, client.request.headers);
+
+	// Frame body via shared helper. Non-blocking: needMore returns early so
+	// the event loop can recv more bytes and re-enter dispatch.
+	const bufferAfter = data.slice(endPos, data.length);
+	const frame = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
+	if (frame.kind === "needMore") {
+		// DoS guard: cap raw body bytes (data after headers)
+		if ((bufferAfter.length as int32) > server.maxBodySize) {
+			sendErrorAndClose(fd, sel, 413);
+			return;
+		}
+		// Leave headersEndPos set; eventLoop will re-call after next recv.
+		// (Re-parsing headers each event is wasted but correct for v1.)
+		return;
+	}
+	if (frame.kind === "reject") {
+		sendErrorAndClose(fd, sel, frame.rejectStatus);
+		return;
+	}
+
+	// Ready — populate body and dispatch handler.
+	client.request.body = frame.body;
 	handler(client.request, client.response);
 
-	// Preserve pipelined data — zero-alloc memmove instead of slice
-	if (endPos < data.length) {
-		client.data.shiftLeft(endPos);
+	// Advance buffer past consumed bytes (headers + body) so pipelined
+	// requests align correctly for the next dispatch.
+	const totalConsumed = (endPos + frame.bytesConsumed) as int32;
+	if (totalConsumed < data.length) {
+		client.data.shiftLeft(totalConsumed);
 	} else {
 		client.data.setLength(0);
 	}
@@ -388,6 +585,7 @@ function dispatch(client: ClientState, fd: int32, sel: int64, handler: RequestHa
 
 export function serve(server: HttpServer): void {
 	server.running = true;
+	kaTimeoutSeconds = server.keepAliveTimeout / 1000;
 	while (server.running) {
 		const clientFd = msNetAccept(server.fd);
 		if (clientFd < 0) continue;
@@ -415,9 +613,22 @@ function handleBlocking(server: HttpServer, fd: int32): void {
 	let keepGoing = true;
 	const client = initClient(fd);
 	while (keepGoing) {
-		const data = msNetRecv(fd, server.maxHeaderSize);
-		if (data.length === 0) return;
+		// 1. Drain headers: recv until we see \r\n\r\n.
+		// NB: use slow check (linear scan) — fast check returns `len` when buffer
+		// ends with \r\n\r\n, which falsely matches the chunked terminator
+		// (`0\r\n\r\n`) and leaves bufferAfter empty.
+		let data = msNetRecv(fd, server.maxHeaderSize);
+		if (data.length === 0) return;  // peer closed
+		let endPos = msSlowHeadersCheck(data);
+		while (endPos < 0) {
+			if (data.length >= server.maxHeaderSize) return;  // header too large
+			const more = msNetRecv(fd, server.maxHeaderSize);
+			if (more.length === 0) return;  // peer closed mid-headers
+			data = data + more;
+			endPos = msSlowHeadersCheck(data);
+		}
 
+		// 2. Parse method + path + headers.
 		const methodInt = msFastParseMethod(data);
 		if (methodInt < 0) return;
 		client.request.path.parsePathInto(data);
@@ -425,6 +636,37 @@ function handleBlocking(server: HttpServer, fd: int32): void {
 
 		resetRequest(client, fd, methodInt);
 		resetResponse(client, fd);
+		parseHeadersInline(data, endPos, client.request.headers);
+
+		// 3. Frame body — recv more bytes until ready/reject.
+		// DoS guard: cap raw bytes after concat. Chunked has no upfront size,
+		// so without this an attacker can stream chunks without terminator
+		// → bufferAfter unbounded → eventual OOM.
+		//
+		// V1 LIMITATION: tryDecodeChunked is called each iteration on the FULL
+		// bufferAfter (re-decode from start), giving O(n²) per request. Even
+		// with this cap, a 1MB chunked attack amplifies RSS by ~400x via string
+		// concat churn before 413 fires. Functional DoS is blocked; tight
+		// memory bound needs an incremental chunked decoder (v2).
+		let bufferAfter = data.slice(endPos, data.length);
+		let frame: FrameResult = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
+		while (frame.kind === "needMore") {
+			const more = msNetRecv(fd, server.maxHeaderSize);
+			if (more.length === 0) return;  // peer closed mid-body
+			bufferAfter = bufferAfter + more;
+			if ((bufferAfter.length as int32) > server.maxBodySize) {
+				msNetSend(fd, buildErrorResponse(413));
+				return;
+			}
+			frame = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
+		}
+		if (frame.kind === "reject") {
+			msNetSend(fd, buildErrorResponse(frame.rejectStatus));
+			return;  // close connection (Connection: close)
+		}
+
+		// 4. Dispatch.
+		client.request.body = frame.body;
 		server.handler(client.request, client.response);
 		if (client.response._responseData.length > 0) msNetSend(fd, client.response._responseData);
 
@@ -526,7 +768,7 @@ export function createServerAsync(handler: AsyncRequestHandler): HttpServer {
 	return {
 		fd: -1, handler: null as unknown as RequestHandler, running: false,
 		address: "0.0.0.0", port: 0,
-		keepAlive: true, keepAliveTimeout: 5000,
+		keepAlive: true, keepAliveTimeout: 65000,
 		maxRequestsPerConnection: 0, maxHeaderSize: 8192, maxBodySize: 1048576,
 	};
 }
@@ -535,18 +777,56 @@ export function createServerAsync(handler: AsyncRequestHandler): HttpServer {
 // State 0: parse + call handler → yields handler's Promise → suspends.
 // State 1: handler completed → arm fd for WRITE → done.
 // msAsyncCb resumes state 1 inside msProcessCallbacks (same event loop thread).
-async function dispatchAsync(client: ClientState, fd: int32, sel: int64, handler: AsyncRequestHandler, inflight: int32[]): Promise<void> {
+async function dispatchAsync(server: HttpServer, client: ClientState, fd: int32, sel: int64, handler: AsyncRequestHandler, inflight: int32[]): Promise<void> {
 	const data = client.data;
-	const endPos = client.headersEndPos;
+	let endPos = client.headersEndPos;
+
+	// Fast/slow header check guard (see dispatch comment).
+	if (endPos === (data.length as int32)) {
+		const slowEnd = msSlowHeadersCheck(data);
+		if (slowEnd >= 0 && slowEnd < endPos) {
+			endPos = slowEnd;
+			client.headersEndPos = slowEnd;
+		}
+	}
 
 	const methodInt = msFastParseMethod(data);
-	if (methodInt < 0) { client.data.setLength(0); client.asyncPending = false; inflight[0] = inflight[0] - 1; return; }
+	if (methodInt < 0) { client.data.setLength(0); client.headersEndPos = -1; client.asyncPending = false; inflight[0] = inflight[0] - 1; return; }
 
 	client.request.path.parsePathInto(data);
-	if (client.request.path.length === 0) { client.data.setLength(0); client.asyncPending = false; inflight[0] = inflight[0] - 1; return; }
+	if (client.request.path.length === 0) { client.data.setLength(0); client.headersEndPos = -1; client.asyncPending = false; inflight[0] = inflight[0] - 1; return; }
 
 	resetRequest(client, fd, methodInt);
 	resetResponse(client, fd);
+	parseHeadersInline(data, endPos, client.request.headers);
+
+	// Frame body. needMore/reject must reset asyncPending + inflight since
+	// the caller (eventLoopAsync) incremented them before calling dispatchAsync.
+	const bufferAfter = data.slice(endPos, data.length);
+	const frame = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
+	if (frame.kind === "needMore") {
+		if ((bufferAfter.length as int32) > server.maxBodySize) {
+			sendErrorAndClose(fd, sel, 413);
+			client.asyncPending = false;
+			inflight[0] = inflight[0] - 1;
+			return;
+		}
+		// Wait for next recv event. Reset asyncPending so eventLoopAsync resumes
+		// recv on this fd; leave headersEndPos set (re-parsed on next dispatch).
+		client.asyncPending = false;
+		inflight[0] = inflight[0] - 1;
+		return;
+	}
+	if (frame.kind === "reject") {
+		sendErrorAndClose(fd, sel, frame.rejectStatus);
+		client.asyncPending = false;
+		inflight[0] = inflight[0] - 1;
+		return;
+	}
+
+	// Ready — populate body and await handler.
+	client.request.body = frame.body;
+	const totalConsumed = (endPos + frame.bytesConsumed) as int32;
 
 	await handler(client.request, client.response);
 
@@ -554,9 +834,8 @@ async function dispatchAsync(client: ClientState, fd: int32, sel: int64, handler
 	client.asyncPending = false;
 	inflight[0] = inflight[0] - 1;
 
-	// Preserve pipelined data — zero-alloc memmove
-	if (endPos < data.length) {
-		client.data.shiftLeft(endPos);
+	if (totalConsumed < data.length) {
+		client.data.shiftLeft(totalConsumed);
 	} else {
 		client.data.setLength(0);
 	}
@@ -571,14 +850,14 @@ async function dispatchAsync(client: ClientState, fd: int32, sel: int64, handler
 }
 
 // After async send completes: check for pipelined data or reset to READ.
-function resetOrPipelineAsync(client: ClientState, fd: int32, sel: int64, handler: AsyncRequestHandler, inflight: int32[]): void {
+function resetOrPipelineAsync(server: HttpServer, client: ClientState, fd: int32, sel: int64, handler: AsyncRequestHandler, inflight: int32[]): void {
 	if (client.data.length > 0) {
 		const nextEnd = findHeaderEnd(client.data);
 		if (nextEnd >= 0) {
 			client.headersEndPos = nextEnd;
 			client.asyncPending = true;
 			inflight[0] = inflight[0] + 1;
-			dispatchAsync(client, fd, sel, handler, inflight);
+			dispatchAsync(server, client, fd, sel, handler, inflight);
 			return;
 		}
 	}
@@ -653,7 +932,7 @@ function eventLoopAsync(server: HttpServer, listenFd: int32, handler: AsyncReque
 							client.headersEndPos = endPos;
 							client.asyncPending = true;
 							inflight[0] = inflight[0] + 1;
-							dispatchAsync(client, fd, sel, handler, inflight);
+							dispatchAsync(server, client, fd, sel, handler, inflight);
 						}
 					}
 				}
@@ -669,7 +948,7 @@ function eventLoopAsync(server: HttpServer, listenFd: int32, handler: AsyncReque
 						client.bytesSent = client.bytesSent + sent;
 						if (client.bytesSent >= resp.length) {
 							client.bytesSent = 0;
-							resetOrPipelineAsync(client, fd, sel, handler, inflight);
+							resetOrPipelineAsync(server, client, fd, sel, handler, inflight);
 						}
 					}
 				}

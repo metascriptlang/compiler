@@ -89,78 +89,67 @@ export function cborSimple(n: number): CborValue {
 
 export function cborArrayOfStrings(arr: string[]): CborValue {
 	const items: CborValue[] = [];
-	let i = 0;
-	while (i < arr.length) { items.push(cborText(arr[i])); i = i + 1; }
+	for (const s of arr) items.push(cborText(s));
 	return cborArray(items);
 }
 
 export function cborArrayOfBooleans(arr: boolean[]): CborValue {
 	const items: CborValue[] = [];
-	let i = 0;
-	while (i < arr.length) { items.push(cborBool(arr[i])); i = i + 1; }
+	for (const b of arr) items.push(cborBool(b));
 	return cborArray(items);
 }
 
 export function cborArrayOfNumbers(arr: number[]): CborValue {
 	const items: CborValue[] = [];
-	let i = 0;
-	while (i < arr.length) { items.push(cborFloat(arr[i])); i = i + 1; }
+	for (const n of arr) items.push(cborFloat(n));
 	return cborArray(items);
 }
 
 export function cborArrayOfFloat32(arr: float32[]): CborValue {
 	const items: CborValue[] = [];
-	let i = 0;
-	while (i < arr.length) { items.push(cborFloat(arr[i] as float64)); i = i + 1; }
+	for (const x of arr) items.push(cborFloat(x as float64));
 	return cborArray(items);
 }
 
 export function cborArrayOfInt8(arr: int8[]): CborValue {
 	const items: CborValue[] = [];
-	let i = 0;
-	while (i < arr.length) { items.push(cborInt(arr[i] as int64)); i = i + 1; }
+	for (const x of arr) items.push(cborInt(x as int64));
 	return cborArray(items);
 }
 
 export function cborArrayOfInt16(arr: int16[]): CborValue {
 	const items: CborValue[] = [];
-	let i = 0;
-	while (i < arr.length) { items.push(cborInt(arr[i] as int64)); i = i + 1; }
+	for (const x of arr) items.push(cborInt(x as int64));
 	return cborArray(items);
 }
 
 export function cborArrayOfInt32(arr: int32[]): CborValue {
 	const items: CborValue[] = [];
-	let i = 0;
-	while (i < arr.length) { items.push(cborInt(arr[i] as int64)); i = i + 1; }
+	for (const x of arr) items.push(cborInt(x as int64));
 	return cborArray(items);
 }
 
 export function cborArrayOfInt64(arr: int64[]): CborValue {
 	const items: CborValue[] = [];
-	let i = 0;
-	while (i < arr.length) { items.push(cborInt(arr[i])); i = i + 1; }
+	for (const x of arr) items.push(cborInt(x));
 	return cborArray(items);
 }
 
 export function cborArrayOfUint8(arr: uint8[]): CborValue {
 	const items: CborValue[] = [];
-	let i = 0;
-	while (i < arr.length) { items.push(cborInt(arr[i] as int64)); i = i + 1; }
+	for (const x of arr) items.push(cborInt(x as int64));
 	return cborArray(items);
 }
 
 export function cborArrayOfUint16(arr: uint16[]): CborValue {
 	const items: CborValue[] = [];
-	let i = 0;
-	while (i < arr.length) { items.push(cborInt(arr[i] as int64)); i = i + 1; }
+	for (const x of arr) items.push(cborInt(x as int64));
 	return cborArray(items);
 }
 
 export function cborArrayOfUint32(arr: uint32[]): CborValue {
 	const items: CborValue[] = [];
-	let i = 0;
-	while (i < arr.length) { items.push(cborInt(arr[i] as int64)); i = i + 1; }
+	for (const x of arr) items.push(cborInt(x as int64));
 	return cborArray(items);
 }
 

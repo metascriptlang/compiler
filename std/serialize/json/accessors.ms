@@ -95,87 +95,76 @@ export function getDynamicField(this v: JsonValue, key: string): JsonValue {
 export function jsonToStringArray(this v: JsonValue): string[] {
 	const out: string[] = [];
 	if (v === null || v.kind !== JsonKind.Array) return out;
-	let i = 0;
-	while (i < v.items.length) { out.push(asString(v.items[i])); i = i + 1; }
+	for (const item of v.items) out.push(asString(item));
 	return out;
 }
 
 export function jsonToBooleanArray(this v: JsonValue): boolean[] {
 	const out: boolean[] = [];
 	if (v === null || v.kind !== JsonKind.Array) return out;
-	let i = 0;
-	while (i < v.items.length) { out.push(asBoolean(v.items[i])); i = i + 1; }
+	for (const item of v.items) out.push(asBoolean(item));
 	return out;
 }
 
 export function jsonToNumberArray(this v: JsonValue): number[] {
 	const out: number[] = [];
 	if (v === null || v.kind !== JsonKind.Array) return out;
-	let i = 0;
-	while (i < v.items.length) { out.push(asNumber(v.items[i])); i = i + 1; }
+	for (const item of v.items) out.push(asNumber(item));
 	return out;
 }
 
 export function jsonToInt8Array(this v: JsonValue): int8[] {
 	const out: int8[] = [];
 	if (v === null || v.kind !== JsonKind.Array) return out;
-	let i = 0;
-	while (i < v.items.length) { out.push(asInt64(v.items[i]) as int8); i = i + 1; }
+	for (const item of v.items) out.push(asInt64(item) as int8);
 	return out;
 }
 
 export function jsonToInt16Array(this v: JsonValue): int16[] {
 	const out: int16[] = [];
 	if (v === null || v.kind !== JsonKind.Array) return out;
-	let i = 0;
-	while (i < v.items.length) { out.push(asInt64(v.items[i]) as int16); i = i + 1; }
+	for (const item of v.items) out.push(asInt64(item) as int16);
 	return out;
 }
 
 export function jsonToInt32Array(this v: JsonValue): int32[] {
 	const out: int32[] = [];
 	if (v === null || v.kind !== JsonKind.Array) return out;
-	let i = 0;
-	while (i < v.items.length) { out.push(asInt64(v.items[i]) as int32); i = i + 1; }
+	for (const item of v.items) out.push(asInt64(item) as int32);
 	return out;
 }
 
 export function jsonToInt64Array(this v: JsonValue): int64[] {
 	const out: int64[] = [];
 	if (v === null || v.kind !== JsonKind.Array) return out;
-	let i = 0;
-	while (i < v.items.length) { out.push(asInt64(v.items[i])); i = i + 1; }
+	for (const item of v.items) out.push(asInt64(item));
 	return out;
 }
 
 export function jsonToUint8Array(this v: JsonValue): uint8[] {
 	const out: uint8[] = [];
 	if (v === null || v.kind !== JsonKind.Array) return out;
-	let i = 0;
-	while (i < v.items.length) { out.push(asInt64(v.items[i]) as uint8); i = i + 1; }
+	for (const item of v.items) out.push(asInt64(item) as uint8);
 	return out;
 }
 
 export function jsonToUint16Array(this v: JsonValue): uint16[] {
 	const out: uint16[] = [];
 	if (v === null || v.kind !== JsonKind.Array) return out;
-	let i = 0;
-	while (i < v.items.length) { out.push(asInt64(v.items[i]) as uint16); i = i + 1; }
+	for (const item of v.items) out.push(asInt64(item) as uint16);
 	return out;
 }
 
 export function jsonToUint32Array(this v: JsonValue): uint32[] {
 	const out: uint32[] = [];
 	if (v === null || v.kind !== JsonKind.Array) return out;
-	let i = 0;
-	while (i < v.items.length) { out.push(asInt64(v.items[i]) as uint32); i = i + 1; }
+	for (const item of v.items) out.push(asInt64(item) as uint32);
 	return out;
 }
 
 export function jsonToFloat32Array(this v: JsonValue): float32[] {
 	const out: float32[] = [];
 	if (v === null || v.kind !== JsonKind.Array) return out;
-	let i = 0;
-	while (i < v.items.length) { out.push(asNumber(v.items[i]) as float32); i = i + 1; }
+	for (const item of v.items) out.push(asNumber(item) as float32);
 	return out;
 }

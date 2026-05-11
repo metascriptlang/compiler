@@ -449,10 +449,36 @@ export function isCCodeCached(modPath: string, cCode: string, compileCmd: string
 }
 
 // Write C code cache after successful compilation of a module.
+// PREFER `writeCSource` + `writeCompileFingerprint` (split form) for new
+// callers — split form prevents Bug 6 (writing fingerprint before compile
+// confirms success).
 export function writeCCodeCache(modPath: string, cCode: string, compileCmd: string): void {
+	writeCSource(modPath, cCode);
+	writeCompileFingerprint(modPath, cCode, compileCmd);
+}
+
+// Bug 6 fix: write only the .c source. Always safe — .c is debug-friendly
+// (lets user inspect generated C even when zig cc fails).
+export function writeCSource(modPath: string, cCode: string): void {
 	writeFile(stableCFile(modPath), cCode);
+}
+
+// Bug 6 fix: write the compile-success fingerprint (.cfp). Call ONLY after
+// `compileCFile` returns 0. Cache lookup uses this to skip recompilation —
+// writing it on failure causes future runs to false-claim cache hit and try
+// to link a partial/empty .o.
+export function writeCompileFingerprint(modPath: string, cCode: string, compileCmd: string): void {
 	const fp = `${hashContent(cCode)}:${compileCmd}`;
 	writeFile(stableOFile(modPath) + ".cfp", fp);
+}
+
+// Bug 6 fix: remove cache artifacts after a failed compile so the next run
+// triggers a clean retry. Removes .o (potentially partial/empty from failed
+// zig cc) + .cfp (defensive — should never be written on failure path post-fix,
+// but harmless if accidentally present from older runs).
+export function invalidateCompileCache(modPath: string): void {
+	tryRemoveFile(stableOFile(modPath));
+	tryRemoveFile(stableOFile(modPath) + ".cfp");
 }
 
 // ===== Link Cache (Layer 4) =====
@@ -508,4 +534,79 @@ export function writeLinkCache(oFileList: string, linkFlags: string, outputFile:
 // Export getCacheDir for compile.ms to use in -iquote paths.
 export function cacheDir(): string {
 	return getCacheDir();
+}
+
+// ===== Bug 6 regression tests =====
+// Compile-failure invariant: a failed `zig cc` (or any cc) must NOT leave a
+// fingerprint behind, otherwise the next run sees a false cache hit and
+// tries to link an empty/partial .o. Symptom was a cryptic
+// "failed to parse TBD file: NotLibStub" link error masking the real
+// compile error. Fix split writeCCodeCache → writeCSource (always) +
+// writeCompileFingerprint (only after cc returns 0) + invalidateCompileCache
+// (called on cc failure path).
+
+function bug6_clearArtifacts(modPath: string): void {
+	tryRemoveFile(stableCFile(modPath));
+	tryRemoveFile(stableOFile(modPath));
+	tryRemoveFile(stableOFile(modPath) + ".cfp");
+}
+
+test "bug6: writeCSource alone does not produce a cache hit" {
+	// Split form: source written before compile, but no fingerprint until cc OK.
+	// isCCodeCached must stay false so the next run still attempts to compile.
+	const modPath = "test/bug6/probe_source_only.ms";
+	bug6_clearArtifacts(modPath);
+	writeCSource(modPath, "int main(){return 0;}");
+	assert exists(stableCFile(modPath));
+	assert !exists(stableOFile(modPath) + ".cfp");
+	assert !isCCodeCached(modPath, "int main(){return 0;}", "cc -O0");
+	bug6_clearArtifacts(modPath);
+}
+
+test "bug6: writeCompileFingerprint after writeCSource produces a cache hit" {
+	// Happy path: cc returned 0, both .c and .cfp present, .o present →
+	// isCCodeCached true so the next run reuses the object.
+	const modPath = "test/bug6/probe_happy.ms";
+	bug6_clearArtifacts(modPath);
+	const cCode = "int main(){return 0;}";
+	const cmd = "cc -O0";
+	writeCSource(modPath, cCode);
+	// Simulate the .o that compileCFile would have produced.
+	writeFile(stableOFile(modPath), "");
+	writeCompileFingerprint(modPath, cCode, cmd);
+	assert exists(stableOFile(modPath) + ".cfp");
+	assert isCCodeCached(modPath, cCode, cmd);
+	bug6_clearArtifacts(modPath);
+}
+
+test "bug6: invalidateCompileCache removes both .o and .cfp" {
+	// Failure path: cc returned non-zero. invalidateCompileCache must clean
+	// both .o (which may be partial/empty from failed cc) and .cfp (defensive
+	// — never written on failure post-fix, but old runs may leave one).
+	const modPath = "test/bug6/probe_invalidate.ms";
+	bug6_clearArtifacts(modPath);
+	writeFile(stableOFile(modPath), "");
+	writeFile(stableOFile(modPath) + ".cfp", "stale_fp:cc -O0");
+	assert exists(stableOFile(modPath));
+	assert exists(stableOFile(modPath) + ".cfp");
+	invalidateCompileCache(modPath);
+	assert !exists(stableOFile(modPath));
+	assert !exists(stableOFile(modPath) + ".cfp");
+	bug6_clearArtifacts(modPath);
+}
+
+test "bug6: failed-compile sequence yields no cache hit on retry" {
+	// End-to-end invariant: simulate the cmdBuildC sequence on cc failure.
+	//   1. writeCSource (always)
+	//   2. compileCFile fails → invalidateCompileCache, NO writeCompileFingerprint
+	// Result must be: next isCCodeCached call returns false → retry compiles.
+	const modPath = "test/bug6/probe_fail_seq.ms";
+	bug6_clearArtifacts(modPath);
+	const cCode = "broken c source";
+	const cmd = "cc -O0";
+	writeCSource(modPath, cCode);
+	// (compileCFile would fail here — skip writeCompileFingerprint)
+	invalidateCompileCache(modPath);
+	assert !isCCodeCached(modPath, cCode, cmd);
+	bug6_clearArtifacts(modPath);
 }

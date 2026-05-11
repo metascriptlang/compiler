@@ -64,6 +64,7 @@ function isBuiltinDirective(name: string): boolean {
 		|| name === "import"
 		|| name === "comptime"
 		|| name === "target"
+		|| name === "platform"
 		|| name === "runtime"
 		|| name === "builtin"
 		|| name === "cImport";
@@ -316,6 +317,12 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addNodeField(keys, values, "object", d.object, loc);
 		addStrField(keys, values, "property", d.property, loc);
 		addBoolField(keys, values, "isOptional", d.isOptional, loc);
+		return;
+	}
+	if (k === NodeKind.ArrayAccess) {
+		const d = node.data as ArrayAccessData;
+		addNodeField(keys, values, "array", d.array, loc);
+		addNodeField(keys, values, "index", d.index, loc);
 		return;
 	}
 	if (k === NodeKind.ObjectLiteral) {

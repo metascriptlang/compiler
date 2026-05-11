@@ -6,10 +6,11 @@
 
 import { Node, NodeKind, ProgramData, FunctionDeclData, ImportDeclData,
 	ExportDeclData, IdentifierData, VariableDeclData, ClassDeclData, ActorDeclData,
-	CallExprData, MemberExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
+	CallExprData, MemberExprData, NewExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
 import { AliveSet, createAliveSet, aliveSetAdd } from "../codegen/c/context";
+import { hasFlag, SymbolFlag } from "./symbol";
 
 // ===== Module Index =====
 // Maps module path to its program AST for cross-module tracing.
@@ -192,6 +193,29 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 		return;
 	}
 
+	// NewExpr — class constructor expressions need `<className>_init` alive.
+	// `methodToFunction` transform lifts the ctor body to a top-level
+	// `<className>_init(this, ...)` FunctionDecl AFTER reachability runs,
+	// so the lifted name isn't auto-discoverable here. We seed it explicitly
+	// when a class with `HasConstructor` is constructed: same mark-alive
+	// pattern MemberExpr uses for class methods, but keyed off the ctor's
+	// future synthetic name.
+	if (k === NodeKind.NewExpr) {
+		const nd = node.data as NewExprData;
+		walkBody(nd.newCallee, modulePath, importMap);
+		for (const arg of nd.newArguments) {
+			walkBody(arg, modulePath, importMap);
+		}
+		if (nd.newCallee.resolvedSym !== null && hasFlag(nd.newCallee.resolvedSym, SymbolFlag.HasConstructor)) {
+			const classSym = nd.newCallee.resolvedSym;
+			const className = (classSym.originalName !== "" && classSym.originalName !== null) ? classSym.originalName : classSym.name;
+			const initName = className + "_init";
+			const ctorMod = classSym.modulePath !== "" ? classSym.modulePath : modulePath;
+			markAndWalk(ctorMod, initName);
+		}
+		return;
+	}
+
 	// MemberExpr — walk object + mark resolved extension/class method
 	if (k === NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
@@ -249,6 +273,27 @@ function markAndWalk(modulePath: string, name: string): void {
 		const found = matchDeclName(stmt, name);
 		if (found !== null) {
 			walkBody(found, modulePath, importMap);
+			// When a class with a constructor becomes alive, also mark
+			// `<className>_init` alive — `methodToFunction` transform lifts
+			// the ctor body into a top-level FunctionDecl with that name and
+			// removes the ConstructorDecl from classBody. By the time
+			// reachability runs (post-transform), the marker we can rely on
+			// is the class symbol's HasConstructor flag (set at Phase 2
+			// collect, persists through transform). Required for both
+			// `new C(...)` (also seen by the NewExpr walker for the leaf
+			// class) and `super(args)` from a child class — which codegen
+			// lowers to `<Parent>_init(this, args)`, so any reachable parent
+			// in the inheritance chain needs its `_init` alive too.
+			if (found.kind === NodeKind.ClassDecl
+					&& found.resolvedSym !== null
+					&& hasFlag(found.resolvedSym, SymbolFlag.HasConstructor)) {
+				// Recursive: markAndWalk so the lifted `_init` body is also
+				// visited. The ctor body may contain `super(args)` whose
+				// parent class needs to be reached + that parent's `_init`
+				// chained alive too. Without recursion, A → B → C inheritance
+				// chains stop at the leaf and parent `_init`s drop out.
+				markAndWalk(modulePath, name + "_init");
+			}
 		}
 	}
 }

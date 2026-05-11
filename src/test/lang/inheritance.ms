@@ -19,15 +19,15 @@ interface Timestamped { createdAt: number; }
 
 test "interface single extends inherits parent field" {
 	interface Admin extends IUser { role: string; }
-	const a: Admin = { id: 1, name: "sơn", role: "admin" };
+	const a: Admin = { id: 1, name: "alice", role: "admin" };
 	assert a.id === 1;
-	assert a.name === "sơn";
+	assert a.name === "alice";
 	assert a.role === "admin";
 }
 
 test "interface multi-extend merges fields from all parents" {
 	interface Audited extends IUser, Timestamped { byUser: string; }
-	const a: Audited = { id: 7, name: "le", createdAt: 100, byUser: "system" };
+	const a: Audited = { id: 7, name: "bob", createdAt: 100, byUser: "system" };
 	assert a.id === 7;
 	assert a.createdAt === 100;
 	assert a.byUser === "system";
@@ -47,7 +47,7 @@ test "nested inheritance C extends B extends A" {
 
 test "type alias intersection of objects merges fields" {
 	type Extended = IUser & { role: string };
-	const e: Extended = { id: 1, name: "sơn", role: "user" };
+	const e: Extended = { id: 1, name: "alice", role: "user" };
 	assert e.id === 1;
 	assert e.role === "user";
 }

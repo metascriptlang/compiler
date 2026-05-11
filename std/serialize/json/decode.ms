@@ -116,16 +116,107 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			continue;
 		}
 
-		// Array field — emit `jsonToXArray(getDynamicField(jv, "f"))`.
-		// V1.5: atomic-element arrays only; struct-element arrays deferred V2.
+		// Array field — V2: builtin atomic + enum/alias + struct/interface elements.
+		// Builtin → per-type fast helper (jsonToXArray).
+		// Non-builtin Identifier (enum / type alias) → `_jsonToIntArray<T>` generic.
+		// Struct/interface → `_jsonToStructArray<T>` generic.
+		// All paths emit a typed witness `null as <Elem> | null` so T binds via
+		// substituteType (Phase 1 fix) for explicit-`<T>` and via unifyType
+		// (Phase 2 fix) for inference. We emit explicit `<Elem>` — though MS
+		// CallExpr's type-arg storage is parser-keyed, the inference path
+		// works thanks to bug008 bridge.
 		if (ftype.kind === NodeKind.TypeArray) {
 			const elemType: Node = ftype.typExprElement;
-			if (elemType.kind !== NodeKind.Identifier) {
-				error("jsonValueToStruct: V1.5 array fields support atomic-element types only; struct-element arrays deferred to V2 (field '" + fname + "')", witness);
+			let en: string = "";
+			let elemIsStruct: boolean = false;
+			if (elemType.kind === NodeKind.Identifier) {
+				en = elemType.name;
+			} else if (elemType.kind === NodeKind.TypeObject) {
+				elemIsStruct = true;
+				en = elemType.typExprTypeName;
+				if (en === "") {
+					error("jsonValueToStruct: anonymous struct element arrays unsupported (field '" + fname + "')", witness);
+				}
+			} else if (elemType.kind === NodeKind.TypeGeneric) {
+				const peeled: Node = elemType.typExprArgs[0];
+				if (peeled.kind === NodeKind.TypeObject) {
+					elemIsStruct = true;
+					en = peeled.typExprTypeName;
+					if (en === "") {
+						error("jsonValueToStruct: anonymous struct element arrays unsupported (field '" + fname + "')", witness);
+					}
+				} else {
+					error("jsonValueToStruct: unsupported array element kind=TypeGeneric (field '" + fname + "')", witness);
+				}
+			} else {
+				error("jsonValueToStruct: unsupported array element kind=" + elemType.kind + " (field '" + fname + "')", witness);
 			}
-			const en: string = elemType.name;
+			const isBuiltin: boolean = en === "string" || en === "boolean"
+				|| en === "number" || en === "float32" || en === "float64"
+				|| en === "int8" || en === "int16" || en === "int32" || en === "int64"
+				|| en === "uint8" || en === "uint16" || en === "uint32";
+
+			const getCall: Node = {
+				kind: NodeKind.CallExpr,
+				line: jv.line,
+				column: jv.column,
+				callee: {
+					kind: NodeKind.Identifier,
+					line: jv.line,
+					column: jv.column,
+					name: "getDynamicField",
+				},
+				arguments: [
+					jv,
+					{
+						kind: NodeKind.StringLiteral,
+						line: jv.line,
+						column: jv.column,
+						value: fname,
+					},
+				],
+			};
+
+			// Generic-helper path: enum/alias → _jsonToIntArray<T>;
+			// struct/interface → _jsonToStructArray<T>. Witness is
+			// `null as <Elem> | null` — Phase 1+2 fixes make T bind:
+			// for value Elem (Maybe<Elem>), unifyType bridges (bug008);
+			// for Ref Elem (Union<Ref<Elem>, Null>), structural unify works.
+			if (elemIsStruct || !isBuiltin) {
+				const witnessNode: Node = {
+					kind: NodeKind.TypeAssertion,
+					line: jv.line,
+					column: jv.column,
+					asExpr: {
+						kind: NodeKind.NullLiteral,
+						line: jv.line,
+						column: jv.column,
+						nullPlaceholder: true,
+					},
+					asType: en + " | null",
+				};
+				const helperName: string = elemIsStruct ? "_jsonToStructArray" : "_jsonToIntArray";
+				const arrFieldAccess: Node = {
+					kind: NodeKind.CallExpr,
+					line: jv.line,
+					column: jv.column,
+					callee: {
+						kind: NodeKind.Identifier,
+						line: jv.line,
+						column: jv.column,
+						name: helperName,
+					},
+					arguments: [getCall, witnessNode],
+				};
+				keyNodes.push(fname);
+				valueNodes.push(arrFieldAccess);
+				i = i + 1;
+				continue;
+			}
+
+			// Builtin atomic element → fast per-type helper.
 			// IF-ELSE not match (Raiser VM string-match bug, see memory).
-			let arrHelper: string = "jsonToInt64Array";   // default for enum/alias
+			let arrHelper: string = "jsonToInt64Array";
 			if (en === "string") arrHelper = "jsonToStringArray";
 			else if (en === "boolean") arrHelper = "jsonToBooleanArray";
 			else if (en === "number") arrHelper = "jsonToNumberArray";
@@ -138,10 +229,6 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			else if (en === "uint8") arrHelper = "jsonToUint8Array";
 			else if (en === "uint16") arrHelper = "jsonToUint16Array";
 			else if (en === "uint32") arrHelper = "jsonToUint32Array";
-			// Identifier-callee form: `arrHelper(getDynamicField(jv, "f"))`.
-			// Extension-dispatch via MemberExpr fails to resolve in the
-			// monomorphized macro-expansion scope (Bug 53 family); positional
-			// call resolves directly via the symbol table.
 			const arrFieldAccess: Node = {
 				kind: NodeKind.CallExpr,
 				line: jv.line,
@@ -152,28 +239,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 					column: jv.column,
 					name: arrHelper,
 				},
-				arguments: [
-					{
-						kind: NodeKind.CallExpr,
-						line: jv.line,
-						column: jv.column,
-						callee: {
-							kind: NodeKind.Identifier,
-							line: jv.line,
-							column: jv.column,
-							name: "getDynamicField",
-						},
-						arguments: [
-							jv,
-							{
-								kind: NodeKind.StringLiteral,
-								line: jv.line,
-								column: jv.column,
-								value: fname,
-							},
-						],
-					},
-				],
+				arguments: [getCall],
 			};
 			keyNodes.push(fname);
 			valueNodes.push(arrFieldAccess);

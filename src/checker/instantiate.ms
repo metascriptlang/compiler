@@ -538,6 +538,11 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	}
 	ctorDeclNode.nodeType = createFunction(resolvedParamTypes, fnParams, null as unknown as Type);
 
+	// Concrete (instantiated) class type — used both by body re-check (as the
+	// `this` receiver type) and by the synthetic ClassDecl below (so the
+	// methodToFunction transform sees the right receiver when lifting the ctor).
+	const concreteClassType = instantiateGeneric(classSym.symbolType, dedup.names, dedup.types);
+
 	// Re-check constructor body with concrete types in the class's DEFINING module ctx
 	// (from _moduleCtxMap registry). This resolves private module-level symbols
 	// referenced by the body — e.g. `let cap = INITIAL_CAPACITY;` in `HashSet.constructor`.
@@ -557,7 +562,6 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		// Replicate checkPass.ms:264-284: prepend `this` with concrete class type
 		const ctorParams: string[] = ["this"];
 		for (const p of fnParams) { ctorParams.push(p); }
-		const concreteClassType = instantiateGeneric(classSym.symbolType, dedup.names, dedup.types);
 		const ctorChildren: Type[] = [concreteClassType];
 		for (const pt of resolvedParamTypes) { ctorChildren.push(pt); }
 		const ctorFnType = createFunction(ctorChildren, ctorParams, null as unknown as Type);
@@ -572,11 +576,17 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	// Can't use symbol table (each module has its own). Use shared _ctorRegistry instead.
 	registerCtorDefaults(ctorFnName, ctorDeclNode.nodeType, fnDefaults);
 
-	// Emit ClassDecl with just the constructor (struct already emitted by monoEmitTypeInstNodes)
+	// Emit ClassDecl with just the constructor (struct already emitted by monoEmitTypeInstNodes).
+	// Set classNode.nodeType to the concrete (instantiated) class type so the
+	// methodToFunction transform can pull the right receiver type when lifting
+	// the ctor — without it, `this` falls back to `void*` in the generated
+	// `<MangledClass>_init` signature and `(*this).field` accesses fail to type
+	// check at the C level.
 	const classBody: Node[] = [];
 	classBody.push(ctorDeclNode);
 	const classNodeData: NodeData = { className: mangledClass, classExtends: "", classBody, nameLocation: loc };
 	const classNode = createNodeAt(NodeKind.ClassDecl, classNodeData, loc);
+	classNode.nodeType = concreteClassType;
 	addPendingInstance(classNode);
 }
 

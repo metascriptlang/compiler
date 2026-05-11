@@ -124,8 +124,17 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 				error("cborValueToStruct: V1.5 array fields support atomic-element types only; struct-element arrays deferred to V2 (field '" + fname + "')", witness);
 			}
 			const en: string = elemType.name;
+			// Reject non-builtin element types — fall-through emits the wrong
+			// array type. See std/serialize/json/encode.ms for rationale.
+			const isBuiltin: boolean = en === "string" || en === "boolean"
+				|| en === "number" || en === "float32" || en === "float64"
+				|| en === "int8" || en === "int16" || en === "int32" || en === "int64"
+				|| en === "uint8" || en === "uint16" || en === "uint32";
+			if (!isBuiltin) {
+				error("cborValueToStruct: V1.5 array fields support builtin atomic element types only; enum/alias/struct element arrays deferred to V2 (field '" + fname + "', element type '" + en + "')", witness);
+			}
 			// IF-ELSE not match (Raiser VM string-match bug, see memory).
-			let arrHelper: string = "cborToInt64Array";   // default for enum/alias
+			let arrHelper: string = "cborToInt64Array";
 			if (en === "string") arrHelper = "cborToStringArray";
 			else if (en === "boolean") arrHelper = "cborToBooleanArray";
 			else if (en === "number") arrHelper = "cborToNumberArray";

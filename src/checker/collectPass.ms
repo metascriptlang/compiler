@@ -364,6 +364,15 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 			for (const loc of methodNode.paramLocations) { newLocs.push(loc); }
 			methodNode.paramLocations = newLocs;
 		}
+		// Align methodDefaults with the prepended receiver. fillDefaultArgsForNode
+		// uses defaultOffset=1 for non-static methods, expecting defaults[0] to be
+		// the (always-null) receiver slot. Without this shift, non-static class
+		// methods with default params can't be called with fewer args.
+		if (md.methodDefaults !== null) {
+			const newDefaults: Node[] = [null as unknown as Node];
+			for (const d of md.methodDefaults) { newDefaults.push(d); }
+			md.methodDefaults = newDefaults;
+		}
 	}
 	const fnType = createFunction([], [], unknownType());
 	if (md.nativeName !== null && md.nativeName !== "") {
@@ -390,6 +399,13 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	methodSym.modulePath = ctx.modulePath;
 	methodSym.declNode = member;
 	member.resolvedSym = methodSym;
+	// Copy method defaults onto the symbol so call-site default-fill can find them.
+	// resolvePass populates this for FunctionDecl via d.fnDefaults, but never visits
+	// the MethodDecl branch, so the method symbol's defaultParams stays empty unless
+	// we set it here. (Pairs with the methodDefaults shift above for non-static methods.)
+	if (md.methodDefaults !== null && md.methodDefaults.length > 0) {
+		methodSym.defaultParams = md.methodDefaults;
+	}
 	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, className, "", fnType, md.methodIsStatic, methodSym, 1));
 }
 

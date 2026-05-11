@@ -15,7 +15,7 @@ import {
 	emitProcLocalsLine, lookupLocalName, typeCacheGet,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType, ensurePromiseAllInstance, typeKey } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType, ensurePromiseAllInstance, typeKey } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto, isDrcLifecycleName } from "./forward";
@@ -925,15 +925,41 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 				cName = genExpr(g, p, d.newCallee);
 			}
 			ensureTypeInfoDef(g, cName);
-			const ctorName = cName + "_new";
-			let argList = "";
-			let ai = 0;
-			while (ai < d.newArguments.length) {
-				if (ai > 0) argList = argList + ", ";
-				argList = argList + genExpr(g, p, d.newArguments[ai]);
-				ai += 1;
+			// Inline allocation + delegate to `<Class>_init(this, args)`. The ctor
+			// body lives at module top-level as `<Class>_init` (lifted by
+			// `methodToFunction` transform) — no `<Class>_new` wrapper exists any
+			// more. This matches the inline pattern already used for class-without-
+			// ctor below (line ~960) and Nim's `genObjConstr` parity.
+			//
+			// Cross-module: defining module emits the `_init` proto via
+			// genFunctionDecl. If this NewExpr is in a different module, the
+			// caller's compile unit needs a forward decl too — `_init` symbol
+			// lookup goes through the exportRegistry, same path
+			// `ensureCrossModuleProto` uses for any cross-module call.
+			const initName = cName + "_init";
+			g.labels += 1;
+			const newTmp = `_new${g.labels}_`;
+			emitProcLocalsLine(p, `${cName}* ${newTmp};`);
+			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName)};`);
+			let initArgs = newTmp;
+			for (const argNode of d.newArguments) {
+				let argSnippet = genExpr(g, p, argNode);
+				// `_init` parameters go through the same `shouldIndirectParam`
+				// promotion that any other function uses (Bug 9). Mirror it on
+				// the caller side: if the user's ctor arg type is ccgIntroducedPtr
+				// (Array, Union, Span, big struct) and the arg isn't already a
+				// pointer, take its address — same convention `shimCallArg` uses
+				// for ordinary call sites. Without this, the caller passes a
+				// value where the lifted `_init` signature expects a pointer.
+				if (argNode.nodeType !== null
+						&& ccgIntroducedPtr(argNode.nodeType)
+						&& !isPointerType(argNode.nodeType)) {
+					argSnippet = safeAddrOf(g, p, argSnippet, argNode, argNode.nodeType);
+				}
+				initArgs = initArgs + ", " + argSnippet;
 			}
-			ctx.results.push(d.newArguments.length === 0 ? `${ctorName}()` : `${ctorName}(${argList})`);
+			emitStmtsLine(p, `${initName}(${initArgs});`);
+			ctx.results.push(newTmp);
 			return;
 		}
 		// Value-type new: struct/GenericInstance types → zero-initialized struct
@@ -1873,8 +1899,18 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					emitStmtsLine(p, `${refTmp}->v${unionWrapIdx} = ${tmpName};`);
 					ctx.results.push(refTmp);
 				} else if (unionWrapIdx >= 0) {
-					// Value union: wrap variant struct in compound literal
-					ctx.results.push(`(${unionWrapName}){ ._tag = ${unionWrapIdx}, .v${unionWrapIdx} = ${tmpName} }`);
+					// Value union: hoist temp + field-by-field assign (mirrors the
+					// Ref<Union> path above, and matches Nim's `genObjConstr` pattern
+					// in compiler/ccgexprs.nim — never emit inline compound literal
+					// for variant objects). The inline form `(Union){...}` would
+					// break when used as a C macro argument (commas inside braces
+					// aren't protected from preprocessor arg-counting).
+					p.labels += 1;
+					const wrapTmp = `_uw${p.labels}_`;
+					emitProcLocalsLine(p, `${unionWrapName} ${wrapTmp};`);
+					emitStmtsLine(p, `${wrapTmp}._tag = ${unionWrapIdx};`);
+					emitStmtsLine(p, `${wrapTmp}.v${unionWrapIdx} = ${tmpName};`);
+					ctx.results.push(wrapTmp);
 				} else {
 					ctx.results.push(tmpName);
 				}

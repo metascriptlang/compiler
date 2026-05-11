@@ -383,7 +383,7 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 // files emitted with overlapping global symbols → linker duplicate-symbol
 // error. Map-provider test paths like `/src/a.ms` already absolute → pass
 // through unchanged.
-function canonicalModulePath(path: string): string {
+export function canonicalModulePath(path: string): string {
 	if (isAbsolute(path)) return path;
 	return normalize(join(cwd(), path));
 }

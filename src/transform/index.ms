@@ -55,6 +55,7 @@ import { lowerAwait } from "./lowering/awaitLower";
 import { lowerVarHoist } from "./lowering/varHoist";
 import { lowerLambda } from "./lowering/lambdaLifting";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
+import { lowerMethodToFunction } from "./lowering/methodToFunction";
 import { lowerBuiltins } from "./native/builtinLower";
 import { lowerSubscript } from "./lowering/subscriptLower";
 import { lowerOperators } from "./lowering/operatorLower";
@@ -103,6 +104,10 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerActor(result, ctx); }
 	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
 	result = lowerExtensionMethod(result, ctx);
+	// Lift class/actor methods → top-level FunctionDecl. C + Raiser want one
+	// uniform shape for codegen; JS keeps `class Foo {}` native (its semantics
+	// already match what we want at the source level).
+	if (!jsBackend) { result = lowerMethodToFunction(result, ctx); }
 	if (!jsBackend) { result = lowerLambda(result, ctx); }
 	result = lowerBuiltins(result, ctx);
 	result = lowerOperators(result, ctx);

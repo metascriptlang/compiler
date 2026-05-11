@@ -1519,6 +1519,20 @@ export function substituteType(t: Type | null, paramName: string, concrete: Type
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlace(copy, paramName, concrete);
 				substituteClearFlag(t);
+				// Re-canonicalize `T | null` after substitution: when T resolves to a
+				// value-type, collapse Union<T, Null> → Maybe<T>. Mirrors the path
+				// in resolvePass.ms:260-266 that canonicalizes user-written
+				// annotations. At decl time, T is a GenericParam (not Maybe-wrappable)
+				// so the original Union<GP, Null> stays uncanonical; at substitute time
+				// T is concrete and we can pick the right shape.
+				if (t.kind === TypeKind.Union && copy.typeChildren.length === 2) {
+					const a = copy.typeChildren[0];
+					const b = copy.typeChildren[1];
+					if (a !== null && b !== null) {
+						if (b.kind === TypeKind.Null && isMaybeWrappable(a)) return createMaybeType(a);
+						if (a.kind === TypeKind.Null && isMaybeWrappable(b)) return createMaybeType(b);
+					}
+				}
 				return copy;
 			},
 			TypeKind.Ref => createRef(substituteType(t.typeReturn, paramName, concrete)),
@@ -1659,6 +1673,31 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 			}
 		}
 		return;
+	}
+	// Bridge Union<T, Null> ↔ Maybe<X> for nullable witness inference.
+	// At decl time, generic param `T | null` resolves to Union<GP, Null>
+	// (GP isn't Maybe-wrappable). At call site, user-spelled `X | null`
+	// for value-type X resolves to Maybe<X>. Both shapes represent the
+	// same logical type — peel Maybe to its inner so unifyType can bind T.
+	if (formal.kind === TypeKind.Union && concrete.kind === TypeKind.Struct
+			&& isMaybeType(concrete) && concrete.typeReturn !== null
+			&& formal.typeChildren.length === 2) {
+		const fa = formal.typeChildren[0];
+		const fb = formal.typeChildren[1];
+		if (fa !== null && fb !== null) {
+			if (fb.kind === TypeKind.Null) { unifyType(fa, concrete.typeReturn, bindings); return; }
+			if (fa.kind === TypeKind.Null) { unifyType(fb, concrete.typeReturn, bindings); return; }
+		}
+	}
+	if (formal.kind === TypeKind.Struct && concrete.kind === TypeKind.Union
+			&& isMaybeType(formal) && formal.typeReturn !== null
+			&& concrete.typeChildren.length === 2) {
+		const ca = concrete.typeChildren[0];
+		const cb = concrete.typeChildren[1];
+		if (ca !== null && cb !== null) {
+			if (cb.kind === TypeKind.Null) { unifyType(formal.typeReturn, ca, bindings); return; }
+			if (ca.kind === TypeKind.Null) { unifyType(formal.typeReturn, cb, bindings); return; }
+		}
 	}
 	// Structural match — same kind, recurse into children
 	if (formal.kind !== concrete.kind) return;

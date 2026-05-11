@@ -39,12 +39,18 @@ export function getPreludeContext(): CheckerContext { return lastPreludeCtx; }
 
 // stdPath: when non-empty, resolves std/ imports against this path.
 // When empty, falls back to relative "std/" (resolved by reference compiler).
-export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms"): ExportRegistry {
+// osTarget: build target ("macos" / "linux" / "windows" / ""). Set on the
+// prelude context so per-module ctxs inherit it via injectPrelude — needed
+// for the @platform("...") block-form directive filter to evaluate against
+// the correct target during collectDirectives (which runs as part of this
+// check pass, BEFORE cmdBuildC's applyGcMode propagates osTarget elsewhere).
+export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", osTarget: string = ""): ExportRegistry {
 	const registry = createExportRegistry();
 
 	// Load prelude into a base context — provides console, string methods, etc.
 	// Creates the shared IdentCache (one cache per compilation).
 	const baseCtx = buildPreludeContext(stdPath, backendExt);
+	if (osTarget !== "") baseCtx.osTarget = osTarget;
 	lastPreludeCtx = baseCtx;
 	const sharedCache = getSharedIdentCache(baseCtx);
 

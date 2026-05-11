@@ -271,10 +271,15 @@ static inline void msFutureAddCallback(void* fp, msClosure cb) {
 
 /* Complete a typed future — sets value + fires callbacks.
  * Usage: msFutureCompleteT(myDoubleFut, 3.14);
- * Works for any MS_FUTURE_STRUCT type. For void futures, use msFutureCompleteVoid. */
-#define msFutureCompleteT(f, val) do { \
+ * Works for any MS_FUTURE_STRUCT type. For void futures, use msFutureCompleteVoid.
+ *
+ * Variadic in the value position so callers can pass C99 compound literals
+ * — `(MyStruct){ .a = 1, .b = 2 }` — without the inner commas being treated
+ * as additional macro arguments by the preprocessor. The whole tail after the
+ * future pointer is consumed as a single value expression. */
+#define msFutureCompleteT(f, ...) do { \
 	if (atomic_load_explicit(&((msFutureBase*)(f))->finished, memory_order_acquire)) break; \
-	(f)->value = (val); \
+	(f)->value = (__VA_ARGS__); \
 	atomic_store_explicit(&((msFutureBase*)(f))->finished, true, memory_order_release); \
 	msFutureFireCallbacks((msFutureBase*)(f)); \
 } while(0)

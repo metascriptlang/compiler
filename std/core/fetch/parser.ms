@@ -3,7 +3,7 @@
 
 import { HttpMethod, HttpHeaders, ParsedUrl, parseMethod } from "./types";
 import { HttpError, invalidRequest, invalidResponse, invalidHeader } from "./errors";
-import { createHeaders, addHeader } from "./headers";
+import { createHeaders, addHeader, getContentLength, isChunked, getHeaderValues } from "./headers";
 
 // ===== Parsed Results =====
 
@@ -265,6 +265,143 @@ export function encodeLastChunk(): string {
 	return "0\r\n\r\n";
 }
 
+// ===== Server Request Body Framing =====
+// httpbeast pattern: per-fd buffer accumulates bytes across recv events; once
+// headers are parsed, frameRequest decides whether the buffer holds a full body
+// (dispatch), needs more bytes (wait), or violates protocol (reject + close).
+
+// Truncation-aware chunked decoder. Distinguishes "not enough bytes yet" from
+// "format invalid" — needed for non-blocking servers where partial buffers are
+// the common case, not an error.
+export interface ChunkedDecodeResult {
+	kind: string;          // "ready" | "needMore" | "malformed"
+	body: string;
+	bytesConsumed: int32;  // valid when ready
+}
+
+function chunkedReady(body: string, bytesConsumed: int32): ChunkedDecodeResult {
+	return { kind: "ready", body: body, bytesConsumed: bytesConsumed };
+}
+
+function chunkedNeedMore(): ChunkedDecodeResult {
+	return { kind: "needMore", body: "", bytesConsumed: 0 };
+}
+
+function chunkedMalformed(): ChunkedDecodeResult {
+	return { kind: "malformed", body: "", bytesConsumed: 0 };
+}
+
+// Verify two bytes at `pos` form a CRLF separator.
+function isCRLFAt(data: string, pos: int32): boolean {
+	return data.charCodeAt(pos) === 13 && data.charCodeAt(pos + 1) === 10;
+}
+
+export function tryDecodeChunked(data: string): ChunkedDecodeResult {
+	let result = "";
+	let pos: int32 = 0;
+	while (pos < data.length) {
+		const sizeEnd = findCRLF(data, pos);
+		if (sizeEnd < 0) return chunkedNeedMore();
+
+		const chunkSize = parseHex(data.slice(pos, sizeEnd));
+		if (chunkSize < 0) return chunkedMalformed();
+
+		const dataStart = sizeEnd + 2;
+		if (chunkSize === 0) {
+			// Final chunk — expect trailing CRLF (no trailers support in v1).
+			if (dataStart + 1 >= data.length) return chunkedNeedMore();
+			if (!isCRLFAt(data, dataStart as int32)) return chunkedMalformed();
+			return chunkedReady(result, (dataStart + 2) as int32);
+		}
+
+		const dataEnd = dataStart + chunkSize;
+		if (dataEnd + 2 > data.length) return chunkedNeedMore();
+		if (!isCRLFAt(data, dataEnd as int32)) return chunkedMalformed();
+
+		result = result + data.slice(dataStart, dataEnd);
+		pos = (dataEnd + 2) as int32;
+	}
+	return chunkedNeedMore();
+}
+
+// Three-way verdict the server uses after parsing headers.
+//   ready    — buffer contains full body; call handler. body + bytesConsumed valid.
+//   needMore — buffer truncated; loop and recv more before dispatching.
+//   reject   — protocol violation; send rejectStatus + close. (400 / 411 / 413)
+export interface FrameResult {
+	kind: string;          // "ready" | "needMore" | "reject"
+	body: string;
+	bytesConsumed: int32;  // bytes consumed from bufferAfterHeaders
+	rejectStatus: int32;
+}
+
+function frameReady(body: string, bytesConsumed: int32): FrameResult {
+	return { kind: "ready", body: body, bytesConsumed: bytesConsumed, rejectStatus: 0 };
+}
+
+function frameNeedMore(): FrameResult {
+	return { kind: "needMore", body: "", bytesConsumed: 0, rejectStatus: 0 };
+}
+
+function frameReject(status: int32): FrameResult {
+	return { kind: "reject", body: "", bytesConsumed: 0, rejectStatus: status };
+}
+
+// Frame a request body from the bytes already buffered after the header block.
+//
+//   headers            — parsed HttpHeaders (Content-Length / Transfer-Encoding)
+//   method             — parsed HttpMethod (POST/PUT/PATCH need a body or 411)
+//   bufferAfterHeaders — bytes between headersEnd and end of per-fd buffer
+//   maxBodySize        — server.maxBodySize cap (oversize → 413, no recv)
+//
+// Smuggling guards (RFC 9112 §6.3):
+//   - Multiple Content-Length headers     → 400
+//   - Multiple Transfer-Encoding headers  → 400
+//   - Transfer-Encoding != "chunked"      → 400
+//   - Content-Length AND Transfer-Encoding → 400 (CL.TE / TE.CL desync)
+export function frameRequest(
+	headers: HttpHeaders,
+	method: HttpMethod,
+	bufferAfterHeaders: string,
+	maxBodySize: int32,
+): FrameResult {
+	if (getHeaderValues(headers, "content-length").length > 1) return frameReject(400);
+
+	const teValues = getHeaderValues(headers, "transfer-encoding");
+	if (teValues.length > 1) return frameReject(400);
+	let te = false;
+	if (teValues.length === 1) {
+		if (teValues[0].trim().toLowerCase() !== "chunked") return frameReject(400);
+		te = true;
+	}
+
+	const cl = getContentLength(headers);  // -1 if missing
+	const hasCL = cl >= 0;
+	if (hasCL && te) return frameReject(400);
+
+	if (te) {
+		const r = tryDecodeChunked(bufferAfterHeaders);
+		if (r.kind === "ready") {
+			if (r.body.length > maxBodySize) return frameReject(413);
+			return frameReady(r.body, r.bytesConsumed);
+		}
+		if (r.kind === "needMore") return frameNeedMore();
+		return frameReject(400);
+	}
+
+	if (hasCL) {
+		if (cl > maxBodySize) return frameReject(413);
+		if ((bufferAfterHeaders.length as int32) < cl) return frameNeedMore();
+		return frameReady(bufferAfterHeaders.slice(0, cl), cl);
+	}
+
+	// Neither header — POST/PUT/PATCH require length, others have no body.
+	if (method === HttpMethod.POST || method === HttpMethod.PUT || method === HttpMethod.PATCH) {
+		return frameReject(411);
+	}
+	return frameReady("", 0);
+}
+
 // ===== Hex Helpers =====
 
 function parseHex(s: string): int32 {
@@ -516,4 +653,188 @@ test "parseUrl with query only" {
 	assert r.ok;
 	assert r.value.path === "/";
 	assert r.value.query === "key=val";
+}
+
+// --- Server Request Body Framing ---
+
+test "frameRequest CL exact match" {
+	const h = createHeaders();
+	addHeader(h, "Content-Length", "5");
+	const r = frameRequest(h, HttpMethod.POST, "hello", 1024 as int32);
+	assert r.kind === "ready";
+	assert r.body === "hello";
+	assert r.bytesConsumed === 5;
+}
+
+test "frameRequest CL truncated → needMore" {
+	const h = createHeaders();
+	addHeader(h, "Content-Length", "10");
+	const r = frameRequest(h, HttpMethod.POST, "hel", 1024 as int32);
+	assert r.kind === "needMore";
+}
+
+test "frameRequest CL over maxBodySize → 413" {
+	const h = createHeaders();
+	addHeader(h, "Content-Length", "9999");
+	const r = frameRequest(h, HttpMethod.POST, "", 100 as int32);
+	assert r.kind === "reject";
+	assert r.rejectStatus === 413;
+}
+
+test "frameRequest CL=0" {
+	const h = createHeaders();
+	addHeader(h, "Content-Length", "0");
+	const r = frameRequest(h, HttpMethod.POST, "", 1024 as int32);
+	assert r.kind === "ready";
+	assert r.body === "";
+	assert r.bytesConsumed === 0;
+}
+
+test "frameRequest pipelined POST extra bytes ignored" {
+	// CL says 5, buffer holds 5 + next request — only first 5 framed
+	const h = createHeaders();
+	addHeader(h, "Content-Length", "5");
+	const r = frameRequest(h, HttpMethod.POST, "helloGET /next HTTP/1.1\r\n\r\n", 1024 as int32);
+	assert r.kind === "ready";
+	assert r.body === "hello";
+	assert r.bytesConsumed === 5;
+}
+
+test "frameRequest GET no body → ready empty" {
+	const h = createHeaders();
+	const r = frameRequest(h, HttpMethod.GET, "", 1024 as int32);
+	assert r.kind === "ready";
+	assert r.body === "";
+}
+
+test "frameRequest POST without CL or TE → 411" {
+	const h = createHeaders();
+	const r = frameRequest(h, HttpMethod.POST, "", 1024 as int32);
+	assert r.kind === "reject";
+	assert r.rejectStatus === 411;
+}
+
+test "frameRequest smuggling CL+TE → 400" {
+	const h = createHeaders();
+	addHeader(h, "Content-Length", "5");
+	addHeader(h, "Transfer-Encoding", "chunked");
+	const r = frameRequest(h, HttpMethod.POST, "hello", 1024 as int32);
+	assert r.kind === "reject";
+	assert r.rejectStatus === 400;
+}
+
+// Smuggling defense — RFC 9112 §6.3.5: server MUST reject if message has
+// multiple Content-Length headers. Picking the first (or any) value lets a
+// malicious client desync vs an upstream proxy that picks the other.
+test "frameRequest multiple CL → 400" {
+	const h = createHeaders();
+	addHeader(h, "Content-Length", "5");
+	addHeader(h, "Content-Length", "10");
+	const r = frameRequest(h, HttpMethod.POST, "hello12345", 1024 as int32);
+	assert r.kind === "reject";
+	assert r.rejectStatus === 400;
+}
+
+// Smuggling defense — Transfer-Encoding must be exactly "chunked".
+// `chunked, gzip` / `gzip, chunked` / multiple TE headers are smuggling
+// vectors via proxy-server disagreement on which encoding to apply, and
+// we don't implement gzip/deflate decoders anyway. Strict v1: only accept
+// bare "chunked" (case-insensitive, trimmed); reject anything else.
+test "frameRequest TE chunked,gzip → 400" {
+	const h = createHeaders();
+	addHeader(h, "Transfer-Encoding", "chunked, gzip");
+	const r = frameRequest(h, HttpMethod.POST, "5\r\nhello\r\n0\r\n\r\n", 1024 as int32);
+	assert r.kind === "reject";
+	assert r.rejectStatus === 400;
+}
+
+test "frameRequest TE gzip,chunked → 400" {
+	const h = createHeaders();
+	addHeader(h, "Transfer-Encoding", "gzip, chunked");
+	const r = frameRequest(h, HttpMethod.POST, "5\r\nhello\r\n0\r\n\r\n", 1024 as int32);
+	assert r.kind === "reject";
+	assert r.rejectStatus === 400;
+}
+
+test "frameRequest TE chunked uppercase → ready (case-insensitive)" {
+	const h = createHeaders();
+	addHeader(h, "Transfer-Encoding", "Chunked");
+	const data = "5\r\nhello\r\n0\r\n\r\n";
+	const r = frameRequest(h, HttpMethod.POST, data, 1024 as int32);
+	assert r.kind === "ready";
+	assert r.body === "hello";
+}
+
+test "frameRequest TE chunked with whitespace → ready" {
+	const h = createHeaders();
+	addHeader(h, "Transfer-Encoding", "  chunked  ");
+	const data = "5\r\nhello\r\n0\r\n\r\n";
+	const r = frameRequest(h, HttpMethod.POST, data, 1024 as int32);
+	assert r.kind === "ready";
+	assert r.body === "hello";
+}
+
+test "frameRequest multiple TE headers → 400" {
+	const h = createHeaders();
+	addHeader(h, "Transfer-Encoding", "chunked");
+	addHeader(h, "Transfer-Encoding", "gzip");
+	const r = frameRequest(h, HttpMethod.POST, "5\r\nhello\r\n0\r\n\r\n", 1024 as int32);
+	assert r.kind === "reject";
+	assert r.rejectStatus === 400;
+}
+
+test "frameRequest chunked basic" {
+	const h = createHeaders();
+	addHeader(h, "Transfer-Encoding", "chunked");
+	const data = "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+	const r = frameRequest(h, HttpMethod.POST, data, 1024 as int32);
+	assert r.kind === "ready";
+	assert r.body === "hello world";
+	assert r.bytesConsumed === data.length as int32;
+}
+
+test "frameRequest chunked truncated → needMore" {
+	const h = createHeaders();
+	addHeader(h, "Transfer-Encoding", "chunked");
+	const r = frameRequest(h, HttpMethod.POST, "5\r\nhel", 1024 as int32);
+	assert r.kind === "needMore";
+}
+
+test "frameRequest chunked malformed hex → 400" {
+	const h = createHeaders();
+	addHeader(h, "Transfer-Encoding", "chunked");
+	const r = frameRequest(h, HttpMethod.POST, "ZZ\r\nhello\r\n0\r\n\r\n", 1024 as int32);
+	assert r.kind === "reject";
+	assert r.rejectStatus === 400;
+}
+
+test "tryDecodeChunked truncated mid-data" {
+	const r = tryDecodeChunked("5\r\nhel");
+	assert r.kind === "needMore";
+}
+
+test "tryDecodeChunked complete with bytesConsumed" {
+	const data = "5\r\nhello\r\n0\r\n\r\n";
+	const r = tryDecodeChunked(data);
+	assert r.kind === "ready";
+	assert r.body === "hello";
+	assert r.bytesConsumed === data.length as int32;
+}
+
+// Regression: chunked-terminated buffer ends with \r\n\r\n (the final chunk
+// marker `0\r\n\r\n`), which would false-match an "ends with \r\n\r\n" fast
+// header check. parseRequest uses linear scan via findCRLF — must find the
+// FIRST \r\n\r\n (end of headers), not the last (end of chunked body).
+// If this regresses, server.cms's chunked POST handling breaks silently:
+// bufferAfter becomes empty → frame loops needMore → connection closes.
+test "parseRequest finds first CRLFCRLF, not last (chunked terminator regression)" {
+	const data = "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+	const r = parseRequest(data);
+	assert r.ok;
+	// bodyStart must be inside the buffer, not at end.
+	assert r.value.bodyStart > 0;
+	assert r.value.bodyStart < data.length as int32;
+	// Everything after bodyStart is the chunked body, intact.
+	const bodyPart = data.slice(r.value.bodyStart, data.length);
+	assert bodyPart === "5\r\nhello\r\n0\r\n\r\n";
 }

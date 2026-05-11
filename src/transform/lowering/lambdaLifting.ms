@@ -1138,19 +1138,18 @@ function walkLift(node: Node, state: LiftState): void {
 				preRegisterVarTypes(d.fnBody, state);
 			}
 
-			// Inline walkLiftBody: save/clear hoisted FIRST, then setup shared env
-			// so the shared env hoisted decl lands in the function body, not outer scope
-			const savedHoisted = state.hoistedEnvDecls;
-			state.hoistedEnvDecls = [];
-			if (allCaptures.items.length > 0) {
-				setupSharedEnv(state, allCaptures, allCapturedIdents, node.location);
-			}
-			walkLift(d.fnBody, state);
-			if (state.hoistedEnvDecls.length > 0 && d.fnBody !== null && d.fnBody.kind === NodeKind.BlockStmt) {
-				const bd = d.fnBody.data as BlockStmtData;
-				bd.statements = prependHoistedEnvDecls(state.hoistedEnvDecls, bd.statements);
-			}
-			state.hoistedEnvDecls = savedHoisted;
+			// Walk + manage hoisted env decls via the shared helper. The
+			// preWalk slot is where `setupSharedEnv` runs — it MUST happen
+			// after the helper has reset `hoistedEnvDecls` (so the shared
+			// env decl lands here, not in the outer scope) and before the
+			// body walk (so the env name is in scope when closures inside
+			// reference it).
+			const fnLoc = node.location;
+			walkLiftBody(d.fnBody, state, () => {
+				if (allCaptures.items.length > 0) {
+					setupSharedEnv(state, allCaptures, allCapturedIdents, fnLoc);
+				}
+			});
 			popFuncBoundary(state.ss);
 			state.currentParams = savedParams;
 			state.activeEnvRewrites = savedActiveRewrites;
@@ -1267,9 +1266,13 @@ function walkLift(node: Node, state: LiftState): void {
 			// `0 /* unlowered ArrowFunction */`. Build mode never hits this path
 			// (DCE strips test bodies pre-lifting) but test mode keeps them.
 			//
-			// Save/restore the SAME state slots a FunctionDecl arm does, otherwise
-			// processing test bodies pollutes module-level state used by the next
-			// FunctionDecl.
+			// Save/restore the same broader state slots a FunctionDecl arm does
+			// (currentFnName, currentParams, activeEnvRewrites, sharedEnv) so
+			// processing one test body doesn't pollute the next sibling. The
+			// inner hoisted-env-decl lifecycle goes through `walkLiftBody` —
+			// this is what Bug 10 was missing (inline reset+walk+restore was
+			// silently dropping any lifted env declaration that captured a
+			// `let` inside the test body).
 			const d = node.data as TestDeclData;
 			const savedName = state.currentFnName;
 			pushFuncBoundary(state.ss);
@@ -1278,10 +1281,7 @@ function walkLift(node: Node, state: LiftState): void {
 			state.currentParams = createNameSet();
 			state.activeEnvRewrites = [];
 			const savedShared = saveSharedEnv(state);
-			const savedHoisted = state.hoistedEnvDecls;
-			state.hoistedEnvDecls = [];
-			walkLift(d.testBody, state);
-			state.hoistedEnvDecls = savedHoisted;
+			walkLiftBody(d.testBody, state);
 			popFuncBoundary(state.ss);
 			state.currentParams = savedParams;
 			state.activeEnvRewrites = savedActiveRewrites;
@@ -1350,9 +1350,33 @@ function prependHoistedEnvDecls(hoisted: Node[], stmts: Node[]): Node[] {
 	return newStmts;
 }
 
-function walkLiftBody(body: Node, state: LiftState): void {
+// No-op default for `walkLiftBody`'s `preWalk` slot. Callers without any
+// pre-walk work (Method/Ctor/Arrow/FuncExpr/Test) can rely on the default and
+// don't need to thread a callback through.
+function noopPreWalk(): void {}
+
+// Walk a function-body-shaped node and own the full env-hoisting lifecycle:
+//
+//   save current hoisted env decls list
+//   reset to empty (so anything hoisted during this walk lands in this scope)
+//   preWalk()                       <-- only FunctionDecl uses this slot
+//                                       (its `setupSharedEnv` MUST run between
+//                                        the reset and the walk so the shared
+//                                        env decl lands in *this* function's
+//                                        body, not the outer scope's)
+//   walkLift(body)
+//   prepend hoisted decls into body's statements   <-- always runs
+//   restore the outer scope's hoisted list
+//
+// The "always runs" prepend is the load-bearing invariant. Bug 10 was
+// TestDecl re-implementing this lifecycle inline and forgetting the prepend
+// step — so any closure capturing a `let` inside a test block ended up with a
+// dangling `_envN_` reference at codegen. Owning the full lifecycle inside
+// this helper means callers physically can't skip the prepend.
+function walkLiftBody(body: Node, state: LiftState, preWalk: () => void = noopPreWalk): void {
 	const savedHoisted = state.hoistedEnvDecls;
 	state.hoistedEnvDecls = [];
+	preWalk();
 	walkLift(body, state);
 	if (state.hoistedEnvDecls.length > 0 && body !== null && body.kind === NodeKind.BlockStmt) {
 		const bd = body.data as BlockStmtData;

@@ -255,8 +255,59 @@ export function monoConcreteTypeName(t: Type | null): string {
 			}
 			return name + ">";
 		},
-		TypeKind.Union => t.typeName !== "" ? t.typeName : "Union",
-		TypeKind.Function => "Function",
+		TypeKind.Union => {
+			// Named DU alias (Either, Result, user-declared union): use the name —
+			// it resolves back to the same Union via type-alias lookup.
+			if (t.typeName !== "") return t.typeName;
+			// Anonymous union: emit literal `A | B | C` so the substituted
+			// annotation roundtrips through `resolveAnnotation` back to a
+			// Union with the same children. The previous "Union" placeholder
+			// didn't resolve to anything and triggered the same `_function`-
+			// style mono-naming divergence Bug 5a fixed for Function types.
+			let lit = "";
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (i > 0) lit = lit + " | ";
+				lit = lit + monoConcreteTypeName(t.typeChildren[i]);
+				i = i + 1;
+			}
+			return lit !== "" ? lit : "unknown";
+		},
+		TypeKind.Conditional => {
+			// `T extends U ? A : B` — typeChildren = [check, extends, true, false].
+			// Most conditionals evaluate to one branch during substitution
+			// (`evaluateConditionalType`); reach this arm only when generic
+			// params still leak through. Emit the literal so the parser can
+			// reconstruct the Conditional shape on re-resolution.
+			if (t.typeChildren.length < 4) return "unknown";
+			return monoConcreteTypeName(t.typeChildren[0])
+				+ " extends " + monoConcreteTypeName(t.typeChildren[1])
+				+ " ? " + monoConcreteTypeName(t.typeChildren[2])
+				+ " : " + monoConcreteTypeName(t.typeChildren[3]);
+		},
+		TypeKind.Function => {
+			// Function type substituted into a generic body has to roundtrip
+			// through `resolveAnnotation` after the substitution string is
+			// re-parsed. The previous "Function" placeholder didn't roundtrip
+			// — there is no `Function` symbol in scope, so the re-resolved
+			// type came back as Unknown and the generic instance ended up
+			// with `void*` fields plus a `_Function`-suffixed mangled name
+			// that disagreed with the caller-side `_function` lowercase
+			// name produced by `monoTypeKey`. Emit the function-type literal
+			// (the same surface syntax the user writes) so the parser
+			// reconstructs an equivalent `Function` Type and downstream
+			// mangling lines up with the caller's mono path.
+			let sig = "(";
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (i > 0) sig = sig + ", ";
+				const paramName = i < t.typeNames.length && t.typeNames[i].length > 0 ? t.typeNames[i] : `p${i}`;
+				sig = sig + paramName + ": " + monoConcreteTypeName(t.typeChildren[i]);
+				i = i + 1;
+			}
+			const retName = t.typeReturn !== null ? monoConcreteTypeName(t.typeReturn) : "void";
+			return sig + ") => " + retName;
+		},
 		TypeKind.Int8 => "int8",
 		TypeKind.Int16 => "int16",
 		TypeKind.Int32 => "int32",

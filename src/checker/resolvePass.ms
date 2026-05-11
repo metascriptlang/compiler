@@ -14,6 +14,7 @@ import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/s
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName } from "./collectPass";
 import { isAssignable as isAssignableCheck } from "./compat";
+import { monoTypeKey } from "../monomorphize/registry";
 
 // ===== A. Resolve Annotation Strings =====
 
@@ -746,12 +747,26 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 
 // ===== Generic Type Instantiation Helpers =====
 
-// Build a type arg key from resolved type arg strings (e.g., "number,string")
+// Build a type arg key from resolved type arg strings.
+//
+// Resolves each annotation string to its `Type` and runs `monoTypeKey` so
+// the resulting key is the SAME canonical form the Type-based mono path
+// uses for `mangleMonoName`. Without this alignment, `Map<string, Handler>`
+// where `Handler = (s: string) => void` produced two different mangled
+// suffixes — `string_Handler` (raw user spelling, struct path) vs
+// `string_function` (canonical, function path) — and the resulting
+// universe of struct/function symbols disagreed (Bug 5a / Task #11).
+// Routing both through `monoTypeKey` makes the struct mono path and the
+// function mono path agree on names without needing any further per-type
+// special-casing in `monoConcreteTypeName`.
 export function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 	let key = "";
 	for (let i = 0; i < args.length; i += 1) {
 		if (i > 0) key = key + "_";
-		key = key + args[i].trim();
+		const trimmed = args[i].trim();
+		const resolved = trimmed !== "" ? resolveAnnotation(trimmed, ctx, 0, 0) : unknownType();
+		const canonical = resolved.kind !== TypeKind.Unknown ? monoTypeKey(resolved) : trimmed;
+		key = key + canonical;
 	}
 	return key;
 }
@@ -1602,6 +1617,35 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			for (const pt of memberTypes) { propagateToOwner(inner, pt); }
 			node.nodeType = sym.symbolType;
 			return;
+		}
+		// Mutual / multi-step cycle (`A extends B`, `B extends A` — or longer chain).
+		// We can't rely on the Shaping state for this: `resolveClass` flips the
+		// symbol to `Shaped` early to support forward references inside method
+		// bodies, so by the time we recurse into a parent the original class
+		// already looks finished. Walk the parent chain *structurally* via the
+		// `classExtends` annotation strings before triggering resolution — if
+		// the chain leads back to ourselves, report and bail out the same way
+		// the self-cycle branch above does. Without this the partial-resolve
+		// races produce a misleading "field 'x' redefines inherited field"
+		// downstream instead of a clean "cyclic inheritance" diagnostic.
+		let cycleProbe = bareParentName.trim();
+		let cycleSteps: int32 = 0;
+		while (cycleProbe !== "" && cycleSteps < 64) {
+			if (cycleProbe === d.className) {
+				addError(ctx, "'" + d.className + "' cyclic inheritance — '" + d.className + "' indirectly extends itself via '" + bareParentName + "'", node.location.line, node.location.column);
+				inner.typeNames = memberNames;
+				inner.typeChildren = memberTypes;
+				for (const pt of memberTypes) { propagateToOwner(inner, pt); }
+				node.nodeType = sym.symbolType;
+				return;
+			}
+			const probeSym = lookupSymbol(ctx.table, cycleProbe);
+			if (probeSym === null || probeSym.declNode === null || probeSym.declNode.kind !== NodeKind.ClassDecl) break;
+			const probeData = probeSym.declNode.data as ClassDeclData;
+			const nextParent = probeData.classExtends;
+			if (nextParent === "") break;
+			cycleProbe = nextParent.indexOf("<") >= 0 ? nextParent.slice(0, nextParent.indexOf("<")).trim() : nextParent.trim();
+			cycleSteps = (cycleSteps + 1) as int32;
 		}
 		const parentSym = lookupSymbol(ctx.table, bareParentName);
 		if (parentSym !== null) ensureShaped(parentSym, ctx);

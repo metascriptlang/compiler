@@ -21,7 +21,7 @@ import { analyzeProgram } from "../analyzer/index";
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
 import { AliveSet, createAliveSet } from "../codegen/c/context";
 import { generateJS } from "../codegen/js/jsgen";
-import { MapEntry, createMapProvider, loadModuleGraph } from "../module/loader";
+import { MapEntry, createMapProvider, loadModuleGraph, canonicalModulePath } from "../module/loader";
 import { Module, ModuleGraph, findModule } from "../module/graph";
 import { Node } from "../ast/node";
 // Side-effect import — registers the Raiser-VM-backed macro evaluator so
@@ -46,7 +46,9 @@ function collectErrors(errors: any[], prefix: string): string {
 // Full C pipeline: parse → check → monomorphize → validate → transform → native → analyze → codegen
 export function compileToC(source: string): CompileResult {
 	resetAllSideChannels();
-	const modPath = "test/e2e.ms";
+	// loadModule canonicalizes the entry path to absolute (loader.ms:393) —
+	// findModule uses string equality, so we must canonicalize here too.
+	const modPath = canonicalModulePath("test/e2e.ms");
 	const entries = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph(modPath, provider);
@@ -83,7 +85,7 @@ export function compileToC(source: string): CompileResult {
 // Full JS pipeline: parse → check → transform(jsBackend=true) → codegen
 export function compileToJS(source: string): CompileResult {
 	resetAllSideChannels();
-	const modPath = "test/e2e.ms";
+	const modPath = canonicalModulePath("test/e2e.ms");
 	const entries = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph(modPath, provider);

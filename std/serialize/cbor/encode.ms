@@ -39,9 +39,18 @@ export macro cborValueOf(t: Node): Node {
 			error("cborValueOf: V1.5 array fields support atomic-element types only; struct-element arrays deferred to V2", t);
 		}
 		const en: string = elemType.name;
+		// Reject non-builtin element types — fall-through emits the wrong
+		// array type. See std/serialize/json/encode.ms for rationale.
+		const isBuiltin: boolean = en === "string" || en === "boolean"
+			|| en === "number" || en === "float32" || en === "float64"
+			|| en === "int8" || en === "int16" || en === "int32" || en === "int64"
+			|| en === "uint8" || en === "uint16" || en === "uint32";
+		if (!isBuiltin) {
+			error("cborValueOf: V1.5 array fields support builtin atomic element types only; enum/alias/struct element arrays deferred to V2 (got element type '" + en + "')", t);
+		}
 		// IF-ELSE not match: macro VM string-match dispatch bug (always picks `_`).
 		// See memory project_macro_vm_string_match_bug.
-		let helperName: string = "cborArrayOfInt64";   // default for enum/alias
+		let helperName: string = "cborArrayOfInt64";
 		if (en === "string") helperName = "cborArrayOfStrings";
 		else if (en === "boolean") helperName = "cborArrayOfBooleans";
 		else if (en === "number") helperName = "cborArrayOfNumbers";

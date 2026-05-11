@@ -44,7 +44,7 @@ import { CliOptions, Target } from "./options";
 import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileCFile, linkObjects, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker, effectiveOsTarget } from "./cc";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
+import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, writeCSource, writeCompileFingerprint, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
@@ -304,7 +304,7 @@ export function applyGcMode(opts: CliOptions): void {
 	if (opts.osTarget !== "") graphPreludeCtx.osTarget = opts.osTarget;
 }
 
-function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig): ModuleGraph {
+function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, osTarget: string = ""): ModuleGraph {
 	if (verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const provider = createFileSystemProvider();
 
@@ -324,7 +324,11 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 
 	if (verbose) verboseLog("cross-module type check");
 	const backendExt = config.extensions.length > 0 ? config.extensions[0] : ".cms";
-	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt);
+	// Pass osTarget through so @platform("...") directives are filtered against
+	// the build target during collectDirectives. Without this, modules check
+	// with ctx.osTarget="" → effectiveCtxOsTarget falls back to host → mac
+	// directives leak into a cross-compile windows build's linkFlags().
+	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, osTarget);
 	graphPreludeCtx = getPreludeContext();
 	// Report type errors but continue — allows codegen to proceed past non-fatal checker issues
 	reportModuleErrors(graph, "type error");
@@ -1090,17 +1094,23 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 				oFiles = appendFlag(oFiles, oFile);
 				if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
 			} else {
-				writeCCodeCache(p.modPath, cCode, compileCmd);
+				// Bug 6: write only .c source BEFORE compile (always — debuggable).
+				// Defer fingerprint (.cfp) until after successful compile so a
+				// failed zig cc doesn't leave a false cache hit for the next run.
+				writeCSource(p.modPath, cCode);
 				const cFile = stableCFile(p.modPath);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 				const tCl = performance.now();
 				const ccCode = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 				clangTime = clangTime + (performance.now() - tCl);
 				if (ccCode !== 0) {
+					// Compile failed — clean cache so next run retries cleanly.
+					invalidateCompileCache(p.modPath);
 					if (opts.osTarget !== "solana") {
 						console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccCode})`)}`);
 					}
 				} else {
+					writeCompileFingerprint(p.modPath, cCode, compileCmd);
 					oFiles = appendFlag(oFiles, oFile);
 				}
 				modulesRecompiled = modulesRecompiled + 1;
@@ -1343,14 +1353,17 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			oFiles = appendFlag(oFiles, oFile);
 			if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
 		} else {
-			writeCCodeCache(p.modPath, cCode, compileCmd);
+			// Bug 6: same fix as main path — defer fingerprint until success.
+			writeCSource(p.modPath, cCode);
 			const cFile = stableCFile(p.modPath);
 			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 			const ccCode = compileCFile(cFile, oFile, testModFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 			if (ccCode !== 0) {
+				invalidateCompileCache(p.modPath);
 				console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccCode})`)}`);
 				exit(1);
 			}
+			writeCompileFingerprint(p.modPath, cCode, compileCmd);
 			oFiles = appendFlag(oFiles, oFile);
 		}
 		compiled = compiled + 1;

@@ -459,9 +459,13 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 	const nrvo = isNrvoReturnType(methodType.typeReturn, methodType);
 	const actualRetType = nrvo ? "void" : cRetType;
 
-	// Build params from d.methodParams — "this" is already at index 0 for instance methods.
-	// NRVO inserts `Type* __result` as the synthetic first parameter (before any
-	// user params, including any `this` receiver).
+	// Fallback path. Post-`methodToFunction` transform (Phase 3, !jsBackend),
+	// MethodDecl no longer reaches codegen — it's lifted into a top-level
+	// FunctionDecl that goes through `genFunctionDecl`. This branch only fires
+	// if a future generic / extern / mono path leaks a MethodDecl past the
+	// transform. Kept as a no-op-equivalent emitter so we don't crash; if a
+	// param-promotion drift surfaces here, the right fix is to extend the
+	// transform's coverage, not to mirror logic into this branch.
 	let paramList = "";
 	if (nrvo) {
 		paramList = cRetType + "* __result";

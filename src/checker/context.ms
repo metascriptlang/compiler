@@ -319,12 +319,27 @@ export function createExtMethod(methodName: string, receiverTypeName: string, so
 }
 
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
-	// Dedup by sym identity only (keeps all candidates, resolves via scoring + scope depth).
+	// Dedup by sym identity first (cheap fast-path).
 	if (method.sym !== null) {
-		let i = 0;
-		while (i < registry.methods.length) {
-			if (registry.methods[i].sym === method.sym) return;
-			i = i + 1;
+		for (const existing of registry.methods) {
+			if (existing.sym === method.sym) return;
+		}
+	}
+	// Stronger dedup: same logical extension may register through multiple
+	// import / re-export paths producing distinct Symbol instances for the
+	// same definition (same name + modulePath + receiver). Without this,
+	// `obj.asNumber()` reports "Ambiguous overloaded extension method" even
+	// though only one definition exists. Fast path skips this loop when
+	// the sym lacks a stable identity (modulePath empty).
+	if (method.sym !== null && method.sym.modulePath !== "") {
+		for (const other of registry.methods) {
+			if (other.sym !== null
+					&& other.sym.name === method.sym.name
+					&& other.sym.modulePath === method.sym.modulePath
+					&& other.receiverTypeName === method.receiverTypeName
+					&& other.isStatic === method.isStatic) {
+				return;
+			}
 		}
 	}
 	registry.methods.push(method);

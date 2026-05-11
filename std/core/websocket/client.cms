@@ -1,0 +1,515 @@
+// WebSocket Client — RFC 6455.
+//
+// Async-first client over plain TCP (`ws://`). TLS (`wss://`) is out of scope
+// for v0. Synchronous wrappers are provided for tests / simple scripts.
+//
+// Layered design:
+//   ./frame      — pure-MS frame parser/builder (number[] bytes)
+//   ./handshake  — pure-MS HTTP/1.1 upgrade builder + 101 response parser
+//   ./errors     — WsError + classification
+//   THIS FILE    — wires the layers into std/net + std/crypto and surfaces a
+//                  user-facing API: connect / sendText / sendBinary / recv / close
+//
+// All inbound bytes are accumulated in `WsClient._rxBuf` (number[]) and parsed
+// frame-by-frame. Control frames (ping/pong/close) are handled internally;
+// only data frames surface to the caller. Fragmented messages are reassembled
+// in `_fragments` and surfaced once FIN=1 arrives.
+
+@include("runtime/crypto/hash.h");
+@include("runtime/net/socket.h");
+
+// mbedTLS include + compile chain — mirrors std/crypto/index.cms. We pull the
+// C sources in here directly instead of `import { ... } from "std/crypto"`
+// because importing the prelude module surfaces the Hasher/Hmac classes,
+// whose static `create` extension methods collide with each other in some
+// resolution paths. Going via local externs avoids the ambiguity.
+@passC("-Iruntime/crypto");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/core");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
+@passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
+@compile("runtime/crypto/hash.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_util.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha1.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c");
+
+extern function msCryptoRandomBytesRaw(size: number): string from "msCryptoRandomBytes";
+
+import {
+	connect as netConnect, close as netClose, createSocket, setTimeout as netSetTimeout,
+	send as netSend, recv as netRecv, recvAsync, sendAsync,
+} from "std/net";
+
+import {
+	OPCODE_CONTINUATION, OPCODE_TEXT, OPCODE_BINARY, OPCODE_CLOSE, OPCODE_PING, OPCODE_PONG,
+	MAX_PAYLOAD_BYTES,
+	parseFrame, buildFrame, encodeClosePayload,
+	ParsedFrame,
+} from "./frame";
+
+import {
+	WsUrl, parseWsUrl, makeClientKey, deriveAcceptKey, buildUpgradeRequest, parse101Response,
+} from "./handshake";
+
+import {
+	WsError, wsConnectionFailed, wsTimeout, wsHandshakeFailed, wsProtocolError,
+	wsPayloadTooLarge, wsClosed, wsSocketError, wsInternalError,
+} from "./errors";
+
+import {
+	WsState, WsMessageKind, WsCloseCode, WsMessage, FragState, FrameDecision,
+	newFragState, processFrame,
+	appendBytes, dropPrefix, sliceBytes, findCRLFCRLF,
+} from "./state";
+
+export interface WsClient {
+	fd: int32;
+	state: WsState;
+	subprotocol: string;     // server-negotiated subprotocol; "" if none
+	_rxBuf: number[];        // accumulator for inbound bytes across recv() calls
+	_rxStart: int32;         // offset into _rxBuf — bytes [0.._rxStart) already consumed
+	_frag: FragState;        // fragmented-message reassembly state
+}
+
+export interface ConnectOptions {
+	subprotocols: string[];
+	extraHeaders: string[];
+	// recv/send timeout — applies AFTER the TCP connection is established.
+	// Backed by SO_RCVTIMEO / SO_SNDTIMEO. The TCP `connect()` syscall itself
+	// is NOT bounded by this value; it follows the OS default (typically tens
+	// of seconds). Bounding connect requires non-blocking connect + select,
+	// which is a future improvement. 0 = no timeout (default).
+	recvSendTimeoutMs: int32;
+}
+
+// ===== Bytes ↔ string boundary =====
+//
+// Frame layer works on `number[]`; std/net works on `string`. Conversions are
+// localised here and call into std/core/buffer to allocate fresh strings. The
+// string→bytes path is pure MS (charCodeAt loop) and is also exposed via
+// `stringToBytes` for callers building raw payloads.
+
+export function stringToBytes(s: string): number[] {
+	// Use byteAt + byteLength — charCodeAt/length use UTF-16 indexing (with
+	// UTF-8 decoding internally), which corrupts and re-counts bytes ≥ 0x80
+	// (WS frame headers like 0x81 are invalid UTF-8 leads). Sockets deliver
+	// raw bytes; we want raw bytes back out.
+	const n = s.byteLength;
+	let out: number[] = [];
+	for (let i: int64 = 0; i < n; i = i + 1) {
+		out.push(s.byteAt(i));
+	}
+	return out;
+}
+
+export function bytesToString(arr: number[]): string {
+	return Buffer.fromArray(arr);
+}
+
+// ===== State helpers =====
+
+function stateName(s: WsState): string {
+	return match (s) {
+		WsState.Connecting => "Connecting",
+		WsState.Open => "Open",
+		WsState.Closing => "Closing",
+		WsState.Closed => "Closed",
+	};
+}
+
+// Compact the read buffer if the consumed prefix has grown large. Replaces
+// the previous "allocate new array per frame via dropPrefix" pattern, which
+// was O(n²) for streams of many small frames. Now O(N) amortized: we only
+// re-allocate when the dead prefix exceeds 64 KB or half the buffer, which-
+// ever is smaller. Threshold values picked to keep the compaction overhead
+// negligible while bounding peak memory at ~2× the live frame data.
+const RX_COMPACT_THRESHOLD: int32 = 65536;
+
+function compactRxBuf(ws: WsClient): void {
+	if (ws._rxStart === 0) return;
+	const liveLen = ws._rxBuf.length - ws._rxStart;
+	if (ws._rxStart < RX_COMPACT_THRESHOLD && ws._rxStart < liveLen) return;
+	ws._rxBuf = sliceBytes(ws._rxBuf, ws._rxStart, ws._rxBuf.length);
+	ws._rxStart = 0;
+}
+
+// ===== Internal: send a single frame (mask key from std/crypto.randomBytes) =====
+//
+// RFC 6455 §5.3 requires the mask key to be unpredictable. If the system RNG
+// fails (mbedTLS msCryptoRandomBytes returns ""), we MUST NOT silently fall
+// back to a fixed key — that would defeat the masking entirely. Instead we
+// surface InternalError so the caller can decide.
+
+function buildAndMaskFrame(opcode: int32, fin: boolean, payload: number[]): Result<string, WsError> {
+	const raw = msCryptoRandomBytesRaw(4);
+	const maskBytes = stringToBytes(raw);
+	if (maskBytes.length !== 4) {
+		return Result.err(wsInternalError("mask key generation failed (RNG returned " + maskBytes.length.toString() + " bytes)"));
+	}
+	const frame = buildFrame(opcode, fin, payload, maskBytes);
+	return Result.ok(bytesToString(frame));
+}
+
+async function sendFrameAsync(ws: WsClient, opcode: int32, payload: number[]): Promise<Result<void, WsError>> {
+	if (ws.state !== WsState.Open && opcode !== OPCODE_CLOSE) {
+		return Result.err(wsClosed("send on " + stateName(ws.state) + " connection"));
+	}
+	if (payload.length > MAX_PAYLOAD_BYTES) {
+		return Result.err(wsPayloadTooLarge(payload.length, MAX_PAYLOAD_BYTES));
+	}
+	const wireResult = buildAndMaskFrame(opcode, true, payload);
+	if (!wireResult.ok) return Result.err(wireResult.error);
+	const sent = await sendAsync(ws.fd, wireResult.value);
+	if (sent < 0) return Result.err(wsSocketError("send failed"));
+	return Result.ok(null as unknown as void);
+}
+
+function sendFrameSync(ws: WsClient, opcode: int32, payload: number[]): Result<void, WsError> {
+	if (ws.state !== WsState.Open && opcode !== OPCODE_CLOSE) {
+		return Result.err(wsClosed("send on " + stateName(ws.state) + " connection"));
+	}
+	if (payload.length > MAX_PAYLOAD_BYTES) {
+		return Result.err(wsPayloadTooLarge(payload.length, MAX_PAYLOAD_BYTES));
+	}
+	const wireResult = buildAndMaskFrame(opcode, true, payload);
+	if (!wireResult.ok) return Result.err(wireResult.error);
+	const sent = netSend(ws.fd, wireResult.value);
+	if (sent < 0) return Result.err(wsSocketError("send failed"));
+	return Result.ok(null as unknown as void);
+}
+
+// ===== Public send API =====
+
+export async function sendText(this ws: WsClient, payload: string): Promise<Result<void, WsError>> {
+	const bytes = stringToBytes(payload);
+	return await sendFrameAsync(ws, OPCODE_TEXT, bytes);
+}
+
+export async function sendBinary(this ws: WsClient, payload: number[]): Promise<Result<void, WsError>> {
+	return await sendFrameAsync(ws, OPCODE_BINARY, payload);
+}
+
+// Sync variants — useful in tests and simple scripts.
+export function sendTextSync(this ws: WsClient, payload: string): Result<void, WsError> {
+	const bytes = stringToBytes(payload);
+	return sendFrameSync(ws, OPCODE_TEXT, bytes);
+}
+
+export function sendBinarySync(this ws: WsClient, payload: number[]): Result<void, WsError> {
+	return sendFrameSync(ws, OPCODE_BINARY, payload);
+}
+
+// ===== Public recv API =====
+
+export async function recv(this ws: WsClient): Promise<Result<WsMessage, WsError>> {
+	while (true) {
+		// Parse next frame starting at the consumed-prefix offset. O(1) drain
+		// on success — no per-frame buffer reallocation.
+		const r = parseFrame(ws._rxBuf, ws._rxStart);
+		if (!r.ok) {
+			// Protocol violation in the inbound stream. Try to send a Close
+			// frame, then close the socket.
+			const empty: number[] = [];
+			const closePayload = encodeClosePayload(WsCloseCode.ProtocolError as int32, empty);
+			await sendFrameAsync(ws, OPCODE_CLOSE, closePayload);
+			netClose(ws.fd);
+			ws.state = WsState.Closed;
+			return Result.err(r.error);
+		}
+
+		if (r.value.needMore) {
+			const chunk = await recvAsync(ws.fd, 16384);
+			if (chunk.length === 0) {
+				netClose(ws.fd);
+				ws.state = WsState.Closed;
+				return Result.err(wsClosed("connection closed by peer"));
+			}
+			appendBytes(ws._rxBuf, stringToBytes(chunk));
+			continue;
+		}
+
+		const f = r.value.frame;
+		ws._rxStart = ws._rxStart + f.totalSize;
+		compactRxBuf(ws);
+
+		const d = processFrame(ws._frag, f);
+		if (d.action === "error") {
+			const empty: number[] = [];
+			const closePayload = encodeClosePayload(d.closeCode, empty);
+			await sendFrameAsync(ws, OPCODE_CLOSE, closePayload);
+			netClose(ws.fd);
+			ws.state = WsState.Closed;
+			return Result.err(wsProtocolError(d.errorMsg));
+		}
+		if (d.autoReplyOpcode !== 0) {
+			await sendFrameAsync(ws, d.autoReplyOpcode, d.autoReplyPayload);
+		}
+		if (d.action === "delivered_close") {
+			netClose(ws.fd);
+			ws.state = WsState.Closed;
+			return Result.ok(d.message);
+		}
+		if (d.action === "deliver") {
+			return Result.ok(d.message);
+		}
+		// "continue" — loop for next frame
+	}
+}
+
+export function recvSync(this ws: WsClient): Result<WsMessage, WsError> {
+	while (true) {
+		const r = parseFrame(ws._rxBuf, ws._rxStart);
+		if (!r.ok) {
+			const empty: number[] = [];
+			const closePayload = encodeClosePayload(WsCloseCode.ProtocolError as int32, empty);
+			sendFrameSync(ws, OPCODE_CLOSE, closePayload);
+			netClose(ws.fd);
+			ws.state = WsState.Closed;
+			return Result.err(r.error);
+		}
+
+		if (r.value.needMore) {
+			const chunk = netRecv(ws.fd, 16384);
+			if (chunk.length === 0) {
+				netClose(ws.fd);
+				ws.state = WsState.Closed;
+				return Result.err(wsClosed("connection closed by peer"));
+			}
+			appendBytes(ws._rxBuf, stringToBytes(chunk));
+			continue;
+		}
+
+		const f = r.value.frame;
+		ws._rxStart = ws._rxStart + f.totalSize;
+		compactRxBuf(ws);
+
+		const d = processFrame(ws._frag, f);
+		if (d.action === "error") {
+			const empty: number[] = [];
+			const closePayload = encodeClosePayload(d.closeCode, empty);
+			sendFrameSync(ws, OPCODE_CLOSE, closePayload);
+			netClose(ws.fd);
+			ws.state = WsState.Closed;
+			return Result.err(wsProtocolError(d.errorMsg));
+		}
+		if (d.autoReplyOpcode !== 0) {
+			sendFrameSync(ws, d.autoReplyOpcode, d.autoReplyPayload);
+		}
+		if (d.action === "delivered_close") {
+			netClose(ws.fd);
+			ws.state = WsState.Closed;
+			return Result.ok(d.message);
+		}
+		if (d.action === "deliver") {
+			return Result.ok(d.message);
+		}
+	}
+}
+
+// ===== Public close =====
+
+export async function close(this ws: WsClient, code: int32, reason: string): Promise<Result<void, WsError>> {
+	if (ws.state === WsState.Closed) return Result.ok(null as unknown as void);
+	if (ws.state === WsState.Closing) {
+		// Already initiated. Just shut the socket.
+		netClose(ws.fd);
+		ws.state = WsState.Closed;
+		return Result.ok(null as unknown as void);
+	}
+
+	const reasonBytes = stringToBytes(reason);
+	const closePayload = encodeClosePayload(code, reasonBytes);
+	const sendResult = await sendFrameAsync(ws, OPCODE_CLOSE, closePayload);
+	ws.state = WsState.Closing;
+
+	// For v0 we don't wait for the echo close — we close the socket immediately.
+	// The doc allows this; spec-perfect close handshake (drain frames until peer
+	// echoes Close) can be added later if needed.
+	netClose(ws.fd);
+	ws.state = WsState.Closed;
+	if (!sendResult.ok) return Result.err(sendResult.error);
+	return Result.ok(null as unknown as void);
+}
+
+export function closeSync(this ws: WsClient, code: int32, reason: string): Result<void, WsError> {
+	if (ws.state === WsState.Closed) return Result.ok(null as unknown as void);
+	if (ws.state === WsState.Closing) {
+		netClose(ws.fd);
+		ws.state = WsState.Closed;
+		return Result.ok(null as unknown as void);
+	}
+
+	const reasonBytes = stringToBytes(reason);
+	const closePayload = encodeClosePayload(code, reasonBytes);
+	const sendResult = sendFrameSync(ws, OPCODE_CLOSE, closePayload);
+	ws.state = WsState.Closing;
+	netClose(ws.fd);
+	ws.state = WsState.Closed;
+	if (!sendResult.ok) return Result.err(sendResult.error);
+	return Result.ok(null as unknown as void);
+}
+
+// ===== Public connect =====
+
+const HANDSHAKE_RECV_BUF: int32 = 4096;
+const HANDSHAKE_HEADER_CAP: int32 = 65536;
+
+// Result of reading the handshake response from the socket. The transition
+// from "headers (ASCII text)" to "frame stream (binary bytes)" can happen
+// inside a single recv chunk, so we buffer everything as bytes and split at
+// the first \r\n\r\n. Mixing string concat with binary tail bytes is unsafe:
+// `s.length` and `s.slice` use UTF-16 indexing in the C runtime, which
+// undercounts and corrupts non-ASCII bytes (e.g. 0x81 frame leads).
+export interface HandshakeRead {
+	headers: string;       // ASCII headers up to and including the trailing CRLF CRLF
+	postHeaderBytes: number[];  // any frame bytes that arrived in the same recv chunk
+}
+
+async function readUntilHeaderEndAsync(fd: int32): Promise<Result<HandshakeRead, WsError>> {
+	let bytes: number[] = [];
+	while (true) {
+		const chunk = await recvAsync(fd, HANDSHAKE_RECV_BUF);
+		if (chunk.byteLength === 0) {
+			return Result.err(wsHandshakeFailed("connection closed during handshake"));
+		}
+		appendBytes(bytes, stringToBytes(chunk));
+		const sep = findCRLFCRLF(bytes);
+		if (sep >= 0) {
+			const headerBytes = sliceBytes(bytes, 0, sep + 4);
+			const postBytes = sliceBytes(bytes, sep + 4, bytes.length);
+			return Result.ok({ headers: bytesToString(headerBytes), postHeaderBytes: postBytes });
+		}
+		if (bytes.length > HANDSHAKE_HEADER_CAP) {
+			return Result.err(wsHandshakeFailed("response headers exceeded " + HANDSHAKE_HEADER_CAP.toString() + " bytes"));
+		}
+	}
+	const empty: number[] = [];
+	return Result.err(wsHandshakeFailed("unreachable"));
+}
+
+function readUntilHeaderEndSync(fd: int32): Result<HandshakeRead, WsError> {
+	let bytes: number[] = [];
+	while (true) {
+		const chunk = netRecv(fd, HANDSHAKE_RECV_BUF);
+		if (chunk.byteLength === 0) {
+			return Result.err(wsHandshakeFailed("connection closed during handshake"));
+		}
+		appendBytes(bytes, stringToBytes(chunk));
+		const sep = findCRLFCRLF(bytes);
+		if (sep >= 0) {
+			const headerBytes = sliceBytes(bytes, 0, sep + 4);
+			const postBytes = sliceBytes(bytes, sep + 4, bytes.length);
+			return Result.ok({ headers: bytesToString(headerBytes), postHeaderBytes: postBytes });
+		}
+		if (bytes.length > HANDSHAKE_HEADER_CAP) {
+			return Result.err(wsHandshakeFailed("response headers exceeded " + HANDSHAKE_HEADER_CAP.toString() + " bytes"));
+		}
+	}
+	return Result.err(wsHandshakeFailed("unreachable"));
+}
+
+function defaultConnectOptions(): ConnectOptions {
+	const subs: string[] = [];
+	const extras: string[] = [];
+	return { subprotocols: subs, extraHeaders: extras, recvSendTimeoutMs: 0 };
+}
+
+export async function connect(url: string, options: ConnectOptions = null): Promise<Result<WsClient, WsError>> {
+	const opts = options === null ? defaultConnectOptions() : options;
+
+	const u = parseWsUrl(url);
+	if (!u.ok) return Result.err(u.error);
+	const wsUrl = u.value;
+
+	const fd = createSocket();
+	if (fd < 0) return Result.err(wsConnectionFailed("socket() failed"));
+	if (opts.recvSendTimeoutMs > 0) netSetTimeout(fd, opts.recvSendTimeoutMs);
+
+	if (netConnect(fd, wsUrl.host, wsUrl.port) < 0) {
+		netClose(fd);
+		return Result.err(wsConnectionFailed("connect to " + wsUrl.host + ":" + wsUrl.port.toString() + " failed"));
+	}
+
+	const clientKey = makeClientKey();
+	const expectedAccept = deriveAcceptKey(clientKey);
+	const req = buildUpgradeRequest(wsUrl, clientKey, opts.subprotocols, opts.extraHeaders);
+
+	const sent = await sendAsync(fd, req);
+	if (sent < 0) {
+		netClose(fd);
+		return Result.err(wsSocketError("failed to send upgrade request"));
+	}
+
+	const rawResult = await readUntilHeaderEndAsync(fd);
+	if (!rawResult.ok) {
+		netClose(fd);
+		return Result.err(rawResult.error);
+	}
+	const raw = rawResult.value;
+
+	const parsed = parse101Response(raw.headers, expectedAccept);
+	if (!parsed.ok) {
+		netClose(fd);
+		return Result.err(parsed.error);
+	}
+
+	return Result.ok({
+		fd: fd,
+		state: WsState.Open,
+		subprotocol: parsed.value.subprotocol,
+		_rxBuf: raw.postHeaderBytes,
+		_rxStart: 0,
+		_frag: newFragState(),
+	});
+}
+
+export function connectSync(url: string, options: ConnectOptions = null): Result<WsClient, WsError> {
+	const opts = options === null ? defaultConnectOptions() : options;
+
+	const u = parseWsUrl(url);
+	if (!u.ok) return Result.err(u.error);
+	const wsUrl = u.value;
+
+	const fd = createSocket();
+	if (fd < 0) return Result.err(wsConnectionFailed("socket() failed"));
+	if (opts.recvSendTimeoutMs > 0) netSetTimeout(fd, opts.recvSendTimeoutMs);
+
+	if (netConnect(fd, wsUrl.host, wsUrl.port) < 0) {
+		netClose(fd);
+		return Result.err(wsConnectionFailed("connect to " + wsUrl.host + ":" + wsUrl.port.toString() + " failed"));
+	}
+
+	const clientKey = makeClientKey();
+	const expectedAccept = deriveAcceptKey(clientKey);
+	const req = buildUpgradeRequest(wsUrl, clientKey, opts.subprotocols, opts.extraHeaders);
+
+	const sentN = netSend(fd, req);
+	if (sentN < 0) {
+		netClose(fd);
+		return Result.err(wsSocketError("failed to send upgrade request"));
+	}
+
+	const rawResult = readUntilHeaderEndSync(fd);
+	if (!rawResult.ok) {
+		netClose(fd);
+		return Result.err(rawResult.error);
+	}
+	const raw = rawResult.value;
+
+	const parsed = parse101Response(raw.headers, expectedAccept);
+	if (!parsed.ok) {
+		netClose(fd);
+		return Result.err(parsed.error);
+	}
+
+	return Result.ok({
+		fd: fd,
+		state: WsState.Open,
+		subprotocol: parsed.value.subprotocol,
+		_rxBuf: raw.postHeaderBytes,
+		_rxStart: 0,
+		_frag: newFragState(),
+	});
+}

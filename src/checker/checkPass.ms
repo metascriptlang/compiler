@@ -12,6 +12,7 @@ import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/fs";
+import { platform } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
@@ -907,7 +908,21 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	if (ctx.currentFunction === null) {
 		addError(ctx, "return outside of function", node.location.line, node.location.column);
 	}
-	if (d.argument === null) return;
+	if (d.argument === null) {
+		// Bare `return;` is the user explicitly saying "void return". Inference
+		// (e.g. lambda body without an explicit return-type annotation) needs
+		// this signal — without it, a body whose only return is bare leaves
+		// `inferredReturn` stuck at Unknown, codegen falls back to `void*`, and
+		// the C compiler rejects the bare `return;` as "non-void function
+		// should return a value". Mirrors the "first return wins" rule used
+		// below for `return X` so subsequent returns can't downgrade the type.
+		if (ctx.matchExprDepth === 0
+				&& ctx.inferredReturn !== null
+				&& ctx.inferredReturn.kind === TypeKind.Unknown) {
+			ctx.inferredReturn = voidType();
+		}
+		return;
+	}
 
 	// `return null`: validate assignability with retType=Null FIRST, then stamp
 	// d.argument.nodeType with the declared return type for codegen. The fast-path
@@ -1431,19 +1446,86 @@ function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	}
 }
 
+// Returns the platform name when `node` is the MacroInvocation `@platform("X")`,
+// else "". Parser represents `@platform("X") { ... }` as DecoratedDecl with the
+// MacroInvocation as a decorator on a BlockStmt body — this helper inspects the
+// decorator node directly.
+function extractPlatformTag(node: Node): string {
+	if (node.kind !== NodeKind.MacroInvocation) return "";
+	const md = node.data as MacroInvocationData;
+	if (md.macroName !== "platform") return "";
+	if (md.macroArgs.length === 0) return "";
+	if (md.macroArgs[0].kind !== NodeKind.StringLiteral) return "";
+	return (md.macroArgs[0].data as StringLiteralData).value;
+}
+
+// Resolve the active OS target for directive filtering. Per-module ctx
+// inherits osTarget from prelude (see injectPrelude). Empty osTarget means
+// "host build" — fall back to runtime `platform`. Normalizes "darwin" → "macos"
+// so users write the friendlier name in @platform("macos").
+function effectiveCtxOsTarget(ctx: CheckerContext): string {
+	let t = ctx.osTarget;
+	if (t === "" && ctx.preludeCtx !== null) t = ctx.preludeCtx.osTarget;
+	if (t === "") t = platform;
+	if (t === "darwin") t = "macos";
+	return t;
+}
+
+// Walk inner statements of a @platform-conditioned block, applying each as a
+// directive. Mirrors the dispatch in collectDirectives' main loop. Inner
+// statements that aren't directives are silently ignored — matches existing
+// top-level non-directive behavior.
+function collectBlockDirectives(ctx: CheckerContext, block: Node): void {
+	if (block.kind !== NodeKind.BlockStmt) return;
+	const bd = block.data as BlockStmtData;
+	for (const inner of bd.statements) {
+		if (inner.kind === NodeKind.ExprStmt) {
+			collectOneDirective(ctx, (inner.data as ExprStmtData).expr);
+		} else if (inner.kind === NodeKind.DecoratedDecl) {
+			const dd = inner.data as DecoratedDeclData;
+			for (const dec of dd.decorators) {
+				collectOneDirective(ctx, dec);
+			}
+		}
+	}
+}
+
 // Extract @include/@link/@passC/@passL directives from program AST into context.
-// Handles both standalone directives (@name("x");) and decorators (@name("x") decl).
+// Handles three shapes:
+//   1. Standalone directive:   `@name("x");`
+//   2. Decorator on a decl:    `@name("x") function foo() { ... }`
+//   3. Platform-conditional block (NEW):
+//        @platform("windows") {
+//            @compile("./platform/windows/state.c");
+//            @passL("-luser32 -lole32");
+//        }
+//      Parser produces a DecoratedDecl whose single decorator is `@platform(...)`
+//      and whose decoratedNode is the BlockStmt body. Inner directives apply
+//      only when the tag matches the build target. Nested @platform blocks
+//      are not supported (only flat top-level).
 export function collectDirectives(ctx: CheckerContext, program: Node): void {
 	if (program === null) return;
 	if (program.kind !== NodeKind.Program) return;
 	const pd = program.data as ProgramData;
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		const stmt = pd.programStmts[i];
+	for (const stmt of pd.programStmts) {
 		if (stmt.kind === NodeKind.ExprStmt) {
 			const d = stmt.data as ExprStmtData;
 			collectOneDirective(ctx, d.expr);
 		} else if (stmt.kind === NodeKind.DecoratedDecl) {
 			const dd = stmt.data as DecoratedDeclData;
+			// Platform block: single @platform("X") decorator + BlockStmt body.
+			if (dd.decorators.length === 1
+			 && dd.decoratedNode !== null
+			 && dd.decoratedNode.kind === NodeKind.BlockStmt) {
+				const tag = extractPlatformTag(dd.decorators[0]);
+				if (tag !== "") {
+					if (tag === effectiveCtxOsTarget(ctx)) {
+						collectBlockDirectives(ctx, dd.decoratedNode);
+					}
+					continue;  // platform block consumed
+				}
+			}
+			// Default: decorators on a declaration → each acts as its own directive.
 			for (const dec of dd.decorators) {
 				collectOneDirective(ctx, dec);
 			}
@@ -1758,6 +1840,13 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	// @compile objects at the compile.ms level.
 	if (preludeCtx.compilerFlags !== "") {
 		ctx.compilerFlags = appendFlag(ctx.compilerFlags, preludeCtx.compilerFlags);
+	}
+	// Build target inherited from prelude. Per-module ctx needs this so
+	// the @platform("...") block-form filter (in collectDirectives) can be
+	// evaluated against the correct target without threading opts through
+	// the checker API.
+	if (ctx.osTarget === "" && preludeCtx.osTarget !== "") {
+		ctx.osTarget = preludeCtx.osTarget;
 	}
 	// @passL/@link go directly to global linkState — no per-module merge needed
 }
@@ -3531,4 +3620,128 @@ test "asserts: returns void" {
 		+ "  assertNum(v);\n"
 		+ "}\n"
 	);
+}
+
+// ===== @platform block-form directive filter =====
+//
+// Each platform-conditional block gates its inner @compile/@passC/@passL
+// directives on the build target. Tests below run on the host platform
+// (`platform` from std/process), so they pick the host name vs a non-host
+// name dynamically — that way the suite passes on Mac, Linux, and Windows
+// hosts identically.
+
+// Returns the platform name that should match on the current host build.
+// Normalizes "darwin" → "macos" so source uses the friendlier name.
+function hostPlatformName(): string {
+	const p = platform;
+	if (p === "darwin") return "macos";
+	return p;
+}
+
+// Returns a platform name guaranteed NOT to match the current host. Used to
+// verify the filter actually skips non-matching blocks.
+function nonHostPlatformName(): string {
+	const here = hostPlatformName();
+	if (here === "windows") return "macos";
+	return "windows";
+}
+
+test "@platform: untagged directive outside any block is always-active" {
+	const ctx = checkSource("@passC(\"-Duntagged_passc_outside\");");
+	assert ctx.compilerFlags.indexOf("-Duntagged_passc_outside") >= 0;
+}
+
+test "@platform: matching block — inner @passC applied" {
+	const here = hostPlatformName();
+	const ctx = checkSource(
+		`@platform("${here}") {\n`
+		+ `	@passC("-Dplatform_match_passc");\n`
+		+ `}\n`
+	);
+	assert ctx.compilerFlags.indexOf("-Dplatform_match_passc") >= 0;
+}
+
+test "@platform: non-matching block — inner @passC filtered" {
+	const other = nonHostPlatformName();
+	const ctx = checkSource(
+		`@platform("${other}") {\n`
+		+ `	@passC("-Dplatform_skip_passc");\n`
+		+ `}\n`
+	);
+	assert ctx.compilerFlags.indexOf("-Dplatform_skip_passc") < 0;
+}
+
+test "@platform: matching block — inner @compile recorded" {
+	const here = hostPlatformName();
+	const ctx = checkSource(
+		`@platform("${here}") {\n`
+		+ `	@compile("platform_match_compile.c");\n`
+		+ `}\n`
+	);
+	assert ctx.compileDirectives.indexOf("platform_match_compile.c") >= 0;
+}
+
+test "@platform: non-matching block — inner @compile filtered" {
+	const other = nonHostPlatformName();
+	const ctx = checkSource(
+		`@platform("${other}") {\n`
+		+ `	@compile("platform_skip_compile.c");\n`
+		+ `}\n`
+	);
+	assert ctx.compileDirectives.indexOf("platform_skip_compile.c") < 0;
+}
+
+test "@platform: directive outside block stays active even when block is skipped" {
+	const other = nonHostPlatformName();
+	const ctx = checkSource(
+		"@passC(\"-Doutside_active\");\n"
+		+ `@platform("${other}") {\n`
+		+ `	@passC("-Dinside_skipped");\n`
+		+ `}\n`
+		+ "@passC(\"-Dafter_block_active\");\n"
+	);
+	// Untagged directives before AND after the skipped block survive.
+	assert ctx.compilerFlags.indexOf("-Doutside_active") >= 0;
+	assert ctx.compilerFlags.indexOf("-Dafter_block_active") >= 0;
+	// Block content stays out.
+	assert ctx.compilerFlags.indexOf("-Dinside_skipped") < 0;
+}
+
+test "@platform: empty block is a no-op" {
+	const here = hostPlatformName();
+	const ctx = checkSource(
+		"@passC(\"-Dbefore_empty\");\n"
+		+ `@platform("${here}") {}\n`
+		+ "@passC(\"-Dafter_empty\");\n"
+	);
+	// Both surrounding directives still applied — empty block didn't break dispatch.
+	assert ctx.compilerFlags.indexOf("-Dbefore_empty") >= 0;
+	assert ctx.compilerFlags.indexOf("-Dafter_empty") >= 0;
+}
+
+test "@platform: multiple blocks for different targets" {
+	const here = hostPlatformName();
+	const other = nonHostPlatformName();
+	const ctx = checkSource(
+		`@platform("${here}") {\n`
+		+ `	@passC("-Dhere_block");\n`
+		+ `}\n`
+		+ `@platform("${other}") {\n`
+		+ `	@passC("-Dother_block");\n`
+		+ `}\n`
+	);
+	assert ctx.compilerFlags.indexOf("-Dhere_block") >= 0;
+	assert ctx.compilerFlags.indexOf("-Dother_block") < 0;
+}
+
+test "@platform: standalone @platform without block — no-op (no pairing)" {
+	const here = hostPlatformName();
+	// `@platform("X");` without a following BlockStmt does nothing. Adjacent
+	// @passC stays unaffected. This guards against accidental pairing across
+	// arbitrary distance — the block must immediately follow.
+	const ctx = checkSource(
+		`@platform("${here}");\n`
+		+ "@passC(\"-Dnopair_active\");\n"
+	);
+	assert ctx.compilerFlags.indexOf("-Dnopair_active") >= 0;
 }

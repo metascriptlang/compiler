@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion } from "./types";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn } from "./context";
 import {
@@ -14,7 +14,7 @@ import {
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
-import { cloneNodeForCheck } from "../monomorphize/clone";
+import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { expandMacroInvocation } from "../compiler/meta/expand";
 import { evalComptimeBlock } from "../compiler/meta/comptime";
 import { findChar, splitTopLevel } from "../utils/string";
@@ -36,47 +36,97 @@ import { isTemplateSym, expandTemplate } from "./template";
 // FlowAssignment node + getFlowTypeOfReference. Per-use-site queries see
 // the post-assignment flow state naturally — no fact stack to purge.
 
+// Peel through Ref/Ptr to find a GenericInstance carrying type args.
+// Used by `resolveGenericNewExpr` to read concrete type args from a contextual
+// type annotation (`const m: Map<K, V> = new Map()`) when the user didn't
+// spell `<K, V>` on the `new` itself.
+function peelToGenericInstance(t: Type | null): Type | null {
+	if (t === null) return null;
+	let cur: Type = t;
+	let depth: int32 = 0;
+	while (cur !== null && depth < 8) {
+		if (cur.kind === TypeKind.GenericInstance) return cur;
+		if ((cur.kind === TypeKind.Ref || cur.kind === TypeKind.Ptr) && cur.typeReturn !== null) {
+			cur = cur.typeReturn;
+			depth = (depth + 1) as int32;
+			continue;
+		}
+		break;
+	}
+	return null as unknown as Type;
+}
+
 // ===== Generic NewExpr Resolution =====
 // Resolves `new Box<number>(42)` — captures type args from side-channel,
 // records instantiation, and builds concrete Ref<Struct> type.
 // Parity: standard reference object construction → type node captures type args.
-function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Type, astTypeArg: string): Type {
+//
+// Type args come from one of three sources, in priority order:
+//   1. Explicit `<...>` on the `new` expression itself.
+//   2. The AST-resident `typeArg` (cloned bodies preserve this through
+//      mono substitution; the location-keyed side channel can go stale).
+//   3. Contextual type from a declaration annotation
+//      (`const m: Map<K, V> = new Map()`) — TypeScript-style inference.
+//      Without this, the user is forced to repeat type args on both
+//      sides of the assignment, which is awkward for the common
+//      Map/Set/Box patterns.
+function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Type, astTypeArg: string, expectedType: Type | null): Type {
 	if (callee.kind !== NodeKind.Identifier) return calleeType;
 	const calleeName = (callee.data as IdentifierData).name;
 	const ltCol = callee.location.column + calleeName.length;
-	// Prefer the AST-resident typeArg (survives clone + substitution) over the
-	// location-keyed side channel (stale for cloned generic bodies because the
-	// cloned source location still points at the original "K, V" strings).
+	const genericParams = getGenericDecl(calleeName);
+	if (genericParams === "") return calleeType;
+	// Try explicit type args first (sources 1 + 2 in priority comment above).
 	let typeArgStr = astTypeArg;
 	if (typeArgStr === "") {
 		typeArgStr = getExplicitTypeArg(callee.location.line, ltCol);
 	}
-	if (typeArgStr === "") return calleeType;
-	const genericParams = getGenericDecl(calleeName);
-	if (genericParams === "") return calleeType;
-	const args = splitTopLevel(typeArgStr, ",");
+	let args: string[] = [];
+	const paramNames = splitTopLevel(genericParams, ",");
+	const trimmedParamNames: string[] = [];
+	const concreteTypes: Type[] = [];
+	let typeArgCol = ltCol + 1;
+	if (typeArgStr !== "") {
+		// Source 1/2 — explicit type args spelled by user.
+		args = splitTopLevel(typeArgStr, ",");
+		for (let pi = 0; pi < paramNames.length; pi += 1) {
+			trimmedParamNames.push(paramNames[pi].trim());
+			const argName = pi < args.length ? args[pi].trim() : "";
+			const resolved = resolveAnnotation(argName, ctx, callee.location.line, typeArgCol);
+			concreteTypes.push(resolved);
+			if (argName !== "") {
+				const typeArgSym = lookupSymbol(ctx.table, argName);
+				if (typeArgSym !== null) {
+					sgRecordSym(ctx, callee.location.line, typeArgCol, typeArgCol + argName.length, typeArgSym, typeArgSym.symbolType, typeArgSym.symbolKind, argName, "", false);
+				}
+				typeArgCol = typeArgCol + argName.length + 2;
+			}
+		}
+	} else {
+		// Source 3 — contextual inference. Peel `expectedType` (e.g.
+		// `Ref<GenericInstance Map(string, Handler)>` from a `const m:
+		// Map<string, Handler> = ...` annotation) and pull the concrete
+		// type args out of `typeChildren`. Round-trip the names through
+		// `monoConcreteTypeName` so the parser-side
+		// `recordGenericTypeInstantiation` registry sees the same string
+		// form it would have if the user had written `<...>` explicitly.
+		const giCtx = peelToGenericInstance(expectedType);
+		if (giCtx === null
+				|| giCtx.typeName !== calleeName
+				|| giCtx.typeChildren === null
+				|| giCtx.typeChildren.length !== paramNames.length) {
+			return calleeType;
+		}
+		for (let pi = 0; pi < paramNames.length; pi += 1) {
+			trimmedParamNames.push(paramNames[pi].trim());
+			concreteTypes.push(giCtx.typeChildren[pi]);
+			args.push(monoConcreteTypeName(giCtx.typeChildren[pi]));
+		}
+	}
 	recordGenericTypeInstantiation(calleeName, genericParams, args, ctx);
 	const baseSym = lookupSymbol(ctx.table, calleeName);
 	if (baseSym === null) return calleeType;
 	ensureShaped(baseSym, ctx);
-	const paramNames = splitTopLevel(genericParams, ",");
-	const trimmedParamNames: string[] = [];
-	const concreteTypes: Type[] = [];
-	let typeArgCol = ltCol + 1;  // column after '<'
-	for (let pi = 0; pi < paramNames.length; pi += 1) {
-		trimmedParamNames.push(paramNames[pi].trim());
-		const argName = pi < args.length ? args[pi].trim() : "";
-		const resolved = resolveAnnotation(argName, ctx, callee.location.line, typeArgCol);
-		concreteTypes.push(resolved);
-		// Record type arg symbol for hover/go-to-definition
-		if (argName !== "") {
-			const typeArgSym = lookupSymbol(ctx.table, argName);
-			if (typeArgSym !== null) {
-				sgRecordSym(ctx, callee.location.line, typeArgCol, typeArgCol + argName.length, typeArgSym, typeArgSym.symbolType, typeArgSym.symbolKind, argName, "", false);
-			}
-			typeArgCol = typeArgCol + argName.length + 2;  // skip "T, " for next arg
-		}
-	}
 	// Build GenericInstance — same structure as type annotation path in resolvePass.
 	// Avoids instantiateGeneric which creates shared type references that cause DRC
 	// use-after-free when the original base type is freed (substituteType shallow copies).
@@ -459,9 +509,24 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.MemberExpr => checkMemberExpr(ctx, node, expectedType),
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
+			// Defensive: malformed ArrayAccess may have null d.array (e.g. macro
+			// VM round-trip lost the field). Convert null deref into diagnostic.
+			if (d.array === null) {
+				addError(ctx, "internal: ArrayAccess with null array sub-expression", node.location.line, node.location.column);
+				node.nodeType = unknownType();
+				return unknownType();
+			}
 			checkExpr(ctx, d.array, null);
 			const arrType = d.array.nodeType;
-			checkExpr(ctx, d.index, null);
+			if (d.index !== null) checkExpr(ctx, d.index, null);
+			// Array sub-expr may have null nodeType when a macro expansion
+			// returns an Identifier whose lookup hasn't repopulated the
+			// symbol's type yet. Diagnostic instead of null deref.
+			if (arrType === null) {
+				addError(ctx, "internal: array type unresolved in ArrayAccess (child kind=" + d.array.kind + ")", node.location.line, node.location.column);
+				node.nodeType = unknownType();
+				return unknownType();
+			}
 			// HashMap<K,V> subscript: mutate `m[k]` into the method-call form `m.get(k)`
 			// so the existing extension resolution (checkMemberExpr → checkCallExpr)
 			// sets up NodeFlag.ExtCall + resolvedSym, and extensionMethodLower later
@@ -1121,6 +1186,17 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (anyArgIsParametric(md.macroArgs)) return unknownType();
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
 				const expanded = expandMacroInvocation(node, ctx, 0);
+				// Bug 18: when a user macro emits a sentinel error (or VM fails),
+				// expandMacroInvocation returns the SAME MacroInvocation node and
+				// has already called addError. Re-checking would route back into
+				// this same branch and re-fire the macro, multiplying the error
+				// up to the depth limit and finally emitting a misleading
+				// "possible recursive macro" warning. Detect by kind preservation.
+				if (expanded.kind === NodeKind.MacroInvocation) {
+					ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
+					node.nodeType = unknownType();
+					return unknownType();
+				}
 				node.kind = expanded.kind;
 				node.data = expanded.data;
 				if (expanded.location !== null) node.location = expanded.location;
@@ -1679,15 +1755,29 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): T
 	const calleeType = d.newCallee.nodeType;
 	// Pass the NewExpr's AST-resident typeArg so resolveGenericNewExpr can prefer
 	// it over the stale location-keyed side channel (important for cloned bodies).
-	const resolvedType = resolveGenericNewExpr(ctx, d.newCallee, calleeType, node.typeArg);
-	// Error: generic type without type args and no inferable context
+	// Also pass `expected` so that `const m: Map<K, V> = new Map();` (no type
+	// args on the `new`) can pull K/V from the contextual annotation.
+	const resolvedType = resolveGenericNewExpr(ctx, d.newCallee, calleeType, node.typeArg, expected);
+	// Error: generic type without type args AND no inferable contextual type.
+	// `resolveGenericNewExpr` returns the bare `calleeType` (still
+	// `Ref<GenericInstance>` with un-substituted GenericParam children) when
+	// it couldn't resolve type args from any source — that's the signal
+	// that we should report.
 	if (d.newCallee.kind === NodeKind.Identifier) {
 		const calleeName2 = (d.newCallee.data as IdentifierData).name;
 		const genericParams2 = getGenericDecl(calleeName2);
 		if (genericParams2 !== "") {
 			const ltCol2 = d.newCallee.location.column + calleeName2.length;
 			const typeArgStr2 = getExplicitTypeArg(d.newCallee.location.line, ltCol2);
-			if (typeArgStr2 === "") {
+			const noExplicit = typeArgStr2 === "" && (node.typeArg === null || node.typeArg === "");
+			// Treat the contextual-inference path as "satisfied" iff the
+			// peeled expected type matched the callee's name. Without this
+			// guard a contextual mismatch (`const m: Map<K,V> = new Set()`)
+			// would silently slip through; with it, the error still fires
+			// for genuinely under-specified `new`s.
+			const giCtxOk = peelToGenericInstance(expected) !== null
+				&& peelToGenericInstance(expected).typeName === calleeName2;
+			if (noExplicit && !giCtxOk) {
 				addError(ctx, `'new ${calleeName2}()' requires explicit type arguments: new ${calleeName2}<...>()`, node.location.line, node.location.column);
 			}
 		}
@@ -1854,6 +1944,14 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			// re-check below so recursive macros hit the limit cleanly.
 			ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
 			const expanded = expandMacroInvocation(node, ctx, 0);
+			// Bug 18 — see checkExpr MacroInvocation branch for full rationale.
+			// Sentinel/VM errors leave node.kind = MacroInvocation; skip re-check
+			// to avoid duplicating diagnostics + spurious recursive-macro warning.
+			if (expanded.kind === NodeKind.MacroInvocation) {
+				ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
+				node.nodeType = unknownType();
+				return unknownType();
+			}
 			// Replace current node contents with the expanded result.
 			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
 			node.kind = expanded.kind;
@@ -3938,16 +4036,28 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// Explicit return type annotation takes precedence over inferred (semProcAux parity).
 	// This ensures Result<Node, string> gets concrete types, not GenericParam("T") from
 	// inference of Result.err() which can't determine T without context.
+	//
+	// Use `createClosureType` (callConv = CcClosure) — Arrow/FunctionExpr in
+	// expression position are *value-form* function literals: the runtime
+	// representation is a closure pair {fn, env} (msClosure), not a raw
+	// function pointer. Without the CcClosure flag, a downstream
+	// `const cb = () => ...; cb()` call site reads the variable's Function
+	// type with callConv=CcDefault, the checker's "is this a closure call?"
+	// check (line ~1971) bails out, codegen emits a direct call against the
+	// msClosure struct, and C rejects it with "called object type 'msClosure'
+	// is not a function or function pointer". `fitNode`'s named-fn → closure
+	// auto-wrap only fires for Identifier callees with SymbolKind.Function,
+	// so it doesn't catch this case for inline expression-form functions.
 	if (explicitReturnType !== null && explicitReturnType.kind !== TypeKind.Unknown) {
-		return createFunction(types, params, explicitReturnType);
+		return createClosureType(types, params, explicitReturnType);
 	}
 	if (returnTypeAnnotation === "void") {
-		return createFunction(types, params, voidType());
+		return createClosureType(types, params, voidType());
 	}
 	if (inferredRet.kind !== TypeKind.Unknown) {
-		return createFunction(types, params, inferredRet);
+		return createClosureType(types, params, inferredRet);
 	}
-	return createFunction(types, params, unknownType());
+	return createClosureType(types, params, unknownType());
 }
 
 function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
