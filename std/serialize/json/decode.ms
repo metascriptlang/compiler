@@ -183,17 +183,22 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			// for value Elem (Maybe<Elem>), unifyType bridges (bug008);
 			// for Ref Elem (Union<Ref<Elem>, Null>), structural unify works.
 			if (elemIsStruct || !isBuiltin) {
+				// Emit bare `null` witness — T binds via Pass 3 contextual return-type
+				// binding (Nim parity inheritBindings, semcall.nim:777-859). The
+				// surrounding ObjectLiteral assignment context (`colors: ... : Color[]`)
+				// flows expected return type `Color[]` to the call, Pass 3 unifies
+				// `Array<T>` formal vs `Array<Color>` expected → T=Color.
+				//
+				// Post-mono arg reconciliation in tryInstantiateGenericCallee then
+				// wraps the bare null literal into Maybe<Color> for value-type T at
+				// codegen. No `as <Elem> | null` annotation needed — that path
+				// required scope to see `Elem` (failed for user-file types referenced
+				// from prelude macro expansion).
 				const witnessNode: Node = {
-					kind: NodeKind.TypeAssertion,
+					kind: NodeKind.NullLiteral,
 					line: jv.line,
 					column: jv.column,
-					asExpr: {
-						kind: NodeKind.NullLiteral,
-						line: jv.line,
-						column: jv.column,
-						nullPlaceholder: true,
-					},
-					asType: en + " | null",
+					nullPlaceholder: true,
 				};
 				const helperName: string = elemIsStruct ? "_jsonToStructArray" : "_jsonToIntArray";
 				const arrFieldAccess: Node = {

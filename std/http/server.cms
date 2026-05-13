@@ -159,7 +159,9 @@ function endResponse(res: ServerResponse, data: string): void {
 		hdrs.removeHeader(res.headers, "content-length");
 		hdrs.removeHeader(res.headers, "content-type");
 	} else if (!hdrs.hasHeader(res.headers, "content-length")) {
-		hdrs.setHeader(res.headers, "content-length", data.length.toString());
+		// Content-Length is byte count per RFC 7230 — for UTF-8 response bodies
+		// .length (UTF-16 code units) under-reports; client truncates the body.
+		hdrs.setHeader(res.headers, "content-length", data.byteLength().toString());
 	}
 	if (!hdrs.hasHeader(res.headers, "keep-alive") && !hdrs.hasHeader(res.headers, "connection")) {
 		hdrs.setHeader(res.headers, "keep-alive", "timeout=" + kaTimeoutSeconds.toString());
@@ -248,6 +250,36 @@ export function getClientFd(req: HttpRequest): int32 {
 	return req.clientFd;
 }
 
+// ===== Protocol switch / fd handoff =====
+//
+// Signal that the handler is taking ownership of the underlying socket fd
+// (e.g. WebSocket upgrade after sending 101 Switching Protocols, raw TCP
+// takeover, HTTP/2 upgrade, etc.). After the current response is written,
+// the event loop removes the fd from its selector and STOPS managing it —
+// in particular, it will NOT close the fd and will NOT re-arm read for
+// pipelined HTTP requests. From that point on, the caller owns the fd's
+// lifecycle (recv loop, close on disconnect, etc.).
+//
+// Typical WebSocket usage:
+//
+//   res.setHeader("Upgrade", "websocket");
+//   res.setHeader("Connection", "Upgrade");
+//   res.setHeader("Sec-WebSocket-Accept", deriveAcceptKey(clientKey));
+//   res.status = 101;
+//   const fd = res.detach();   // signal handoff; returns fd for convenience
+//   res.end();                  // flush 101 through normal HTTP write pipeline
+//   // ... spawn an actor that owns fd from here ...
+//
+// Status 101 has no body (RFC 7230 §3.3.2 / endResponse `noBodyAllowed`), so
+// the 101 response is just the header block. The handler MUST set Upgrade +
+// Connection: Upgrade headers before calling res.end() — otherwise std/http's
+// default `Keep-Alive: timeout=N` injection kicks in and the response is
+// no longer a valid protocol switch.
+export function detach(this res: ServerResponse): int32 {
+	res._upgraded = true;
+	return res.fd;
+}
+
 
 // ===== Event Loop =====
 
@@ -275,6 +307,7 @@ function initClient(fd: int32): ClientState {
 			_chunks: [],
 			headersSent: false, _finished: false, _chunked: false,
 			_responseData: msStringNewCap(4096),
+			_upgraded: false,
 		},
 	};
 }
@@ -297,6 +330,7 @@ function resetClient(client: ClientState, fd: int32): void {
 	client.response.headers._names.length = 0;
 	client.response.headers._values.length = 0;
 	client.response._responseData.setLength(0);
+	client.response._upgraded = false;
 }
 
 function resetRequest(client: ClientState, fd: int32, method: int32): void {
@@ -320,6 +354,7 @@ function resetResponse(client: ClientState, fd: int32): void {
 	client.response.headers._names.length = 0;
 	client.response.headers._values.length = 0;
 	client.response._responseData.setLength(0);  // preserves buffer (= "" would free it)
+	client.response._upgraded = false;
 }
 
 // Fast headers check: O(1) last-4-bytes, then slow linear fallback (httpbeast pattern)
@@ -403,6 +438,13 @@ export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 
 // After send completes: check for pipelined data or reset to READ.
 function resetOrPipeline(server: HttpServer, client: ClientState, fd: int32, sel: int64, handler: RequestHandler): void {
+	// Protocol switch (e.g. WebSocket upgrade): handler called res.detach() to
+	// take ownership of the fd. Remove from selector but do NOT close — the
+	// caller's recv loop now owns the fd's lifecycle. Skip keep-alive logic.
+	if (client.response._upgraded) {
+		msSelectorRemove(sel, fd);
+		return;
+	}
 	// Honor server-side keep-alive setting: if disabled, close the connection
 	// after sending a response (Connection: close semantics). Without this,
 	// eventLoop always re-arms read regardless, leaving sockets in a state
@@ -545,8 +587,9 @@ function dispatch(server: HttpServer, client: ClientState, fd: int32, sel: int64
 	const bufferAfter = data.slice(endPos, data.length);
 	const frame = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
 	if (frame.kind === "needMore") {
-		// DoS guard: cap raw body bytes (data after headers)
-		if ((bufferAfter.length as int32) > server.maxBodySize) {
+		// DoS guard: cap raw body BYTES (use byteLength, not .length which is
+		// UTF-16 code units and under-counts for UTF-8 multibyte content).
+		if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
 			sendErrorAndClose(fd, sel, 413);
 			return;
 		}
@@ -572,6 +615,22 @@ function dispatch(server: HttpServer, client: ClientState, fd: int32, sel: int64
 		client.data.setLength(0);
 	}
 
+	// Protocol switch: handler called res.detach(). If there's a queued response
+	// (e.g. the 101 built via res.end()), schedule WRITE — resetOrPipeline will
+	// see _upgraded after the write completes and release the fd from the
+	// selector. If there's NO queued response (handler wrote 101 directly via
+	// msNetSend and bypassed res.end()), release immediately — otherwise the
+	// selector would re-arm READ and the next WS frame would be parsed as HTTP.
+	if (client.response._upgraded) {
+		if (client.response._finished && client.response._responseData.length > 0) {
+			client.bytesSent = 0;
+			msSelectorModify(sel, fd, 3);
+		} else {
+			msSelectorRemove(sel, fd);
+		}
+		return;
+	}
+
 	// Send directly from _responseData (no sendQueue copy)
 	if (client.response._finished && client.response._responseData.length > 0) {
 		client.bytesSent = 0;
@@ -589,9 +648,17 @@ export function serve(server: HttpServer): void {
 	while (server.running) {
 		const clientFd = msNetAccept(server.fd);
 		if (clientFd < 0) continue;
+		// Match eventLoop / async / io_uring paths — Mac doesn't get MSG_NOSIGNAL
+		// (it's #defined to 0), so a send() to a closed peer raises SIGPIPE and
+		// kills the process. SO_NOSIGPIPE on the client fd converts that to a
+		// recoverable EPIPE return. Single-thread `serve()` callers (vendor
+		// stdio-style MCP transports) depend on this.
+		msNetSetNoSigpipe(clientFd);
 		if (server.keepAliveTimeout > 0) msNetSetTimeout(clientFd, server.keepAliveTimeout);
-		handleBlocking(server, clientFd);
-		msNetClose(clientFd);
+		const upgraded = handleBlocking(server, clientFd);
+		// If the handler called res.detach() the fd is now owned by the
+		// caller's protocol layer (e.g. a WebSocket recv loop) — don't close.
+		if (!upgraded) msNetClose(clientFd);
 	}
 }
 
@@ -601,14 +668,16 @@ export function serveN(server: HttpServer, count: int32): void {
 	while (server.running && served < count) {
 		const clientFd = msNetAccept(server.fd);
 		if (clientFd < 0) continue;
-		handleBlocking(server, clientFd);
-		msNetClose(clientFd);
+		const upgraded = handleBlocking(server, clientFd);
+		if (!upgraded) msNetClose(clientFd);
 		served = served + 1;
 	}
 	server.running = false;
 }
 
-function handleBlocking(server: HttpServer, fd: int32): void {
+// Returns true iff the handler upgraded the connection (called res.detach());
+// caller must NOT close the fd in that case — it has been handed off.
+function handleBlocking(server: HttpServer, fd: int32): boolean {
 	let requestCount = 0;
 	let keepGoing = true;
 	const client = initClient(fd);
@@ -618,21 +687,21 @@ function handleBlocking(server: HttpServer, fd: int32): void {
 		// ends with \r\n\r\n, which falsely matches the chunked terminator
 		// (`0\r\n\r\n`) and leaves bufferAfter empty.
 		let data = msNetRecv(fd, server.maxHeaderSize);
-		if (data.length === 0) return;  // peer closed
+		if (data.length === 0) return false;  // peer closed
 		let endPos = msSlowHeadersCheck(data);
 		while (endPos < 0) {
-			if (data.length >= server.maxHeaderSize) return;  // header too large
+			if (data.length >= server.maxHeaderSize) return false;  // header too large
 			const more = msNetRecv(fd, server.maxHeaderSize);
-			if (more.length === 0) return;  // peer closed mid-headers
+			if (more.length === 0) return false;  // peer closed mid-headers
 			data = data + more;
 			endPos = msSlowHeadersCheck(data);
 		}
 
 		// 2. Parse method + path + headers.
 		const methodInt = msFastParseMethod(data);
-		if (methodInt < 0) return;
+		if (methodInt < 0) return false;
 		client.request.path.parsePathInto(data);
-		if (client.request.path.length === 0) return;
+		if (client.request.path.length === 0) return false;
 
 		resetRequest(client, fd, methodInt);
 		resetResponse(client, fd);
@@ -652,17 +721,18 @@ function handleBlocking(server: HttpServer, fd: int32): void {
 		let frame: FrameResult = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
 		while (frame.kind === "needMore") {
 			const more = msNetRecv(fd, server.maxHeaderSize);
-			if (more.length === 0) return;  // peer closed mid-body
+			if (more.length === 0) return false;  // peer closed mid-body
 			bufferAfter = bufferAfter + more;
-			if ((bufferAfter.length as int32) > server.maxBodySize) {
+			// Byte-oriented cap — see frameRequest for the same rationale.
+			if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
 				msNetSend(fd, buildErrorResponse(413));
-				return;
+				return false;
 			}
 			frame = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
 		}
 		if (frame.kind === "reject") {
 			msNetSend(fd, buildErrorResponse(frame.rejectStatus));
-			return;  // close connection (Connection: close)
+			return false;  // close connection (Connection: close)
 		}
 
 		// 4. Dispatch.
@@ -670,10 +740,15 @@ function handleBlocking(server: HttpServer, fd: int32): void {
 		server.handler(client.request, client.response);
 		if (client.response._responseData.length > 0) msNetSend(fd, client.response._responseData);
 
+		// Protocol switch: handler took ownership of fd via res.detach(). Stop
+		// the keep-alive loop and signal caller to skip msNetClose.
+		if (client.response._upgraded) return true;
+
 		requestCount = requestCount + 1;
 		if (!server.keepAlive) keepGoing = false;
 		else if (server.maxRequestsPerConnection > 0 && requestCount >= server.maxRequestsPerConnection) keepGoing = false;
 	}
+	return false;
 }
 
 // ===== io_uring Native Event Loop (Linux) =====
@@ -736,7 +811,17 @@ function eventLoopUring(server: HttpServer, listenFd: int32, handler: RequestHan
 							resetRequest(client, evFd, methodInt);
 							resetResponse(client, evFd);
 							handler(client.request, client.response);
-							if (client.response._finished && client.response._responseData.length > 0) {
+							// Protocol switch via res.detach(): if a response is queued
+							// (e.g. the 101 from res.end()), SEND it — the SEND-complete
+							// branch below skips resubmitting RECV when _upgraded. If
+							// nothing is queued (handler wrote raw via msNetSend), just
+							// don't resubmit RECV — fd is owned by caller's loop now.
+							if (client.response._upgraded) {
+								if (client.response._finished && client.response._responseData.length > 0) {
+									msUringSubmitSend(evFd, client.response._responseData, client.response._responseData.length);
+								}
+								// else: fd silently detached, no further uring ops
+							} else if (client.response._finished && client.response._responseData.length > 0) {
 								msUringSubmitSend(evFd, client.response._responseData, client.response._responseData.length);
 							} else {
 								msUringSubmitRecv(evFd, "", 4096);
@@ -747,10 +832,15 @@ function eventLoopUring(server: HttpServer, listenFd: int32, handler: RequestHan
 					}
 				}
 			} else if (op === 2) {
-				// SEND complete — re-arm recv for keep-alive
+				// SEND complete — re-arm recv for keep-alive, UNLESS the handler
+				// took over the fd via res.detach() (protocol switch). In the
+				// upgrade case the fd is now owned by the caller's recv loop;
+				// don't resubmit a recv that would steal frames from it.
 				if (evFd >= 0 && evFd < maxFds) {
 					clients[evFd].sendQueue = "";
-					msUringSubmitRecv(evFd, "", 4096);
+					if (!clients[evFd].response._upgraded) {
+						msUringSubmitRecv(evFd, "", 4096);
+					}
 				}
 			}
 			i = i + 1;
@@ -805,7 +895,8 @@ async function dispatchAsync(server: HttpServer, client: ClientState, fd: int32,
 	const bufferAfter = data.slice(endPos, data.length);
 	const frame = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
 	if (frame.kind === "needMore") {
-		if ((bufferAfter.length as int32) > server.maxBodySize) {
+		// Byte-oriented cap — see frameRequest for the same rationale.
+		if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
 			sendErrorAndClose(fd, sel, 413);
 			client.asyncPending = false;
 			inflight[0] = inflight[0] - 1;
@@ -840,6 +931,19 @@ async function dispatchAsync(server: HttpServer, client: ClientState, fd: int32,
 		client.data.setLength(0);
 	}
 
+	// Protocol switch (see dispatch above for rationale): if upgraded, release
+	// fd here when there's nothing queued — the WRITE→resetOrPipelineAsync path
+	// handles the case where a 101 is queued.
+	if (client.response._upgraded) {
+		if (client.response._finished && client.response._responseData.length > 0) {
+			client.bytesSent = 0;
+			msSelectorModify(sel, fd, 3);
+		} else {
+			msSelectorRemove(sel, fd);
+		}
+		return;
+	}
+
 	// Arm WRITE if response is ready
 	if (client.response._finished && client.response._responseData.length > 0) {
 		client.bytesSent = 0;
@@ -851,6 +955,11 @@ async function dispatchAsync(server: HttpServer, client: ClientState, fd: int32,
 
 // After async send completes: check for pipelined data or reset to READ.
 function resetOrPipelineAsync(server: HttpServer, client: ClientState, fd: int32, sel: int64, handler: AsyncRequestHandler, inflight: int32[]): void {
+	// Protocol switch (see resetOrPipeline above): release fd ownership.
+	if (client.response._upgraded) {
+		msSelectorRemove(sel, fd);
+		return;
+	}
 	if (client.data.length > 0) {
 		const nextEnd = findHeaderEnd(client.data);
 		if (nextEnd >= 0) {

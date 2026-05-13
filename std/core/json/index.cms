@@ -13,7 +13,7 @@ export {
 export { stringify, stringifyPretty } from "std/serialize/json/stringify";
 export { parseJson } from "std/serialize/json/parser";
 export {
-	asString, asNumber, asBoolean, asInt32, asInt64, at, length, getDynamicField,
+	asString, asNumber, asBoolean, asInt32, asInt64, at, length, getDynamicField, setDynamicField,
 	jsonToStringArray, jsonToBooleanArray, jsonToNumberArray, jsonToFloat32Array,
 	jsonToInt8Array, jsonToInt16Array, jsonToInt32Array, jsonToInt64Array,
 	jsonToUint8Array, jsonToUint16Array, jsonToUint32Array,

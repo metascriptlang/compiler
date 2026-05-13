@@ -3,7 +3,7 @@ import { isAssignable } from "./compat";
 import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
@@ -53,6 +53,18 @@ export interface ExportedSymInfo {
 	// the export pipeline so importing modules can register in macroBodyRegistry.
 	macroBody: Node;
 	macroParams: string[];
+	// Cross-module generic mono — generic FunctionDecl / MethodDecl AST so
+	// importing modules can instantiate the body with concrete type args.
+	// Without this, `import { f } from "./lib"` + `f<Post>(...)` would keep
+	// the original generic Result<unknown, _> shape at the call site (mono
+	// skips because the imported sym has no declNode), producing codegen
+	// type mismatches at link time. Populated only for generic FunctionDecl
+	// / static generic MethodDecl in buildExportInfo; null otherwise.
+	declNode: Node;
+	// Parallel to overloadTypes: per-overload AST so cross-module mono works
+	// for overloaded generic functions (`export function g<T>(...): ...; export function g(s: string): ...;`).
+	// Entries are null for non-generic overloads.
+	overloadDeclNodes: Node[];
 }
 
 export interface ModuleExports {
@@ -177,12 +189,28 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	const ovDefParamsCounts: number[] = [];
 	const ovFlags: int32[] = [];
 
+	const ovDeclNodes: Node[] = [];
+
 	let ovi = 0;
 	while (ovi < sym.overloads.length) {
 		ovTypes.push(sym.overloads[ovi].symbolType);
 		ovRtNames.push(sym.overloads[ovi].nativeName);
 		ovBiKinds.push(sym.overloads[ovi].builtinKind);
 		ovFlags.push(sym.overloads[ovi].symFlags);
+		// Cross-module mono — carry overload's declNode if it's a generic
+		// FunctionDecl / static generic MethodDecl (same rule as primary).
+		let ovDN: Node = null as unknown as Node;
+		const ovDecl = sym.overloads[ovi].declNode;
+		if (ovDecl !== null) {
+			if (ovDecl.kind === NodeKind.FunctionDecl) {
+				const fd = ovDecl.data as FunctionDeclData;
+				if (isGenericFn(fd.fnFlags)) ovDN = ovDecl;
+			} else if (ovDecl.kind === NodeKind.MethodDecl) {
+				const md = ovDecl.data as MethodDeclData;
+				if (md.methodIsStatic && isGenericFn(md.methodFlags)) ovDN = ovDecl;
+			}
+		}
+		ovDeclNodes.push(ovDN);
 
 		if (extensionRegistry !== null) {
 			const ovExt = findExtensionByType(extensionRegistry, sym.name, sym.overloads[ovi].symbolType);
@@ -228,6 +256,21 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		}
 	}
 
+	// Cross-module generic mono — carry the AST for generic functions and
+	// static generic methods so importing modules can clone+substitute.
+	// Non-generic decls and class instance methods don't need this path
+	// (instance methods on generic classes go through class instantiation).
+	let exportDeclNode: Node = null as unknown as Node;
+	if (sym.declNode !== null) {
+		if (sym.declNode.kind === NodeKind.FunctionDecl) {
+			const fd = sym.declNode.data as FunctionDeclData;
+			if (isGenericFn(fd.fnFlags)) exportDeclNode = sym.declNode;
+		} else if (sym.declNode.kind === NodeKind.MethodDecl) {
+			const md = sym.declNode.data as MethodDeclData;
+			if (md.methodIsStatic && isGenericFn(md.methodFlags)) exportDeclNode = sym.declNode;
+		}
+	}
+
 	return {
 		name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 		overloadTypes: ovTypes,
@@ -247,6 +290,8 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		location: sym.location !== null ? sym.location : makeLoc(0, 0),
 		memberLocations: memberLocs,
 		macroBody: mBody,
+		declNode: exportDeclNode,
+		overloadDeclNodes: ovDeclNodes,
 		macroParams: mParams,
 	};
 }
@@ -1094,7 +1139,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [], declNode: null as unknown as Node, overloadDeclNodes: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -1112,7 +1157,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [], declNode: null as unknown as Node, overloadDeclNodes: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");

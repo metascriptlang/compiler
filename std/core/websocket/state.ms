@@ -189,11 +189,25 @@ export function findCRLFCRLF(bytes: number[]): int32 {
 // Examines a parsed frame. Mutates `fs.fragments` / `fs.fragOpcode` when
 // assembling fragmented messages. Returns a FrameDecision for the I/O caller
 // to act on. Keeps no socket reference — purely a state transition.
+//
+// `isServerSide` selects the mask-direction check per RFC 6455 §5.1:
+//   - default false (client receiving): server→client frames MUST NOT be masked
+//   - true (server receiving): client→server frames MUST be masked
+// Default preserves the existing client-side behavior so call sites in
+// client.cms don't need to change.
 
-export function processFrame(fs: FragState, f: ParsedFrame): FrameDecision {
-	// Server-to-client frames must NOT be masked (RFC 6455 §5.1).
-	if (f.masked) {
-		return decisionError(WsCloseCode.ProtocolError as int32, "server sent masked frame");
+export function processFrame(fs: FragState, f: ParsedFrame, isServerSide: boolean = false): FrameDecision {
+	// RFC 6455 §5.1 — masking direction is asymmetric:
+	//   client→server: MUST mask    (server rejects unmasked)
+	//   server→client: MUST NOT mask (client rejects masked)
+	if (isServerSide) {
+		if (!f.masked) {
+			return decisionError(WsCloseCode.ProtocolError as int32, "client sent unmasked frame");
+		}
+	} else {
+		if (f.masked) {
+			return decisionError(WsCloseCode.ProtocolError as int32, "server sent masked frame");
+		}
 	}
 
 	// Control frames — auto-reply or surface immediately. Per RFC §5.4 control
@@ -371,7 +385,7 @@ test "processFrame: Close with illegal code 1015 → protocol error" {
 	assert d.action === "error";
 }
 
-// ----- Server-masked rejection -----
+// ----- Server-masked rejection (client-side direction, default isServerSide=false) -----
 
 test "processFrame: server-masked frame → protocol error" {
 	const fs = newFragState();
@@ -379,6 +393,43 @@ test "processFrame: server-masked frame → protocol error" {
 	const d = processFrame(fs, makeFrame(OPCODE_TEXT, true, true, payload));  // masked=true
 	assert d.action === "error";
 	assert d.closeCode === (WsCloseCode.ProtocolError as int32);
+}
+
+// ----- Server-side direction (isServerSide=true): mask check is flipped -----
+
+test "processFrame server-side: masked client frame → deliver" {
+	const fs = newFragState();
+	const payload: number[] = [0x68, 0x65, 0x6C, 0x6C, 0x6F];
+	const d = processFrame(fs, makeFrame(OPCODE_TEXT, true, true, payload), true);  // isServerSide=true, masked=true
+	assert d.action === "deliver";
+	assert d.message.kind === WsMessageKind.Text;
+	assert bytesEqual(d.message.data, payload);
+}
+
+test "processFrame server-side: unmasked client frame → protocol error" {
+	const fs = newFragState();
+	const payload: number[] = [0x68, 0x69];
+	const d = processFrame(fs, makeFrame(OPCODE_TEXT, true, false, payload), true);  // isServerSide=true, masked=false
+	assert d.action === "error";
+	assert d.closeCode === (WsCloseCode.ProtocolError as int32);
+	assert d.errorMsg === "client sent unmasked frame";
+}
+
+test "processFrame server-side: ping with masked payload → auto-pong" {
+	const fs = newFragState();
+	const payload: number[] = [0x01, 0x02];
+	const d = processFrame(fs, makeFrame(OPCODE_PING, true, true, payload), true);
+	assert d.action === "continue";
+	assert d.autoReplyOpcode === OPCODE_PONG;
+	assert bytesEqual(d.autoReplyPayload, payload);
+}
+
+test "processFrame server-side: fragmentation still works with masked frames" {
+	const fs = newFragState();
+	processFrame(fs, makeFrame(OPCODE_TEXT, false, true, [0x48, 0x65, 0x6C]), true);
+	const d = processFrame(fs, makeFrame(OPCODE_CONTINUATION, true, true, [0x6C, 0x6F]), true);
+	assert d.action === "deliver";
+	assert bytesEqual(d.message.data, [0x48, 0x65, 0x6C, 0x6C, 0x6F]);
 }
 
 // ----- Fragmentation lifecycle -----

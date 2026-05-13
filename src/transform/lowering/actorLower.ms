@@ -911,6 +911,15 @@ function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], di
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
 		if (fd.fnBody !== null) wireActorInNode(fd.fnBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+	} else if (node.kind === NodeKind.ExportDecl) {
+		// `export function foo() { const w = new Actor(); }` — drill into the
+		// wrapped decl so the function body gets wired. Without this branch,
+		// any `new ActorType()` inside an exported function is silently
+		// skipped, leaving the actor pid uninitialized and SEND a no-op.
+		const ed = node.data as ExportDeclData;
+		if (ed.exportedDecl !== null) {
+			wireActorInNode(ed.exportedDecl, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		}
 	} else if (node.kind === NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
 		bd.statements = wireActorInStmts(bd.statements, names, dispatchSyms, dispatchNames, wireInfos, ctx);

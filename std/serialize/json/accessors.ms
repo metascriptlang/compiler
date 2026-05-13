@@ -86,6 +86,27 @@ export function getDynamicField(this v: JsonValue, key: string): JsonValue {
 	return jsonNull();
 }
 
+// ===== Dynamic Field Write (protocol — `setDynamicField`) =====
+//
+// Compiler synthesizes `j.foo = v` → `j.setDynamicField("foo", v)`.
+// Replace-or-append into the parallel keys[]/values[] arrays. Non-Object kinds
+// are no-op rather than throwing — common for view types like JsonValue where
+// the caller often does not control kind statically. To grow an empty/null
+// value into an object, use builder helpers first.
+export function setDynamicField(this v: JsonValue, key: string, value: JsonValue): void {
+	if (v === null || v.kind !== JsonKind.Object) return;
+	let i = 0;
+	while (i < v.keys.length) {
+		if (v.keys[i] === key) {
+			v.values[i] = value;
+			return;
+		}
+		i = i + 1;
+	}
+	v.keys.push(key);
+	v.values.push(value);
+}
+
 // ===== Array-extraction helpers =====
 //
 // Used by typed decode macro (jsonValueToStruct) for array fields. Per-

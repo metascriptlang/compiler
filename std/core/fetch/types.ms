@@ -42,6 +42,10 @@ export interface HttpResponse {
 }
 
 // Mutable response builder (server-side, handler fills via writeHead/write/end).
+// `_upgraded` signals that the handler has taken ownership of the fd (e.g. for
+// a WebSocket upgrade). When true, the HTTP event loop removes the fd from
+// its selector after the current response is written and does NOT close it —
+// the handler is responsible for the fd's lifecycle from that point on.
 export interface ServerResponse {
 	fd: int32;
 	status: int32;
@@ -51,6 +55,7 @@ export interface ServerResponse {
 	_finished: boolean;
 	_chunked: boolean;
 	_responseData: string;
+	_upgraded: boolean;
 }
 
 export type RequestHandler = (req: HttpRequest, res: ServerResponse) => void;

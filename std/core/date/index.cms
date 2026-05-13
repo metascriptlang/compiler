@@ -12,7 +12,7 @@ import { msTimeNow } from "runtime/core/datetime.h";
 export class Date {
 	// Wall-clock time in milliseconds since Unix epoch (fractional).
 	// Mirrors JS/Node `Date.now()`. Use when comparing to external
-	// timestamps — not for elapsed-time measurement (use `time.monotonicMs()`).
+	// timestamps — not for elapsed-time measurement (use `performance.now()`).
 	static now(): number {
 		return msTimeNow();
 	}

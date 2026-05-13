@@ -2,6 +2,11 @@
 //
 // Pure MetaScript. Returns Result<JsonValue, string>.
 // Depth-limited to prevent stack overflow.
+//
+// All scan positions are BYTE offsets (consistent with HTTP/JSON wire
+// semantics). We read with `byteAt`, slice with `byteSlice`, and append
+// raw bytes during string parsing — that keeps UTF-8 multibyte content
+// intact and prevents the position from drifting against `byteLength`.
 
 import { JsonKind, JsonValue } from "./types";
 import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonInt } from "./builder";
@@ -31,7 +36,7 @@ function skipWs(input: string, pos: number): number {
 	let p = pos;
 	const len = input.byteLength;
 	while (p < len) {
-		const ch = input.charCodeAt(p);
+		const ch = input.byteAt(p);
 		if (ch !== " ".code && ch !== "\t".code && ch !== "\n".code && ch !== "\r".code) return p;
 		p = p + 1;
 	}
@@ -48,7 +53,7 @@ function parseValue(input: string, pos: number, depth: number): ParseResult {
 	if (depth > DEPTH_LIMIT) return errorAt("Maximum nesting depth exceeded", pos);
 	if (pos >= input.byteLength) return errorAt("Unexpected end of input", pos);
 
-	const ch = input.charCodeAt(pos);
+	const ch = input.byteAt(pos);
 	return match (ch) {
 		"\"".code => parseString(input, pos),
 		"{".code => parseObject(input, pos, depth),
@@ -60,7 +65,7 @@ function parseValue(input: string, pos: number, depth: number): ParseResult {
 			if (ch === "-".code || (ch >= "0".code && ch <= "9".code)) {
 				return parseNumber(input, pos);
 			}
-			return errorAt(`Unexpected character '${input.charAt(pos)}'`, pos);
+			return errorAt(`Unexpected character '${input.byteSlice(pos, pos + 1)}'`, pos);
 		},
 	};
 }
@@ -68,13 +73,14 @@ function parseValue(input: string, pos: number, depth: number): ParseResult {
 // ===== Literal Parser =====
 
 function parseLiteral(input: string, pos: number, expected: string, value: JsonValue): ParseResult {
-	if (pos + expected.length > input.byteLength) {
+	const expectedLen = expected.byteLength as number;
+	if (pos + expectedLen > input.byteLength) {
 		return errorAt(`Expected '${expected}'`, pos);
 	}
-	if (input.slice(pos, pos + expected.length) !== expected) {
+	if (input.byteSlice(pos, pos + expectedLen) !== expected) {
 		return errorAt(`Expected '${expected}'`, pos);
 	}
-	return Result.ok({ node: value, pos: pos + expected.length });
+	return Result.ok({ node: value, pos: pos + expectedLen });
 }
 
 // ===== Number Parser =====
@@ -84,39 +90,39 @@ function parseNumber(input: string, pos: number): ParseResult {
 	const len = input.byteLength;
 
 	// Optional minus
-	if (p < len && input.charCodeAt(p) === "-".code) p = p + 1;
+	if (p < len && input.byteAt(p) === "-".code) p = p + 1;
 
 	// Integer part
-	if (p >= len || input.charCodeAt(p) < "0".code || input.charCodeAt(p) > "9".code) {
+	if (p >= len || input.byteAt(p) < "0".code || input.byteAt(p) > "9".code) {
 		return errorAt("Invalid number", pos);
 	}
-	while (p < len && input.charCodeAt(p) >= "0".code && input.charCodeAt(p) <= "9".code) {
+	while (p < len && input.byteAt(p) >= "0".code && input.byteAt(p) <= "9".code) {
 		p = p + 1;
 	}
 
 	// Decimal part
 	let isFloat = false;
-	if (p < len && input.charCodeAt(p) === ".".code) {
+	if (p < len && input.byteAt(p) === ".".code) {
 		isFloat = true;
 		p = p + 1;
-		while (p < len && input.charCodeAt(p) >= "0".code && input.charCodeAt(p) <= "9".code) {
+		while (p < len && input.byteAt(p) >= "0".code && input.byteAt(p) <= "9".code) {
 			p = p + 1;
 		}
 	}
 
 	// Exponent part
-	if (p < len && (input.charCodeAt(p) === "e".code || input.charCodeAt(p) === "E".code)) {
+	if (p < len && (input.byteAt(p) === "e".code || input.byteAt(p) === "E".code)) {
 		isFloat = true;
 		p = p + 1;
-		if (p < len && (input.charCodeAt(p) === "+".code || input.charCodeAt(p) === "-".code)) {
+		if (p < len && (input.byteAt(p) === "+".code || input.byteAt(p) === "-".code)) {
 			p = p + 1;
 		}
-		while (p < len && input.charCodeAt(p) >= "0".code && input.charCodeAt(p) <= "9".code) {
+		while (p < len && input.byteAt(p) >= "0".code && input.byteAt(p) <= "9".code) {
 			p = p + 1;
 		}
 	}
 
-	const numStr = input.slice(pos, p);
+	const numStr = input.byteSlice(pos, p);
 	return Result.ok({
 		node: isFloat ? jsonNumber(parseFloat(numStr)) : jsonInt(numStr.parseInt()),
 		pos: p,
@@ -126,20 +132,20 @@ function parseNumber(input: string, pos: number): ParseResult {
 // ===== String Parser =====
 
 function parseString(input: string, pos: number): ParseResult {
-	if (input.charCodeAt(pos) !== "\"".code) return errorAt("Expected '\"'", pos);
+	if (input.byteAt(pos) !== "\"".code) return errorAt("Expected '\"'", pos);
 	let p = pos + 1;
 	const len = input.byteLength;
 	let result = "";
 
 	while (p < len) {
-		const ch = input.charCodeAt(p);
+		const ch = input.byteAt(p);
 		if (ch === "\"".code) {
 			return Result.ok({ node: jsonString(result), pos: p + 1 });
 		}
 		if (ch === "\\".code) {
 			p = p + 1;
 			if (p >= len) return errorAt("Unexpected end of string", p);
-			const esc = input.charCodeAt(p);
+			const esc = input.byteAt(p);
 			match (esc) {
 				"\"".code => { result += "\""; },
 				"\\".code => { result += "\\"; },
@@ -151,13 +157,13 @@ function parseString(input: string, pos: number): ParseResult {
 				"t".code => { result += "\t"; },
 				"u".code => {
 					if (p + 4 >= len) return errorAt("Invalid unicode escape", p);
-					const hex = input.slice(p + 1, p + 5);
+					const hex = input.byteSlice(p + 1, p + 5);
 					const codePoint = parseHex(hex);
 					if (codePoint < 0) return errorAt("Invalid unicode escape", p);
 					// Handle UTF-16 surrogate pairs
 					if (codePoint >= 55296 && codePoint <= 56319 && p + 10 < len) {
-						if (input.charCodeAt(p + 5) === "\\".code && input.charCodeAt(p + 6) === "u".code) {
-							const hex2 = input.slice(p + 7, p + 11);
+						if (input.byteAt(p + 5) === "\\".code && input.byteAt(p + 6) === "u".code) {
+							const hex2 = input.byteSlice(p + 7, p + 11);
 							const low = parseHex(hex2);
 							if (low >= 56320 && low <= 57343) {
 								const full = 65536 + ((codePoint - 55296) * 1024) + (low - 56320);
@@ -171,10 +177,13 @@ function parseString(input: string, pos: number): ParseResult {
 					result += fromCodePoint(codePoint);
 					p = p + 4;
 				},
-				_ => { return errorAt(`Invalid escape '\\${input.charAt(p)}'`, p); },
+				_ => { return errorAt(`Invalid escape '\\${input.byteSlice(p, p + 1)}'`, p); },
 			};
 		} else {
-			result += input.charAt(p);
+			// Copy raw byte — for ASCII chars this is the char itself, for
+			// UTF-8 multibyte content we append each byte in turn and the
+			// concatenation reconstructs valid UTF-8 in `result`.
+			result += input.byteSlice(p, p + 1);
 		}
 		p = p + 1;
 	}
@@ -184,8 +193,9 @@ function parseString(input: string, pos: number): ParseResult {
 function parseHex(s: string): number {
 	let result = 0;
 	let i = 0;
-	while (i < s.length) {
-		const ch = s.charCodeAt(i);
+	const len = s.byteLength;
+	while (i < len) {
+		const ch = s.byteAt(i);
 		result = result * 16;
 		if (ch >= "0".code && ch <= "9".code) { result = result + (ch - "0".code); }
 		else if (ch >= "a".code && ch <= "f".code) { result = result + 10 + (ch - "a".code); }
@@ -203,7 +213,7 @@ function parseArray(input: string, pos: number, depth: number): ParseResult {
 	p = skipWs(input, p);
 	const items: JsonValue[] = [];
 
-	if (p < input.byteLength && input.charCodeAt(p) === "]".code) {
+	if (p < input.byteLength && input.byteAt(p) === "]".code) {
 		return Result.ok({ node: jsonArray(items), pos: p + 1 });
 	}
 
@@ -214,7 +224,7 @@ function parseArray(input: string, pos: number, depth: number): ParseResult {
 		p = skipWs(input, elem.pos);
 
 		if (p >= input.byteLength) return errorAt("Unterminated array", pos);
-		const ch = input.charCodeAt(p);
+		const ch = input.byteAt(p);
 		if (ch === "]".code) {
 			return Result.ok({ node: jsonArray(items), pos: p + 1 });
 		}
@@ -234,20 +244,20 @@ function parseObject(input: string, pos: number, depth: number): ParseResult {
 	const keys: string[] = [];
 	const values: JsonValue[] = [];
 
-	if (p < input.byteLength && input.charCodeAt(p) === "}".code) {
+	if (p < input.byteLength && input.byteAt(p) === "}".code) {
 		return Result.ok({ node: jsonObject(keys, values), pos: p + 1 });
 	}
 
 	while (p < input.byteLength) {
 		p = skipWs(input, p);
-		if (input.charCodeAt(p) !== "\"".code) {
+		if (input.byteAt(p) !== "\"".code) {
 			return errorAt("Expected string key", p);
 		}
 		const keyResult = try parseString(input, p);
 		keys.push(keyResult.node.strVal);
 		p = skipWs(input, keyResult.pos);
 
-		if (p >= input.byteLength || input.charCodeAt(p) !== ":".code) {
+		if (p >= input.byteLength || input.byteAt(p) !== ":".code) {
 			return errorAt("Expected ':'", p);
 		}
 		p = skipWs(input, p + 1);
@@ -257,7 +267,7 @@ function parseObject(input: string, pos: number, depth: number): ParseResult {
 		p = skipWs(input, valResult.pos);
 
 		if (p >= input.byteLength) return errorAt("Unterminated object", pos);
-		const ch = input.charCodeAt(p);
+		const ch = input.byteAt(p);
 		if (ch === "}".code) {
 			return Result.ok({ node: jsonObject(keys, values), pos: p + 1 });
 		}
@@ -311,6 +321,18 @@ test "parse string with escapes" {
 	const r = parseJson("\"a\\nb\"");
 	assert r.ok;
 	assert r.value.strVal === "a\nb";
+}
+
+test "parse string with utf-8 content" {
+	const r = parseJson("\"vào trận → ok\"");
+	assert r.ok;
+	assert r.value.strVal === "vào trận → ok";
+}
+
+test "parse object with utf-8 value" {
+	const r = parseJson("{\"k\":\"5s → crash\"}");
+	assert r.ok;
+	assert r.value.values[0].strVal === "5s → crash";
 }
 
 test "parse empty array" {

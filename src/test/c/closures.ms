@@ -3,26 +3,25 @@
 
 import { compileToC } from "../helpers";
 
+// Restored 2026-05-12 after Bug F (parser rejected zero-param `(): T =>`)
+// shipped. Closures DO work end-to-end now — see bug021_*.ms for the
+// regression coverage of the parser side, and the lambda-lifting +
+// codegen path is exercised by these E2E tests.
 
-// KNOWN ISSUE: Arrow functions and closures fail in E2E pipeline.
-// The checker/validator/transform chain rejects them before codegen.
-// These tests document the current limitation and should be uncommented
-// when the pipeline supports closures end-to-end.
+test "E2E C: non-capturing arrow function" {
+	const src = "const double = (n: number): number => n * 2;\nconst r = double(5);";
+	const c = compileToC(src);
+	assert c.ok;
+}
 
-// test "E2E C: non-capturing arrow function" {
-// 	const src = "const double = (n: number): number => n * 2;\nconst r = double(5);";
-// 	const c = compileToC(src);
-// 	check(c.ok);
-// }
+test "E2E C: closure captures outer variable" {
+	const src = "function outer(): number {\n  const x: number = 10;\n  const f = (): number => x + 1;\n  return f();\n}\nconst r = outer();";
+	const c = compileToC(src);
+	assert c.ok;
+}
 
-// test "E2E C: closure captures outer variable" {
-// 	const src = "function outer(): number {\n  const x: number = 10;\n  const f = (): number => x + 1;\n  return f();\n}\nconst r = outer();";
-// 	const c = compileToC(src);
-// 	check(c.ok);
-// }
-
-// test "E2E C: closure with mutable capture" {
-// 	const src = "function make(): number {\n  let n: number = 0;\n  const inc = (): number => { n = n + 1; return n; };\n  return inc();\n}\nconst r = make();";
-// 	const c = compileToC(src);
-// 	check(c.ok);
-// }
+test "E2E C: closure with mutable capture" {
+	const src = "function make(): number {\n  let n: number = 0;\n  const inc = (): number => { n = n + 1; return n; };\n  return inc();\n}\nconst r = make();";
+	const c = compileToC(src);
+	assert c.ok;
+}

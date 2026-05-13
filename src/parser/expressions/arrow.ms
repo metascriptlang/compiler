@@ -73,9 +73,15 @@ export function isArrowFunction(state: ParserState): boolean {
 	if (current(state).kind !== TokenKind.LParen) { return false; }
 
 	const p1 = peek(state, 1);
-	// () =>  (zero params)
-	if (p1.kind === TokenKind.RParen && peek(state, 2).kind === TokenKind.Arrow) {
-		return true;
+	// () =>  (zero params) — also handle () : Type => via scanParenForArrow,
+	// which already knows how to walk past an optional return-type annotation
+	// (used by the destructured-params and default-value paths below). Without
+	// the Colon branch, `(): Type =>` falls through to paren-expression
+	// parsing and blows up on the unexpected `:`. Bug F.
+	if (p1.kind === TokenKind.RParen) {
+		const p2 = peek(state, 2);
+		if (p2.kind === TokenKind.Arrow) return true;
+		if (p2.kind === TokenKind.Colon) return scanParenForArrow(state);
 	}
 
 	// Rest params: (...args) =>

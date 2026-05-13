@@ -11,6 +11,7 @@ import { ScopeKind, openScope, addSymbolToScope, hasFlag, SymbolFlag } from "./s
 import { ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { runThreePasses, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude } from "./checkPass";
 import { collectTopLevelLocal } from "./collectPass";
+import { registerModuleCtx } from "./instantiate";
 import { inferOwnership } from "./ownershipInference";
 import { lex } from "../lexer/lexer";
 import { createState } from "../parser/context";
@@ -122,6 +123,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 				overloadFlags: [],
 				macroBody: null as unknown as Node,
 				macroParams: [],
+				declNode: null as unknown as Node,
+				overloadDeclNodes: [],
 				};
 				earlyExports.push(info);
 			}
@@ -165,6 +168,12 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		runThreePasses(ctx, pr.value);
 		collectDirectives(ctx, pr.value);
 		stampHeaderPaths(ctx);
+
+		// Register this module's ctx so cross-module generic instantiation can
+		// re-check cloned bodies in the DEFINING module's scope (resolving
+		// private helpers and locally-visible types). Pairs with the
+		// registerModuleCtx call in checkProgram for single-file mode.
+		registerModuleCtx(ctx.modulePath, ctx);
 
 		// Ownership Inference (for cross-module consumption)
 		inferOwnership(ctx, pr.value);

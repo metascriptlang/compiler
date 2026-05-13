@@ -368,6 +368,178 @@ export function parse101Response(raw: string, expectedAccept: string): Result<Up
 	});
 }
 
+// ===== Server-side handshake =====
+//
+// Inverse of buildUpgradeRequest / parse101Response. Server consumes the
+// client's HTTP/1.1 upgrade request (raw HTTP bytes, headers terminated by
+// CRLFCRLF) and emits the 101 Switching Protocols response. Pure string
+// work — the actual accept-key derivation reuses deriveAcceptKey
+// (SHA-1 + base64) above. Caller is responsible for combining the parsed
+// clientKey with deriveAcceptKey and feeding the result into
+// buildUpgradeResponse.
+
+export interface UpgradeRequest {
+	path: string;                // request-target from the GET line (e.g. "/socket?token=abc")
+	clientKey: string;           // Sec-WebSocket-Key value, base64-encoded
+	subprotocols: string[];      // client-offered subprotocols, lowercased; empty if none
+	bodyStart: int32;            // byte offset where any post-headers bytes begin
+}
+
+// Parse a client's HTTP/1.1 WebSocket upgrade request. Symmetric inverse of
+// parse101Response. Validates per RFC 6455 §4.1:
+//   - Request-line is "GET <path> HTTP/1.1"
+//   - Upgrade header contains "websocket" (RFC 7230 comma-list, case-insensitive)
+//   - Connection header contains "upgrade" (RFC 7230 comma-list, case-insensitive
+//     — proxies may send "Upgrade, keep-alive")
+//   - Sec-WebSocket-Key is present and non-empty
+//   - Sec-WebSocket-Version is "13"
+//
+// On success returns the parsed key + offered subprotocols + path. Caller
+// passes clientKey to deriveAcceptKey, then buildUpgradeResponse, then writes
+// the response back to the socket.
+export function parseUpgradeRequest(raw: string): Result<UpgradeRequest, WsError> {
+	const headerEnd = raw.indexOf("\r\n\r\n");
+	if (headerEnd < 0) {
+		return Result.err(wsHandshakeFailed("request missing CRLF CRLF terminator"));
+	}
+	const firstCrlf = raw.indexOf("\r\n");
+	if (firstCrlf < 0 || firstCrlf >= headerEnd) {
+		return Result.err(wsHandshakeFailed("malformed request line"));
+	}
+
+	// Parse request line: "GET <path> HTTP/1.1"
+	const reqLine = raw.slice(0, firstCrlf);
+	const sp1 = reqLine.indexOf(" ");
+	if (sp1 < 0) {
+		return Result.err(wsHandshakeFailed("request line missing method/path separator"));
+	}
+	const method = reqLine.slice(0, sp1);
+	if (method !== "GET") {
+		return Result.err(wsHandshakeFailed("upgrade requires GET method, got " + method));
+	}
+	const rest = reqLine.slice(sp1 + 1, reqLine.length);
+	const sp2 = rest.indexOf(" ");
+	if (sp2 < 0) {
+		return Result.err(wsHandshakeFailed("request line missing path/version separator"));
+	}
+	const path = rest.slice(0, sp2);
+	const version = rest.slice(sp2 + 1, rest.length);
+	if (version !== "HTTP/1.1") {
+		return Result.err(wsHandshakeFailed("upgrade requires HTTP/1.1, got " + version));
+	}
+
+	// Walk header lines.
+	let upgradeOk = false;
+	let connectionOk = false;
+	let clientKey = "";
+	let versionHeader = "";
+	let subprotocols: string[] = [];
+
+	let cursor = firstCrlf + 2;
+	while (cursor < headerEnd) {
+		const lineEnd = raw.indexOf("\r\n", cursor);
+		if (lineEnd < 0 || lineEnd > headerEnd) break;
+		const line = raw.slice(cursor, lineEnd);
+		const colon = line.indexOf(":");
+		if (colon > 0) {
+			const name = line.slice(0, colon).toLowerCase();
+			const value = trimAsciiWs(line.slice(colon + 1, line.length));
+			match (name) {
+				"upgrade" => { if (commaListContainsToken(value, "websocket")) upgradeOk = true; },
+				"connection" => { if (commaListContainsToken(value, "upgrade")) connectionOk = true; },
+				"sec-websocket-key" => { clientKey = value; },
+				"sec-websocket-version" => { versionHeader = value; },
+				"sec-websocket-protocol" => { subprotocols = splitCommaList(value); },
+				_ => {},
+			};
+		}
+		cursor = lineEnd + 2;
+	}
+
+	if (!upgradeOk) return Result.err(wsHandshakeFailed("missing or wrong Upgrade header"));
+	if (!connectionOk) return Result.err(wsHandshakeFailed("missing or wrong Connection header"));
+	if (clientKey.length === 0) return Result.err(wsHandshakeFailed("missing Sec-WebSocket-Key"));
+	// RFC 6455 §4.1 — the key MUST be the base64 encoding of a 16-byte random
+	// nonce. base64(16 bytes) = 22 chars + 2 padding = exactly 24 chars. Lax
+	// parsing here is safe (the protocol's accept-key roundtrip catches garbage
+	// end-to-end) but rejecting wrong-length keys earlier gives the caller a
+	// clear handshake error instead of an opaque "accept mismatch" on the client.
+	if (clientKey.length !== 24) {
+		return Result.err(wsHandshakeFailed("invalid Sec-WebSocket-Key length: expected 24, got " + clientKey.length.toString()));
+	}
+	if (versionHeader !== WS_VERSION) {
+		return Result.err(wsHandshakeFailed("unsupported Sec-WebSocket-Version: " + versionHeader));
+	}
+
+	return Result.ok({
+		path: path,
+		clientKey: clientKey,
+		subprotocols: subprotocols,
+		bodyStart: (headerEnd + 4) as int32,
+	});
+}
+
+// Split an RFC 7230 comma-separated header value into trimmed lowercased tokens.
+// "cbor, JSON, bincode" → ["cbor", "json", "bincode"]. Used for the offered
+// subprotocols list — the same splitter pattern as commaListContainsToken,
+// but materializing the list rather than membership-testing.
+function splitCommaList(value: string): string[] {
+	let out: string[] = [];
+	const lower = value.toLowerCase();
+	let i: int32 = 0;
+	while (i < lower.length) {
+		while (i < lower.length) {
+			const c = lower.charCodeAt(i);
+			if (c !== " ".code && c !== "\t".code && c !== ",".code) break;
+			i = i + 1;
+		}
+		let start = i;
+		while (i < lower.length) {
+			const c = lower.charCodeAt(i);
+			if (c === ",".code) break;
+			i = i + 1;
+		}
+		let end = i;
+		while (end > start) {
+			const c = lower.charCodeAt(end - 1);
+			if (c !== " ".code && c !== "\t".code) break;
+			end = end - 1;
+		}
+		if (end > start) {
+			out.push(lower.slice(start, end));
+		}
+		if (i < lower.length) i = i + 1;
+	}
+	return out;
+}
+
+// Build the HTTP/1.1 101 Switching Protocols response. Symmetric inverse of
+// parse101Response. Caller has already derived `acceptKey` via deriveAcceptKey.
+//   subprotocol   — negotiated subprotocol; "" omits the header
+//   extraHeaders  — additional headers as full lines without trailing CRLF
+//                   (e.g. "X-Server: photon/0.1")
+export function buildUpgradeResponse(
+	acceptKey: string,
+	subprotocol: string,
+	extraHeaders: string[],
+): string {
+	let resp = "HTTP/1.1 101 Switching Protocols\r\n";
+	resp = resp + "Upgrade: websocket\r\n";
+	resp = resp + "Connection: Upgrade\r\n";
+	resp = resp + "Sec-WebSocket-Accept: " + acceptKey + "\r\n";
+
+	if (subprotocol.length > 0) {
+		resp = resp + "Sec-WebSocket-Protocol: " + subprotocol + "\r\n";
+	}
+
+	for (const header of extraHeaders) {
+		resp = resp + header + "\r\n";
+	}
+
+	resp = resp + "\r\n";
+	return resp;
+}
+
 // ===== Tests (pure-string only — sha1/randomBytes paths covered in src/test/std/http/websocket.ms) =====
 
 test "parseWsUrl plain host" {
@@ -717,4 +889,291 @@ test "trimAsciiWs strips both ends" {
 	assert trimAsciiWs("hi") === "hi";
 	assert trimAsciiWs("") === "";
 	assert trimAsciiWs("   ") === "";
+}
+
+// ----- parseUpgradeRequest / buildUpgradeResponse (server-side handshake) -----
+
+test "parseUpgradeRequest minimal valid" {
+	const raw =
+		"GET /socket HTTP/1.1\r\n" +
+		"Host: localhost:8080\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert r.ok;
+	assert r.value.path === "/socket";
+	assert r.value.clientKey === "dGhlIHNhbXBsZSBub25jZQ==";
+	assert r.value.subprotocols.length === 0;
+	assert r.value.bodyStart === raw.length;
+}
+
+test "parseUpgradeRequest preserves query string in path" {
+	const raw =
+		"GET /socket?token=abc HTTP/1.1\r\n" +
+		"Host: h\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert r.ok;
+	assert r.value.path === "/socket?token=abc";
+}
+
+test "parseUpgradeRequest case-insensitive header names + values" {
+	const raw =
+		"GET / HTTP/1.1\r\n" +
+		"Host: h\r\n" +
+		"upgrade: WebSocket\r\n" +
+		"CONNECTION: upgrade\r\n" +
+		"sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert r.ok;
+}
+
+test "parseUpgradeRequest accepts Connection: Upgrade, keep-alive (proxies)" {
+	const raw =
+		"GET / HTTP/1.1\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade, keep-alive\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert r.ok;
+}
+
+test "parseUpgradeRequest accepts Upgrade: websocket, h2c (multi-token Upgrade)" {
+	const raw =
+		"GET / HTTP/1.1\r\n" +
+		"Upgrade: websocket, h2c\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert r.ok;
+}
+
+test "parseUpgradeRequest extracts subprotocols list" {
+	const raw =
+		"GET / HTTP/1.1\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Protocol: cbor, JSON\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert r.ok;
+	assert r.value.subprotocols.length === 2;
+	assert r.value.subprotocols[0] === "cbor";
+	assert r.value.subprotocols[1] === "json";  // lowercased
+}
+
+test "parseUpgradeRequest empty subprotocols list" {
+	const raw =
+		"GET / HTTP/1.1\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert r.ok;
+	assert r.value.subprotocols.length === 0;
+}
+
+test "parseUpgradeRequest rejects non-GET method" {
+	const raw =
+		"POST / HTTP/1.1\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert !r.ok;
+}
+
+test "parseUpgradeRequest rejects HTTP/1.0" {
+	const raw =
+		"GET / HTTP/1.0\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert !r.ok;
+}
+
+test "parseUpgradeRequest rejects missing Sec-WebSocket-Key" {
+	const raw =
+		"GET / HTTP/1.1\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert !r.ok;
+}
+
+test "parseUpgradeRequest rejects too-short Sec-WebSocket-Key (RFC 6455 §4.1)" {
+	const raw =
+		"GET / HTTP/1.1\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: short\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert !r.ok;
+}
+
+test "parseUpgradeRequest rejects too-long Sec-WebSocket-Key" {
+	const raw =
+		"GET / HTTP/1.1\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==EXTRA\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert !r.ok;
+}
+
+test "parseUpgradeRequest rejects unsupported Sec-WebSocket-Version" {
+	const raw =
+		"GET / HTTP/1.1\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 8\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert !r.ok;
+}
+
+test "parseUpgradeRequest rejects missing CRLFCRLF" {
+	const raw = "GET / HTTP/1.1\r\nUpgrade: websocket\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert !r.ok;
+}
+
+test "parseUpgradeRequest rejects missing Upgrade header" {
+	const raw =
+		"GET / HTTP/1.1\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert !r.ok;
+}
+
+test "parseUpgradeRequest rejects missing Connection header" {
+	const raw =
+		"GET / HTTP/1.1\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert !r.ok;
+}
+
+test "parseUpgradeRequest rejects Connection without 'upgrade' token" {
+	const raw =
+		"GET / HTTP/1.1\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: keep-alive\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const r = parseUpgradeRequest(raw);
+	assert !r.ok;
+}
+
+test "parseUpgradeRequest surfaces post-headers byte offset (piggybacked frame)" {
+	const headers =
+		"GET / HTTP/1.1\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"\r\n";
+	const trailing = "leftover-bytes";
+	const raw = headers + trailing;
+	const r = parseUpgradeRequest(raw);
+	assert r.ok;
+	assert r.value.bodyStart === headers.length;
+	assert raw.slice(r.value.bodyStart, raw.length) === trailing;
+}
+
+test "buildUpgradeResponse minimal — no subprotocol, no extras" {
+	const resp = buildUpgradeResponse("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", "", []);
+	assert resp.startsWith("HTTP/1.1 101 Switching Protocols\r\n");
+	assert resp.indexOf("Upgrade: websocket\r\n") >= 0;
+	assert resp.indexOf("Connection: Upgrade\r\n") >= 0;
+	assert resp.indexOf("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n") >= 0;
+	assert resp.indexOf("Sec-WebSocket-Protocol:") < 0;
+	assert resp.endsWith("\r\n\r\n");
+}
+
+test "buildUpgradeResponse with negotiated subprotocol" {
+	const resp = buildUpgradeResponse("K", "cbor", []);
+	assert resp.indexOf("Sec-WebSocket-Protocol: cbor\r\n") >= 0;
+}
+
+test "buildUpgradeResponse with extra headers" {
+	const resp = buildUpgradeResponse("K", "", ["X-Server: photon", "X-Trace-Id: abc"]);
+	assert resp.indexOf("X-Server: photon\r\n") >= 0;
+	assert resp.indexOf("X-Trace-Id: abc\r\n") >= 0;
+}
+
+test "buildUpgradeResponse roundtrips through parse101Response" {
+	// What the server emits must be what the client successfully parses.
+	const resp = buildUpgradeResponse("ABC", "", []);
+	const r = parse101Response(resp, "ABC");
+	assert r.ok;
+	assert r.value.acceptKey === "ABC";
+	assert r.value.subprotocol === "";
+}
+
+test "buildUpgradeResponse with subprotocol roundtrips through parse101Response" {
+	const resp = buildUpgradeResponse("K", "cbor", []);
+	const r = parse101Response(resp, "K");
+	assert r.ok;
+	assert r.value.subprotocol === "cbor";
+}
+
+test "splitCommaList: single token" {
+	const out = splitCommaList("cbor");
+	assert out.length === 1;
+	assert out[0] === "cbor";
+}
+
+test "splitCommaList: multiple tokens trimmed + lowercased" {
+	const out = splitCommaList("CBOR,  JSON , bincode");
+	assert out.length === 3;
+	assert out[0] === "cbor";
+	assert out[1] === "json";
+	assert out[2] === "bincode";
+}
+
+test "splitCommaList: empty" {
+	const out = splitCommaList("");
+	assert out.length === 0;
+}
+
+test "splitCommaList: only commas + whitespace" {
+	const out = splitCommaList(" , , ,");
+	assert out.length === 0;
 }

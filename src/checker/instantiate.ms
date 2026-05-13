@@ -161,7 +161,16 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 		injectConcreteTypeSyms(tr, ctx, callerCtx, injected);
 		return;
 	}
-	if (t.kind === TypeKind.Struct && t.typeName !== "") {
+	// Named user types — Struct (interface/class), Enum, Distinct (type alias).
+	// Cross-module body re-check needs the concrete type symbol injected so
+	// `resolveAnnotation("Color[]")` resolves to ColorArray instead of falling
+	// back to Unknown → msRefArray. Without these, a helper
+	// `function f<T>(...): T[] { const out: T[] = []; ... }` called with
+	// T=Color emits the function signature mangled correctly but the body's
+	// `out` declared as untyped msRefArray, breaking the assignment site at
+	// C compile time.
+	if ((t.kind === TypeKind.Struct || t.kind === TypeKind.Enum || t.kind === TypeKind.Distinct)
+			&& t.typeName !== "") {
 		tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
 		return;
 	}

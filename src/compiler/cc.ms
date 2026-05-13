@@ -156,6 +156,54 @@ export function getCompilerName(ccOption: number, ccBinary: string): string {
 	return "cc";
 }
 
+// -- C++ source support (Nim-style: per-file extension detection drives
+// compiler + std-flag switch; a sticky flag drives the link-step driver
+// switch so libc++ / libstdc++ is linked automatically when needed).
+// References: ~/projects/nim/compiler/extccomp.nim:533 (useCpp), :545
+// (getCompilerExe), :575 (getLinkerExe), :591 (optMixedMode).
+//
+// IMPORTANT — flag set timing: `_hasCppCompile` MUST be set at directive-
+// resolution time (call `markCppCompile` from processCompileDirectives'
+// main-thread loop), not just at compile time. Reason: the global content-
+// addressed .o cache (cache.ms `tryRestoreFromGlobal`) restores byte-
+// identical .o files without invoking compileCFile, so a compile-time-only
+// flag-set would miss cache-hit .cpp paths and the linker would default to
+// the C driver, losing libc++.
+
+let _hasCppCompile = false;
+
+function isCppFile(path: string): boolean {
+	if (path.endsWith(".cpp")) return true;
+	if (path.endsWith(".cxx")) return true;
+	if (path.endsWith(".cc"))  return true;
+	if (path.endsWith(".c++")) return true;
+	if (path.endsWith(".cp"))  return true;
+	if (path.endsWith(".C"))   return true;
+	if (path.endsWith(".CPP")) return true;
+	return false;
+}
+
+// Public: mark a source path as needing the C++ link driver. Idempotent +
+// monotone (once true, stays true). Called from compile.ms at directive
+// resolution time so it covers all paths (fresh compile + local cache hit
+// + global cache hit + per-build dedup skip).
+export function markCppCompile(path: string): void {
+	if (isCppFile(path)) _hasCppCompile = true;
+}
+
+// Map a C-compiler invocation to its C++ counterpart.
+// "zig cc" → "zig c++", "clang" → "clang++", "gcc" → "g++", "cc" → "c++".
+// Explicit binaries (e.g. "x86_64-linux-gnu-gcc") get best-effort suffix swap.
+function toCppCompiler(cName: string): string {
+	if (cName === "zig cc") return "zig c++";
+	if (cName === "clang")  return "clang++";
+	if (cName === "gcc")    return "g++";
+	if (cName === "cc")     return "c++";
+	if (cName.endsWith("-gcc"))   return cName.slice(0, cName.length - 4) + "-g++";
+	if (cName.endsWith("-clang")) return cName + "++";
+	return cName;
+}
+
 // Cross-compiler: zig cc is the default for cross-compilation.
 // Returns "zig cc" if available, falls back to platform-specific cross-gcc.
 export function getCrossCompilerName(ccOption: number, ccBinary: string, osTarget: string, cpuTarget: string): string {
@@ -331,7 +379,15 @@ export function cliAllFlags(opts: CliOptions): string {
 // -- Build command construction --
 
 function buildCompileCommand(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): string {
-	let cmd = `${getCcachePrefix()}${getCompilerName(ccOption, ccBinary)} -std=c11${modeFlags(mode)}`;
+	const isCpp = isCppFile(cFile);
+	// Single-file path (compileC) doesn't go through processCompileDirectives,
+	// so the flag-set lives here too. For the multi-file @compile pipeline,
+	// the canonical set is markCppCompile called from compile.ms.
+	if (isCpp) _hasCppCompile = true;
+	const baseCompiler = getCompilerName(ccOption, ccBinary);
+	const compiler = isCpp ? toCppCompiler(baseCompiler) : baseCompiler;
+	const stdFlag = isCpp ? "-std=c++17" : "-std=c11";
+	let cmd = `${getCcachePrefix()}${compiler} ${stdFlag}${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {
@@ -353,7 +409,11 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 // Compile a .c file to an object file only (-c flag, no linking).
 // Returns 0 on success, non-zero on failure.
 export function compileCFile(cFile: string, oFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): number {
-	let cmd = `${getCcachePrefix()}${getCompilerName(ccOption, ccBinary)} -std=c11${modeFlags(mode)}`;
+	const isCpp = isCppFile(cFile);
+	const baseCompiler = getCompilerName(ccOption, ccBinary);
+	const compiler = isCpp ? toCppCompiler(baseCompiler) : baseCompiler;
+	const stdFlag = isCpp ? "-std=c++17" : "-std=c11";
+	let cmd = `${getCcachePrefix()}${compiler} ${stdFlag}${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {
@@ -375,7 +435,11 @@ const LINK_CMD_LIMIT = 7800;
 // oFileList: space-separated list of .o file paths
 // Returns 0 on success, non-zero on failure.
 export function linkObjects(oFileList: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): number {
-	const compiler = getCompilerName(ccOption, ccBinary);
+	const baseCompiler = getCompilerName(ccOption, ccBinary);
+	// Sticky flag: any .cpp file compiled in this build → use C++ driver for
+	// the final link so libc++ / libstdc++ is pulled automatically. Pure-C
+	// builds keep the existing C-driver behavior (no behavior change).
+	const compiler = _hasCppCompile ? toCppCompiler(baseCompiler) : baseCompiler;
 	const rtDir = resolveRuntime();
 	const rtFlag = rtDir !== "" ? ` -iquote${dirname(dirname(rtDir))}` : "";
 	const bulk = extraFlags !== "" ? `${oFileList} ${extraFlags}` : oFileList;

@@ -42,7 +42,7 @@ import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { CliOptions, Target } from "./options";
 import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
-import { compileCFile, linkObjects, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker, effectiveOsTarget } from "./cc";
+import { compileCFile, linkObjects, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker, effectiveOsTarget, markCppCompile } from "./cc";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
 import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, writeCSource, writeCompileFingerprint, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
@@ -541,6 +541,10 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 					console.log(`${error("error")}: @compile cannot find: ${fullPath}`);
 					exit(1);
 				}
+				// Mark C++ at directive-resolution time (main thread, sequential)
+				// so the flag is set regardless of cache-hit / dedup / fresh-compile.
+				// See cc.ms `markCppCompile` for the why.
+				markCppCompile(fullPath);
 				const oFile = stableOFile(fullPath);
 				if (!_compiledOFiles.has(oFile)) {
 					_compiledOFiles.add(oFile);
@@ -620,7 +624,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config);
+	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.osTarget);
 	const outDir = outputDir !== "" ? outputDir : "out";
 	ensureDir(outDir);
 	// Project root for deriving module IDs
@@ -790,7 +794,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
 	const config = buildResolverConfig(Target.C, defaultResolveSection(), opts.osTarget, opts.projectRoot);
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config);
+	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.osTarget);
 	applyGcMode(opts);
 
 	// Solana: resolve BPF toolchain, force --gc=manual, force release mode
@@ -1241,7 +1245,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
+	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.osTarget);
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
 	const processed: ProcessedModule[] = [];
@@ -1408,7 +1412,7 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
+	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.osTarget);
 
 	const outDir = "out/debug";
 	ensureDir(outDir);
@@ -1455,7 +1459,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
 	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
+	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.osTarget);
 
 	// Parse each module → RaiserModuleInput (topological order)
 	const modules: RaiserModuleInput[] = [];

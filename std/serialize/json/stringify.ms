@@ -122,8 +122,13 @@ function hexDigit(n: number): string {
 function escapeString(s: string): string {
 	let result = "\"";
 	let i = 0;
-	while (i < s.byteLength) {
-		const ch = s.charCodeAt(i);
+	const len = s.byteLength;
+	while (i < len) {
+		// Walk byte-by-byte to stay aligned with byteLength. ASCII bytes match
+		// JSON control chars; UTF-8 multibyte continuation bytes (0x80-0xBF)
+		// and lead bytes (0xC0+) fall through to the default branch and are
+		// emitted verbatim — preserving UTF-8 content end-to-end.
+		const ch = s.byteAt(i);
 		match (ch) {
 			"\"".code => { result += "\\\""; },
 			"\\".code => { result += "\\\\"; },
@@ -136,7 +141,9 @@ function escapeString(s: string): string {
 				if (ch < 32) {
 					result += "\\u00" + hexDigit((ch >> 4) & 15) + hexDigit(ch & 15);
 				} else {
-					result += s.charAt(i);
+					// Emit raw byte; ASCII renders as itself, UTF-8 multibyte
+					// rebuilds verbatim across iterations.
+					result += s.byteSlice(i, i + 1);
 				}
 			},
 		};

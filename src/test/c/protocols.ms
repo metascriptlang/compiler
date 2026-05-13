@@ -11,7 +11,7 @@
 // in `examples/testGetDynamicField.ms` and `examples/testAsTargetProtocol.ms`
 // (compile + execute end-to-end).
 
-import { compileToC } from "../helpers";
+import { compileToC, compileProjectToC } from "../helpers";
 
 // =====================================================================
 // Phase 1: getDynamicField protocol
@@ -301,6 +301,183 @@ function main(): void {
 // =====================================================================
 // Cross-module protocol resolution (relevant for Layer A SERIALIZE)
 // =====================================================================
+
+// =====================================================================
+// Phase 6: setDynamicField protocol (write side)
+// =====================================================================
+
+test "E2E C: setDynamicField synthesis compiles" {
+	const src = `
+interface Store { tag: string; }
+
+export function getDynamicField(this s: Store, key: string): string {
+	return key + "/" + s.tag;
+}
+
+export function setDynamicField(this s: Store, key: string, value: string): void {
+	// stub body — just observe key/value flow at type level
+}
+
+function main(): void {
+	const s: Store = { tag: "init" };
+	s.foo = "v1";
+	s.bar = "v2";
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: real field write beats setDynamicField synthesis" {
+	const src = `
+interface Box { tag: string; }
+
+export function setDynamicField(this b: Box, key: string, value: string): void {}
+
+function main(): void {
+	const b: Box = { tag: "old" };
+	// 'tag' is real field — must resolve to field write, not protocol call
+	b.tag = "new";
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: compound assignment on dynamic field rejected with clear error" {
+	const src = `
+interface Counter { tag: string; }
+
+export function getDynamicField(this c: Counter, key: string): int32 { return 0; }
+export function setDynamicField(this c: Counter, key: string, value: int32): void {}
+
+function main(): void {
+	const c: Counter = { tag: "x" };
+	c.hits += 1;
+}
+`;
+	const c = compileToC(src);
+	assert !c.ok;
+}
+
+// Chain write `a.b.c = x` (intermediate reads + final write) is deferred to
+// V2: requires `leftPartOfAsgn` to be scoped to the outermost MemberExpr of
+// the LHS so intermediates can fire `getDynamicField`. Out of scope for the
+// initial setDynamicField rollout.
+
+test "E2E C: setDynamicField type-coercion of RHS via fitNode" {
+	const src = `
+interface Box { tag: string; }
+
+export function setDynamicField(this b: Box, key: string, value: int64): void {}
+
+function main(): void {
+	const b: Box = { tag: "x" };
+	// RHS is int32 literal — fitNode must widen to int64 to match ext signature
+	b.count = 100;
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: setDynamicField recursion-guard — direct setDynamicField call still works" {
+	const src = `
+interface Bag { tag: string; }
+
+export function setDynamicField(this b: Bag, key: string, value: string): void {}
+
+function main(): void {
+	const b: Bag = { tag: "t" };
+	// Explicit call — must NOT re-synthesize. d.property === "setDynamicField" is the recursion guard.
+	b.setDynamicField("k", "v");
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: setDynamicField rejected when no extension exists" {
+	const src = `
+interface Plain { tag: string; }
+
+function main(): void {
+	const p: Plain = { tag: "x" };
+	// No setDynamicField extension — error stays "Property does not exist"
+	p.weirdField = "should error";
+}
+`;
+	const c = compileToC(src);
+	assert !c.ok;
+}
+
+test "E2E C: setDynamicField eval-once for side-effecting receiver" {
+	// `getObj().foo = x` must evaluate getObj() exactly once. AST mutation
+	// places md.object in a single slot (the synthesized callee's object),
+	// so codegen sees one call site. Runtime POC verified at
+	// examples/testSetDynamicField.ms style (callCount = 1 after one statement);
+	// here we pin the compile-time invariant by checking the source compiles.
+	const src = `
+interface Box { tag: string; }
+export function setDynamicField(this b: Box, key: string, value: int32): void {}
+function makeBox(): Box { return { tag: "made" }; }
+function main(): void {
+	makeBox().count = 42;
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: setDynamicField cross-module — extension in lib, used in main" {
+	const entries = [
+		{ entryPath: "src/lib.ms", entrySource: `
+			export interface Bag { tag: string; }
+			export function setDynamicField(this b: Bag, key: string, value: string): void {}
+		` },
+		{ entryPath: "src/main.ms", entrySource: `
+			import { Bag } from "./lib";
+			function main(): void {
+				const b: Bag = { tag: "t" };
+				b.foo = "hello";
+			}
+		` },
+	];
+	const cCode = compileProjectToC(entries, "src/main.ms");
+	assert !cCode.contains("ERROR:");
+}
+
+test "E2E C: setDynamicField with async RHS type-checks" {
+	const src = `
+interface Box { tag: string; }
+export function setDynamicField(this b: Box, key: string, value: int32): void {}
+
+async function fetchVal(): Promise<int32> { return 99; }
+
+async function doWork(): Promise<void> {
+	const b: Box = { tag: "t" };
+	b.count = await fetchVal();
+}
+function main(): void { doWork(); }
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: JsonValue dynamic write via setDynamicField" {
+	// Uses jsonObject() directly to avoid the pre-existing `r.value` narrowing
+	// quirk that drops the Ref<JsonValueData> wrapping. The protocol path itself
+	// works end-to-end (see examples/testSetDynamicField.ms for runtime POC).
+	const src = `
+function main(): void {
+	const j = jsonObject(["name"], [jsonString("Alice")]);
+	j.age = jsonInt(30 as int64);
+	j.name = jsonString("Bob");
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
 
 test "E2E C: JsonValue dynamic access via protocol after migration" {
 	// Verifies Phase 3 migration: JsonValue.foo → JsonValue.getDynamicField("foo")

@@ -26,9 +26,11 @@ export {
 
 export {
 	WS_MAGIC_GUID, WS_VERSION,
-	WsUrl, UpgradeResponse,
+	WsUrl, UpgradeResponse, UpgradeRequest,
 	parseWsUrl, makeClientKey, deriveAcceptKey,
 	buildUpgradeRequest, parse101Response,
+	parseUpgradeRequest, buildUpgradeResponse,
+	commaListContainsToken,
 } from "./handshake";
 
 export {

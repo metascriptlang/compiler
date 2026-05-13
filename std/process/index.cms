@@ -92,8 +92,9 @@ export class env {
 	}
 }
 
-// Time primitives moved to std/core/date (Date.now()) and std/core/time
-// (time.monotonicMs()) — both preludes, no import needed.
+// Time primitives moved to std/core/date (Date.now() — wall-clock) and
+// std/core/performance (performance.now() — monotonic) — both preludes,
+// no import needed.
 
 // =============================================================================
 // Platform detection

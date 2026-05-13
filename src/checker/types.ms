@@ -234,14 +234,26 @@ export function createEnum(name: string, members: string[], values: number[]): T
 // the field with `void` type — codegen filters it out at typedef + hook walk
 // to avoid emitting invalid `void value;` declarations.
 export function createResult(okType: Type, errType: Type): Type {
+	// Use Result's own GenericParam placeholders (named "T"/"E") in variants
+	// instead of baking the user-supplied okType/errType. Why: when the user
+	// composes `Result<T[], E>` inside a function whose own generic param is
+	// also named "T", the baked `Array<GenericParam("T_user"))` collides with
+	// Result's "T" at codegen substitution time — sub fires twice, producing
+	// `Array<Array<int32>>` (the msRefArrayArray double-wrap bug).
+	// Keeping variants generic until codegen substitutes Result's "T"/"E"
+	// against `typeChildren` cleanly avoids the name collision. Concrete
+	// user types live ONLY in typeChildren; getResultOkType/getResultErrType
+	// already read from typeChildren, so accessor callers are unaffected.
+	const tParam = createGenericParam("T");
+	const eParam = createGenericParam("E");
 	const trueVariant = emptyType();
 	trueVariant.kind = TypeKind.Struct;
 	trueVariant.typeNames = ["ok", "value"];
-	trueVariant.typeChildren = [createBooleanLiteral(true), okType];
+	trueVariant.typeChildren = [createBooleanLiteral(true), tParam];
 	const falseVariant = emptyType();
 	falseVariant.kind = TypeKind.Struct;
 	falseVariant.typeNames = ["ok", "error"];
-	falseVariant.typeChildren = [createBooleanLiteral(false), errType];
+	falseVariant.typeChildren = [createBooleanLiteral(false), eParam];
 	const base = createUnion([trueVariant, falseVariant]);
 	base.typeName = "Result";
 	base.typeExtra = booleanType();

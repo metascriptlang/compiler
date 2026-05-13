@@ -602,6 +602,13 @@ export function importSymFromRegistry(
 		setFlag(sym, SymbolFlag.Global);
 	}
 	defineOrError(ctx, sym, defNode);
+	// Cross-module generic mono: restore declNode for generic FunctionDecl /
+	// static generic MethodDecl AFTER defineOrError (which sets declNode to
+	// the ImportDecl). The generic AST is needed by tryInstantiateGenericCallee
+	// so the call site in this module can clone+substitute. Without this,
+	// `import { f } from "./lib"` + `f<Post>(...)` keeps the un-substituted
+	// Result<unknown, _> shape and codegen produces type mismatches.
+	if (exportInfo.declNode !== null) sym.declNode = exportInfo.declNode;
 	sgRecordSym(ctx, nameLoc.line, nameLoc.column, nameLoc.column + alias.length, sym, exportInfo.symType, exportInfo.kind, alias, "", false);
 	return sym;
 }
@@ -768,6 +775,18 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 								&& (exportInfo.overloadFlags[ovIdx] & SymbolFlag.OverloadSig) !== 0) {
 							setFlag(ovSym, SymbolFlag.OverloadSig);
 						}
+						// Cross-module generic mono — restore overload's declNode
+						// for generic overloads. Same rule as primary sym path.
+						// NOTE: overloaded-generic mono is currently blocked at a
+						// pre-existing site in `resolveOverloadCall` which doesn't
+						// invoke `tryInstantiateGenericCallee` for the winning
+						// overload. Carrying declNode here is preparation; the
+						// fix at resolveOverloadCall is out of scope for now.
+						if (exportInfo.overloadDeclNodes !== null
+								&& ovIdx < exportInfo.overloadDeclNodes.length
+								&& exportInfo.overloadDeclNodes[ovIdx] !== null) {
+							ovSym.declNode = exportInfo.overloadDeclNodes[ovIdx];
+						}
 						primarySym.overloads.push(ovSym);
 						// Register per-overload extension if it has one
 						if (ctx.extensionRegistry !== null && exportInfo.overloadExtReceiverTypes !== null && ovIdx < exportInfo.overloadExtReceiverTypes.length && exportInfo.overloadExtReceiverTypes[ovIdx] !== "") {
@@ -800,41 +819,59 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 	}
 
 	// Auto-propagate exported extension methods from imported module.
-	// When you import anything from a module, all its exported extension methods
-	// (operators and named methods) become available automatically.
-	if (ctx.extensionRegistry !== null && sourcePath !== "") {
-		const modExports = findModuleExports(ctx.exportRegistry, sourcePath);
-		if (modExports !== null) {
-			for (const expInfo of modExports.symbols) {
-				if (expInfo.extReceiverType !== "") {
-					// Derive original method name: class methods have mangled names
-					// (GPUInstance_release) but extensions use original names (release).
-					let methName = expInfo.name;
-					const prefix = expInfo.extReceiverType + "_";
-					if (methName.length > prefix.length && methName.slice(0, prefix.length) === prefix) {
-						methName = methName.slice(prefix.length, methName.length);
-					}
-					// Only register if not already present
-					if (findExtension(ctx.extensionRegistry, expInfo.extReceiverType, methName) === null) {
-						const methSym = makeSymbol(expInfo.name, SymbolKind.Function, expInfo.symType, false);
-						methSym.modulePath = expInfo.definingModule !== "" ? expInfo.definingModule : sourcePath;
-						if (expInfo.nativeName !== "") methSym.nativeName = expInfo.nativeName;
-						if (expInfo.location !== null) methSym.location = expInfo.location;
-						// Carry default-param info — without this, member-call dispatch
-						// resolves to a sym that has no defaults, then the call site
-						// emits N-1 args expecting N parameters. Manifests as C error
-						// "too few arguments to function call". Discovered when the hub
-						// re-export fix (#73) made auto-prop run for accessors that
-						// previously only registered via direct import.
-						if (expInfo.defaultParams !== null && expInfo.defaultParams.length > 0) {
-							methSym.defaultParams = expInfo.defaultParams;
-						}
-						methSym.state = SymbolState.Shaped;
-						registerExtension(ctx.extensionRegistry, createExtMethod(methName, expInfo.extReceiverType, sourcePath, expInfo.symType, expInfo.extIsStatic, methSym, 0));
-					}
-				}
-			}
+	autoPropagateModuleExtensions(ctx, sourcePath, false);
+}
+
+// Auto-propagate exported extension methods from a sibling module's exports
+// into the current ctx's extension registry. Fires from two entry points:
+//   - collectImport (`import { X } from "./y"`)  — long-standing behavior
+//   - collectExport (`export { X } from "./y"`)   — bug #73 (class re-export)
+//
+// `markExported` controls whether the propagated method syms are marked
+// `Exported` on the way through:
+//   - false (collectImport): methods are visible to this module only
+//   - true  (collectExport): methods flow downstream to consumers of THIS
+//     module too, mandatory for hub re-export of classes whose static
+//     methods would otherwise be invisible past the hub
+//
+// Without the `markExported=true` path, a hub doing `export { ClassName }
+// from "./inner"` would re-export the class symbol cleanly but consumers
+// would see `Property '<method>' does not exist on type 'ClassName'` because
+// the per-method extension entries never reach the consumer's registry.
+function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, markExported: boolean): void {
+	if (ctx.extensionRegistry === null || sourcePath === "") return;
+	const modExports = findModuleExports(ctx.exportRegistry, sourcePath);
+	if (modExports === null) return;
+	for (const expInfo of modExports.symbols) {
+		if (expInfo.extReceiverType === "") continue;
+		// Derive original method name: class methods have mangled names
+		// (GPUInstance_release) but extensions use original names (release).
+		let methName = expInfo.name;
+		const prefix = expInfo.extReceiverType + "_";
+		if (methName.length > prefix.length && methName.startsWith(prefix)) {
+			methName = methName.slice(prefix.length, methName.length);
 		}
+		// Only register if not already present
+		if (findExtension(ctx.extensionRegistry, expInfo.extReceiverType, methName) !== null) continue;
+		const methSym = makeSymbol(expInfo.name, SymbolKind.Function, expInfo.symType, false);
+		methSym.modulePath = expInfo.definingModule !== "" ? expInfo.definingModule : sourcePath;
+		if (expInfo.nativeName !== "") methSym.nativeName = expInfo.nativeName;
+		if (expInfo.location !== null) methSym.location = expInfo.location;
+		// Carry default-param info — without this, member-call dispatch resolves
+		// to a sym that has no defaults, then the call site emits N-1 args
+		// expecting N parameters. Manifests as C error "too few arguments".
+		if (expInfo.defaultParams !== null && expInfo.defaultParams.length > 0) {
+			methSym.defaultParams = expInfo.defaultParams;
+		}
+		// Cross-module generic mono for class methods: carry the MethodDecl AST
+		// so tryInstantiateGenericCallee can fire at the call site (e.g.
+		// `Lib.fetch<Post>(...)` from a different module). Without this, the
+		// auto-propagated methSym has no declNode and mono skips, leaving the
+		// call typed as Result<unknown, _> at codegen.
+		if (expInfo.declNode !== null) methSym.declNode = expInfo.declNode;
+		methSym.state = SymbolState.Shaped;
+		if (markExported) setFlag(methSym, SymbolFlag.Exported);
+		registerExtension(ctx.extensionRegistry, createExtMethod(methName, expInfo.extReceiverType, sourcePath, expInfo.symType, expInfo.extIsStatic, methSym, 0));
 	}
 }
 
@@ -952,6 +989,16 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 					}
 				}
 			}
+			// Bug #73 fix: when `export { X } from "./y"` brings a class through,
+			// the class's per-method extension registrations live in ./y's ext
+			// registry, not the hub's. Without this auto-propagation, downstream
+			// consumers (`import { X } from "./hub"`) would see the class symbol
+			// but lose access to all `X.methodName()` calls — extension lookup
+			// against the hub's registry finds no matching `methodName` ext.
+			// Mirrors the same auto-propagation in `collectImport` (single
+			// helper `autoPropagateModuleExtensions`).
+			const reExportSourcePath = resolveImportSourcePath(ctx, imp.importSource);
+			autoPropagateModuleExtensions(ctx, reExportSourcePath, true);
 		}
 
 		// Mark all as exported (whether freshly imported or pre-existing)

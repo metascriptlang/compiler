@@ -382,7 +382,8 @@ export function frameRequest(
 	if (te) {
 		const r = tryDecodeChunked(bufferAfterHeaders);
 		if (r.kind === "ready") {
-			if (r.body.length > maxBodySize) return frameReject(413);
+			// HTTP byte-oriented: cap by byte length, not UTF-16 unit count.
+			if ((r.body.byteLength() as int32) > maxBodySize) return frameReject(413);
 			return frameReady(r.body, r.bytesConsumed);
 		}
 		if (r.kind === "needMore") return frameNeedMore();
@@ -391,8 +392,11 @@ export function frameRequest(
 
 	if (hasCL) {
 		if (cl > maxBodySize) return frameReject(413);
-		if ((bufferAfterHeaders.length as int32) < cl) return frameNeedMore();
-		return frameReady(bufferAfterHeaders.slice(0, cl), cl);
+		// Content-Length is byte count per RFC 7230; compare against byteLength,
+		// not .length (UTF-16 code units), or UTF-8 bodies loop forever.
+		if ((bufferAfterHeaders.byteLength() as int32) < cl) return frameNeedMore();
+		// Use byteSlice so the cut respects byte boundaries on UTF-8 bodies.
+		return frameReady(bufferAfterHeaders.byteSlice(0, cl), cl);
 	}
 
 	// Neither header — POST/PUT/PATCH require length, others have no body.

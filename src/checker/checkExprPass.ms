@@ -394,6 +394,130 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (d.operator === "=" && leftType !== null) {
 				d.right = fitNode(ctx, d.right, leftType, rightType);
 			}
+			// Convention-based dynamic field write protocol:
+			//   obj.foo = x  →  obj.setDynamicField("foo", x)
+			// when:
+			//   - foo is not a real field of obj's declared type, AND
+			//   - obj's type has a registered extension `setDynamicField(this T, key: string, value: U): void`.
+			// Mirrors the getDynamicField synthesis for reads (~line 3727) and the
+			// HashMap `m[k]=v` rewrite below. Compound ops (`+=`, etc.) are rejected
+			// with a clear error since they need a read-modify-write cycle that the
+			// protocol does not express.
+			if (isAsgn && d.left.kind === NodeKind.MemberExpr
+					&& d.left.nodeType !== null
+					&& d.left.nodeType.kind === TypeKind.Unknown
+					&& ctx.extensionRegistry !== null) {
+				const md = d.left.data as MemberExprData;
+				if (md.object.nodeType !== null && md.property !== "setDynamicField") {
+					// Receiver-match against the un-peeled type (preserves Ref<T>
+					// wrapping for reference types like JsonValue). Property-lookup
+					// mirrors `checkMember`'s full chain: peel Alias/Ref/Struct/Union,
+					// try `getProperty`, fall back to `lookupSymbol`+shape on the
+					// type's name (the same "class-aware field delegation" path
+					// at line 3512). Skipping the fallback would mis-fire synthesis
+					// on real fields like `MacroInvocationData.macroArgs` whose
+					// alias isn't shaped until a read primes it.
+					const recvType = md.object.nodeType;
+					let probeType = recvType;
+					let _peelHops = 0;
+					while (_peelHops < 4) {
+						_peelHops = _peelHops + 1;
+						if (probeType.kind === TypeKind.Alias && probeType.typeReturn !== null) {
+							probeType = probeType.typeReturn;
+							continue;
+						}
+						if (probeType.kind === TypeKind.Ref && probeType.typeReturn !== null) {
+							probeType = probeType.typeReturn;
+							continue;
+						}
+						break;
+					}
+					const peeled = peelToStructOrUnion(probeType);
+					if (peeled !== null) probeType = peeled;
+					let propertyExists = getProperty(probeType, md.property).kind !== TypeKind.Unknown
+						|| (probeType.typeNames !== null && probeType.typeNames.indexOf(md.property) >= 0);
+					if (!propertyExists && probeType.typeName !== "") {
+						const classSym = lookupSymbol(ctx.table, probeType.typeName);
+						if (classSym !== null) {
+							ensureShaped(classSym, ctx);
+							let classStruct = classSym.symbolType;
+							if (classStruct !== null && classStruct.kind === TypeKind.Alias && classStruct.typeReturn !== null) {
+								classStruct = classStruct.typeReturn;
+							}
+							if (classStruct !== null && classStruct.kind === TypeKind.Ref && classStruct.typeReturn !== null) {
+								classStruct = classStruct.typeReturn;
+							}
+							if (classStruct !== null && (classStruct.kind === TypeKind.Struct || classStruct.kind === TypeKind.Union)) {
+								if (getProperty(classStruct, md.property).kind !== TypeKind.Unknown) {
+									propertyExists = true;
+								}
+							}
+						}
+					}
+					// Last-resort fallback: shape the receiver's source symbol if reachable.
+					// `recvType.sym` carries the declaration site for alias parameters even
+					// when typeName was lost. This shapes `MacroInvocationData` to its inner
+					// record BEFORE we declare the field missing — matching how a prior read
+					// would have primed the alias on the same parameter.
+					if (!propertyExists && recvType.sym !== null) {
+						ensureShaped(recvType.sym, ctx);
+						let symType = recvType.sym.symbolType;
+						let _h = 0;
+						while (symType !== null && _h < 4) {
+							_h = _h + 1;
+							if (symType.kind === TypeKind.Alias && symType.typeReturn !== null) { symType = symType.typeReturn; continue; }
+							if (symType.kind === TypeKind.Ref && symType.typeReturn !== null) { symType = symType.typeReturn; continue; }
+							break;
+						}
+						if (symType !== null && (symType.kind === TypeKind.Struct || symType.kind === TypeKind.Union)
+								&& getProperty(symType, md.property).kind !== TypeKind.Unknown) {
+							propertyExists = true;
+						}
+					}
+					if (!propertyExists) {
+						const setExts = findAllExtensionsByName(ctx.extensionRegistry, "setDynamicField");
+						// Stricter receiver match: a `setDynamicField` ext only matches
+						// when its declared `receiverTypeName` lines up with the actual
+						// receiver's name (or its un-peeled alias). The generic
+						// `findFirstMatchingExt` is too permissive — when the ext's
+						// receiver type is parameterized (Ref<...>), unification can bind
+						// against unrelated types and yield false positives that would
+						// route ordinary field writes through the protocol.
+						let extMatch = false;
+						if (setExts.length > 0) {
+							const recvNames: string[] = [];
+							if (recvType.typeName !== "") recvNames.push(recvType.typeName);
+							if (probeType.typeName !== "" && probeType.typeName !== recvType.typeName) recvNames.push(probeType.typeName);
+							if (recvType.sym !== null && recvType.sym.name !== "") {
+								let alreadyIn = false;
+								for (const n of recvNames) { if (n === recvType.sym.name) alreadyIn = true; }
+								if (!alreadyIn) recvNames.push(recvType.sym.name);
+							}
+							for (const e of setExts) {
+								if (e.receiverTypeName === "") continue;
+								for (const rn of recvNames) {
+									if (e.receiverTypeName === rn) { extMatch = true; break; }
+								}
+								if (extMatch) break;
+							}
+						}
+						if (extMatch) {
+							if (d.operator !== "=") {
+								const lhsRead = d.operator.slice(0, d.operator.length - 1);
+								addError(ctx,
+									`compound assignment '${d.operator}' is not supported on dynamic field '${md.property}'; rewrite as 'expr.${md.property} = expr.${md.property} ${lhsRead} value'`,
+									node.location.line, node.location.column);
+								return unknownType();
+							}
+							const keyLit = createNodeAt(NodeKind.StringLiteral, { value: md.property }, node.location);
+							const wargs: Node[] = [];
+							wargs.push(keyLit);
+							wargs.push(d.right);
+							return rewriteAsMethodCall(ctx, node, md.object, "setDynamicField", wargs);
+						}
+					}
+				}
+			}
 			// HashMap<K,V> subscript write: `m[k] = v` → `m.set(k, v)`. Mutate the
 			// whole BinaryExpr into a method call so the existing extension
 			// resolution + lowering path handles it. Counterpart of the read-case
@@ -406,27 +530,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 				if (setObjType !== null && setObjType.kind === TypeKind.GenericInstance
 					&& isIndexableMapType(setObjType)) {
-					const wloc = node.location;
-					const wtok = createToken(TokenKind.Ident, "", wloc.line);
-					const wmember: MemberExprData = { object: ad.array, property: "set", isOptional: false };
-					const wmemberNode = createNode(NodeKind.MemberExpr, wmember, wtok);
 					const wargs: Node[] = [];
 					wargs.push(ad.index);
 					wargs.push(d.right);
-					// Mutate in place. Assign literal directly to node.data: NodeData (the
-					// union type) — a typed intermediate like `const x: CallExprData = ...`
-					// confuses C codegen into typing the local as the variant struct, which
-					// then fails the union assignment.
-					node.kind = NodeKind.CallExpr;
-					node.data = {
-						callee: wmemberNode,
-						arguments: wargs,
-						isDirectCall: true,
-						resolvedOverloadIdx: -1,
-					};
-					node.flags = node.flags & ~NodeFlag.Sem;
-					node.nodeType = null;
-					return checkCallExpr(ctx, node, null);
+					return rewriteAsMethodCall(ctx, node, ad.array, "set", wargs);
 				}
 			}
 			// Ref parity: initVar on assignment LHS (sempass2 line 1284)
@@ -1505,6 +1612,29 @@ function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType: Type,
 	return synthCall;
 }
 
+// ===== rewriteAsMethodCall — In-place rewrite to method call =====
+// Mutates `node` to a CallExpr that invokes `receiver.methodName(args)`. Used
+// by commit-style desugaring sites that have already verified the rewrite
+// should happen (e.g., `m[k]=v` → `m.set(k, v)` and `obj.foo=x` →
+// `obj.setDynamicField("foo", x)`). After mutation, checkCallExpr resolves
+// the extension method and validates argument types. Returns the call's
+// inferred type.
+function rewriteAsMethodCall(ctx: CheckerContext, node: Node, receiver: Node, methodName: string, args: Node[]): Type {
+	const tok = createToken(TokenKind.Ident, "", node.location.line);
+	const member: MemberExprData = { object: receiver, property: methodName, isOptional: false };
+	const memberNode = createNode(NodeKind.MemberExpr, member, tok);
+	node.kind = NodeKind.CallExpr;
+	node.data = {
+		callee: memberNode,
+		arguments: args,
+		isDirectCall: true,
+		resolvedOverloadIdx: -1,
+	};
+	node.flags = node.flags & ~NodeFlag.Sem;
+	node.nodeType = null;
+	return checkCallExpr(ctx, node, null);
+}
+
 // ===== fitNode — Central Implicit Conversion Insertion =====
 // Parity: standard reference's node fitting, conversion matching, and implicit conversion patterns
 // Called at every "value flows into typed slot" point:
@@ -2099,7 +2229,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 	// which re-checks per candidate with speculative rollback (Phase 5).
 	// Affine-Promise consumption also happens inside, during the commit step.
 	if (needsOverloadScoring) {
-		return resolveOverloadCall(ctx, overloadSym, node);
+		return resolveOverloadCall(ctx, overloadSym, node, expectedType);
 	}
 	// Non-overload path: check args once with callee-derived expected types.
 	const argTypes: Type[] = [];
@@ -2155,8 +2285,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				&& node.resolvedSym !== null && node.resolvedSym.declNode !== null
 				&& node.resolvedSym.declNode.kind === NodeKind.MethodDecl
 				&& (node.resolvedSym.declNode.data as MethodDeclData).methodIsStatic) {
-			const methodFlags = (node.resolvedSym.declNode.data as MethodDeclData).methodFlags;
-			const newCalleeType = tryInstantiateGenericCallee(ctx, node, calleeType, argTypes, methodFlags);
+			const methodFlags = getGenericDeclFlags(node.resolvedSym.declNode);
+			const newCalleeType = tryInstantiateGenericCallee(ctx, node, calleeType, argTypes, methodFlags, expectedType);
 			if (newCalleeType !== null) {
 				calleeType = newCalleeType;
 				return inferGenericReturn(calleeType, argTypes, expectedType);
@@ -2311,8 +2441,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			&& node.resolvedSym !== null
 			&& node.resolvedSym.declNode !== null
 			&& node.resolvedSym.declNode.kind === NodeKind.FunctionDecl) {
-			const fnDeclData = node.resolvedSym.declNode.data as FunctionDeclData;
-			const genericParamNames = extractGenericNames(fnDeclData.fnFlags);
+			const genericParamNames = extractGenericNames(getGenericDeclFlags(node.resolvedSym.declNode));
 			const explicitBindings = bindFromExplicitTypeArgs(node, genericParamNames, ctx);
 			if (explicitBindings.names.length > 0) {
 				const boundFnType = instantiateGeneric(calleeType, explicitBindings.names, explicitBindings.types);
@@ -2336,14 +2465,12 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		// MethodDecl — non-static methods on generic classes go through the
 		// class-instantiation path. See `tryInstantiateGenericCallee` for the
 		// shared arg-unify + explicit-type-arg merge + sym/nodeType update.
-		if (node.resolvedSym !== null && node.resolvedSym.declNode !== null
-			&& (node.resolvedSym.declNode.kind === NodeKind.FunctionDecl
-				|| node.resolvedSym.declNode.kind === NodeKind.MethodDecl)) {
-			const directFlags = node.resolvedSym.declNode.kind === NodeKind.FunctionDecl
-				? (node.resolvedSym.declNode.data as FunctionDeclData).fnFlags
-				: (node.resolvedSym.declNode.data as MethodDeclData).methodFlags;
-			const newCalleeType = tryInstantiateGenericCallee(ctx, node, calleeType, argTypes, directFlags);
-			if (newCalleeType !== null) calleeType = newCalleeType;
+		if (node.resolvedSym !== null) {
+			const directFlags = getGenericDeclFlags(node.resolvedSym.declNode);
+			if (directFlags !== "") {
+				const newCalleeType = tryInstantiateGenericCallee(ctx, node, calleeType, argTypes, directFlags, expectedType);
+				if (newCalleeType !== null) calleeType = newCalleeType;
+			}
 		}
 		// If explicit type args (<T>) and generic params, resolve type args at checker time
 		if (hasGenericParams(calleeType)) {
@@ -2525,9 +2652,7 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 		}
 	}
 
-	for (let j = 0; j < argBindings.names.length; j += 1) {
-		returnType = substituteType(returnType, argBindings.names[j], argBindings.types[j]);
-	}
+	returnType = applySubstitutions(returnType, argBindings);
 	// Bug 16: eagerly instantiate body for concrete GenericInstance — mirrors
 	// inferGenericReturnWithExplicit. Without this, downstream peelToStructOrUnion
 	// falls back to the un-substituted typeExtra and `r.value.field` access
@@ -2548,6 +2673,17 @@ function findBindingIndex(b: UnifyBindings, name: string): number {
 		if (b.names[i] === name) return i;
 	}
 	return -1;
+}
+
+// Apply every binding in `b` to type `t` via substituteType. Used by callers
+// that need to convert a formal type containing GenericParam(s) into its
+// concrete substituted form after Pass 1/2/3 binding.
+function applySubstitutions(t: Type, b: UnifyBindings): Type {
+	let result = t;
+	for (let i = 0; i < b.names.length; i += 1) {
+		result = substituteType(result, b.names[i], b.types[i]);
+	}
+	return result;
 }
 
 function hasBindingName(b: UnifyBindings, name: string): boolean {
@@ -2584,10 +2720,25 @@ function hasBindingName(b: UnifyBindings, name: string): boolean {
 // Returns the new instantiated callee type, or null if instantiation
 // didn't fire (no bindings, builtin, instantiation refused, etc.). Caller
 // keeps `calleeType` unchanged on null return.
-function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string): Type {
+//
+// Extract the per-decl "generic flags" segment used by mono dispatch.
+// Centralizes the FunctionDecl/MethodDecl fork that previously appeared at
+// 4+ call sites (ext static path, direct call mono, explicit-type-arg
+// validation, overload winner). Returns "" when declNode is null or of an
+// unsupported kind; callers should treat that as "no mono path applies".
+function getGenericDeclFlags(declNode: Node): string {
+	if (declNode === null) return "";
+	if (declNode.kind === NodeKind.FunctionDecl) return (declNode.data as FunctionDeclData).fnFlags;
+	if (declNode.kind === NodeKind.MethodDecl) return (declNode.data as MethodDeclData).methodFlags;
+	return "";
+}
+
+function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string, expectedType: Type | null = null as unknown as Type): Type {
 	if (!isGenericFn(flags)) return null as unknown as Type;
 	const sym = node.resolvedSym;
-	if (sym === null || sym.builtinKind !== "" || sym.declNode === null) return null as unknown as Type;
+	if (sym === null || sym.builtinKind !== "" || sym.declNode === null) {
+		return null as unknown as Type;
+	}
 	const cd = node.data as CallExprData;
 
 	// Pass 1: unify args against params to derive bindings.
@@ -2603,7 +2754,47 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	// constrain T, only the explicit `<Person>` does).
 	const genericNames = extractGenericNames(flags);
 	mergeUnifyBindings(eb, bindFromExplicitTypeArgs(node, genericNames, ctx));
+	// Pass 3: contextual return-type binding (Nim parity — `inheritBindings` in
+	// semcall.nim:777-859). When args + explicit <T> together don't bind all
+	// generic params, walk return type vs expected type to derive bindings from
+	// caller context. Mirrors local pattern in `inferGenericReturn` (line 2621+):
+	// gated on !isNakedGenericReturn to preserve TS-flavored naked-T rule.
+	// `mergeUnifyBindings` preserves earlier bindings (types.ms:1612) so Pass 3
+	// only fills gaps — no overwrite risk.
+	//
+	// Fixes Bug 3 V2: macro emit `_jsonToIntArray(jv, null)` with caller-side
+	// `const colors: Color[] = ...` context. Args alone don't bind T (null is
+	// weak), explicit <T> not present in macro emit. Pass 3 binds T=Color from
+	// return Array<T> vs expected Array<Color>.
+	if (expectedType !== null && calleeType.typeReturn !== null
+			&& calleeType.typeReturn.kind !== TypeKind.GenericParam) {
+		const ctxBindings = createUnifyBindings();
+		unifyType(calleeType.typeReturn, expectedType, ctxBindings);
+		mergeUnifyBindings(eb, ctxBindings);
+	}
 	if (eb.names.length === 0) return null as unknown as Type;
+
+	// Post-mono arg reconciliation: substitute generic params in formal types
+	// and apply Maybe-wrap for null literal args against value-type Maybe<T>
+	// formals. Mirrors Nim's match-as-you-go pattern (sigmatch.nim:2395+
+	// paramTypesMatchAux substitutes T progressively per arg) via deferred
+	// substitute. MS's checkArg-then-bind ordering leaves null arg typed as
+	// Null primitive while formal becomes Maybe<T-concrete> after mono — C
+	// codegen rejects void* vs struct mismatch. Re-coerce here.
+	//
+	// Only fires for NullLiteral args with substituted formal as Maybe<T> +
+	// concrete typeReturn. synthMaybeWrap emits typed-null literal that codegen
+	// lowers to Maybe { ok: false }.
+	const reconcileLimit = cd.arguments.length < calleeType.typeChildren.length
+		? cd.arguments.length : calleeType.typeChildren.length;
+	for (let pi = 0; pi < reconcileLimit; pi += 1) {
+		const arg = cd.arguments[pi];
+		if (arg === null || arg.kind !== NodeKind.NullLiteral) continue;
+		const substituted = applySubstitutions(calleeType.typeChildren[pi], eb);
+		if (substituted !== null && isMaybeType(substituted) && substituted.typeReturn !== null) {
+			cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType);
+		}
+	}
 
 	const instSym = callInstantiateGeneric(sym, eb.names, eb.types, ctx);
 	if (instSym === null) return null as unknown as Type;
@@ -2746,7 +2937,7 @@ function checkArgsAgainstCandidate(ctx: CheckerContext, args: Node[], candType: 
 // (Wigham, 2024) proposed formal speculation, was marked Experimental,
 // closed unmerged. Known leakage bugs microsoft/TypeScript#49820, #13430
 // are accepted.
-function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node): Type {
+function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, expectedType: Type | null = null as unknown as Type): Type {
 	const impl = findOverloadImpl(sym);
 	if (impl === null) {
 		addError(ctx, `Overloaded function '${sym.name}' has no implementation — at least one definition must have a body`,
@@ -2892,6 +3083,54 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node): 
 		d.callee.resolvedSym = sym;
 		if (sym.symbolType !== null) d.callee.nodeType = sym.symbolType;
 	}
+
+	// Generic-overload mono: if the winning overload is generic, instantiate
+	// it now and redirect `node.resolvedSym` to the specialized symbol. The
+	// existing `tryInstantiateGenericCallee` helper handles the unify +
+	// explicit-type-arg merge + sym redirect — temporarily set callNode.resolvedSym
+	// to the winner sym (not primary) so the helper instantiates the right one,
+	// then let it overwrite to instSym on success.
+	//
+	// Why this is needed: codegen's overload-tag path (TAG_CALL_OVERLOAD) mangles
+	// the call name by slot index (`g__module_u${idx}`), which points at the
+	// un-substituted generic body. The instSym has zero overloads, so after
+	// redirect the codegen naturally falls into direct-call path and emits the
+	// mangled mono name (e.g. `g__ref_Post`).
+	const winnerSym: Symbol = bestIdx === 0
+		? sym
+		: (bestIdx - 1 < sym.overloads.length ? sym.overloads[bestIdx - 1] : (null as unknown as Symbol));
+	if (winnerSym !== null && winnerSym.declNode !== null) {
+		const winnerFlags = getGenericDeclFlags(winnerSym.declNode);
+		if (isGenericFn(winnerFlags)) {
+			// Swap callNode.resolvedSym to winner so the helper instantiates
+			// the picked overload, not the primary. Helper writes instSym
+			// back into resolvedSym on success.
+			const savedSym = callNode.resolvedSym;
+			callNode.resolvedSym = winnerSym;
+			if (d.callee !== null && d.callee.kind === NodeKind.Identifier) {
+				d.callee.resolvedSym = winnerSym;
+				d.callee.nodeType = winnerSym.symbolType;
+			}
+			const newCalleeType = tryInstantiateGenericCallee(ctx, callNode, winnerType, argTypes, winnerFlags, expectedType);
+			if (newCalleeType !== null) {
+				// Mono fired. callNode.resolvedSym now points to instSym (no
+				// overloads → codegen takes direct path). Keep d.resolvedOverloadIdx
+				// at bestIdx so LSP hover/sig-help still reports which overload
+				// the user matched against, even though codegen ignores it.
+				if (newCalleeType.kind === TypeKind.Function && argTypes.length < newCalleeType.typeChildren.length) {
+					fillDefaultArgsForNode(ctx, callNode, sym.name, newCalleeType.typeChildren.length, 0);
+				}
+				return newCalleeType.typeReturn !== null ? newCalleeType.typeReturn : unknownType();
+			}
+			// Mono didn't fire — restore primary sym for normal fall-through.
+			callNode.resolvedSym = savedSym;
+			if (d.callee !== null && d.callee.kind === NodeKind.Identifier) {
+				d.callee.resolvedSym = savedSym;
+				d.callee.nodeType = sym.symbolType;
+			}
+		}
+	}
+
 	if (winnerType.kind === TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
 		fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0);
 	}
@@ -3094,6 +3333,11 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 	if (expInfo.headerPath !== "") sym.headerPath = expInfo.headerPath;
 	if (expInfo.jsModulePath !== "") sym.jsModulePath = expInfo.jsModulePath;
 	sym.defaultParams = expInfo.defaultParams;
+	// Cross-module generic mono — carry original AST so tryInstantiateGenericCallee
+	// can fire at `ns.f<T>(...)` namespace-access call sites (mirrors the
+	// importSymFromRegistry path for direct imports). Without this, namespace
+	// member access keeps the un-substituted Result<T, _> shape and codegen fails.
+	if (expInfo.declNode !== null) sym.declNode = expInfo.declNode;
 	// Preserve OverloadSig flag on the primary sym for namespace access paths.
 	if ((expInfo.primaryFlags & SymbolFlag.OverloadSig) !== 0) {
 		setFlag(sym, SymbolFlag.OverloadSig);
@@ -3125,6 +3369,12 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 			if (expInfo.overloadFlags !== null && oi < expInfo.overloadFlags.length
 					&& (expInfo.overloadFlags[oi] & SymbolFlag.OverloadSig) !== 0) {
 				setFlag(overSym, SymbolFlag.OverloadSig);
+			}
+			// Cross-module mono parity with primary path.
+			if (expInfo.overloadDeclNodes !== null
+					&& oi < expInfo.overloadDeclNodes.length
+					&& expInfo.overloadDeclNodes[oi] !== null) {
+				overSym.declNode = expInfo.overloadDeclNodes[oi];
 			}
 			sym.overloads.push(overSym);
 			oi = oi + 1;
@@ -3350,6 +3600,35 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	// Generic match-type alias: peel GenericInstance through typeReturn/typeExtra
 	// to reach the underlying Union body. Required for field resolution +
 	// narrowing on `Result<T, E> = Ref<ResultData<T, E>>` style types.
+	//
+	// Bug 16 family fix: eagerly instantiate GI body BEFORE peeling so that
+	// `peelToStructOrUnion` reaches the substituted typeReturn rather than
+	// falling back to the un-substituted typeExtra. Without this, accessing
+	// `.value` / `.error` on `Result<T, _>` leaks GenericParam("T") to the
+	// field type — downstream MemberExpr code then falls through to the
+	// `getDynamicField` synthesis path and matches stray protocol exts
+	// (manifested as `_rxBuf: Array ≠ JsonValueData...` after Bug #2 fix
+	// removed the bake-in workaround). Mirrors the same fix at
+	// `inferGenericReturn` (~line 2664) which handles call-return paths.
+	//
+	// Guard: only instantiate when typeChildren are CONCRETE (no GenericParam).
+	// Instantiating with un-substituted GenericParam args caches an identity-
+	// substituted body in typeReturn that later mono'd instances cannot
+	// overwrite (the guard `if (typeReturn !== null) return` in
+	// instantiateGenericBody skips repeat calls), producing cross-instance
+	// type mismatches like `HashSetEntry__stringArray vs __numberArray`.
+	if (resolvedObjType.kind === TypeKind.GenericInstance && resolvedObjType.typeReturn === null) {
+		let allConcrete = true;
+		for (const tc of resolvedObjType.typeChildren) {
+			if (tc !== null && hasGenericParams(tc)) { allConcrete = false; break; }
+		}
+		if (allConcrete) {
+			const declParams = getGenericDecl(resolvedObjType.typeName);
+			if (declParams !== "") {
+				instantiateGenericBody(resolvedObjType, declParams);
+			}
+		}
+	}
 	resolvedObjType = peelToStructOrUnion(resolvedObjType);
 	// Static access detection: when the object is a type name (class, type alias, interface, struct),
 	// skip instance field resolution — go to static method lookup.
@@ -3720,20 +3999,109 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	// Unresolved member access — emit error with field suggestion if available
 	const propertyActuallyExists = resolvedObjType.typeNames !== null && resolvedObjType.typeNames.indexOf(d.property) >= 0;
 	if (propType.kind === TypeKind.Unknown && resolvedObjType.kind !== TypeKind.Unknown && !propertyActuallyExists) {
-		const typeName = typeDisplayName(resolvedObjType);
-		let suggestion = "";
-		if (resolvedObjType.typeNames !== null) {
-			for (const fn of resolvedObjType.typeNames) {
-				if (fn !== d.property && fn.length > 0) {
-					if (suggestion === "") { suggestion = fn; }
-					else { suggestion = suggestion + ", " + fn; }
+		// Suppress error in LHS-of-assignment context when type opts into the
+		// `setDynamicField` write protocol. The enclosing BinaryExpr handler
+		// rewrites the assignment as `obj.setDynamicField("key", value)`.
+		// Counterpart of the getDynamicField synthesis for reads (~line 3727).
+		// Receiver match uses the un-peeled object type (Ref<T> intact) — the
+		// extension is declared on the wrapping reference type, not the inner
+		// variant Union. Mirrors the getDynamicField synthesis below.
+		//
+		// Defense in depth: before suppressing the error, mirror the class-aware
+		// fallback at line 3518 — type aliases over records are only shaped after
+		// a read primes them, so the initial `getProperty` on the alias may
+		// return Unknown even though the underlying record owns the field. Walk
+		// the type's name via `lookupSymbol`+`ensureShaped` to surface the real
+		// field. Without this, writes on alias-typed receivers (e.g.
+		// `MacroInvocationData.macroArgs`) would silently route through the
+		// protocol and surface a confusing setDynamicField type error.
+		let realFieldOnAlias = getProperty(resolvedObjType, d.property).kind !== TypeKind.Unknown;
+		if (!realFieldOnAlias && resolvedObjType.typeName !== "") {
+			const aliasSym = lookupSymbol(ctx.table, resolvedObjType.typeName);
+			if (aliasSym !== null) {
+				ensureShaped(aliasSym, ctx);
+				let inner = aliasSym.symbolType;
+				let _h = 0;
+				while (inner !== null && _h < 4) {
+					_h = _h + 1;
+					if (inner.kind === TypeKind.Alias && inner.typeReturn !== null) { inner = inner.typeReturn; continue; }
+					if (inner.kind === TypeKind.Ref && inner.typeReturn !== null) { inner = inner.typeReturn; continue; }
+					break;
+				}
+				if (inner !== null && (inner.kind === TypeKind.Struct || inner.kind === TypeKind.Union)
+						&& getProperty(inner, d.property).kind !== TypeKind.Unknown) {
+					realFieldOnAlias = true;
 				}
 			}
 		}
-		if (suggestion !== "") {
-			addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'. Available: ${suggestion}`, node.location.line, node.location.column);
-		} else {
-			addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'`, node.location.line, node.location.column);
+		// Also try `objType.sym` (the un-resolved receiver) — alias parameters
+		// often expose the declaration via this back-pointer even when typeName
+		// was lost during peeling above.
+		if (!realFieldOnAlias && objType.sym !== null) {
+			ensureShaped(objType.sym, ctx);
+			let symType = objType.sym.symbolType;
+			let _h2 = 0;
+			while (symType !== null && _h2 < 4) {
+				_h2 = _h2 + 1;
+				if (symType.kind === TypeKind.Alias && symType.typeReturn !== null) { symType = symType.typeReturn; continue; }
+				if (symType.kind === TypeKind.Ref && symType.typeReturn !== null) { symType = symType.typeReturn; continue; }
+				break;
+			}
+			if (symType !== null && (symType.kind === TypeKind.Struct || symType.kind === TypeKind.Union)
+					&& getProperty(symType, d.property).kind !== TypeKind.Unknown) {
+				realFieldOnAlias = true;
+			}
+		}
+		let suppressDynWrite = false;
+		if (!realFieldOnAlias
+				&& ctx.initTracker.leftPartOfAsgn > 0
+				&& d.property !== "setDynamicField"
+				&& ctx.extensionRegistry !== null) {
+			const setExts = findAllExtensionsByName(ctx.extensionRegistry, "setDynamicField");
+			// Strict receiver-name match (mirrors the BinaryExpr synthesis path):
+			// `findFirstMatchingExt` is too lenient when the ext's declared
+			// receiver type is parameterized (e.g. `Ref<JsonValueData>`), so we
+			// compare `receiverTypeName` directly against the actual receiver's
+			// type name + alias-sym name. Without this guard, an unrelated ext
+			// (e.g. JsonValue's setDynamicField) would suppress legitimate
+			// "Property does not exist" errors on alias-typed receivers like
+			// `MacroInvocationData`.
+			if (setExts.length > 0) {
+				const recvNames: string[] = [];
+				if (objType.typeName !== "") recvNames.push(objType.typeName);
+				if (resolvedObjType.typeName !== "" && resolvedObjType.typeName !== objType.typeName) {
+					recvNames.push(resolvedObjType.typeName);
+				}
+				if (objType.sym !== null && objType.sym.name !== "") {
+					let already = false;
+					for (const n of recvNames) { if (n === objType.sym.name) already = true; }
+					if (!already) recvNames.push(objType.sym.name);
+				}
+				for (const e of setExts) {
+					if (e.receiverTypeName === "") continue;
+					for (const rn of recvNames) {
+						if (e.receiverTypeName === rn) { suppressDynWrite = true; break; }
+					}
+					if (suppressDynWrite) break;
+				}
+			}
+		}
+		if (!suppressDynWrite) {
+			const typeName = typeDisplayName(resolvedObjType);
+			let suggestion = "";
+			if (resolvedObjType.typeNames !== null) {
+				for (const fn of resolvedObjType.typeNames) {
+					if (fn !== d.property && fn.length > 0) {
+						if (suggestion === "") { suggestion = fn; }
+						else { suggestion = suggestion + ", " + fn; }
+					}
+				}
+			}
+			if (suggestion !== "") {
+				addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'. Available: ${suggestion}`, node.location.line, node.location.column);
+			} else {
+				addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'`, node.location.line, node.location.column);
+			}
 		}
 	}
 	return propType;
@@ -3971,10 +4339,48 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		ctxParamTypes = expectedType.typeChildren;
 	}
 
-	// Resolve explicit return type annotation (semProcAux parity: annotation takes precedence)
+	// Body's expected return type. Sources, in priority order:
+	//   1. Explicit annotation on the arrow (`(): T => ...`)
+	//   2. Bug G — contextual fallback from caller's expectedType when concrete
+	//   3. None (null) — body inference drives the result
+	// Var stays named `explicitReturnType` for historical reasons; treat it as
+	// "body-expected return" past this point (drives ReturnStmt check via
+	// ctx.currentFunction.symType.typeReturn at line ~4297 below).
 	let explicitReturnType: Type = null as unknown as Type;
+	// Source 1: semProcAux parity — annotation takes precedence.
 	if (returnTypeAnnotation !== "" && returnTypeAnnotation !== "void") {
 		explicitReturnType = resolveAnnotation(returnTypeAnnotation, ctx, 0, 0);
+	}
+	// Source 2: Bug G — contextual return-type fallback. When the user writes
+	// neither an explicit annotation nor `: void`, and the call site
+	// (expectedType) gives us a CONCRETE function type with a fully-resolved
+	// return type (no GenericParam children), use that as the body's expected
+	// type so calls like `Result.ok(42)` in a field of type
+	// `() => Result<int32, string>` get BOTH generic args bound from context.
+	// Without this, only T gets bound from the argument (`42` → int32) while
+	// E is left as GenericParam("E"), producing a half-resolved
+	// `Result<int32, E>` that the lifter copies into the lifted FunctionDecl.
+	// Codegen then bails at `hasGenericParams(fnType)` in declarations.ms and
+	// the body is silently dropped, surfacing as a link error against
+	// `dollarfn_<scope>_N_`.
+	//
+	// Guard: only when expectedType.typeReturn is itself concrete. If the
+	// caller is generic and passing `() => T`, body inference must still
+	// produce the concrete T from the body — propagating GenericParam back
+	// in would defeat that.
+	//
+	// Divergence note: TS-parity, not Nim-parity. Nim's semProcAux
+	// (semstmts.nim:2628) uses the lambda's OWN return type for body check
+	// and relies on overload resolution at the call site to bind generic
+	// args. MS uses contextual typing here for symmetry with how param
+	// types are inferred from expectedType just above.
+	if (explicitReturnType === null && returnTypeAnnotation === ""
+		&& expectedType !== null
+		&& expectedType.kind === TypeKind.Function
+		&& expectedType.typeReturn !== null
+		&& expectedType.typeReturn.kind !== TypeKind.Unknown
+		&& !hasGenericParams(expectedType.typeReturn)) {
+		explicitReturnType = expectedType.typeReturn;
 	}
 
 	const savedFunction = ctx.currentFunction;

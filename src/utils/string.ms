@@ -33,7 +33,16 @@ export function splitTopLevel(s: string, delim: string): string[] {
 	for (let i = 0; i < s.length; i += 1) {
 		const c = s.charAt(i);
 		if (c === "<" || c === "(" || c === "{" || c === "[") { depth += 1; }
-		if (c === ">" || c === ")" || c === "}" || c === "]") { depth -= 1; }
+		if (c === ">" || c === ")" || c === "}" || c === "]") {
+			// Don't count `>` that is the tail of an arrow-function `=>` — without
+			// this, splitting a type-arg list like `string, (s: string) => Result<string, string>`
+			// goes wrong: the arrow's `>` drops depth to -1, then the nested
+			// `Result<...>`'s comma is mistakenly treated as a top-level separator.
+			const prev = i > 0 ? s.charAt(i - 1) : "";
+			if (!(c === ">" && prev === "=")) {
+				depth -= 1;
+			}
+		}
 		if (depth === 0 && c === delim) {
 			parts.push(s.slice(start, i).trim());
 			start = i + 1;
