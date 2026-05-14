@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, cmdExists, execFile, cwd } from "std/process";
+import { exit, exec, cmdExists, execFile, cwd, platform } from "std/process";
 import { exists } from "std/fs";
 import { parseSource } from "../parser/statements/validation";
 import { Node, ProgramData } from "../ast/node";
@@ -42,7 +42,7 @@ import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { CliOptions, Target } from "./options";
 import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
-import { compileCFile, linkObjects, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker, effectiveOsTarget, markCppCompile } from "./cc";
+import { compileCFile, linkObjects, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker, markCppCompile } from "./cc";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
 import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, writeCSource, writeCompileFingerprint, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
@@ -88,11 +88,11 @@ function addFileDepAliases(deps: DepsSection, baseDir: string, config: ResolverC
 	}
 }
 
-export function buildResolverConfig(target: Target, resolve: ResolveSection, osTarget: string = "", projectRoot: string = ""): ResolverConfig {
+export function buildResolverConfig(target: Target, resolve: ResolveSection, targetOs: string = platform, projectRoot: string = ""): ResolverConfig {
 	let backend = Backend.C;
 	if (target === Target.JS) { backend = Backend.JS; }
 	if (target === Target.Raiser) { backend = Backend.Raiser; }
-	if (osTarget === "wasm" || osTarget === "emcc") { backend = Backend.Wasm; }
+	if (targetOs === "wasm" || targetOs === "emcc") { backend = Backend.Wasm; }
 	// Resolve stdPath from project root (handles both binary and Bun execution).
 	const root = resolveRuntimeDir();
 	const stdPath = root !== "" ? join(root, "std") : "std";
@@ -301,10 +301,10 @@ export function applyGcMode(opts: CliOptions): void {
 	if (opts.gcMode === "none") graphPreludeCtx.gcMode = GcMode.None;
 	else if (opts.gcMode === "manual") graphPreludeCtx.gcMode = GcMode.Manual;
 	else if (opts.gcMode === "orc") graphPreludeCtx.gcMode = GcMode.Orc;
-	if (opts.osTarget !== "") graphPreludeCtx.osTarget = opts.osTarget;
+	graphPreludeCtx.targetOs = opts.targetOs;
 }
 
-function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, osTarget: string = ""): ModuleGraph {
+function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, targetOs: string = platform): ModuleGraph {
 	if (verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const provider = createFileSystemProvider();
 
@@ -324,11 +324,11 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 
 	if (verbose) verboseLog("cross-module type check");
 	const backendExt = config.extensions.length > 0 ? config.extensions[0] : ".cms";
-	// Pass osTarget through so @platform("...") directives are filtered against
+	// Pass targetOs through so @platform("...") directives are filtered against
 	// the build target during collectDirectives. Without this, modules check
-	// with ctx.osTarget="" → effectiveCtxOsTarget falls back to host → mac
-	// directives leak into a cross-compile windows build's linkFlags().
-	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, osTarget);
+	// with stale ctx.targetOs → mac directives leak into a cross-compile
+	// windows build's linkFlags().
+	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, targetOs);
 	graphPreludeCtx = getPreludeContext();
 	// Report type errors but continue — allows codegen to proceed past non-fatal checker issues
 	reportModuleErrors(graph, "type error");
@@ -393,16 +393,16 @@ function initCBuildState(opts: CliOptions): CBuildState {
 	// userProjectFlag() below and call sites in processCompileDirectives +
 	// per-module .ms → .c compile.
 	// --os=bare/solana: force-include manual.h before all .c files (runtime .c files need the defines)
-	if ((opts.osTarget === "bare" || opts.osTarget === "solana") && compilerRoot !== "") {
+	if ((opts.targetOs === "bare" || opts.targetOs === "solana") && compilerRoot !== "") {
 		let defines = "-DMSOS_BARE";
-		if (opts.osTarget === "solana") defines = "-DMSOS_SOLANA -DMSOS_BARE";
+		if (opts.targetOs === "solana") defines = "-DMSOS_SOLANA -DMSOS_BARE";
 		allFlags = appendFlag(allFlags, `${defines} -include ${compilerRoot}/runtime/manual.h`);
 	}
 	// --os=wasm/emcc: define MSOS_WASM/MSOS_EMCC for runtime @compile files (disables threading)
-	if (opts.osTarget === "wasm") {
+	if (opts.targetOs === "wasm") {
 		allFlags = appendFlag(allFlags, "-DMSOS_WASM");
 	}
-	if (opts.osTarget === "emcc") {
+	if (opts.targetOs === "emcc") {
 		allFlags = appendFlag(allFlags, "-DMSOS_EMCC");
 	}
 	return { allFlags, includePaths };
@@ -498,7 +498,7 @@ interface CompileJob {
 //      serializes (no speedup, still correct).
 //   3. COLLECT (serial, main thread) — waitFor each future in input order, check
 //      exit codes, publish cache entries, emit oFiles deterministically.
-function processCompileDirectives(directives: string, moduleDir: string, includePaths: HashSet<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, osTarget: string, projectRoot: string, compilerRoot: string): string {
+function processCompileDirectives(directives: string, moduleDir: string, includePaths: HashSet<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, targetOs: string, projectRoot: string, compilerRoot: string): string {
 	if (directives === "") return "";
 	// Per-call user-project flag: non-empty only when moduleDir is user code.
 	// Applied to every @compile job this call emits (all share same moduleDir).
@@ -572,10 +572,18 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			verboseLog(`  @compile ${j.fullPath} → ${j.oFile}`);
 		}
 	}
+	// Parallel @compile path keeps a simple number future to avoid heavy generic
+	// Result<void, ProcessError> wrapping across the spawn boundary. Stderr loss
+	// at this boundary is acceptable: per-job stderr was already streamed to the
+	// parent terminal by the spawn dispatcher in previous versions, and the
+	// failure path here just exit(1)s after logging. Direct serial compile/link
+	// paths (cmdBuildC body) preserve full Result + stderr display.
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
 		futures.push(spawn(() => {
-			return compileCFile(j.fullPath, j.oFile, j.fileFlags, mode, ccOption, ccBinary);
+			const r = compileCFile(j.fullPath, j.oFile, j.fileFlags, mode, ccOption, ccBinary);
+			if (r.ok) return 0;
+			return r.error.exitCode !== 0 ? r.error.exitCode : -1;
 		}));
 	}
 	const exitCodes: number[] = [];
@@ -589,7 +597,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		const j = jobs[ci];
 		const code = exitCodes[ci];
 		if (code !== 0) {
-			if (osTarget === "solana") {
+			if (targetOs === "solana") {
 				console.log(`  ${dim("skip")} @compile ${j.cPath} ${dim("(BPF unsupported)")}`);
 				ci = ci + 1;
 				continue;
@@ -624,7 +632,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.osTarget);
+	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs);
 	const outDir = outputDir !== "" ? outputDir : "out";
 	ensureDir(outDir);
 	// Project root for deriving module IDs
@@ -746,13 +754,13 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 // Returns the .o paths to append via appendFlag, or "" for bare / Solana.
 // Shared by cmdBuildC and cmdTestC so test binaries link the same runtime.
 function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string, opts: CliOptions): string {
-	if (opts.osTarget === "bare" || opts.osTarget === "solana") return "";
+	if (opts.targetOs === "bare" || opts.targetOs === "solana") return "";
 
 	let rtFiles = "";
-	if (opts.osTarget === "emcc") {
+	if (opts.targetOs === "emcc") {
 		// Single-threaded: Asyncify-based async. spawn/Actor not yet supported.
 		rtFiles = "runtime/promise/dispatchEmcc.c";
-	} else if (opts.osTarget === "wasm") {
+	} else if (opts.targetOs === "wasm") {
 		rtFiles = "runtime/promise/dispatchWasm.c";
 	} else {
 		// Desktop: full dispatcher + thread pool + selectors
@@ -762,7 +770,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorKqueue.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorEpoll.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorPoll.c";
-		if (effectiveOsTarget(opts.osTarget) === "windows") {
+		if (opts.targetOs === "windows") {
 			rtFiles = rtFiles + "\n" + "runtime/fs/windows.c";
 		} else {
 			rtFiles = rtFiles + "\n" + "runtime/fs/posix.c";
@@ -770,7 +778,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 	}
 
 	if (rtFiles === "") return "";
-	return processCompileDirectives(rtFiles, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.osTarget, opts.projectRoot, resolveRuntimeDir());
+	return processCompileDirectives(rtFiles, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 }
 
 // ===== C Build =====
@@ -793,12 +801,12 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
-	const config = buildResolverConfig(Target.C, defaultResolveSection(), opts.osTarget, opts.projectRoot);
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.osTarget);
+	const config = buildResolverConfig(Target.C, defaultResolveSection(), opts.targetOs, opts.projectRoot);
+	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs);
 	applyGcMode(opts);
 
 	// Solana: resolve BPF toolchain, force --gc=manual, force release mode
-	if (opts.osTarget === "solana") {
+	if (opts.targetOs === "solana") {
 		if (opts.gcMode === "" || opts.gcMode === "drc" || opts.gcMode === "orc") opts.gcMode = "manual";
 		if (opts.mode === 0) opts.mode = 1;
 		if (opts.ccBinary === "") {
@@ -819,13 +827,13 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	}
 
 	// WASM: force release mode, use zig cc with wasm32-wasi target
-	if (opts.osTarget === "wasm") {
+	if (opts.targetOs === "wasm") {
 		if (opts.mode === 0) opts.mode = 1;  // Release (smaller .wasm)
 		setTargetSizes(4, 4);  // WASM32: 32-bit pointers and ints
 	}
 
 	// Emscripten (browser WASM): use emcc, 32-bit pointers
-	if (opts.osTarget === "emcc") {
+	if (opts.targetOs === "emcc") {
 		if (opts.mode === 0) opts.mode = 1;  // Release (smaller .wasm)
 		setTargetSizes(4, 4);  // WASM32: 32-bit pointers and ints
 		opts.ccBinary = "emcc";  // emcc for compile + link
@@ -835,11 +843,12 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// Default: "zig cc" (modern cross-compiler, bundled sysroots, no external deps).
 	// Fallback: platform-specific cross-gcc (e.g. x86_64-w64-mingw32-gcc).
 	// Override: --cc=<binary>
-	if (opts.osTarget !== "" && opts.osTarget !== "bare" && opts.osTarget !== "solana" && opts.osTarget !== "emcc" && opts.ccBinary === "") {
+	// Trigger when actually crossing OS (or CPU set) and not an embedded profile.
+	if ((opts.targetOs !== platform || opts.cpuTarget !== "") && opts.targetOs !== "bare" && opts.targetOs !== "solana" && opts.targetOs !== "emcc" && opts.ccBinary === "") {
 		if (cmdExists("zig")) {
 			opts.ccBinary = "zig cc";
 		} else {
-			const resolved = resolveCcForTarget(defaultCcSection(), opts.osTarget, opts.cpuTarget !== "" ? opts.cpuTarget : "amd64");
+			const resolved = resolveCcForTarget(defaultCcSection(), opts.targetOs, opts.cpuTarget !== "" ? opts.cpuTarget : "amd64");
 			if (resolved.compiler !== "") {
 				opts.ccBinary = resolved.compiler;
 			}
@@ -852,11 +861,11 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const outDir = outDirForMode(opts.mode);
 		ensureDir(outDir);
 		let suffix = opts.isHcr ? soSuffix() : exeSuffix();
-		// Cross-compile: use target OS suffix, not host
-		if (opts.osTarget === "windows") suffix = opts.isHcr ? ".dll" : ".exe";
-		if (opts.osTarget === "solana") suffix = ".so";
-		if (opts.osTarget === "wasm") suffix = ".wasm";
-		if (opts.osTarget === "emcc") suffix = ".js";  // emcc outputs .js + .wasm pair
+		// Use target OS suffix (works for both native + cross since targetOs always set).
+		if (opts.targetOs === "windows") suffix = opts.isHcr ? ".dll" : ".exe";
+		if (opts.targetOs === "solana") suffix = ".so";
+		if (opts.targetOs === "wasm") suffix = ".wasm";
+		if (opts.targetOs === "emcc") suffix = ".js";  // emcc outputs .js + .wasm pair
 		outBinary = outDir + "/" + replaceExt(basename(entryPath), "") + suffix;
 	}
 
@@ -974,7 +983,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		if (opts.gcMode === "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode === "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode === "orc") ctx.gcMode = GcMode.Orc;
-		if (opts.osTarget !== "") ctx.osTarget = opts.osTarget;
+		ctx.targetOs = opts.targetOs;
 		const _ta0 = performance.now();
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		tAnalyze = tAnalyze + (performance.now() - _ta0);
@@ -1041,7 +1050,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// These are C runtime files, not application code. The linker strips unused sections.
 	// For Solana, processCompileDirectives already skips BPF-unsupported .c files.
 	if (graphPreludeCtx !== null && graphPreludeCtx.compileDirectives !== "") {
-		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.osTarget, opts.projectRoot, resolveRuntimeDir());
+		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		oFiles = appendFlag(oFiles, preludeObjs);
 	}
 
@@ -1072,7 +1081,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		codegenTime = codegenTime + (performance.now() - tCg);
 
 		// Process @compile("foo.c") directives
-		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.osTarget, opts.projectRoot, resolveRuntimeDir());
+		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		oFiles = appendFlag(oFiles, compileObjs);
 
 		if (opts.emitC) {
@@ -1105,13 +1114,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 				const cFile = stableCFile(p.modPath);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 				const tCl = performance.now();
-				const ccCode = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
+				const ccRes = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 				clangTime = clangTime + (performance.now() - tCl);
-				if (ccCode !== 0) {
+				if (!ccRes.ok) {
 					// Compile failed — clean cache so next run retries cleanly.
 					invalidateCompileCache(p.modPath);
-					if (opts.osTarget !== "solana") {
-						console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccCode})`)}`);
+					if (opts.targetOs !== "solana") {
+						console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccRes.error.exitCode})`)}`);
+						if (ccRes.error.stderr !== "") console.log(ccRes.error.stderr);
 					}
 				} else {
 					writeCompileFingerprint(p.modPath, cCode, compileCmd);
@@ -1139,7 +1149,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// Skip link step if --emit=c (only writing C source files)
 	if (opts.emitC) {
 		// Also emit dispatcher (MsMain + entry point)
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, hasUserMain, mainRetType, opts.osTarget);
+		const dispatcher = genProjectDispatcher(aliveModules, entryPath, hasUserMain, mainRetType, opts.targetOs);
 		const emitDir = outDirForMode(opts.mode);
 		const dispPath = `${emitDir}/_dispatch.c`;
 		writeOutput(dispPath, dispatcher);
@@ -1152,14 +1162,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// Generate global init dispatcher and compile to .o (skip for HCR — .so has no main)
 	if (!opts.isHcr) {
 		if (opts.verbose) verboseLog("generating dispatcher");
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, hasUserMain, mainRetType, opts.osTarget);
+		const dispatcher = genProjectDispatcher(aliveModules, entryPath, hasUserMain, mainRetType, opts.targetOs);
 		const dispFile = `${cd}/_dispatch.c`;
 		const dispObj = `${cd}/_dispatch.o`;
 		writeOutput(dispFile, dispatcher);
-		const dispCode = compileCFile(dispFile, dispObj, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
-		if (dispCode !== 0) {
-			console.log(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${dispCode})`)}`);
-
+		const dispRes = compileCFile(dispFile, dispObj, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
+		if (!dispRes.ok) {
+			console.log(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${dispRes.error.exitCode})`)}`);
+			if (dispRes.error.stderr !== "") console.log(dispRes.error.stderr);
 			exit(1);
 		}
 		oFiles = appendFlag(oFiles, dispObj);
@@ -1192,7 +1202,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const tD = performance.now();
 
 	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module alive)
-	if (opts.osTarget === "emcc" && aliveSet.entries.length > 0) {
+	if (opts.targetOs === "emcc" && aliveSet.entries.length > 0) {
 		let hasAsync = false;
 		for (const mp of aliveModules) {
 			if (mp.endsWith("promise/index.cms")) { hasAsync = true; }
@@ -1204,16 +1214,18 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	}
 
 	if (opts.verbose) verboseLog("linking → " + outBinary);
-	if (opts.osTarget === "solana") {
-		const linkCode = linkSolana(oFiles, outBinary);
-		if (linkCode !== 0) {
-			console.log(`${error("error")}: sbpf-linker failed ${dim(`(exit ${linkCode})`)}`);
+	if (opts.targetOs === "solana") {
+		const linkRes = linkSolana(oFiles, outBinary);
+		if (!linkRes.ok) {
+			console.log(`${error("error")}: sbpf-linker failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+			if (linkRes.error.stderr !== "") console.log(linkRes.error.stderr);
 			exit(1);
 		}
 	} else {
-		const linkCode = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
-		if (linkCode !== 0) {
-			console.log(`${error("error")}: link failed ${dim(`(exit ${linkCode})`)}`);
+		const linkRes = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
+		if (!linkRes.ok) {
+			console.log(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+			if (linkRes.error.stderr !== "") console.log(linkRes.error.stderr);
 			exit(1);
 		}
 	}
@@ -1245,7 +1257,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.osTarget);
+	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
 	const processed: ProcessedModule[] = [];
@@ -1306,7 +1318,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		if (opts.gcMode === "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode === "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode === "orc") ctx.gcMode = GcMode.Orc;
-		if (opts.osTarget !== "") ctx.osTarget = opts.osTarget;
+		ctx.targetOs = opts.targetOs;
 
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
@@ -1327,7 +1339,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
 	if (graphPreludeCtx !== null && graphPreludeCtx.compileDirectives !== "") {
-		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.osTarget, opts.projectRoot, resolveRuntimeDir());
+		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		oFiles = appendFlag(oFiles, preludeObjs);
 	}
 
@@ -1343,7 +1355,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 		const cCode = generateCModule(p.program, p.ctx, p.modPath, aliveSet, true, opts.isHcr);
 
-		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.osTarget, opts.projectRoot, resolveRuntimeDir());
+		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		oFiles = appendFlag(oFiles, compileObjs);
 
 		let testModFlags = appendFlag(allFlags, `-iquote${dirname(p.modPath)}`);
@@ -1361,10 +1373,11 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			writeCSource(p.modPath, cCode);
 			const cFile = stableCFile(p.modPath);
 			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
-			const ccCode = compileCFile(cFile, oFile, testModFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
-			if (ccCode !== 0) {
+			const ccRes = compileCFile(cFile, oFile, testModFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
+			if (!ccRes.ok) {
 				invalidateCompileCache(p.modPath);
-				console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccCode})`)}`);
+				console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccRes.error.exitCode})`)}`);
+				if (ccRes.error.stderr !== "") console.log(ccRes.error.stderr);
 				exit(1);
 			}
 			writeCompileFingerprint(p.modPath, cCode, compileCmd);
@@ -1379,10 +1392,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const dispFile = `${tcd}/_test_dispatch.c`;
 	const dispObj = `${tcd}/_test_dispatch.o`;
 	writeOutput(dispFile, dispatcher);
-	const dispCode = compileCFile(dispFile, dispObj, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
-	if (dispCode !== 0) {
-		console.log(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${dispCode})`)}`);
-
+	const dispRes = compileCFile(dispFile, dispObj, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
+	if (!dispRes.ok) {
+		console.log(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${dispRes.error.exitCode})`)}`);
+		if (dispRes.error.stderr !== "") console.log(dispRes.error.stderr);
 		exit(1);
 	}
 	oFiles = appendFlag(oFiles, dispObj);
@@ -1393,10 +1406,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	let testLink = allFlags;
 	for (const obj of globalLinkObjects()) { testLink = appendFlag(testLink, obj); }
 	for (const flag of globalLinkFlags()) { testLink = appendFlag(testLink, flag); }
-	const linkCode = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary);
-	if (linkCode !== 0) {
-		console.log(`${error("error")}: link failed ${dim(`(exit ${linkCode})`)}`);
-
+	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary);
+	if (!linkRes.ok) {
+		console.log(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+		if (linkRes.error.stderr !== "") console.log(linkRes.error.stderr);
 		exit(1);
 	}
 
@@ -1412,7 +1425,7 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.osTarget);
+	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
 
 	const outDir = "out/debug";
 	ensureDir(outDir);
@@ -1447,8 +1460,14 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	const entryRel = relative(baseDir, filePath);
 	const entryJs = `${outDir}/${replaceExt(entryRel, ".js")}`;
 	if (opts.verbose) verboseLog(`exec ${getJSRuntime()} ${entryJs}`);
-	const code = exec(`${getJSRuntime()} ${entryJs}`);
-	exit(code);
+	const r = exec(`${getJSRuntime()} ${entryJs}`);
+	if (r.ok) {
+		if (r.value !== "") console.log(r.value);
+		exit(0);
+	}
+	if (r.error.stdout !== "") console.log(r.error.stdout);
+	if (r.error.stderr !== "") console.log(r.error.stderr);
+	exit(r.error.exitCode !== 0 ? r.error.exitCode : 1);
 }
 
 // ===== Raiser (Bytecode VM) Run =====
@@ -1459,7 +1478,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
 	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.osTarget);
+	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
 
 	// Parse each module → RaiserModuleInput (topological order)
 	const modules: RaiserModuleInput[] = [];

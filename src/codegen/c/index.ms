@@ -35,7 +35,7 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	addLine(sec(g, CSection.Headers), "#include <stdint.h>");
 	addLine(sec(g, CSection.Headers), "#include <stdbool.h>");
 	addLine(sec(g, CSection.Headers), "#include <stddef.h>");
-	if (ctx === null || ctx.osTarget !== "solana") {
+	if (ctx === null || ctx.targetOs !== "solana") {
 		// Solana/BPF has no libc — manual.h provides memcpy/memset/strlen
 		addLine(sec(g, CSection.Headers), "#include <string.h>");
 		addLine(sec(g, CSection.Headers), "#include <math.h>");
@@ -43,7 +43,7 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	if (ctx !== null && ctx.gcMode === GcMode.Manual) {
 		// manual.h uses the same SYSTEM_H include guard as core.h,
 		// so any subsequent @include("runtime/core/system.h") from prelude is a C-level no-op.
-		match (ctx.osTarget) {
+		match (ctx.targetOs) {
 			"solana" => {
 				addLine(sec(g, CSection.Headers), "#define MSOS_SOLANA");
 				addLine(sec(g, CSection.Headers), "#define MSOS_BARE");
@@ -57,10 +57,10 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 		nameSetAdd(g.declaredThings, "inc:runtime/manual.h");
 		nameSetAdd(g.declaredThings, "inc:runtime/core/system.h");
 	} else {
-		if (ctx !== null && ctx.osTarget === "wasm") {
+		if (ctx !== null && ctx.targetOs === "wasm") {
 			addLine(sec(g, CSection.Headers), "#define MSOS_WASM");
 		}
-		if (ctx !== null && ctx.osTarget === "emcc") {
+		if (ctx !== null && ctx.targetOs === "emcc") {
 			addLine(sec(g, CSection.Headers), "#define MSOS_EMCC");
 		}
 		addLine(sec(g, CSection.Headers), "#include \"runtime/core/system.h\"");
@@ -118,7 +118,7 @@ function genModuleInitFns(g: CGen): void {
 
 	// Contract targets (solana, bare): single entry point, init called once in sequence.
 	// Skip mutable static guard variables — no re-entry possible.
-	const ost = g.checkerCtx !== null ? g.checkerCtx.osTarget : "";
+	const ost = g.checkerCtx !== null ? g.checkerCtx.targetOs : "";
 	const skipGuard = ost === "solana" || ost === "bare";
 
 	// DatInit000: data/type initialization (non-static for cross-module visibility)
@@ -155,7 +155,7 @@ function genModuleInitFns(g: CGen): void {
 // Generates the global init dispatcher: forward decls, MsPreMainInner, MsMainInner,
 // MsMain, global vars, and POSIX main.
 
-export function genProjectDispatcher(modulePaths: string[], entryPath: string, hasUserMain: boolean, mainRetType: string, osTarget: string): string {
+export function genProjectDispatcher(modulePaths: string[], entryPath: string, hasUserMain: boolean, mainRetType: string, targetOs: string): string {
 	const b = createBuilder();
 	const retType = (mainRetType.length > 0) ? mainRetType : "void";
 
@@ -227,7 +227,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	addLine(b, "}");
 	addNewline(b);
 
-	match (osTarget) {
+	match (targetOs) {
 		"bare" => {
 			addLine(b, "int main(void) {");
 			addLine(b, "  MsMain();");

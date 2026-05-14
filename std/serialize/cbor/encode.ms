@@ -31,23 +31,74 @@ export macro cborValueOf(t: Node): Node {
 	}
 
 	// Array field — emit a call to a per-element-type runtime helper.
-	// Atomic-element arrays only in V1.5; struct-element arrays deferred to V2.
+	// V2 (2026-05-14): atomic-builtin, enum/alias, struct/interface elements.
 	// Mirror of std/serialize/json/encode.ms array branch.
+	// Builtin elements → per-type fast helpers (cborArrayOfX).
+	// Non-builtin Identifier (enum / type alias) → `_cborArrayOfInts<T>` generic.
+	// TypeObject element (struct/interface) → `_cborArrayOfStructs<T>` generic.
 	if (tt.kind === NodeKind.TypeArray) {
 		const elemType: Node = tt.typExprElement;
-		if (elemType.kind !== NodeKind.Identifier) {
-			error("cborValueOf: V1.5 array fields support atomic-element types only; struct-element arrays deferred to V2", t);
+		let en: string = "";
+		let elemIsStruct: boolean = false;
+		if (elemType.kind === NodeKind.Identifier) {
+			en = elemType.name;
+		} else if (elemType.kind === NodeKind.TypeObject) {
+			elemIsStruct = true;
+			en = elemType.typExprTypeName;
+			if (en === "") {
+				error("cborValueOf: anonymous struct element arrays unsupported (must name struct via interface/class)", t);
+			}
+		} else if (elemType.kind === NodeKind.TypeGeneric) {
+			// Ref<Struct> wrapper around struct element.
+			const peeled: Node = elemType.typExprArgs[0];
+			if (peeled.kind === NodeKind.TypeObject) {
+				elemIsStruct = true;
+				en = peeled.typExprTypeName;
+				if (en === "") {
+					error("cborValueOf: anonymous struct element arrays unsupported", t);
+				}
+			} else {
+				error("cborValueOf: unsupported array element kind (TypeGeneric inner kind=" + peeled.kind + ")", t);
+			}
+		} else {
+			error("cborValueOf: unsupported array element kind=" + elemType.kind + " (only Identifier or TypeObject supported)", t);
 		}
-		const en: string = elemType.name;
-		// Reject non-builtin element types — fall-through emits the wrong
-		// array type. See std/serialize/json/encode.ms for rationale.
 		const isBuiltin: boolean = en === "string" || en === "boolean"
 			|| en === "number" || en === "float32" || en === "float64"
 			|| en === "int8" || en === "int16" || en === "int32" || en === "int64"
 			|| en === "uint8" || en === "uint16" || en === "uint32";
-		if (!isBuiltin) {
-			error("cborValueOf: V1.5 array fields support builtin atomic element types only; enum/alias/struct element arrays deferred to V2 (got element type '" + en + "')", t);
+
+		// Struct/interface element → generic struct helper (recursive macro re-expansion at mono-time).
+		if (elemIsStruct) {
+			return {
+				kind: NodeKind.CallExpr,
+				line: t.line,
+				column: t.column,
+				callee: {
+					kind: NodeKind.Identifier,
+					line: t.line,
+					column: t.column,
+					name: "_cborArrayOfStructs",
+				},
+				arguments: [t],
+			};
 		}
+		// Non-builtin Identifier (enum / type alias) → generic int helper.
+		if (!isBuiltin) {
+			return {
+				kind: NodeKind.CallExpr,
+				line: t.line,
+				column: t.column,
+				callee: {
+					kind: NodeKind.Identifier,
+					line: t.line,
+					column: t.column,
+					name: "_cborArrayOfInts",
+				},
+				arguments: [t],
+			};
+		}
+		// Builtin atomic element → per-element-type fast helper.
 		// IF-ELSE not match: macro VM string-match dispatch bug (always picks `_`).
 		// See memory project_macro_vm_string_match_bug.
 		let helperName: string = "cborArrayOfInt64";

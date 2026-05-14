@@ -487,6 +487,31 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 		return lastReg;
 	}
 
+	// Generic native call: any callee resolved to a Symbol with nativeName
+	// (extern decl) becomes a CallHost lookup at the registered name.
+	// This is the path that scales — adding a new extern doesn't require any
+	// codegen edits. The hardcoded readFile/writeFile branch below remains
+	// only as a fallback for codegen paths that bypass the checker (e.g.,
+	// parse-only test helpers in rgen tests).
+	if (d.callee.kind === NodeKind.Identifier && d.callee.resolvedSym !== null) {
+		const sym = d.callee.resolvedSym;
+		if (sym.nativeName !== "") {
+			const argCount = d.arguments.length;
+			const dest = allocReg(s);
+			for (let i = 0; i < argCount; i = i + 1) { allocReg(s); }
+			for (let i = 0; i < argCount; i = i + 1) {
+				const argReg = compileExpr(s, d.arguments[i]);
+				const targetReg = dest + 1 + i;
+				if (argReg !== targetReg) {
+					emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, argReg, 0));
+				}
+			}
+			const nameIdx = addConst(s, raiserString(sym.nativeName));
+			emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, argCount));
+			return dest;
+		}
+	}
+
 	// Host builtins: readFile, writeFile
 	if (d.callee.kind === NodeKind.Identifier) {
 		const bid = d.callee.data as IdentifierData;

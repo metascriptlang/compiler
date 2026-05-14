@@ -20,6 +20,7 @@ extern function msNetRecv(fd: int32, maxBytes: int32): string;
 extern function msNetClose(fd: int32): void;
 extern function msNetSetTimeout(fd: int32, ms: int32): int32;
 extern function msNetSetNonBlocking(fd: int32): int32;
+extern function msNetSetBlocking(fd: int32): int32;
 extern function msNetAcceptNonBlock(fd: int32): int32;
 extern function msNetRecvNonBlock(fd: int32, maxBytes: int32): string;
 extern function msNetSendNonBlock(fd: int32, data: string, offset: int32): int32;
@@ -64,6 +65,13 @@ export function setTimeout(fd: int32, ms: int32): int32 {
 
 export function setNonBlocking(fd: int32): int32 {
 	return msNetSetNonBlocking(fd);
+}
+
+// Inverse of setNonBlocking — clears O_NONBLOCK. Used by protocol-switch
+// consumers (WebSocket recv loop, raw TCP takeover) that own a fd after
+// res.detach() and want blocking I/O on their own worker thread.
+export function setBlocking(fd: int32): int32 {
+	return msNetSetBlocking(fd);
 }
 
 // ===== Non-Blocking API (for event-loop servers) =====

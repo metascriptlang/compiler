@@ -1,6 +1,7 @@
 // MetaScript Compiler CLI — build.ms config loader
 // Uses AST parsing to extract config from build.ms (no Raiser VM needed).
 
+import { platform } from "std/process";
 import { exists, readFile } from "std/fs";
 import { registerCoreParsers } from "../parser/statements/core";
 import { parseSource } from "../parser/statements/validation";
@@ -62,8 +63,8 @@ export function defaultCcSection(): CcSection {
 
 // Well-known cross-compiler binary for common os-cpu targets.
 // Covers 90% of cross-compile use cases without explicit config.
-function defaultCompilerForTarget(osTarget: string, cpuTarget: string): string {
-	const key = `${osTarget}-${cpuTarget}`;
+function defaultCompilerForTarget(targetOs: string, cpuTarget: string): string {
+	const key = `${targetOs}-${cpuTarget}`;
 	if (key === "linux-amd64") return "x86_64-unknown-linux-gnu-gcc";
 	if (key === "linux-arm64") return "aarch64-unknown-linux-gnu-gcc";
 	if (key === "linux-386") return "i686-unknown-linux-gnu-gcc";
@@ -77,14 +78,15 @@ function defaultCompilerForTarget(osTarget: string, cpuTarget: string): string {
 
 // Resolve CcSection for a specific os-cpu target.
 // Priority: explicit per-target config > cc.compiler default > well-known default.
-export function resolveCcForTarget(cc: CcSection, osTarget: string, cpuTarget: string): CcTargetSection {
+// Cross detected via `targetOs !== platform || cpuTarget !== ""`.
+export function resolveCcForTarget(cc: CcSection, targetOs: string, cpuTarget: string): CcTargetSection {
 	let entry = "";
 	let compiler = cc.compiler;
 	let flags = cc.flags;
 	let linkFlags = cc.linkFlags;
 
-	if (osTarget !== "" || cpuTarget !== "") {
-		const key = `${osTarget}-${cpuTarget}`;
+	if (targetOs !== platform || cpuTarget !== "") {
+		const key = `${targetOs}-${cpuTarget}`;
 		let i = 0;
 		while (i < cc.targetKeys.length) {
 			if (cc.targetKeys[i] === key) {
@@ -99,7 +101,7 @@ export function resolveCcForTarget(cc: CcSection, osTarget: string, cpuTarget: s
 		}
 		// Fallback to well-known cross-compiler if nothing configured
 		if (compiler === "") {
-			compiler = defaultCompilerForTarget(osTarget, cpuTarget);
+			compiler = defaultCompilerForTarget(targetOs, cpuTarget);
 		}
 	}
 

@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
-import { exit, cmdExists } from "std/process";
+import { exit, cmdExists, platform } from "std/process";
 import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
@@ -101,7 +101,7 @@ export function main(): number {
 			}
 			// Apply cc section from build.ms: resolve per-target config, CLI flags override
 			if (cfg.valid) {
-				const resolved = resolveCcForTarget(cfg.cc, opts.osTarget, opts.cpuTarget);
+				const resolved = resolveCcForTarget(cfg.cc, opts.targetOs, opts.cpuTarget);
 				if (resolved.entry !== "" && opts.inputFile === "") opts.inputFile = resolved.entry;
 				if (opts.ccBinary === "" && resolved.compiler !== "") opts.ccBinary = resolved.compiler;
 				if (opts.passC === "" && resolved.flags.length > 0) opts.passC = resolved.flags.join(" ");
@@ -110,7 +110,7 @@ export function main(): number {
 			// Cross-compile default: prefer zig cc over platform-specific cross-gcc.
 			// zig cc bundles clang + lld + sysroots for all targets — no external deps.
 			// Skip for bare/solana — they resolve their own toolchains.
-			if (opts.osTarget !== "" && opts.osTarget !== "bare" && opts.osTarget !== "solana" && cmdExists("zig")) {
+			if (opts.targetOs !== platform && opts.targetOs !== "bare" && opts.targetOs !== "solana" && cmdExists("zig")) {
 				opts.ccBinary = "zig cc";
 			}
 			if ((cfg.valid && cfg.build.target === "js") || opts.target === Target.JS) {

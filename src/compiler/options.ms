@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Argument parsing and option types
 
-import { argv, exit } from "std/process";
+import { argv, exit, platform } from "std/process";
 import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
 
@@ -28,7 +28,9 @@ export interface CliOptions {
 	mode: number;
 	ccCompiler: number;
 	ccBinary: string;          // --cc=<path>: explicit C compiler binary (cross-compile)
-	osTarget: string;          // --os=<linux|macos|windows>: target OS (cross-compile)
+	targetOs: string;          // Target OS. Always set; defaults to host platform.
+	                           // Values: "linux"|"macos"|"windows"|"freebsd"|"bare"|"solana"|"wasm"|"emcc".
+	                           // Cross-compile detected by callsites via `targetOs !== platform`.
 	cpuTarget: string;         // --cpu=<x86_64|arm64|...>: target CPU (cross-compile)
 	genDeps: boolean;
 	forceRebuild: boolean;
@@ -66,7 +68,7 @@ export function parseArgs(): CliOptions {
 		mode: MODE_DEBUG,
 		ccCompiler: 0,
 		ccBinary: "",
-		osTarget: "",
+		targetOs: platform,
 		cpuTarget: "",
 		genDeps: false,
 		forceRebuild: false,
@@ -141,7 +143,7 @@ export function parseArgs(): CliOptions {
 				console.log(`  Valid targets: bare, solana, wasm, emcc, linux, macos, windows`);
 				return opts;
 			}
-			opts.osTarget = osVal;
+			opts.targetOs = osVal;
 		} else if (arg.startsWith("--cpu=")) {
 			opts.cpuTarget = arg.slice(6, arg.length);
 		} else if (arg === "--gendeps") {

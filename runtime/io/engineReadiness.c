@@ -9,6 +9,7 @@
 /* Included from engineSelect.c — engine.h already included by parent */
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>

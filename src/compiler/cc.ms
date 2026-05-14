@@ -2,19 +2,11 @@
 //
 // Invokes clang to compile generated C source into native binaries.
 
-import { exec, env, cmdExists, platform } from "std/process";
+import { exec, env, cmdExists, platform, ProcessError, ProcessErrorKind } from "std/process";
 import { writeFile } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { CliOptions } from "./options";
 import { resolveRuntimeDir } from "../utils/path";
-
-// Target OS identity — `osTarget` left empty for host-native builds, but
-// platform-specific file/flag pickers still need to know which OS is being
-// targeted. Falls back to the host when not explicitly cross-compiling.
-export function effectiveOsTarget(osTarget: string): string {
-	if (osTarget !== "") return osTarget;
-	return platform;
-}
 
 // -- ccache detection --
 
@@ -59,7 +51,7 @@ let _bpfClangChecked = false;
 
 function testBpfClang(binary: string): boolean {
 	// Check if clang supports BPF target (Apple clang doesn't)
-	return exec(`"${binary}" --print-targets 2>/dev/null | grep -q bpf`) === 0;
+	return exec(`"${binary}" --print-targets 2>/dev/null | grep -q bpf`).ok;
 }
 
 export function resolveBpfClang(): string {
@@ -85,14 +77,14 @@ let _sbpfLinkerChecked = false;
 export function resolveSbpfLinker(): string {
 	if (_sbpfLinkerChecked) return _sbpfLinker;
 	_sbpfLinkerChecked = true;
-	if (exec("which sbpf-linker > /dev/null 2>&1") === 0) {
+	if (exec("which sbpf-linker > /dev/null 2>&1").ok) {
 		_sbpfLinker = "sbpf-linker";
 	} else {
 		// Try cargo default install location
 		const home = env.get("HOME");
 		if (home !== "") {
 			const cargoPath = `${home}/.cargo/bin/sbpf-linker`;
-			if (exec(`test -x "${cargoPath}"`) === 0) {
+			if (exec(`test -x "${cargoPath}"`).ok) {
 				_sbpfLinker = cargoPath;
 			}
 		}
@@ -104,10 +96,10 @@ export function resolveSbpfLinker(): string {
 // Returns true if valid, false if llc rejects it.
 export function validateBpfBitcode(bcFile: string): boolean {
 	const llc = _bpfClang.length > 5 ? `"${_bpfClang.slice(0, _bpfClang.length - 5)}llc"` : "llc";
-	return exec(`${llc} -march=bpfel -filetype=null "${bcFile}" 2>/dev/null`) === 0;
+	return exec(`${llc} -march=bpfel -filetype=null "${bcFile}" 2>/dev/null`).ok;
 }
 
-export function linkSolana(oFileList: string, outBinary: string): number {
+export function linkSolana(oFileList: string, outBinary: string): Result<void, ProcessError> {
 	// Derive llvm-link path from BPF clang binary
 	const llvmDir = _bpfClang.length > 5 ? _bpfClang.slice(0, _bpfClang.length - 5) : "";
 	const llvmLink = llvmDir !== "" ? `"${llvmDir}llvm-link"` : "llvm-link";
@@ -120,15 +112,37 @@ export function linkSolana(oFileList: string, outBinary: string): number {
 			validFiles = `${validFiles}${f}`;
 		}
 	}
-	if (validFiles === "") return 1;
+	if (validFiles === "") {
+		return Result.err({
+			kind: ProcessErrorKind.SpawnFailed,
+			command: "linkSolana",
+			exitCode: 1,
+			signal: 0,
+			stdout: "",
+			stderr: "",
+			message: "no BPF-valid bitcode files to link",
+		});
+	}
 	// Step 2: merge valid .bc files into one
 	const combined = `${outBinary}.bc`;
-	const linkCode = exec(`${llvmLink} ${validFiles} -o "${combined}" 2>/dev/null`);
-	if (linkCode !== 0) return linkCode;
+	const linkRes = exec(`${llvmLink} ${validFiles} -o "${combined}" 2>/dev/null`);
+	if (!linkRes.ok) return Result.err(linkRes.error);
 	// Step 3: sbpf-linker converts bitcode to Solana-compatible ELF (DYN type)
 	const linker = resolveSbpfLinker();
-	if (linker === "") return 1;
-	return exec(`${linker} "${combined}" --export entrypoint -o "${outBinary}" 2>/dev/null`);
+	if (linker === "") {
+		return Result.err({
+			kind: ProcessErrorKind.NotFound,
+			command: "sbpf-linker",
+			exitCode: 0,
+			signal: 0,
+			stdout: "",
+			stderr: "",
+			message: "sbpf-linker not found on PATH",
+		});
+	}
+	const sbpfRes = exec(`${linker} "${combined}" --export entrypoint -o "${outBinary}" 2>/dev/null`);
+	if (!sbpfRes.ok) return Result.err(sbpfRes.error);
+	return Result.ok(null as unknown as void);
 }
 
 export function getCompilerName(ccOption: number, ccBinary: string): string {
@@ -206,7 +220,7 @@ function toCppCompiler(cName: string): string {
 
 // Cross-compiler: zig cc is the default for cross-compilation.
 // Returns "zig cc" if available, falls back to platform-specific cross-gcc.
-export function getCrossCompilerName(ccOption: number, ccBinary: string, osTarget: string, cpuTarget: string): string {
+export function getCrossCompilerName(ccOption: number, ccBinary: string, targetOs: string, cpuTarget: string): string {
 	if (ccBinary !== "") return ccBinary;
 	// zig cc: modern cross-compiler (clang + lld + all sysroots bundled)
 	if (checkZigCC()) return "zig cc";
@@ -229,30 +243,30 @@ function normalizeCpu(cpu: string): string {
 // Build cross-compilation target flag.
 // zig cc uses "-target x86_64-windows-gnu" (no --target= prefix, no -pc-/-unknown- infixes).
 // clang/gcc uses "--target=x86_64-pc-windows-gnu".
-export function crossTargetFlag(osTarget: string, cpuTarget: string, useZig: boolean): string {
-	if (osTarget === "" && cpuTarget === "") return "";
+// Caller is responsible for only invoking when actually cross-compiling
+// (targetOs !== platform || cpuTarget !== "").
+export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boolean): string {
 	const cpu = normalizeCpu(cpuTarget !== "" ? cpuTarget : "amd64");
 	if (useZig) {
 		// zig cc target format: cpu-os[-abi]
-		let zigOs = osTarget;
-		if (osTarget === "macos" || osTarget === "darwin") zigOs = "macos";
-		if (osTarget === "windows") return `-target ${cpu}-windows-gnu`;
-		if (osTarget === "linux") return `-target ${cpu}-linux-gnu`;
-		if (zigOs !== "") return `-target ${cpu}-${zigOs}`;
-		return `-target ${cpu}-native`;
+		let zigOs = targetOs;
+		if (targetOs === "macos" || targetOs === "darwin") zigOs = "macos";
+		if (targetOs === "windows") return `-target ${cpu}-windows-gnu`;
+		if (targetOs === "linux") return `-target ${cpu}-linux-gnu`;
+		return `-target ${cpu}-${zigOs}`;
 	}
 	// clang/gcc target format: cpu-vendor-os[-abi]
 	let triple = cpu;
-	if (osTarget === "linux") {
+	if (targetOs === "linux") {
 		triple = `${cpu}-unknown-linux-gnu`;
-	} else if (osTarget === "macos" || osTarget === "darwin") {
+	} else if (targetOs === "macos" || targetOs === "darwin") {
 		triple = `${cpu}-apple-darwin`;
-	} else if (osTarget === "windows") {
+	} else if (targetOs === "windows") {
 		triple = `${cpu}-pc-windows-gnu`;
-	} else if (osTarget === "freebsd") {
+	} else if (targetOs === "freebsd") {
 		triple = `${cpu}-unknown-freebsd`;
-	} else if (osTarget !== "") {
-		triple = `${cpu}-unknown-${osTarget}`;
+	} else {
+		triple = `${cpu}-unknown-${targetOs}`;
 	}
 	return `--target=${triple}`;
 }
@@ -280,13 +294,13 @@ export function appendFlag(base: string, flag: string): string {
 // Build compile-phase flags from CLI options (sanitize + passC + cross-compile target).
 // Is this a cross-compilation using zig cc?
 function isCrossZig(opts: CliOptions): boolean {
-	return opts.osTarget !== "" && opts.ccBinary === "" && checkZigCC();
+	return opts.targetOs !== platform && opts.ccBinary === "" && checkZigCC();
 }
 
 export function cliCompileFlags(opts: CliOptions): string {
 	let flags = "";
 	// Solana/BPF: completely different flag set, skip everything else
-	if (opts.osTarget === "solana") {
+	if (opts.targetOs === "solana") {
 		flags = appendFlag(flags, "-target bpfel");
 		flags = appendFlag(flags, "-fno-builtin");
 		flags = appendFlag(flags, "-emit-llvm");
@@ -296,12 +310,12 @@ export function cliCompileFlags(opts: CliOptions): string {
 		return flags;
 	}
 	// Emscripten (browser WASM): emcc handles everything
-	if (opts.osTarget === "emcc") {
+	if (opts.targetOs === "emcc") {
 		if (opts.passC !== "") flags = appendFlag(flags, opts.passC);
 		return flags;
 	}
 	// WASM32-WASI: zig cc handles sysroot + libc automatically
-	if (opts.osTarget === "wasm") {
+	if (opts.targetOs === "wasm") {
 		flags = appendFlag(flags, "-target wasm32-wasi");
 		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
 		if (opts.passC !== "") flags = appendFlag(flags, opts.passC);
@@ -310,16 +324,18 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// Cross-compilation target triple
 	// zig cc: -target cpu-os-abi (bundled sysroot, no --target= prefix)
 	// clang/gcc: --target=cpu-vendor-os-abi
-	if ((opts.osTarget !== "" && opts.osTarget !== "bare" && opts.osTarget !== "solana") || opts.cpuTarget !== "") {
+	// Trigger when actually crossing (target differs from host OS, or CPU explicit).
+	// "bare" is freestanding (no OS) — needs target flag only if CPU is set.
+	if ((opts.targetOs !== platform && opts.targetOs !== "bare") || opts.cpuTarget !== "") {
 		const useZig = opts.ccBinary === "zig cc";
-		const ct = crossTargetFlag(opts.osTarget, opts.cpuTarget, useZig);
+		const ct = crossTargetFlag(opts.targetOs, opts.cpuTarget, useZig);
 		if (ct !== "") flags = appendFlag(flags, ct);
 	}
 	// Linux requires _GNU_SOURCE for POSIX APIs (clock_gettime, getaddrinfo, etc.)
-	if (opts.osTarget === "linux") {
+	if (opts.targetOs === "linux") {
 		flags = appendFlag(flags, "-D_GNU_SOURCE");
 	}
-	if (opts.osTarget === "windows" && opts.ccBinary !== "zig cc") {
+	if (opts.targetOs === "windows" && opts.ccBinary !== "zig cc") {
 		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0600");
 	}
 	if (opts.gcMode === "orc") flags = appendFlag(flags, "-DMSGC_ORC");
@@ -335,15 +351,15 @@ export function cliCompileFlags(opts: CliOptions): string {
 // Build link-phase flags (adds passL + strip on top of compile flags).
 export function cliLinkFlags(base: string, opts: CliOptions): string {
 	// Solana: sbpf-linker handles everything, no extra link flags
-	if (opts.osTarget === "solana") return appendFlag(base, opts.passL);
+	if (opts.targetOs === "solana") return appendFlag(base, opts.passL);
 	// Emscripten: emcc links to .js + .wasm bundle
-	if (opts.osTarget === "emcc") {
+	if (opts.targetOs === "emcc") {
 		let eflags = appendFlag(base, "-sWASM=1 -sALLOW_MEMORY_GROWTH=1");
 		eflags = appendFlag(eflags, opts.passL);
 		return eflags;
 	}
 	// WASM: zig cc links with -target wasm32-wasi, strip dead sections + debug info
-	if (opts.osTarget === "wasm") {
+	if (opts.targetOs === "wasm") {
 		let wflags = appendFlag(base, "-target wasm32-wasi");
 		wflags = appendFlag(wflags, "-Wl,--gc-sections -Wl,--strip-all");
 		wflags = appendFlag(wflags, opts.passL);
@@ -355,16 +371,15 @@ export function cliLinkFlags(base: string, opts: CliOptions): string {
 	if (opts.isHcr) {
 		flags = appendFlag(flags, "-shared");
 	} else {
-		const osId = effectiveOsTarget(opts.osTarget);
-		if (osId === "linux") {
+		if (opts.targetOs === "linux") {
 			flags = appendFlag(flags, "-Wl,--gc-sections");
 			flags = appendFlag(flags, "-lpthread");
-		} else if (osId === "windows") {
+		} else if (opts.targetOs === "windows") {
 			flags = appendFlag(flags, "-Wl,--gc-sections");
 			flags = appendFlag(flags, "-lws2_32");
 			flags = appendFlag(flags, "-lmswsock");
 			flags = appendFlag(flags, "-lbcrypt");
-		} else if (osId === "darwin") {
+		} else if (opts.targetOs === "darwin" || opts.targetOs === "macos") {
 			flags = appendFlag(flags, "-Wl,-dead_strip");
 		}
 	}
@@ -400,15 +415,17 @@ function buildCompileCommand(cFile: string, outBinary: string, extraFlags: strin
 }
 
 // Compile a .c file to a native binary.
-// Returns 0 on success, non-zero on failure.
-export function compileC(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): number {
+// Returns Result.ok on exit-code 0; Result.err carries gcc/clang stderr.
+export function compileC(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
 	const cmd = buildCompileCommand(cFile, outBinary, extraFlags, mode, ccOption, ccBinary);
-	return exec(cmd);
+	const r = exec(cmd);
+	if (!r.ok) return Result.err(r.error);
+	return Result.ok(null as unknown as void);
 }
 
 // Compile a .c file to an object file only (-c flag, no linking).
-// Returns 0 on success, non-zero on failure.
-export function compileCFile(cFile: string, oFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): number {
+// Returns Result.ok on exit-code 0; Result.err carries gcc/clang stderr.
+export function compileCFile(cFile: string, oFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
 	const isCpp = isCppFile(cFile);
 	const baseCompiler = getCompilerName(ccOption, ccBinary);
 	const compiler = isCpp ? toCppCompiler(baseCompiler) : baseCompiler;
@@ -422,7 +439,9 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 
 	cmd = `${cmd} -c ${cFile} -o ${oFile}`;
 	if (extraFlags !== "") cmd = `${cmd} ${extraFlags}`;
-	return exec(cmd);
+	const r = exec(cmd);
+	if (!r.ok) return Result.err(r.error);
+	return Result.ok(null as unknown as void);
 }
 
 // Windows cmd.exe caps command lines at 8191 chars. Link commands with hundreds
@@ -433,8 +452,8 @@ const LINK_CMD_LIMIT = 7800;
 
 // Link object files + runtime into a binary.
 // oFileList: space-separated list of .o file paths
-// Returns 0 on success, non-zero on failure.
-export function linkObjects(oFileList: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): number {
+// Returns Result.ok on exit-code 0; Result.err carries linker stderr.
+export function linkObjects(oFileList: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
 	const baseCompiler = getCompilerName(ccOption, ccBinary);
 	// Sticky flag: any .cpp file compiled in this build → use C++ driver for
 	// the final link so libc++ / libstdc++ is pulled automatically. Pure-C
@@ -445,12 +464,17 @@ export function linkObjects(oFileList: string, outBinary: string, extraFlags: st
 	const bulk = extraFlags !== "" ? `${oFileList} ${extraFlags}` : oFileList;
 	const cmd = `${compiler}${rtFlag} ${bulk} -o ${outBinary} -lm`;
 
-	if (cmd.length <= LINK_CMD_LIMIT) return exec(cmd);
-
-	// Overflow: write bulk args to a response file in the same dir as the binary.
-	const rspPath = `${dirname(outBinary)}/_link.rsp`;
-	writeFile(rspPath, bulk);
-	return exec(`${compiler}${rtFlag} @${rspPath} -o ${outBinary} -lm`);
+	let r: Result<string, ProcessError>;
+	if (cmd.length <= LINK_CMD_LIMIT) {
+		r = exec(cmd);
+	} else {
+		// Overflow: write bulk args to a response file in the same dir as the binary.
+		const rspPath = `${dirname(outBinary)}/_link.rsp`;
+		writeFile(rspPath, bulk);
+		r = exec(`${compiler}${rtFlag} @${rspPath} -o ${outBinary} -lm`);
+	}
+	if (!r.ok) return Result.err(r.error);
+	return Result.ok(null as unknown as void);
 }
 
 // Get the runtime directory path (for -I include path).

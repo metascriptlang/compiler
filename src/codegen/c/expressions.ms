@@ -94,25 +94,29 @@ function isRealDiscriminatedUnion(t: Type): boolean {
 	return seenNames.length >= 2;
 }
 
-// Variant struct C name. Three sources, in priority order:
-//   1. Named struct/interface variant (e.g. `OkResult`) — reuse directly
-//   2. genUnionType's variant cache — when two distinct Union instances share
-//      a structurally identical variant (e.g. `Result<void,IoError>` and
-//      `Result<string,IoError>` both have a `{ok: false, error: IoError}`
-//      variant), genUnionType emits ONE typedef and reuses it. The cache key
-//      is the variant's `typeKey`. Without consulting the cache here, the OL
-//      construction would emit `<Union>_v<N>` for an undefined typedef.
-//   3. Synthetic `<Union>_v<N>` — fallback when no cache hit and no named
-//      variant struct.
+// Variant struct C name. Single source of truth: typeCache.
+//
+// typeCache reflects what was (or will be) emitted in the current compilation
+// unit. Three writers populate it before variantStructCName is consulted:
+//   - genUnionType Phase 1a: cache.set(variantKey, positional `<Union>_v<N>`)
+//     when no prior entry exists. Phase 1b emits matching typedef.
+//   - genUnionType Phase 1a structural sharing: if cache already holds a
+//     prior canonical name (e.g. variant shared with another Union instance,
+//     or the variant interface was emitted standalone via genObjectType),
+//     Phase 1a reuses that name and Phase 1b skips re-emission.
+//   - genObjectType (imported branch): cache.set(key, t.typeName) +
+//     useImportedTypeHeader includes the source module's header.
+//
+// Bypassing the cache (returning raw `mangle(v.typeName)` for named variants)
+// leaks the source-level interface name when the typedef lives only in
+// another compilation unit — caller emits `NativeBuild _lit_` but the
+// importing .c file never receives that typedef. Caught by the discriminated-
+// union cross-file probe (consumer importing `BuildTarget` from types.ms).
 function variantStructCName(g: CGen, unionType: Type, varIdx: number, unionName: string): string {
 	if (unionType.typeChildren !== null && varIdx < unionType.typeChildren.length) {
 		let v = unionType.typeChildren[varIdx];
 		if (v !== null && (v.kind === TypeKind.Ref || v.kind === TypeKind.Ptr) && v.typeReturn !== null) {
 			v = v.typeReturn;
-		}
-		if (v !== null && v.kind === TypeKind.Struct && v.typeName.length > 0
-			&& v.typeName.indexOf(".") < 0) {
-			return mangle(v.typeName);
 		}
 		if (v !== null && v.kind === TypeKind.Struct) {
 			const cached = typeCacheGet(g.typeCache, typeKey(v));

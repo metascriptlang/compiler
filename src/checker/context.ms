@@ -1,3 +1,4 @@
+import { platform } from "std/process";
 import { unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable } from "./compat";
 import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag } from "./symbol";
@@ -816,7 +817,9 @@ export class CheckerContext {
 	table: SymbolTable;
 	errors: CheckerError[];
 	gcMode: GcMode;                // Drc (ARC), Orc (ARC + cycle collector), None (malloc, no free), Manual (freestanding, arena)
-	osTarget: string;              // "" (auto), "bare", "solana", "linux", "macos", "windows"
+	targetOs: string;              // Target OS. Always set; defaults to host platform.
+	                               // Values: "linux"|"macos"|"windows"|"freebsd"|"bare"|"solana"|"wasm"|"emcc".
+	                               // Cross-compile detected via `targetOs !== platform`.
 	currentFunction: Symbol;   // innermost function (for return type validation)
 	currentActorName: string;  // non-empty when inside an actor body (isolation checking)
 	inLoop: boolean;           // break/continue validation
@@ -856,7 +859,7 @@ export function createContext(): CheckerContext {
 		table,
 		errors: [],
 		gcMode: GcMode.Orc,
-		osTarget: "",
+		targetOs: platform,
 		currentFunction: null as unknown as Symbol,
 		currentActorName: "",
 		inLoop: false,

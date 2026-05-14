@@ -44,6 +44,10 @@
       u_long mode = 1;
       return ioctlsocket((SOCKET)(intptr_t)fd, FIONBIO, &mode) == 0 ? 0 : -1;
   }
+  static inline int32_t ms_set_blocking(int32_t fd) {
+      u_long mode = 0;
+      return ioctlsocket((SOCKET)(intptr_t)fd, FIONBIO, &mode) == 0 ? 0 : -1;
+  }
   #define MS_SOCKOPT_CAST (const char*)
   static inline struct tm* ms_gmtime(const time_t* t, struct tm* result) {
       gmtime_s(result, t); return result;
@@ -54,6 +58,7 @@
   }
 #else
   #include <errno.h>
+  #include <sys/types.h>
   #include <unistd.h>
   #include <sys/socket.h>
   #include <sys/time.h>
@@ -68,7 +73,12 @@
   #define ms_errno()           errno
   #define MS_EWOULDBLOCK       EAGAIN
   #define MS_EINTR             EINTR
-  #ifdef __linux__
+  /* MSG_NOSIGNAL on send() suppresses SIGPIPE atomically with the syscall —
+   * no race window between accept() and per-fd setsockopt(SO_NOSIGPIPE).
+   * Linux always; macOS 10.9+ and FreeBSD also expose it. Fall back to 0 on
+   * platforms that lack the flag (rare modern Unixes) — those rely on the
+   * per-fd SO_NOSIGPIPE set by msNetSetNoSigpipe at accept time. */
+  #ifdef MSG_NOSIGNAL
     #define MS_SEND_FLAGS      MSG_NOSIGNAL
   #else
     #define MS_SEND_FLAGS      0
@@ -76,6 +86,10 @@
   static inline int32_t ms_set_nonblock(int32_t fd) {
       int flags = fcntl(fd, F_GETFL, 0);
       return (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) ? -1 : 0;
+  }
+  static inline int32_t ms_set_blocking(int32_t fd) {
+      int flags = fcntl(fd, F_GETFL, 0);
+      return (flags < 0 || fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) < 0) ? -1 : 0;
   }
   #define MS_SOCKOPT_CAST
   #define ms_gmtime(t, tm)     gmtime_r(t, tm)
@@ -290,6 +304,16 @@ static inline int32_t msNetSetTimeout(int32_t fd, int32_t ms) {
  */
 static inline int32_t msNetSetNonBlocking(int32_t fd) {
 	return ms_set_nonblock(fd);
+}
+
+/**
+ * Set fd to blocking mode (clears O_NONBLOCK). Returns 0 on success, -1 on error.
+ * Mirror of msNetSetNonBlocking — used by protocol-switch consumers (WebSocket,
+ * raw TCP takeover) that take ownership of a fd after res.detach() and want
+ * blocking I/O semantics in their own worker thread.
+ */
+static inline int32_t msNetSetBlocking(int32_t fd) {
+	return ms_set_blocking(fd);
 }
 
 /**

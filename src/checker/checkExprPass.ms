@@ -4149,8 +4149,15 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 		const hasGuard = cd.caseGuard !== null;
 		for (const p of cd.casePatterns) {
 			if (p.kind === NodeKind.Identifier) {
-				// Wildcard/binding — Standard reference's else has no pattern nodes at all.
-				// Guarded wildcard/binding does NOT count as exhaustive coverage.
+				const id = p.data as IdentifierData;
+				if (id.name !== "_") {
+					const sym = lookupSymbol(ctx.table, id.name);
+					if (sym !== null && sym.symbolKind === SymbolKind.Variable && !sym.mutable) {
+						p.resolvedSym = sym;
+						checkExpr(ctx, p, discType);
+						continue;
+					}
+				}
 				if (!hasGuard) hasWildcard = true;
 				p.nodeType = discType;
 			} else {

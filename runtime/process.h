@@ -17,8 +17,11 @@
 #include <direct.h>
 #include <shellapi.h>
 #else
+#include <sys/types.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <errno.h>
+#include <string.h>
 #endif
 
 #ifdef __cplusplus
@@ -199,19 +202,9 @@ static inline double msProcessFileExists(msString path) {
 	return 1.0;
 }
 
-/**
- * Execute a shell command. Returns the exit code.
- */
-static inline double msProcessExec(msString command) {
-	const char* cmd = msStringToCString(command);
-	int status = system(cmd);
-#if defined(__APPLE__) || defined(__linux__)
-	if (WIFEXITED(status)) return (double)WEXITSTATUS(status);
-	return -1.0;
-#else
-	return (double)status;
-#endif
-}
+/* Note: legacy `msProcessExec` (exit-code-only `system()` wrapper) removed.
+ * std/process.exec() now uses msProcessSpawnSync — rich result with captured
+ * stdout, stderr, exit code, and signal. Wrap via Result<string, ProcessError>. */
 
 /**
  * Execute a binary directly (no shell). Returns its exit code, or -1 on spawn failure.
@@ -371,6 +364,251 @@ static inline double msProcessExecFile(msString path, msStringArray args) {
 	return -1.0;
 }
 #endif
+
+// =============================================================================
+// Synchronous subprocess (capture stdout + stderr + exit status)
+// =============================================================================
+//
+// Implementation pattern: errno-style globals populated after each call, mirrors
+// msFsLastErrno in runtime/fs/posix.c. MS wrapper reads stdout return value
+// then queries getters for additional metadata before building Result/Error.
+//
+// POSIX: pipe() × 2 + fork() + dup2() + execvp("/bin/sh", "-c", cmd) +
+//        read loops + waitpid(). Stderr captured separately from stdout.
+// Windows: CreatePipe() × 2 + CreateProcess() + ReadFile loops +
+//          WaitForSingleObject + GetExitCodeProcess.
+//
+// Output cap: 16 MB per stream. Longer outputs are truncated (matches stdout
+// capture semantics in popen-based shells like Bun.$).
+//
+// Known limitation (v1): sequential read of stdout-first-then-stderr can
+// deadlock if child writes >64KB to stderr while we're blocked on stdout
+// read. For build-introspection tools (pkg-config, llvm-config, brew --prefix)
+// outputs are tiny so this is not hit in practice. Upgrade to select()/poll()
+// when a deadlock case appears.
+
+static int32_t _msProcSpawnExitCode = 0;
+static int32_t _msProcSpawnSignal = 0;
+static msString _msProcSpawnStderr = MS_EMPTY_STRING;
+static int32_t _msProcSpawnOk = 0;  /* 1 if spawn succeeded, 0 otherwise */
+static int32_t _msProcSpawnPipeOk = 1;  /* 0 if a pipe read/setup failed mid-flight */
+
+static inline int32_t msProcSpawnGetExitCode(void) { return _msProcSpawnExitCode; }
+static inline int32_t msProcSpawnGetSignal(void) { return _msProcSpawnSignal; }
+static inline msString msProcSpawnGetStderr(void) { return _msProcSpawnStderr; }
+static inline int32_t msProcSpawnGetOk(void) { return _msProcSpawnOk; }
+static inline int32_t msProcSpawnGetPipeOk(void) { return _msProcSpawnPipeOk; }
+
+#define MS_SPAWN_MAX_OUTPUT (16 * 1024 * 1024)
+
+#ifndef _WIN32
+/* Drain a fd into a heap buffer; returns malloc'd buffer + length via out params.
+ * 1 on success, 0 on read error. Caller frees *outBuf. */
+static inline int _msSpawnDrainFd(int fd, char** outBuf, size_t* outLen) {
+	size_t cap = 4096;
+	size_t len = 0;
+	char* buf = (char*)malloc(cap);
+	if (!buf) { *outBuf = NULL; *outLen = 0; return 0; }
+	char chunk[4096];
+	ssize_t n;
+	while ((n = read(fd, chunk, sizeof(chunk))) > 0) {
+		size_t got = (size_t)n;
+		if (len + got > MS_SPAWN_MAX_OUTPUT) {
+			got = MS_SPAWN_MAX_OUTPUT - len;
+			if (got == 0) break;
+		}
+		while (len + got + 1 > cap) {
+			cap *= 2;
+			char* nb = (char*)realloc(buf, cap);
+			if (!nb) { free(buf); *outBuf = NULL; *outLen = 0; return 0; }
+			buf = nb;
+		}
+		memcpy(buf + len, chunk, got);
+		len += got;
+		if (len >= MS_SPAWN_MAX_OUTPUT) break;
+	}
+	if (n < 0 && errno != 0) { free(buf); *outBuf = NULL; *outLen = 0; return 0; }
+	buf[len] = '\0';
+	*outBuf = buf;
+	*outLen = len;
+	return 1;
+}
+#endif
+
+static inline msString msProcessSpawnSync(msString command) {
+	/* Reset side-channel state for this invocation. */
+	_msProcSpawnExitCode = 0;
+	_msProcSpawnSignal = 0;
+	_msProcSpawnStderr = MS_EMPTY_STRING;
+	_msProcSpawnOk = 0;
+	_msProcSpawnPipeOk = 1;
+
+	const char* cmd = msStringToCString(command);
+
+#ifdef _WIN32
+	SECURITY_ATTRIBUTES sa;
+	sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+	sa.bInheritHandle = TRUE;
+	sa.lpSecurityDescriptor = NULL;
+
+	HANDLE outRd = NULL, outWr = NULL;
+	HANDLE errRd = NULL, errWr = NULL;
+	if (!CreatePipe(&outRd, &outWr, &sa, 0)) return MS_EMPTY_STRING;
+	if (!SetHandleInformation(outRd, HANDLE_FLAG_INHERIT, 0)) {
+		CloseHandle(outRd); CloseHandle(outWr);
+		return MS_EMPTY_STRING;
+	}
+	if (!CreatePipe(&errRd, &errWr, &sa, 0)) {
+		CloseHandle(outRd); CloseHandle(outWr);
+		return MS_EMPTY_STRING;
+	}
+	if (!SetHandleInformation(errRd, HANDLE_FLAG_INHERIT, 0)) {
+		CloseHandle(outRd); CloseHandle(outWr);
+		CloseHandle(errRd); CloseHandle(errWr);
+		return MS_EMPTY_STRING;
+	}
+
+	/* Run via cmd.exe /c to support shell features (pipes, redirects). */
+	char* cmdLine = (char*)malloc(strlen(cmd) + 16);
+	if (!cmdLine) {
+		CloseHandle(outRd); CloseHandle(outWr);
+		CloseHandle(errRd); CloseHandle(errWr);
+		return MS_EMPTY_STRING;
+	}
+	sprintf(cmdLine, "cmd.exe /c %s", cmd);
+
+	STARTUPINFOA si;
+	PROCESS_INFORMATION pi;
+	ZeroMemory(&si, sizeof(si));
+	si.cb = sizeof(si);
+	si.dwFlags = STARTF_USESTDHANDLES;
+	si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+	si.hStdOutput = outWr;
+	si.hStdError = errWr;
+	ZeroMemory(&pi, sizeof(pi));
+
+	BOOL ok = CreateProcessA(NULL, cmdLine, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+	free(cmdLine);
+	CloseHandle(outWr);  /* child writes; parent reads */
+	CloseHandle(errWr);
+	if (!ok) {
+		CloseHandle(outRd); CloseHandle(errRd);
+		return MS_EMPTY_STRING;
+	}
+
+	/* Drain stdout pipe. */
+	size_t outCap = 4096, outLen = 0;
+	char* outBuf = (char*)malloc(outCap);
+	char chunk[4096];
+	DWORD nRead;
+	while (outBuf && ReadFile(outRd, chunk, sizeof(chunk), &nRead, NULL) && nRead > 0) {
+		size_t got = (size_t)nRead;
+		if (outLen + got > MS_SPAWN_MAX_OUTPUT) { got = MS_SPAWN_MAX_OUTPUT - outLen; if (got == 0) break; }
+		while (outLen + got + 1 > outCap) { outCap *= 2; outBuf = (char*)realloc(outBuf, outCap); if (!outBuf) break; }
+		if (!outBuf) break;
+		memcpy(outBuf + outLen, chunk, got);
+		outLen += got;
+		if (outLen >= MS_SPAWN_MAX_OUTPUT) break;
+	}
+	CloseHandle(outRd);
+
+	/* Drain stderr pipe. */
+	size_t errCap = 4096, errLen = 0;
+	char* errBuf = (char*)malloc(errCap);
+	while (errBuf && ReadFile(errRd, chunk, sizeof(chunk), &nRead, NULL) && nRead > 0) {
+		size_t got = (size_t)nRead;
+		if (errLen + got > MS_SPAWN_MAX_OUTPUT) { got = MS_SPAWN_MAX_OUTPUT - errLen; if (got == 0) break; }
+		while (errLen + got + 1 > errCap) { errCap *= 2; errBuf = (char*)realloc(errBuf, errCap); if (!errBuf) break; }
+		if (!errBuf) break;
+		memcpy(errBuf + errLen, chunk, got);
+		errLen += got;
+		if (errLen >= MS_SPAWN_MAX_OUTPUT) break;
+	}
+	CloseHandle(errRd);
+
+	WaitForSingleObject(pi.hProcess, INFINITE);
+	DWORD exitCode = 0;
+	GetExitCodeProcess(pi.hProcess, &exitCode);
+	CloseHandle(pi.hProcess);
+	CloseHandle(pi.hThread);
+
+	_msProcSpawnOk = 1;
+	_msProcSpawnExitCode = (int32_t)exitCode;
+	_msProcSpawnSignal = 0;  /* Windows has no signal concept here */
+
+	msString stdoutResult = MS_EMPTY_STRING;
+	msString stderrResult = MS_EMPTY_STRING;
+	if (outBuf) { outBuf[outLen] = '\0'; stdoutResult = msStringNew(outBuf, (int64_t)outLen); free(outBuf); }
+	if (errBuf) { errBuf[errLen] = '\0'; stderrResult = msStringNew(errBuf, (int64_t)errLen); free(errBuf); }
+	_msProcSpawnStderr = stderrResult;
+	return stdoutResult;
+
+#else  /* POSIX */
+	int outPipe[2], errPipe[2];
+	if (pipe(outPipe) < 0) return MS_EMPTY_STRING;
+	if (pipe(errPipe) < 0) {
+		close(outPipe[0]); close(outPipe[1]);
+		return MS_EMPTY_STRING;
+	}
+
+	pid_t pid = fork();
+	if (pid < 0) {
+		close(outPipe[0]); close(outPipe[1]);
+		close(errPipe[0]); close(errPipe[1]);
+		return MS_EMPTY_STRING;
+	}
+
+	if (pid == 0) {
+		/* Child: rewire stdio, exec via shell so the command string can use
+		 * pipes/redirects/glob normally. */
+		close(outPipe[0]);
+		close(errPipe[0]);
+		dup2(outPipe[1], STDOUT_FILENO);
+		dup2(errPipe[1], STDERR_FILENO);
+		close(outPipe[1]);
+		close(errPipe[1]);
+		execl("/bin/sh", "sh", "-c", cmd, (char*)NULL);
+		_exit(127);  /* exec failed */
+	}
+
+	/* Parent */
+	close(outPipe[1]);
+	close(errPipe[1]);
+
+	char* outBuf = NULL; size_t outLen = 0;
+	char* errBuf = NULL; size_t errLen = 0;
+	if (!_msSpawnDrainFd(outPipe[0], &outBuf, &outLen)) _msProcSpawnPipeOk = 0;
+	if (!_msSpawnDrainFd(errPipe[0], &errBuf, &errLen)) _msProcSpawnPipeOk = 0;
+	close(outPipe[0]);
+	close(errPipe[0]);
+
+	int status = 0;
+	if (waitpid(pid, &status, 0) < 0) {
+		if (outBuf) free(outBuf);
+		if (errBuf) free(errBuf);
+		return MS_EMPTY_STRING;
+	}
+
+	_msProcSpawnOk = 1;
+	if (WIFEXITED(status)) {
+		_msProcSpawnExitCode = (int32_t)WEXITSTATUS(status);
+		_msProcSpawnSignal = 0;
+	} else if (WIFSIGNALED(status)) {
+		_msProcSpawnExitCode = 0;
+		_msProcSpawnSignal = (int32_t)WTERMSIG(status);
+	} else {
+		_msProcSpawnExitCode = -1;
+		_msProcSpawnSignal = 0;
+	}
+
+	msString stdoutResult = MS_EMPTY_STRING;
+	msString stderrResult = MS_EMPTY_STRING;
+	if (outBuf) { stdoutResult = msStringNew(outBuf, (int64_t)outLen); free(outBuf); }
+	if (errBuf) { stderrResult = msStringNew(errBuf, (int64_t)errLen); free(errBuf); }
+	_msProcSpawnStderr = stderrResult;
+	return stdoutResult;
+#endif
+}
 
 /**
  * Write string to file. Returns 1.0 on success, 0.0 on failure.

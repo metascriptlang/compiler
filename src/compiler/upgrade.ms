@@ -153,11 +153,15 @@ export function cmdUpgrade(opts: CliOptions): number {
 		? `powershell -ExecutionPolicy Bypass -NoProfile -Command "irm ${INSTALL_PS1_URL} | iex"`
 		: `curl -fsSL ${INSTALL_SH_URL} | sh`;
 	console.log("Running installer...");
-	const code = exec(cmd);
-	if (code !== 0) {
-		console.log(`${yellow("warn")}: installer exited with code ${code}`);
+	const r = exec(cmd);
+	if (r.ok) {
+		if (r.value !== "") console.log(r.value);
+		return 0;
 	}
-	return code;
+	if (r.error.stdout !== "") console.log(r.error.stdout);
+	if (r.error.stderr !== "") console.log(r.error.stderr);
+	console.log(`${yellow("warn")}: installer exited with code ${r.error.exitCode}`);
+	return r.error.exitCode !== 0 ? r.error.exitCode : 1;
 }
 
 // Windows only: delete stale msc.exe.bak-* files left by previous upgrades.

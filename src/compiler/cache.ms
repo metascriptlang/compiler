@@ -274,9 +274,9 @@ let _compilerHash = "";
 function getCompilerHash(ccOption: number): string {
 	if (_compilerHash !== "") return _compilerHash;
 	const name = getCompilerName(ccOption, "");
-	const tmpFile = getCacheDir() + "/_cc_version";
-	exec(`${name} --version > ${tmpFile} 2>&1`);
-	const version = try readFile(tmpFile) catch "";
+	// New exec() captures stdout; no more tmp-file shell redirect needed.
+	const r = exec(`${name} --version 2>&1`);
+	const version = r.ok ? r.value : (r.error.stdout !== "" ? r.error.stdout : r.error.stderr);
 	if (version.length > 0) {
 		_compilerHash = hashContent(version);
 	} else {

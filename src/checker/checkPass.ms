@@ -1460,13 +1460,10 @@ function extractPlatformTag(node: Node): string {
 }
 
 // Resolve the active OS target for directive filtering. Per-module ctx
-// inherits osTarget from prelude (see injectPrelude). Empty osTarget means
-// "host build" — fall back to runtime `platform`. Normalizes "darwin" → "macos"
-// so users write the friendlier name in @platform("macos").
+// ctx.targetOs is always set (defaults to host platform at construction).
+// Normalizes "darwin" → "macos" so users write the friendlier name in @platform("macos").
 function effectiveCtxOsTarget(ctx: CheckerContext): string {
-	let t = ctx.osTarget;
-	if (t === "" && ctx.preludeCtx !== null) t = ctx.preludeCtx.osTarget;
-	if (t === "") t = platform;
+	let t = ctx.targetOs;
 	if (t === "darwin") t = "macos";
 	return t;
 }
@@ -1845,9 +1842,7 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	// the @platform("...") block-form filter (in collectDirectives) can be
 	// evaluated against the correct target without threading opts through
 	// the checker API.
-	if (ctx.osTarget === "" && preludeCtx.osTarget !== "") {
-		ctx.osTarget = preludeCtx.osTarget;
-	}
+	ctx.targetOs = preludeCtx.targetOs;
 	// @passL/@link go directly to global linkState — no per-module merge needed
 }
 

@@ -17,6 +17,8 @@ import {
 	RaiserModule, RaiserFunction,
 	makeTestModule, getFuncConst, getFuncConstLen, getFuncInst, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
+import { lookupHostFn, registerHostFn, _resetHostRegistryForTests } from "./hostRegistry";
+import { RaiserHostFn } from "./marshal";
 
 // --- VM State ---
 
@@ -313,6 +315,8 @@ export function execModule(mod: RaiserModule): RaiserVM {
 			vmCmpBranchF64(vm, inst, 5);
 		} else if (op === RaiserOpcode.Builtin) {
 			vmHandleBuiltin(vm, inst);
+		} else if (op === RaiserOpcode.CallHost) {
+			vmHandleCallHost(vm, inst);
 		} else {
 			vmError(vm, `Unknown opcode: ${op}`);
 		}
@@ -765,6 +769,43 @@ function vmHandleBuiltin(vm: RaiserVM, inst: RaiserInstruction): void {
 		},
 		_ => { vmError(vm, `Unknown builtin ID: ${builtinId}`); },
 	};
+}
+
+// --- CallHost handler ---
+// Generic name-resolved native call. Replaces the per-function hardcoded
+// `Builtin` dispatch above. Lookup is O(n) over the registry, but n is small
+// (~50-200 host fns) and the registered wrappers (auto-generated in Phase 3)
+// own all type-specific marshalling.
+
+function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
+	const base = vm.baseReg;
+	const func = getModuleFunc(vm.mod, vm.funcIdx);
+	const nameConst = getFuncConst(func, inst.b);
+	if (nameConst.kind !== RaiserValueKind.String) {
+		vmError(vm, `CallHost expected string constant at index ${inst.b}, got kind ${nameConst.kind}`);
+		return;
+	}
+	const name = nameConst.strVal;
+
+	const fn = lookupHostFn(name);
+	if (fn === (null as unknown as RaiserHostFn)) {
+		vmError(vm, `Unknown host function: ${name}`);
+		return;
+	}
+
+	// Collect args from R[A+1] .. R[A+C]
+	const args: RaiserValue[] = [];
+	let i = 0;
+	while (i < inst.c) {
+		const argVal = getReg(vm, base + inst.a + 1 + i);
+		args.push(argVal);
+		i = i + 1;
+	}
+
+	const result = fn(args);
+
+	const dst = getReg(vm, base + inst.a);
+	copyValueInto(dst, result);
 }
 
 // --- Stack trace ---
@@ -1386,6 +1427,80 @@ test "builtin readFile missing file returns empty" {
 	const vm = execModule(makeTestModule(code, consts));
 	assert vm.error === "";
 	assert vm.exitValue.strVal === "";
+}
+
+// --- CallHost tests ---
+// Verifies the new generic native-call opcode end-to-end through the registry
+// + marshal layer. Uses synthetic host functions (echo, add) rather than
+// real std/* natives so this test is independent of Phase 3 wiring.
+
+test "CallHost echo string roundtrip" {
+	_resetHostRegistryForTests();
+	const echoFn: RaiserHostFn = (args: RaiserValue[]): RaiserValue => {
+		return args[0];
+	};
+	registerHostFn("echo", echoFn);
+
+	// constants[0] = "echo" (name), constants[1] = "hello" (arg)
+	// Bytecode: R1 = "hello"; CallHost R0(name=consts[0], argc=1); Halt R0
+	const code: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 1, 1),         // R1 = "hello"
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 1),       // R0 = echo(R1)
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const consts: RaiserValue[] = [raiserString("echo"), raiserString("hello")];
+	const vm = execModule(makeTestModule(code, consts));
+	assert vm.error === "";
+	assert vm.exitValue.kind === RaiserValueKind.String;
+	assert vm.exitValue.strVal === "hello";
+}
+
+test "CallHost two-arg native" {
+	_resetHostRegistryForTests();
+	const addFn: RaiserHostFn = (args: RaiserValue[]): RaiserValue => {
+		return raiserInt(args[0].intVal + args[1].intVal);
+	};
+	registerHostFn("add", addFn);
+
+	const code: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 1, 1),         // R1 = 10
+		raiserABx(RaiserOpcode.LoadConst, 2, 2),         // R2 = 32
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 2),       // R0 = add(R1, R2)
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const consts: RaiserValue[] = [raiserString("add"), raiserInt(10), raiserInt(32)];
+	const vm = execModule(makeTestModule(code, consts));
+	assert vm.error === "";
+	assert vm.exitValue.intVal === 42;
+}
+
+test "CallHost zero-arg native" {
+	_resetHostRegistryForTests();
+	const constFn: RaiserHostFn = (args: RaiserValue[]): RaiserValue => {
+		return raiserInt(7);
+	};
+	registerHostFn("seven", constFn);
+
+	const code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),       // R0 = seven()
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const consts: RaiserValue[] = [raiserString("seven")];
+	const vm = execModule(makeTestModule(code, consts));
+	assert vm.error === "";
+	assert vm.exitValue.intVal === 7;
+}
+
+test "CallHost unknown name errors" {
+	_resetHostRegistryForTests();
+	const code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const consts: RaiserValue[] = [raiserString("missingFn")];
+	const vm = execModule(makeTestModule(code, consts));
+	assert vm.error.length > 0;
+	assert vm.halted;
 }
 
 test "instruction line field preserved" {

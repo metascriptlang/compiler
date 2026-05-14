@@ -18,12 +18,14 @@ import {
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
+import { checkProgram } from "../../checker/checkPass";
 import { evalASTFull } from "../../codegen/raiser/eval";
 import {
-	clearObjectHeap, clearArrayHeap,
+	clearObjectHeap, clearArrayHeap, RaiserValueKind,
 } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { valueToNode, synthToken } from "./bridge";
+import { ensureHostTableLoaded } from "./hostTable";
 
 // --- Evaluate a single ComptimeBlock node ---
 // Exported so the checker can eagerly fold @comptime blocks during type
@@ -35,6 +37,10 @@ import { valueToNode, synthToken } from "./bridge";
 // introduced by transforms after checking.
 
 export function evalComptimeBlock(node: Node): Node {
+	// Populate the host-call registry on first use. Idempotent — subsequent
+	// @comptime blocks reuse the same registry without re-registering.
+	ensureHostTableLoaded();
+
 	const d = node.data as ComptimeBlockData;
 	const body = d.comptimeBody;
 	const loc = node.location;
@@ -238,4 +244,87 @@ test "no comptime passes through" {
 	assert pr.ok;
 	const result = evaluateComptimeBlocks(pr.value);
 	assert result === pr.value;
+}
+
+// --- CallHost smoke tests (Phase 6) ---
+// End-to-end: parse → check → transform → Raiser codegen (emits CallHost
+// from resolved extern Symbol) → VM dispatch → registered bridge → MS-level
+// std fn (Bun shim today) → result folded into AST literal.
+//
+// Each test asserts the @comptime block folds to the expected literal kind,
+// proving the entire CallHost pipeline works from user source to value.
+
+// Smoke helper: parse a self-contained MS program (extern + call) and run
+// it through the full Raiser pipeline. This bypasses @comptime block AST
+// surgery and tests the CallHost path end-to-end: parse → check → transform
+// → codegen (emits CallHost from resolvedSym.nativeName) → VM dispatch →
+// registered bridge → MS host fn.
+
+function _smokeCallHost(src: string): RaiserContext {
+	ensureHostTableLoaded();
+	const pr = parseSource(src);
+	if (!pr.ok) {
+		unreachable;
+		return null as unknown as RaiserContext;
+	}
+	return evalASTFull(pr.value);
+}
+
+test "comptime CallHost msProcessPlatform" {
+	const ctx = _smokeCallHost("extern function msProcessPlatform(): string; return msProcessPlatform();");
+	assert ctx.lastError === "";
+	assert ctx.lastResult.kind === RaiserValueKind.String;
+	assert ctx.lastResult.strVal.length > 0;
+}
+
+test "comptime CallHost msProcessCwd" {
+	const ctx = _smokeCallHost("extern function msProcessCwd(): string; return msProcessCwd();");
+	assert ctx.lastError === "";
+	assert ctx.lastResult.kind === RaiserValueKind.String;
+	assert ctx.lastResult.strVal.length > 0;
+}
+
+test "comptime CallHost msFsExists present file" {
+	const ctx = _smokeCallHost("extern function msFsExists(path: string): number; return msFsExists(\"README.md\");");
+	assert ctx.lastError === "";
+	assert ctx.lastResult.intVal === 1;
+}
+
+test "comptime CallHost msFsExists missing file" {
+	const ctx = _smokeCallHost("extern function msFsExists(path: string): number; return msFsExists(\"/tmp/__nope_xyz__\");");
+	assert ctx.lastError === "";
+	assert ctx.lastResult.intVal === 0;
+}
+
+test "comptime CallHost msFsIsFile README" {
+	const ctx = _smokeCallHost("extern function msFsIsFile(path: string): number; return msFsIsFile(\"README.md\");");
+	assert ctx.lastError === "";
+	assert ctx.lastResult.intVal === 1;
+}
+
+test "comptime CallHost msFsIsDir cwd" {
+	const ctx = _smokeCallHost("extern function msFsIsDir(path: string): number; return msFsIsDir(\".\");");
+	assert ctx.lastError === "";
+	assert ctx.lastResult.intVal === 1;
+}
+
+test "comptime CallHost msFsFileSize positive" {
+	const ctx = _smokeCallHost("extern function msFsFileSize(path: string): number; return msFsFileSize(\"README.md\");");
+	assert ctx.lastError === "";
+	assert ctx.lastResult.intVal > 0;
+}
+
+test "comptime CallHost msProcessGetEnv missing var" {
+	const ctx = _smokeCallHost("extern function msProcessGetEnv(name: string): string; return msProcessGetEnv(\"__NEVER_SET_ABCXYZ__\");");
+	assert ctx.lastError === "";
+	assert ctx.lastResult.kind === RaiserValueKind.String;
+	assert ctx.lastResult.strVal === "";
+}
+
+// Pure-MS test (no CallHost) — verifies the smoke harness compiles plain MS
+// correctly so any CallHost failures aren't masked by harness issues.
+test "comptime smoke harness pure MS" {
+	const ctx = _smokeCallHost("function add(a: number, b: number): number { return a + b; } return add(10, 32);");
+	assert ctx.lastError === "";
+	assert ctx.lastResult.intVal === 42;
 }

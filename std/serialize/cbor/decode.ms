@@ -116,23 +116,94 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			continue;
 		}
 
-		// Array field — emit `cborToXArray(getDynamicField(cv, "f"))`.
-		// V1.5: atomic-element arrays only; struct-element arrays deferred V2.
+		// Array field — V2: atomic-builtin + enum/alias + struct/interface elements.
+		// Builtin → per-type fast helper (cborToXArray).
+		// Non-builtin Identifier (enum / type alias) → `_cborToIntArray<T>` generic.
+		// Struct/interface → `_cborToStructArray<T>` generic.
+		// Bare `null` witness — T binds via Pass 3 contextual return-type
+		// binding (Nim parity inheritBindings, semcall.nim:777-859). See
+		// bug024 + std/serialize/json/decode.ms array branch for rationale.
 		if (ftype.kind === NodeKind.TypeArray) {
 			const elemType: Node = ftype.typExprElement;
-			if (elemType.kind !== NodeKind.Identifier) {
-				error("cborValueToStruct: V1.5 array fields support atomic-element types only; struct-element arrays deferred to V2 (field '" + fname + "')", witness);
+			let en: string = "";
+			let elemIsStruct: boolean = false;
+			if (elemType.kind === NodeKind.Identifier) {
+				en = elemType.name;
+			} else if (elemType.kind === NodeKind.TypeObject) {
+				elemIsStruct = true;
+				en = elemType.typExprTypeName;
+				if (en === "") {
+					error("cborValueToStruct: anonymous struct element arrays unsupported (field '" + fname + "')", witness);
+				}
+			} else if (elemType.kind === NodeKind.TypeGeneric) {
+				const peeled: Node = elemType.typExprArgs[0];
+				if (peeled.kind === NodeKind.TypeObject) {
+					elemIsStruct = true;
+					en = peeled.typExprTypeName;
+					if (en === "") {
+						error("cborValueToStruct: anonymous struct element arrays unsupported (field '" + fname + "')", witness);
+					}
+				} else {
+					error("cborValueToStruct: unsupported array element kind=TypeGeneric (field '" + fname + "')", witness);
+				}
+			} else {
+				error("cborValueToStruct: unsupported array element kind=" + elemType.kind + " (field '" + fname + "')", witness);
 			}
-			const en: string = elemType.name;
-			// Reject non-builtin element types — fall-through emits the wrong
-			// array type. See std/serialize/json/encode.ms for rationale.
 			const isBuiltin: boolean = en === "string" || en === "boolean"
 				|| en === "number" || en === "float32" || en === "float64"
 				|| en === "int8" || en === "int16" || en === "int32" || en === "int64"
 				|| en === "uint8" || en === "uint16" || en === "uint32";
-			if (!isBuiltin) {
-				error("cborValueToStruct: V1.5 array fields support builtin atomic element types only; enum/alias/struct element arrays deferred to V2 (field '" + fname + "', element type '" + en + "')", witness);
+
+			// Generic-helper path: enum/alias → _cborToIntArray<T>;
+			// struct/interface → _cborToStructArray<T>. Witness is bare
+			// `null` — Pass 3 contextual binding + post-mono reconciliation
+			// (bug024) bind T from caller-side `: Color[]` / `: Item[]` ctx.
+			if (elemIsStruct || !isBuiltin) {
+				const getCall: Node = {
+					kind: NodeKind.CallExpr,
+					line: cv.line,
+					column: cv.column,
+					callee: {
+						kind: NodeKind.Identifier,
+						line: cv.line,
+						column: cv.column,
+						name: "getDynamicField",
+					},
+					arguments: [
+						cv,
+						{
+							kind: NodeKind.StringLiteral,
+							line: cv.line,
+							column: cv.column,
+							value: fname,
+						},
+					],
+				};
+				const witnessNode: Node = {
+					kind: NodeKind.NullLiteral,
+					line: cv.line,
+					column: cv.column,
+					nullPlaceholder: true,
+				};
+				const helperName: string = elemIsStruct ? "_cborToStructArray" : "_cborToIntArray";
+				const arrCall: Node = {
+					kind: NodeKind.CallExpr,
+					line: cv.line,
+					column: cv.column,
+					callee: {
+						kind: NodeKind.Identifier,
+						line: cv.line,
+						column: cv.column,
+						name: helperName,
+					},
+					arguments: [getCall, witnessNode],
+				};
+				keyNodes.push(fname);
+				valueNodes.push(arrCall);
+				i = i + 1;
+				continue;
 			}
+
 			// IF-ELSE not match (Raiser VM string-match bug, see memory).
 			let arrHelper: string = "cborToInt64Array";
 			if (en === "string") arrHelper = "cborToStringArray";

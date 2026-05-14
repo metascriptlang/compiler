@@ -83,6 +83,14 @@ export enum RaiserOpcode {
 
 	// Host builtins (1)
 	Builtin,          // ABC: R[A] = builtin[B](args from R[A+1]..R[A+C])
+
+	// Host call by name (1)
+	// Generic native-call opcode. Replaces hardcoded numeric Builtin IDs:
+	// the name is looked up in the host registry at dispatch time, and
+	// arguments are marshalled per the registered signature tag.
+	// New stdlib externs require zero VM/codegen edits — they self-register
+	// through the auto-generated host table (see runtime/raiser/hostTable.c).
+	CallHost,         // ABC: R[A] = hostFn[constants[B].strVal](R[A+1]..R[A+C])
 }
 
 // --- Instruction ---
@@ -201,4 +209,24 @@ test "opcodes are distinct" {
 	assert RaiserOpcode.AddI64 !== RaiserOpcode.SubI64;
 	assert RaiserOpcode.Jump !== RaiserOpcode.Call;
 	assert RaiserOpcode.Halt !== RaiserOpcode.Ret;
+}
+
+test "CallHost ABC round-trip" {
+	// A = dst register, B = name constant index, C = argc
+	const inst = raiserABC(RaiserOpcode.CallHost, 3, 7, 2);
+	assert inst.op === RaiserOpcode.CallHost;
+	assert inst.a === 3;
+	assert inst.b === 7;
+	assert inst.c === 2;
+}
+
+test "CallHost distinct from Builtin" {
+	assert RaiserOpcode.CallHost !== RaiserOpcode.Builtin;
+}
+
+test "CallHost zero args" {
+	// Edge case: void-arg native (e.g., msFsLastErrno)
+	const inst = raiserABC(RaiserOpcode.CallHost, 0, 0, 0);
+	assert inst.op === RaiserOpcode.CallHost;
+	assert inst.c === 0;
 }

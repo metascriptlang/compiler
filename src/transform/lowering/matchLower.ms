@@ -13,7 +13,7 @@
 // Or-patterns [p1, p2] → $m === p1 || $m === p2
 // Binding patterns (identifier) → const name = $m; prepended to body
 
-import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type, isEmptyBlock } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type, SymbolKind, isEmptyBlock } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, containsExprKind, replaceInExpr } from "../walker";
 import {
@@ -228,7 +228,10 @@ function canUseSwitchDispatch(cases: Node[], discType: Type): boolean {
 		for (let j = 0; j < cd.casePatterns.length; j += 1) {
 			const p = cd.casePatterns[j];
 			if (p.kind === NodeKind.NumberLiteral) continue;
-			if (p.kind === NodeKind.Identifier && p.resolvedSym !== null) continue;
+			if (p.kind === NodeKind.Identifier && p.resolvedSym !== null) {
+				if (p.resolvedSym.symbolKind === SymbolKind.EnumMember) continue;
+				return false;
+			}
 			if (p.kind === NodeKind.MemberExpr) {
 				// Only accept enum member access (Color.Red), not .code or other property access.
 				// .code patterns are MemberExpr but resolve to runtime values, not constants.
