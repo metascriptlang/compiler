@@ -6,9 +6,8 @@
 //   - flow.ms narrows Maybe<T> via `=== null` / `!== null` checks
 //   - nullableLower rewrites narrowed identifier/member to .value
 //
-// Each section guards against a specific regression discovered during the
-// Bug 3 fix in metacraft/lightcube/docs/COMPILER-BUGS.md. If any of these
-// fail in the future, the gap re-opened.
+// Each section guards against a specific regression. If any of these fail
+// in the future, the gap re-opened.
 
 // ===== Shared definitions =====
 
@@ -20,7 +19,7 @@ interface Cube {
 }
 
 // ===== Var-decl with value (regression for fitNode wrap + boolValue field name) =====
-// Round-1 bug: fitNode emitted `{ value: true }` instead of `{ boolValue: true }`,
+// Regression: fitNode emitted `{ value: true }` instead of `{ boolValue: true }`,
 // silently producing `present: false` for ALL non-null inits. Probes that only
 // asserted "ok" missed it; only assertions that READ the value catch the bug.
 

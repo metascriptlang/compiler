@@ -257,18 +257,35 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		}
 	}
 
-	// Cross-module generic mono — carry the AST for generic functions and
-	// static generic methods so importing modules can clone+substitute.
-	// Non-generic decls and class instance methods don't need this path
-	// (instance methods on generic classes go through class instantiation).
+	// Cross-module AST preservation:
+	//   - Generic FunctionDecl / static generic MethodDecl: required for
+	//     cross-module mono (importing modules clone + substitute type args).
+	//   - Non-generic FunctionDecl: Raiser @comptime walker needs the body
+	//     AST to compile cross-module fns into bytecode (Phase 8b). Safe
+	//     because `ensureShaped → resolveFunction` is self-contained — it
+	//     resolves the fn's own signature/body without cross-polluting the
+	//     importer's type registry.
+	//   - EnumDecl: Phase 8c walker injects enum decls for nested access
+	//     (e.g., `r.error.kind` returns IoErrorKind). Safe because
+	//     `ensureShaped` has no EnumDecl handler (falls to `_ => {}`).
+	//
+	// NOT preserved (intentionally): ClassDecl / ActorDecl / InterfaceDecl
+	// / TypeAliasDecl. Their `ensureShaped` handlers (resolveClass /
+	// resolveActor / resolveInterface / resolveTypeAlias) walk member
+	// types and re-resolve foreign type references in the importer's
+	// scope, polluting the type registry. For Phase 8c walker access to
+	// Interface/TypeAlias decls, read `expInfo.symType.sym.declNode`
+	// instead (Type.sym chain bridges across modules; verified empirically
+	// for InterfaceDecl).
 	let exportDeclNode: Node = null as unknown as Node;
 	if (sym.declNode !== null) {
 		if (sym.declNode.kind === NodeKind.FunctionDecl) {
-			const fd = sym.declNode.data as FunctionDeclData;
-			if (isGenericFn(fd.fnFlags)) exportDeclNode = sym.declNode;
+			exportDeclNode = sym.declNode;
 		} else if (sym.declNode.kind === NodeKind.MethodDecl) {
 			const md = sym.declNode.data as MethodDeclData;
 			if (md.methodIsStatic && isGenericFn(md.methodFlags)) exportDeclNode = sym.declNode;
+		} else if (sym.declNode.kind === NodeKind.EnumDecl) {
+			exportDeclNode = sym.declNode;
 		}
 	}
 

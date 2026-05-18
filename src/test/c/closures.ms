@@ -3,10 +3,8 @@
 
 import { compileToC } from "../helpers";
 
-// Restored 2026-05-12 after Bug F (parser rejected zero-param `(): T =>`)
-// shipped. Closures DO work end-to-end now — see bug021_*.ms for the
-// regression coverage of the parser side, and the lambda-lifting +
-// codegen path is exercised by these E2E tests.
+// Closures work end-to-end — see bug021_*.ms for the parser-side regression
+// coverage; the lambda-lifting + codegen path is exercised by these E2E tests.
 
 test "E2E C: non-capturing arrow function" {
 	const src = "const double = (n: number): number => n * 2;\nconst r = double(5);";

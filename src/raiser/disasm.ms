@@ -64,6 +64,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.BitNot => "BitNot",
 		RaiserOpcode.ShiftLeft => "ShiftLeft",
 		RaiserOpcode.ShiftRight => "ShiftRight",
+		RaiserOpcode.CallHost => "CallHost",
 	};
 }
 

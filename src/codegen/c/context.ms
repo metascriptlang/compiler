@@ -562,7 +562,6 @@ export interface TestEntry {
 }
 
 export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
-	// Initialize all 10 sections
 	const sections: Builder[] = [];
 	for (let i = 0; i < 10; i += 1) {
 		const b = createBuilder();

@@ -44,7 +44,7 @@ import { CliOptions, Target } from "./options";
 import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileCFile, linkObjects, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker, markCppCompile } from "./cc";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, writeCSource, writeCompileFingerprint, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
+import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCSource, writeCompileFingerprint, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
@@ -167,7 +167,6 @@ function getSourceLine(source: string, lineNum: number): string {
 	let i = 0;
 	while (i < source.byteLength) {
 		if (currentLine === lineNum) {
-			// Find end of this line
 			let lineEnd = i;
 			while (lineEnd < source.byteLength && source.slice(lineEnd, lineEnd + 1) !== "\n") {
 				lineEnd = lineEnd + 1;
@@ -332,7 +331,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	graphPreludeCtx = getPreludeContext();
 	// Report type errors but continue — allows codegen to proceed past non-fatal checker issues
 	reportModuleErrors(graph, "type error");
-	// Per-module phase (line 476) skips warnings via Severity check — no clearing needed
+	// Per-module phase skips warnings via Severity check — no clearing needed
 	return graph;
 }
 
@@ -1107,7 +1106,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 				oFiles = appendFlag(oFiles, oFile);
 				if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
 			} else {
-				// Bug 6: write only .c source BEFORE compile (always — debuggable).
+				// Write only .c source BEFORE compile (always — debuggable).
 				// Defer fingerprint (.cfp) until after successful compile so a
 				// failed zig cc doesn't leave a false cache hit for the next run.
 				writeCSource(p.modPath, cCode);
@@ -1121,7 +1120,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 					invalidateCompileCache(p.modPath);
 					if (opts.targetOs !== "solana") {
 						console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccRes.error.exitCode})`)}`);
-						if (ccRes.error.stderr !== "") console.log(ccRes.error.stderr);
+						if (ccRes.error.errorOutput !== "") console.log(ccRes.error.errorOutput);
 					}
 				} else {
 					writeCompileFingerprint(p.modPath, cCode, compileCmd);
@@ -1169,7 +1168,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const dispRes = compileCFile(dispFile, dispObj, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (!dispRes.ok) {
 			console.log(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${dispRes.error.exitCode})`)}`);
-			if (dispRes.error.stderr !== "") console.log(dispRes.error.stderr);
+			if (dispRes.error.errorOutput !== "") console.log(dispRes.error.errorOutput);
 			exit(1);
 		}
 		oFiles = appendFlag(oFiles, dispObj);
@@ -1218,14 +1217,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const linkRes = linkSolana(oFiles, outBinary);
 		if (!linkRes.ok) {
 			console.log(`${error("error")}: sbpf-linker failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
-			if (linkRes.error.stderr !== "") console.log(linkRes.error.stderr);
+			if (linkRes.error.errorOutput !== "") console.log(linkRes.error.errorOutput);
 			exit(1);
 		}
 	} else {
 		const linkRes = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (!linkRes.ok) {
 			console.log(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
-			if (linkRes.error.stderr !== "") console.log(linkRes.error.stderr);
+			if (linkRes.error.errorOutput !== "") console.log(linkRes.error.errorOutput);
 			exit(1);
 		}
 	}
@@ -1369,7 +1368,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			oFiles = appendFlag(oFiles, oFile);
 			if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
 		} else {
-			// Bug 6: same fix as main path — defer fingerprint until success.
+			// Same as main path — defer fingerprint until success.
 			writeCSource(p.modPath, cCode);
 			const cFile = stableCFile(p.modPath);
 			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
@@ -1377,7 +1376,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			if (!ccRes.ok) {
 				invalidateCompileCache(p.modPath);
 				console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccRes.error.exitCode})`)}`);
-				if (ccRes.error.stderr !== "") console.log(ccRes.error.stderr);
+				if (ccRes.error.errorOutput !== "") console.log(ccRes.error.errorOutput);
 				exit(1);
 			}
 			writeCompileFingerprint(p.modPath, cCode, compileCmd);
@@ -1395,7 +1394,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const dispRes = compileCFile(dispFile, dispObj, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 	if (!dispRes.ok) {
 		console.log(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${dispRes.error.exitCode})`)}`);
-		if (dispRes.error.stderr !== "") console.log(dispRes.error.stderr);
+		if (dispRes.error.errorOutput !== "") console.log(dispRes.error.errorOutput);
 		exit(1);
 	}
 	oFiles = appendFlag(oFiles, dispObj);
@@ -1409,7 +1408,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary);
 	if (!linkRes.ok) {
 		console.log(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
-		if (linkRes.error.stderr !== "") console.log(linkRes.error.stderr);
+		if (linkRes.error.errorOutput !== "") console.log(linkRes.error.errorOutput);
 		exit(1);
 	}
 
@@ -1465,8 +1464,8 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 		if (r.value !== "") console.log(r.value);
 		exit(0);
 	}
-	if (r.error.stdout !== "") console.log(r.error.stdout);
-	if (r.error.stderr !== "") console.log(r.error.stderr);
+	if (r.error.output !== "") console.log(r.error.output);
+	if (r.error.errorOutput !== "") console.log(r.error.errorOutput);
 	exit(r.error.exitCode !== 0 ? r.error.exitCode : 1);
 }
 

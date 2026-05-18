@@ -94,6 +94,7 @@ export function identToKeyword(ident: string): TokenKind {
 		"let" => TokenKind.Let,
 		"new" => TokenKind.New,
 		"null" => TokenKind.Null,
+		"undefined" => TokenKind.Null,
 		"return" => TokenKind.Return,
 		"super" => TokenKind.Super,
 		"switch" => TokenKind.Switch,

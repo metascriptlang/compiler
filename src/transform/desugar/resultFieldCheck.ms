@@ -51,7 +51,6 @@ function wrapWithCheck(accessNode: Node, resultObj: Node, checkFnName: string): 
 	const checkCall = makeCall(makeIdent(checkFnName, loc), [resultObj], loc);
 	const checkStmt = makeExprStmt(checkCall, loc);
 	// The original member access becomes the last expression in the block
-	// For now, just return the check + original as a block
 	return makeBlock([checkStmt, makeExprStmt(accessNode, loc)], loc);
 }
 

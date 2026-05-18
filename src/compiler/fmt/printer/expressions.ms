@@ -17,7 +17,7 @@ import {
 	docCommaSepList,
 } from "../doc";
 import { callPrintNode } from "./callbacks";
-import { flagHas, flagGet, buildParamList, paramListInParens } from "./statements";
+import { flagHas, buildParamList, paramListInParens } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as BinaryExprData;

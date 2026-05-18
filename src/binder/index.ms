@@ -4,7 +4,5 @@
 // and before type check. Each reference expression (Identifier, MemberExpr,
 // ArrayAccess) gets a `flowNode` attached, which the checker queries via
 // src/checker/flow.ms to compute narrowed types at each program point.
-//
-// Reference: microsoft/typescript-go/internal/binder/binder.go
 
 export { bindFlowGraph, BinderState } from "./binder";

@@ -27,7 +27,7 @@ export function writeFile(path: string, content: string): Result<void, IoError> 
 		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
 		return Result.err(writeFailed(path, "write failed"));
 	}
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 export function appendFile(path: string, content: string): Result<void, IoError> {
@@ -37,34 +37,34 @@ export function appendFile(path: string, content: string): Result<void, IoError>
 		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
 		return Result.err(writeFailed(path, "append failed"));
 	}
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 // Change POSIX permission bits on a path. Mode is passed as a decimal int32
 // (e.g. 384 for rw------- = 0600). No-op on Windows.
 export function chmod(path: string, mode: int32): Result<void, IoError> {
-	if (msFsChmod(path, mode) === 1) return Result.ok(null as unknown as void);
+	if (msFsChmod(path, mode) === 1) return Result.ok(null);
 	const err = msFsLastErrno();
 	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.err(writeFailed(path, "chmod failed"));
 }
 
 export function mkdir(path: string): Result<void, IoError> {
-	if (msFsMkdir(path) === 1) return Result.ok(null as unknown as void);
+	if (msFsMkdir(path) === 1) return Result.ok(null);
 	const err = msFsLastErrno();
 	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.err(writeFailed(path, "mkdir failed"));
 }
 
 export function rmdir(path: string): Result<void, IoError> {
-	if (msFsRmdir(path) === 1) return Result.ok(null as unknown as void);
+	if (msFsRmdir(path) === 1) return Result.ok(null);
 	const err = msFsLastErrno();
 	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.err(writeFailed(path, "rmdir failed"));
 }
 
 export function remove(path: string): Result<void, IoError> {
-	if (msFsRemove(path) === 1) return Result.ok(null as unknown as void);
+	if (msFsRemove(path) === 1) return Result.ok(null);
 	const err = msFsLastErrno();
 	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.err(writeFailed(path, "remove failed"));
@@ -80,7 +80,7 @@ export function remove(path: string): Result<void, IoError> {
 // for pathological trees (> ~1000 deep). Symlink handling follows
 // whatever runtime/fs/*.c does for remove().
 export function removeAll(path: string): Result<void, IoError> {
-	if (!exists(path)) return Result.ok(null as unknown as void);
+	if (!exists(path)) return Result.ok(null);
 	if (isDir(path)) {
 		for (const entry of readDir(path)) {
 			// readDir marks directories with a trailing "/" — strip for the child path.
@@ -94,7 +94,7 @@ export function removeAll(path: string): Result<void, IoError> {
 }
 
 export function rename(oldPath: string, newPath: string): Result<void, IoError> {
-	if (msFsRename(oldPath, newPath) === 1) return Result.ok(null as unknown as void);
+	if (msFsRename(oldPath, newPath) === 1) return Result.ok(null);
 	const err = msFsLastErrno();
 	if (err !== 0) return Result.err(ioErrorFromErrno(err, oldPath));
 	return Result.err(writeFailed(oldPath, "rename failed"));
@@ -141,7 +141,7 @@ export function copyFile(src: string, dst: string): Result<void, IoError> {
 }
 
 export function ensureDir(path: string): Result<void, IoError> {
-	if (msFsExists(path) === 1) return Result.ok(null as unknown as void);
+	if (msFsExists(path) === 1) return Result.ok(null);
 	let i = 0;
 	while (i < path.length) {
 		if (path.charCodeAt(i) === "/".code) {
@@ -158,5 +158,5 @@ export function ensureDir(path: string): Result<void, IoError> {
 	if (msFsExists(path) !== 1) {
 		return mkdir(path);
 	}
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }

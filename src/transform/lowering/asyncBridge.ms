@@ -107,13 +107,13 @@ function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
 // Zero value for a type — used as fallback in msFutureReadT(f, zeroval) when future failed
 function zeroValueForType(t: Type, loc: SourceLocation): Node {
 	if (t === null) return makeNull(loc);
-	if (t.kind === TypeKind.Number || t.kind === TypeKind.Float64 || t.kind === TypeKind.Float32
-		|| t.kind === TypeKind.Int8 || t.kind === TypeKind.Int16 || t.kind === TypeKind.Int32 || t.kind === TypeKind.Int64) {
-		return makeNumber(0, loc);
-	}
-	if (t.kind === TypeKind.Boolean) return makeBool(false, loc);
-	if (t.kind === TypeKind.String) return makeString("", loc);
-	return makeNull(loc);
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32
+			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => makeNumber(0, loc),
+		TypeKind.Boolean => makeBool(false, loc),
+		TypeKind.String => makeString("", loc),
+		_ => makeNull(loc),
+	};
 }
 
 // ===== Core: Rewrite a was-async function body =====
@@ -194,41 +194,48 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt === null) continue;
-		if (stmt.kind === NodeKind.ReturnStmt) {
-			const rd = stmt.data as ReturnStmtData;
-			const isVoidReturn = fnReturnInner === null || fnReturnInner.kind === TypeKind.Void;
+		match (stmt.kind) {
+			NodeKind.ReturnStmt => {
+				const rd = stmt.data as ReturnStmtData;
+				const isVoidReturn = fnReturnInner === null || fnReturnInner.kind === TypeKind.Void;
 
-			const completeStmts = makeFutureCompleteStmts(rd.argument, isVoidReturn, promiseType, fnReturnInner, loc);
-			const blockStmts: Node[] = [makeStateAssign(-1, loc)];
-			for (const cs of completeStmts) blockStmts.push(cs);
-			blockStmts.push(makeReturn(makeNull(loc), loc));
-			const block = makeBlock(blockStmts, loc);
-			stmts[i] = block;
-		} else if (stmt.kind === NodeKind.BlockStmt) {
-			const bd = stmt.data as BlockStmtData;
-			rewriteAsyncReturns(bd.statements, promiseType, fnReturnInner, loc);
-		} else if (stmt.kind === NodeKind.IfStmt) {
-			const id = stmt.data as IfStmtData;
-			if (id.consequent !== null && id.consequent.kind === NodeKind.BlockStmt) {
-				rewriteAsyncReturns((id.consequent.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
-			}
-			if (id.alternate !== null && id.alternate.kind === NodeKind.BlockStmt) {
-				rewriteAsyncReturns((id.alternate.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
-			}
-		} else if (stmt.kind === NodeKind.WhileStmt) {
-			const wd = stmt.data as WhileStmtData;
-			if (wd.whileBody !== null && wd.whileBody.kind === NodeKind.BlockStmt) {
-				rewriteAsyncReturns((wd.whileBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
-			}
-		} else if (stmt.kind === NodeKind.TryCatchStmt) {
-			const td = stmt.data as TryCatchStmtData;
-			if (td.tryBody !== null && td.tryBody.kind === NodeKind.BlockStmt) {
-				rewriteAsyncReturns((td.tryBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
-			}
-			if (td.catchBody !== null && td.catchBody.kind === NodeKind.BlockStmt) {
-				rewriteAsyncReturns((td.catchBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
-			}
-		}
+				const completeStmts = makeFutureCompleteStmts(rd.argument, isVoidReturn, promiseType, fnReturnInner, loc);
+				const blockStmts: Node[] = [makeStateAssign(-1, loc)];
+				for (const cs of completeStmts) blockStmts.push(cs);
+				blockStmts.push(makeReturn(makeNull(loc), loc));
+				const block = makeBlock(blockStmts, loc);
+				stmts[i] = block;
+			},
+			NodeKind.BlockStmt => {
+				const bd = stmt.data as BlockStmtData;
+				rewriteAsyncReturns(bd.statements, promiseType, fnReturnInner, loc);
+			},
+			NodeKind.IfStmt => {
+				const id = stmt.data as IfStmtData;
+				if (id.consequent !== null && id.consequent.kind === NodeKind.BlockStmt) {
+					rewriteAsyncReturns((id.consequent.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
+				}
+				if (id.alternate !== null && id.alternate.kind === NodeKind.BlockStmt) {
+					rewriteAsyncReturns((id.alternate.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
+				}
+			},
+			NodeKind.WhileStmt => {
+				const wd = stmt.data as WhileStmtData;
+				if (wd.whileBody !== null && wd.whileBody.kind === NodeKind.BlockStmt) {
+					rewriteAsyncReturns((wd.whileBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
+				}
+			},
+			NodeKind.TryCatchStmt => {
+				const td = stmt.data as TryCatchStmtData;
+				if (td.tryBody !== null && td.tryBody.kind === NodeKind.BlockStmt) {
+					rewriteAsyncReturns((td.tryBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
+				}
+				if (td.catchBody !== null && td.catchBody.kind === NodeKind.BlockStmt) {
+					rewriteAsyncReturns((td.catchBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
+				}
+			},
+			_ => {},
+		};
 	}
 }
 
@@ -323,7 +330,7 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 				readExpr = makeCall(makeIdent(readFn, loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
 				readExpr.nodeType = varType;
 			} else {
-				// Session 3b: struct/tuple/generic-instance types spawned via
+				// Struct/tuple/generic-instance types spawned via
 				// msSpawnInto have their result stored inline (memcpy'd by worker,
 				// box freed). Use msWaitForStruct for typed inline read — same path
 				// as the WaitFor builtin. Array types still go through the boxed path

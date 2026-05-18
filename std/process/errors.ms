@@ -15,17 +15,21 @@ export enum ProcessErrorKind {
 
 // ===== Error Interface =====
 // Flat shape — matches std/io/errors.ms IoError pattern. Per-variant fields
-// (exitCode, signal, stdout, stderr) are present uniformly; irrelevant ones
-// carry 0 or "" depending on variant. Caller checks `kind` then reads the
-// relevant fields.
+// are present uniformly; irrelevant ones carry 0 or "" depending on variant.
+// Caller checks `kind` then reads the relevant fields.
+//
+// `output` / `errorOutput` are the captured stdout/stderr text from the child
+// process. NOT named `stdout`/`stderr` because those collide with Windows
+// `<stdio.h>` preprocessor macros at C codegen time (`stdout` expands to
+// `(*__acrt_iob_func(1))`), breaking the generated struct on Win cross-compile.
 
 export interface ProcessError {
 	kind: ProcessErrorKind;
-	command: string;    // command that was attempted
-	exitCode: number;   // 0 if N/A (SpawnFailed, SignalTerminated)
-	signal: number;     // 0 if not signal-terminated
-	stdout: string;     // "" if pipe failed before any data captured
-	stderr: string;     // "" if pipe failed before any data captured
+	command: string;       // command that was attempted
+	exitCode: number;      // 0 if N/A (SpawnFailed, SignalTerminated)
+	signal: number;        // 0 if not signal-terminated
+	output: string;        // "" if pipe failed before any data captured
+	errorOutput: string;   // "" if pipe failed before any data captured
 	message: string;
 }
 
@@ -37,8 +41,8 @@ export function processError(kind: ProcessErrorKind, command: string, msg: strin
 		command,
 		exitCode: 0,
 		signal: 0,
-		stdout: "",
-		stderr: "",
+		output: "",
+		errorOutput: "",
 		message: msg,
 	};
 }
@@ -49,8 +53,8 @@ export function spawnFailed(command: string, reason: string): ProcessError {
 		command,
 		exitCode: 0,
 		signal: 0,
-		stdout: "",
-		stderr: "",
+		output: "",
+		errorOutput: "",
 		message: `spawn failed: ${reason}`,
 	};
 }
@@ -61,32 +65,32 @@ export function notFound(command: string): ProcessError {
 		command,
 		exitCode: 0,
 		signal: 0,
-		stdout: "",
-		stderr: "",
+		output: "",
+		errorOutput: "",
 		message: `command not found: ${command}`,
 	};
 }
 
-export function nonZeroExit(command: string, exitCode: number, stdout: string, stderr: string): ProcessError {
+export function nonZeroExit(command: string, exitCode: number, output: string, errorOutput: string): ProcessError {
 	return {
 		kind: ProcessErrorKind.NonZeroExit,
 		command,
 		exitCode,
 		signal: 0,
-		stdout,
-		stderr,
+		output,
+		errorOutput,
 		message: `command exited with status ${exitCode}: ${command}`,
 	};
 }
 
-export function signalTerminated(command: string, signal: number, stdout: string, stderr: string): ProcessError {
+export function signalTerminated(command: string, signal: number, output: string, errorOutput: string): ProcessError {
 	return {
 		kind: ProcessErrorKind.SignalTerminated,
 		command,
 		exitCode: 0,
 		signal,
-		stdout,
-		stderr,
+		output,
+		errorOutput,
 		message: `command terminated by signal ${signal}: ${command}`,
 	};
 }
@@ -97,8 +101,8 @@ export function pipeError(command: string, reason: string): ProcessError {
 		command,
 		exitCode: 0,
 		signal: 0,
-		stdout: "",
-		stderr: "",
+		output: "",
+		errorOutput: "",
 		message: `pipe error: ${reason}`,
 	};
 }
@@ -139,7 +143,7 @@ test "nonZeroExit captures output" {
 	const e = nonZeroExit("ls /nope", 2, "", "ls: /nope: No such file or directory\n");
 	assert e.kind === ProcessErrorKind.NonZeroExit;
 	assert e.exitCode === 2;
-	assert e.stderr.indexOf("No such file") >= 0;
+	assert e.errorOutput.indexOf("No such file") >= 0;
 	assert e.signal === 0;
 }
 
@@ -153,8 +157,8 @@ test "signalTerminated has signal number" {
 test "pipeError has empty captures" {
 	const e = pipeError("ls", "read() failed");
 	assert e.kind === ProcessErrorKind.PipeError;
-	assert e.stdout === "";
-	assert e.stderr === "";
+	assert e.output === "";
+	assert e.errorOutput === "";
 }
 
 test "isNotFound classification" {

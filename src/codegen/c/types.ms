@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, SymbolKind } from "../../ast/node";
@@ -552,6 +552,12 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent) {
 		return getTypeDesc(g, t.typeReturn);
 	}
+	// Distinct types are nominal in the checker only — at the C ABI level they
+	// share the underlying type's representation (e.g. `distinct type UserId =
+	// number` compiles to `double`).
+	if (t.kind === TypeKind.Distinct) {
+		return getTypeDesc(g, t.typeReturn);
+	}
 	// Check simple types first (no caching needed)
 	const simple = getSimpleTypeDesc(t);
 	if (simple !== "") {
@@ -563,130 +569,130 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached !== "") return cached;
 
-	// Generate based on kind — if-else chain to avoid match arm DRC scope cleanup
-	// destroying local strings before they can be used as return values.
-	const k = t.kind;
-	if (k === TypeKind.Enum) return genEnumType(g, t);
-	// EnumLiteral: treated as its underlying enum for C codegen (ints at runtime)
-	if (k === TypeKind.EnumLiteral) {
-		if (t.typeReturn !== null && t.typeReturn.kind === TypeKind.Enum) return genEnumType(g, t.typeReturn);
-		return "int32_t";
-	}
-	if (k === TypeKind.Struct) return genObjectType(g, t);
-	if (k === TypeKind.Array) return genArrayType(g, t);
-	if (k === TypeKind.SizedArray) return genSizedArrayType(g, t);
-	if (k === TypeKind.Span) return genSpanType(g, t);
-	if (k === TypeKind.Function) return genFunctionType(g, t);
-	if (k === TypeKind.Ref) {
-		const inner = getTypeDesc(g, t.typeReturn);
-		const ptrType = inner + "*";
-		typeCacheSet(g.typeCache, key, ptrType);
-		return ptrType;
-	}
-	if (k === TypeKind.Ptr) {
-		const innerType = t.typeReturn;
-		if (innerType !== null && (innerType.kind === TypeKind.Ref || innerType.kind === TypeKind.Ptr)) {
-			const ptrType = getTypeDesc(g, innerType);
-			typeCacheSet(g.typeCache, key, ptrType);
-			return ptrType;
-		}
-		const inner = getTypeDesc(g, innerType);
-		const ptrType = inner + "*";
-		typeCacheSet(g.typeCache, key, ptrType);
-		return ptrType;
-	}
-	if (k === TypeKind.Var) {
-		// Reference parity: tyVar → T* in C (pass by pointer).
-		// liftdestructors uses Var<T> for lifecycle hook params (=destroy, =copy, =sink, =wasMoved).
-		const inner = getTypeDesc(g, t.typeReturn);
-		const varPtr = inner + "*";
-		typeCacheSet(g.typeCache, key, varPtr);
-		return varPtr;
-	}
-	if (k === TypeKind.Borrow) {
-		const inner = getTypeDesc(g, t.typeReturn);
-		const ptrType = "const " + inner + "*";
-		typeCacheSet(g.typeCache, key, ptrType);
-		return ptrType;
-	}
 	// Result is a boolean-discriminated match-type Union (createResult builds it).
 	// Flow through the standard GenericInstance → Union path below; no bespoke
 	// codegen needed.
 	if (isAwaitable(t)) return genFutureType(g, t);
-	if (k === TypeKind.Union) {
-		// Union(Ref<T>, Null) / Union(Ptr<T>, Null) → bare pointer.
-		// The null pointer is the natural sentinel — no Maybe wrapper needed.
-		const refMember = unwrapRefNullUnion(t);
-		if (refMember !== null) return getTypeDesc(g, refMember);
-		return genUnionType(g, t);
-	}
-	if (k === TypeKind.Tuple) return genTupleType(g, t);
-	if (k === TypeKind.Unknown) return "void*";
-	if (k === TypeKind.GenericParam) return "void*";
-	// GenericInstance: resolve to monomorphized C struct name
-	if (k === TypeKind.GenericInstance) {
-		// Build mangled name using monoTypeKey (single source of truth for C-safe type keys).
-		// Must match the checker's naming in resolvePass.ms and checkExprPass.ms.
-		let instName = t.typeName;
-		for (let gi = 0; gi < t.typeChildren.length; gi += 1) {
-			instName = `${instName}${gi === 0 ? "__" : "_"}${monoTypeKey(t.typeChildren[gi])}`;
-		}
-		const cacheKey = `object:${instName}`;
-		const cached = typeCacheGet(g.typeCache, cacheKey);
-		if (cached !== "") return cached;
-		typeCacheSet(g.typeCache, cacheKey, instName);
-		// Instantiate the base struct with concrete type args, then emit as a named struct.
-		// Peel Ref/GenericInstance to reach the underlying Struct/Union body
-		// (e.g. `Result<T, E> = Ref<ResultData<T, E>>` chains GI→Ref→GI→Union).
-		const baseType: Type | null = peelToStructOrUnion(t.typeExtra);
-		if (baseType !== null && baseType.kind === TypeKind.Struct) {
-			// Substitute generic params in fields with concrete type args
-			const genericDecl = getGenericDecl(t.typeName);
-			if (genericDecl !== "") {
-				const paramNames = splitTopLevel(genericDecl, ",");
-				let concType: Type = baseType;
-				for (let pi = 0; pi < paramNames.length; pi += 1) {
-					if (pi < t.typeChildren.length) {
-						concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);
-					}
-				}
-				// If substituteType returned the same object, clone to avoid mutating the shared base
-				if (concType === baseType) {
-					const newChildren: Type[] = [];
-					for (const c of concType.typeChildren) newChildren.push(c);
-					const newNames: string[] = [];
-					for (const n of concType.typeNames) newNames.push(n);
-					concType = createStruct(instName, newNames, newChildren, isStructType(concType));
-				} else {
-					concType.typeName = instName;
-				}
-				return genObjectType(g, concType);
+
+	return match (t.kind) {
+		TypeKind.Enum => genEnumType(g, t),
+		// EnumLiteral: treated as its underlying enum for C codegen (ints at runtime)
+		TypeKind.EnumLiteral => {
+			if (t.typeReturn !== null && t.typeReturn.kind === TypeKind.Enum) return genEnumType(g, t.typeReturn);
+			return "int32_t";
+		},
+		TypeKind.Struct => genObjectType(g, t),
+		TypeKind.Array => genArrayType(g, t),
+		TypeKind.SizedArray => genSizedArrayType(g, t),
+		TypeKind.Span => genSpanType(g, t),
+		TypeKind.Function => genFunctionType(g, t),
+		TypeKind.Ref => {
+			const inner = getTypeDesc(g, t.typeReturn);
+			const ptrType = inner + "*";
+			typeCacheSet(g.typeCache, key, ptrType);
+			return ptrType;
+		},
+		TypeKind.Ptr => {
+			const innerType = t.typeReturn;
+			if (innerType !== null && (innerType.kind === TypeKind.Ref || innerType.kind === TypeKind.Ptr)) {
+				const ptrType = getTypeDesc(g, innerType);
+				typeCacheSet(g.typeCache, key, ptrType);
+				return ptrType;
 			}
-		}
-		// Generic match-type alias: baseType is Union with discriminant metadata.
-		// Substitute generic params in variant struct fields, then emit as a named
-		// tagged union. Required for `Result<T, E> = Ref<ResultData<T, E>>` style
-		// types where ResultData is a generic match-type.
-		if (baseType !== null && baseType.kind === TypeKind.Union) {
-			const genericDecl = getGenericDecl(t.typeName);
-			if (genericDecl !== "") {
-				const paramNames = splitTopLevel(genericDecl, ",");
-				let concType: Type = baseType;
-				for (let pi = 0; pi < paramNames.length; pi += 1) {
-					if (pi < t.typeChildren.length) {
-						concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);
-					}
-				}
-				// Stamp instance name so genUnionType caches under it (Phase 1b emits typedef)
-				if (concType !== baseType) {
-					concType.typeName = instName;
-				}
-				return genUnionType(g, concType);
+			const inner = getTypeDesc(g, innerType);
+			const ptrType = inner + "*";
+			typeCacheSet(g.typeCache, key, ptrType);
+			return ptrType;
+		},
+		TypeKind.Var => {
+			// Reference parity: tyVar → T* in C (pass by pointer).
+			// liftdestructors uses Var<T> for lifecycle hook params (=destroy, =copy, =sink, =wasMoved).
+			const inner = getTypeDesc(g, t.typeReturn);
+			const varPtr = inner + "*";
+			typeCacheSet(g.typeCache, key, varPtr);
+			return varPtr;
+		},
+		TypeKind.Borrow => {
+			const inner = getTypeDesc(g, t.typeReturn);
+			const ptrType = "const " + inner + "*";
+			typeCacheSet(g.typeCache, key, ptrType);
+			return ptrType;
+		},
+		TypeKind.Union => {
+			// Union(Ref<T>, Null) / Union(Ptr<T>, Null) → bare pointer.
+			// The null pointer is the natural sentinel — no Maybe wrapper needed.
+			const refMember = unwrapRefNullUnion(t);
+			if (refMember !== null) return getTypeDesc(g, refMember);
+			return genUnionType(g, t);
+		},
+		TypeKind.Tuple => genTupleType(g, t),
+		TypeKind.Unknown => "void*",
+		TypeKind.GenericParam => "void*",
+		// GenericInstance: resolve to monomorphized C struct name
+		TypeKind.GenericInstance => {
+			// Build mangled name using monoTypeKey (single source of truth for C-safe type keys).
+			// Must match the checker's naming in resolvePass.ms and checkExprPass.ms.
+			let instName = t.typeName;
+			for (let gi = 0; gi < t.typeChildren.length; gi += 1) {
+				instName = `${instName}${gi === 0 ? "__" : "_"}${monoTypeKey(t.typeChildren[gi])}`;
 			}
-		}
-		return instName;
-	}
-	return "void";
+			const cacheKey = `object:${instName}`;
+			const cached = typeCacheGet(g.typeCache, cacheKey);
+			if (cached !== "") return cached;
+			typeCacheSet(g.typeCache, cacheKey, instName);
+			// Instantiate the base struct with concrete type args, then emit as a named struct.
+			// Peel Ref/GenericInstance to reach the underlying Struct/Union body
+			// (e.g. `Result<T, E> = Ref<ResultData<T, E>>` chains GI→Ref→GI→Union).
+			const baseType: Type | null = peelToStructOrUnion(t.typeExtra);
+			if (baseType !== null && baseType.kind === TypeKind.Struct) {
+				// Substitute generic params in fields with concrete type args
+				const genericDecl = getGenericDecl(t.typeName);
+				if (genericDecl !== "") {
+					const paramNames = splitTopLevel(genericDecl, ",");
+					let concType: Type = baseType;
+					for (let pi = 0; pi < paramNames.length; pi += 1) {
+						if (pi < t.typeChildren.length) {
+							concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);
+						}
+					}
+					// If substituteType returned the same object, clone to avoid mutating the shared base
+					if (concType === baseType) {
+						const newChildren: Type[] = [];
+						for (const c of concType.typeChildren) newChildren.push(c);
+						const newNames: string[] = [];
+						for (const n of concType.typeNames) newNames.push(n);
+						concType = createStruct(instName, newNames, newChildren, isStructType(concType));
+					} else {
+						concType.typeName = instName;
+					}
+					return genObjectType(g, concType);
+				}
+			}
+			// Generic match-type alias: baseType is Union with discriminant metadata.
+			// Substitute generic params in variant struct fields, then emit as a named
+			// tagged union. Required for `Result<T, E> = Ref<ResultData<T, E>>` style
+			// types where ResultData is a generic match-type.
+			if (baseType !== null && baseType.kind === TypeKind.Union) {
+				const genericDecl = getGenericDecl(t.typeName);
+				if (genericDecl !== "") {
+					const paramNames = splitTopLevel(genericDecl, ",");
+					let concType: Type = baseType;
+					for (let pi = 0; pi < paramNames.length; pi += 1) {
+						if (pi < t.typeChildren.length) {
+							concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);
+						}
+					}
+					// Stamp instance name so genUnionType caches under it (Phase 1b emits typedef)
+					if (concType !== baseType) {
+						concType.typeName = instName;
+					}
+					return genUnionType(g, concType);
+				}
+			}
+			return instName;
+		},
+		_ => "void",
+	};
 }
 
 // ===== Enum Type Generation =====
@@ -755,7 +761,6 @@ function genObjectType(g: CGen, t: Type): string {
 		fieldTypes.push(ft);
 	}
 
-	// Build struct definition string
 	let structDef = `#ifndef ${name}_DEFINED\n#define ${name}_DEFINED\nstruct ${name} {\n`;
 	for (let i = 0; i < t.typeNames.length; i += 1) {
 		structDef = structDef + `  ${fieldTypes[i]} ${mangleFieldName(t.typeNames[i])};\n`;

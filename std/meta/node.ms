@@ -363,9 +363,13 @@ export type NodeData =
 	// TypeName uses NodeKind.Identifier with { name: string } — reuses expression kind for type leaf nodes
 	| { typExprBase: Node, typExprArgs: Node[] }                   // TypeGeneric
 	| { typExprElement: Node, typExprSize: number }                // TypeArray (-1 = unsized)
-	| { typExprMembers: Node[] }                                   // TypeUnion
-	// TypeIntersection reuses the same data shape as TypeUnion (Node[] of operands).
-	// Discriminated by NodeKind only.
+	// TypeUnion — discriminator metadata surfaced for tagged-union codecs (V3).
+	// discFieldName="" + variantKeys=[] + discKind="" mean "no detectable disc"
+	// (TS-style DUs auto-detected by codecs walking variants; match-type DUs
+	// have these populated by bridge from Type.typeNames + typeExtra).
+	// discKind ∈ {"boolean","enum",""} ("" = no disc / TS-style).
+	| { typExprMembers: Node[], discFieldName: string, variantKeys: string[], discKind: string }  // TypeUnion
+	// TypeIntersection — same Node[] shape, no disc info (intersections aren't DUs).
 	| { typExprMembers: Node[] }                                   // TypeIntersection
 	| { typExprParams: Node[], typExprReturn: Node, typExprParamNames: string[] } // TypeFunction
 	| { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node, typExprFieldDecorators: Node[][], typExprTypeName: string }   // TypeObject
@@ -376,17 +380,15 @@ export type NodeData =
 	// SERIALIZE A2 — macro multi-decl emission
 	| { spliceNodes: Node[] }                                      // SpliceMany
 
-// ===== Flow Graph (TypeScript-go parity) =====
+// ===== Flow Graph =====
 //
 // A Control Flow Graph built by the binder pass between parse and check.
 // Each reference expression (Identifier, MemberExpr, etc.) gets a `flowNode`
 // pointing into this graph. The checker walks antecedents backward from the
 // reference to compute a narrowed type at that program point.
 //
-// Reference: microsoft/typescript-go/internal/ast/flow.go
-//
 // Single FlowNode struct with a FlowFlags bitset tag (NOT a sum type) —
-// matches TS's design and keeps memory layout simple. Per-variant meaning:
+// keeps memory layout simple. Per-variant meaning:
 //
 // - Start            -> owning function/container (Node=container or null)
 // - Assignment       -> the assigned target (VarDecl / BindingElem / Binary LHS)
@@ -465,7 +467,7 @@ export class Node {
 	typeExprs: (Node | null)[]; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
 	paramLocations: SourceLocation[]; // Per-param source locations for DEF recording
 	typeArg: string; // Explicit generic type arg string (e.g. "Person" from parse<Person>()) — stored on AST, not side-channel
-	flowNode: FlowNode; // Flow graph node for narrowing queries (TypeScript-go parity). Null until binder runs; null for non-reference nodes.
+	flowNode: FlowNode; // Flow graph node for narrowing queries. Null until binder runs; null for non-reference nodes.
 	// Type-AST hint preserved across macro VM round-trip. When nodeToASTLiteral
 	// serializes a Node into the macro VM's heap, it embeds the type info as
 	// a type-AST. valueToNode → readNodeFromObject reconstructs the Node but
@@ -571,8 +573,17 @@ export type ComptimeBlockData = { comptimeBody: Node };
 // Leaf type names use IdentifierData (NodeKind.Identifier) — reuses expression kind for type leaf nodes
 export type TypeGenericData = { typExprBase: Node, typExprArgs: Node[] };
 export type TypeArrayData = { typExprElement: Node, typExprSize: number };
-export type TypeUnionData = { typExprMembers: Node[] };
-// TypeIntersectionData has the same shape as TypeUnionData; discriminated by NodeKind.
+// TypeUnionData — variants + discriminator metadata (V3 tagged-union support).
+// discFieldName/variantKeys/discKind populated only for match-type DUs (where
+// disc info pre-stored in Type.typeNames + typeExtra). TS-style DUs leave them
+// empty — codecs detect by walking variants (each variant struct has disc field).
+export type TypeUnionData = {
+	typExprMembers: Node[],
+	discFieldName: string,
+	variantKeys: string[],
+	discKind: string,
+};
+// TypeIntersectionData — same Node[] shape, no disc info (intersections aren't DUs).
 export type TypeIntersectionData = { typExprMembers: Node[] };
 export type TypeFunctionData = { typExprParams: Node[], typExprReturn: Node, typExprParamNames: string[] };
 // typExprIndexKey / typExprIndexValue are non-null ONLY when the type is an index signature

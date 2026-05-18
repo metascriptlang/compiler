@@ -8,7 +8,7 @@ import { error, red, green, bold, dim } from "../utils/color";
 
 // -- Shared timing + verbose helpers --
 // Extracted to separate functions to avoid DRC discard-variable bugs
-// inside conditional string concatenation (DRC workaround #21)
+// inside conditional string concatenation.
 
 export function printTiming(label: string, t0: number): void {
 	const elapsed = performance.now() - t0;

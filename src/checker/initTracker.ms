@@ -85,7 +85,6 @@ export function getDeclBlock(t: InitTracker, name: string): number {
 // Reference parity: breaksBlock — walks to last statement and determines exit state.
 export function breaksBlock(node: Node): BreakState {
 	if (node === null) return BreakState.BsNone;
-	// Walk to last statement in block
 	let it = node;
 	while (it.kind === NodeKind.BlockStmt) {
 		const bd = it.data as BlockStmtData;

@@ -89,7 +89,7 @@ export function sendNonBlock(fd: int32, data: string, offset: int32): int32 {
 }
 
 // ===== Async I/O API (Completion-based engine, for await) =====
-// Zig-style: completion semantics on all platforms.
+// Completion semantics on all platforms.
 // Readiness (epoll/kqueue): engine simulates — register → poll → syscall → complete.
 // io_uring: native — submit SQE → kernel does I/O → CQE completes.
 // User code is identical regardless of backend.

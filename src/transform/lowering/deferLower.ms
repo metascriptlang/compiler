@@ -170,7 +170,6 @@ function walkStmtList(stmts: Node[]): void {
 // Uses in-place recursion via lowerDeferInNode to avoid Node[] return aliasing.
 
 function lowerDeferInBlock(stmts: Node[], loc: SourceLocation): Node[] {
-	// Find first defer
 	let deferIdx = 0;
 	for (deferIdx = 0; deferIdx < stmts.length; deferIdx += 1) {
 		if (stmts[deferIdx].kind === NodeKind.DeferStmt) break;

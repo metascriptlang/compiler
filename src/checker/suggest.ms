@@ -415,7 +415,6 @@ function sgSymbolKindName(kind: SymbolKind): string {
 
 // Format parameter list: (a: number, b: string) or multiline if too wide.
 function sgFormatParamList(t: Type): string {
-	// Build inline first
 	let inline = "(";
 	for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 		if (i > 0) inline = inline + ", ";
@@ -1106,7 +1105,7 @@ function sgSortSuggestions(list: SgSuggest[]): void {
 
 // ===== AST-Based Completion Context Detection =====
 // Walks the parsed AST to determine completion context by node kind.
-// Aligned with reference (MemberExpr/ObjectLiteral) and rust-analyzer (classify_name_ref).
+// Aligned with reference (MemberExpr/ObjectLiteral and classify_name_ref patterns).
 
 // Find the innermost AST node at or before the given 1-based line:col.
 // Walks depth-first; among matches, prefers the one with largest column (closest to cursor).
@@ -1707,7 +1706,6 @@ export function sgCompleteObjectFields(ctx: CheckerContext, prefix: string, root
 	// Suggest fields from the struct type, excluding already-specified keys
 	for (let fi = 0; fi < t.typeNames.length; fi = fi + 1) {
 		const fname = t.typeNames[fi];
-		// Skip already-specified fields
 		let already = false;
 		for (let ei = 0; ei < existingKeys.length; ei = ei + 1) {
 			if (existingKeys[ei] === fname) { already = true; }
@@ -2087,7 +2085,6 @@ function sgGetCalleeAtCursor(source: string, line: number, col: number): string 
 				// Found the open paren. Now extract the identifier before it.
 				let end = pos;
 				pos = pos - 1;
-				// Skip whitespace
 				while (pos >= 0) {
 					const ws = source.byteAt(pos);
 					if (ws !== " ".code && ws !== "\t".code) {
@@ -2137,7 +2134,6 @@ function sgGetReceiverAtCursor(source: string, line: number, col: number): strin
 				while (pos >= 0 && sgIsIdentByte(source.byteAt(pos))) {
 					pos = pos - 1;
 				}
-				// Check for dot
 				if (pos >= 0 && source.byteAt(pos) === ".".code) {
 					pos = pos - 1;
 					// Extract receiver identifier
@@ -2389,7 +2385,6 @@ function sgCollectCallParamHints(
 	if (node.location.line < startLine) return;
 	if (node.location.line > endLine) return;
 
-	// Resolve callee name
 	let calleeName = "";
 	if (cd.callee !== null && cd.callee.kind === NodeKind.Identifier) {
 		const cid = cd.callee.data as IdentifierData;

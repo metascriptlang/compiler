@@ -10,7 +10,7 @@ import {
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
 	Doc, docText, docGroup, docIndent, docLineSuffix,
-	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin, docCommaSepList,
+	docLine, docHardLine, docIfBreak, docNil, docJoin,
 } from "../doc";
 import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";

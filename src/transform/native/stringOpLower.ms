@@ -25,7 +25,7 @@ import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, String
 import { isNumeric, isStringLike } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeUnary, makeNumber } from "../util";
+import { makeCall, makeIdent, makeNumber, makeHiddenAddr } from "../util";
 
 // ===== Main Entry Point =====
 
@@ -55,7 +55,7 @@ function rewriteStringOp(node: Node): Node {
 		const rd = d.right.data as BinaryExprData;
 		if (rd.operator === "+" && isStringTyped(d.left) && isSameIdent(d.left, rd.left)) {
 			const loc = node.location;
-			const addrOf = makeUnary("&", d.left, loc);
+			const addrOf = makeHiddenAddr(d.left, loc);
 			const right = coercePartToString(rd.right, loc);
 			const result = makeCall(makeIdent("msStringAppend", loc), [addrOf, right], loc);
 			result.nodeType = node.nodeType;
@@ -75,7 +75,7 @@ function rewriteStringOp(node: Node): Node {
 			// msStringConcat(x, p) — 2-part with self-first → msStringAppend(&x, p)
 			if (calleeName === "msStringConcat" && cd.arguments.length === 2
 					&& isSameIdent(d.left, cd.arguments[0])) {
-				const addrOf = makeUnary("&", d.left, loc);
+				const addrOf = makeHiddenAddr(d.left, loc);
 				const result = makeCall(makeIdent("msStringAppend", loc),
 						[addrOf, cd.arguments[1]], loc);
 				result.nodeType = node.nodeType;
@@ -87,7 +87,7 @@ function rewriteStringOp(node: Node): Node {
 			if (calleeName === "msStringConcatArr" && cd.arguments.length >= 3
 					&& isSameIdent(d.left, cd.arguments[1])) {
 				const newCount = cd.arguments.length - 2;
-				const addrOf = makeUnary("&", d.left, loc);
+				const addrOf = makeHiddenAddr(d.left, loc);
 				const newArgs: Node[] = [addrOf, makeNumber(newCount, loc)];
 				let i = 2;
 				while (i < cd.arguments.length) {
@@ -126,7 +126,7 @@ function rewriteStringOp(node: Node): Node {
 	// We do the same rewrite here so DRC sees a normal call (no special-casing)
 	// and codegen emits a normal call (no special-casing).
 	if (d.operator === "+=" && isStringTyped(d.left)) {
-		const addrOf = makeUnary("&", d.left, loc);
+		const addrOf = makeHiddenAddr(d.left, loc);
 		const right = coercePartToString(d.right, loc);
 		const result = makeCall(makeIdent("msStringAppend", loc), [addrOf, right], loc);
 		result.nodeType = node.nodeType;

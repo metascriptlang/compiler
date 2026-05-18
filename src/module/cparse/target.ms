@@ -1,7 +1,6 @@
 // cparse — Target model and predefined macros
-// Not in chibicc (chibicc hardcodes x86-64 Linux ILP64).
 // Parameterizes sizeof/alignof/struct layout so FFI bindings are correct
-// across targets.
+// across targets (instead of hardcoding x86-64 Linux ILP64).
 
 export enum TargetTriple {
 	LinuxX86_64,

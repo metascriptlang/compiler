@@ -27,6 +27,11 @@ import "./lang/trycatch";
 import "./lang/recursion";
 import "./lang/advanced";
 import "./lang/async";
+// comptime.ms uses @comptime block syntax which the Bun transpiler doesn't
+// handle. Run end-to-end via `bun run run-ms run src/test/lang/comptime.ms`
+// instead; regression-prevention guard for the underlying buildExportInfo
+// behavior lives in fixedbugs/bug028.ms.
+// import "./lang/comptime";
 import "./lang/syntax";
 import "./lang/multimod/main";
 

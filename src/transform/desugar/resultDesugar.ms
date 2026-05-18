@@ -189,7 +189,7 @@ function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node 
 
 		// Replace TryExpr with $result.value. For `Result<void, E>` the v0
 		// variant has no `value` field — synthesize a void placeholder
-		// (`null as unknown as void`) which the codegen drops at field-write
+		// (`null`) which the codegen drops at field-write
 		// + sink-assign sites.
 		const okT = getResultOkType(resType);
 		if (okT !== null && okT.kind === TypeKind.Void) {

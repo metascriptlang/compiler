@@ -11,7 +11,7 @@
 
 import { Node, NodeKind, TestDeclData, BlockStmtData } from "../../ast/node";
 import {
-	CGen, CProc, CSection,
+	CGen, CSection,
 	createProc, createBuilder, add, addLine, addNewline, sec, extract, readProcStmts, readProcLocals,
 } from "./context";
 import { genStmt } from "./statements";

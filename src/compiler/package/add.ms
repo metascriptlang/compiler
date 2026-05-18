@@ -137,7 +137,6 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		return false;
 	}
 
-	// Parse arguments
 	let pkgArg = "";
 	let isDev = false;
 	let i = 0;
@@ -155,7 +154,6 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		return false;
 	}
 
-	// Parse name@version
 	const parsed = parseNameVersion(pkgArg);
 	if (parsed.name === "") {
 		console.log("error: invalid package specifier: " + pkgArg);

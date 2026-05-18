@@ -12,7 +12,7 @@ import { ScopeKind, openScope, addSymbolToScope, hasFlag, SymbolFlag } from "./s
 import { ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { runThreePasses, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude } from "./checkPass";
 import { collectTopLevelLocal } from "./collectPass";
-import { registerModuleCtx } from "./instantiate";
+import { registerModuleCtx, registerModuleProgram } from "./instantiate";
 import { inferOwnership } from "./ownershipInference";
 import { lex } from "../lexer/lexer";
 import { createState } from "../parser/context";
@@ -157,6 +157,12 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		for (const parseErr of parseState.errors) {
 			mod.errors.push(createModuleError("Parse: " + parseErr, 0, 0, ErrorSeverity.Error));
 		}
+
+		// Register parsed program for macro VM cross-module helper resolution.
+		// Macro path (expand.ms) walks macro's defining module's programStmts to
+		// find PRIVATE helpers (which ExportRegistry can't surface). Must register
+		// BEFORE runThreePasses since macro expansion fires inside Pass 3.
+		registerModuleProgram(path, pr.value);
 
 		const ctx = createModuleContextWithCache(graph, mod, sharedCache);
 		ctx.exportRegistry = registry;

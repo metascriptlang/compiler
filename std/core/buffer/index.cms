@@ -30,7 +30,6 @@ extern function msBufferFromBase64(b64: string): Buffer;
 // Byte write (string has byteAt for read, but no byte-level write)
 extern function msBufferSet(buf: Buffer, index: number, value: number): void;
 
-// Copy between buffers
 extern function msBufferCopy(src: Buffer, dst: Buffer, dstStart: number, srcStart: number, srcEnd: number): number;
 
 // Fill byte

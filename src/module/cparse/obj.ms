@@ -1,7 +1,4 @@
-// cparse — Top-level declarations
-// Port of: ~/projects/chibicc parse.c Obj struct (headers-only subset).
-//
-// STATUS: skeleton. Populated by task #17.
+// cparse — Top-level declarations (headers-only subset)
 
 import { CType } from "./type";
 

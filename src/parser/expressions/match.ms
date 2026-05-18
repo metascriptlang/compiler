@@ -5,7 +5,7 @@
 import { TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd } from "../context";
-import { parseOk, parseMemberChain } from "./util";
+import { parseOk, parseMemberChain, tryParseLiteralKeyword } from "./util";
 import { isIdentLike } from "../util";
 import { parseNumberLiteral } from "../../utils/string";
 
@@ -160,10 +160,14 @@ function parseSinglePattern(state: ParserState): ExprResult {
 		return Result.ok(node);
 	}
 
-	// Boolean/null/identifier (including _ wildcard)
-	if (isIdentLike(token) ||
-		token.kind === TokenKind.True || token.kind === TokenKind.False ||
-		token.kind === TokenKind.Null) {
+	// Literal-keyword patterns (true/false/null) — must dispatch BEFORE isIdentLike
+	// so matchLower's isBindingPattern doesn't treat them as bindings (which
+	// causes both arms to unconditionally match). See bug025.
+	const literalNode = tryParseLiteralKeyword(state);
+	if (literalNode !== null) return Result.ok(literalNode);
+
+	// Identifier (including _ wildcard, enum members, binding patterns)
+	if (isIdentLike(token)) {
 		advance(state);
 		const base = createNode(NodeKind.Identifier, { name: token.value }, token);
 		return Result.ok(parseMemberChain(state, base));

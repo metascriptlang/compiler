@@ -1,5 +1,4 @@
 // cparse — Integer constant expression evaluator
-// Port of: ~/projects/chibicc parse.c const_expr / eval path.
 //
 // Used by:
 //   1. enum values: enum { A = 1 << 3 }

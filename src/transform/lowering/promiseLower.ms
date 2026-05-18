@@ -92,8 +92,8 @@ function promiseAllFnForInner(t: Type | null): string {
 }
 
 // Typed future readers — msFutureReadT reads the typed inline value from
-// the future struct (msFuture_T.value). Post-refactor (2026-04-11) all
-// futures use typed inline storage; no boxed path exists.
+// the future struct (msFuture_T.value). All futures use typed inline
+// storage; no boxed path exists.
 // Exported for awaitLower.ms which selects the typed read per Promise<T>.
 export function typedFutureReadFn(t: Type): string {
 	if (t === null) return "";

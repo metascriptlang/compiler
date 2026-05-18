@@ -48,9 +48,9 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	// Overload-aware hover: the symRecord stores the PRIMARY sym (so
 	// find-references, goto-def, rename see all call sites as references
 	// to a single declaration). For HOVER on an overloaded function call,
-	// we want the RESOLVED overload's signature instead — TypeScript-go
-	// does the same. The truth lives on the CallExpr's `resolvedOverloadIdx`
-	// field, set by resolveOverloadCall at check time.
+	// we want the RESOLVED overload's signature instead — matches the
+	// reference's behavior. The truth lives on the CallExpr's
+	// `resolvedOverloadIdx` field, set by resolveOverloadCall at check time.
 	//
 	// Query the AST for a CallExpr whose callee is this exact Identifier
 	// position. If found, substitute the winning overload's type into

@@ -378,7 +378,6 @@ function findImport(importMap: ImportMap, name: string): number {
 // ===== Public API =====
 
 export function computeAliveSet(programs: Node[], paths: string[], entryPath: string, isTest: boolean): AliveSet {
-	// Initialize module-level state
 	_aliveSet = createAliveSet();
 	_modIdx = { paths, programs };
 	_visitedSet = new HashSet<string>();
@@ -475,7 +474,6 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 	}
 
 	const result = _aliveSet;
-	// Clear module-level state
 	_aliveSet = createAliveSet();
 	_modIdx = { paths: [], programs: [] };
 	_visitedSet = new HashSet<string>();

@@ -309,7 +309,6 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 			// msAwaitSlotRelease($slot);
 			stmts.push(makeExprStmt(
 				makeCall(makeIdent("msAwaitSlotRelease", loc), [slotEntry.slotIdent], loc), loc));
-			// Apply unboxing
 			let resultIdent = agr.ident;
 			if (slotEntry.innerType !== null) {
 				resultIdent = makeUnboxCall(resultIdent, slotEntry.innerType, loc);

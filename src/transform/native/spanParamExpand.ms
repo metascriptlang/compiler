@@ -122,7 +122,6 @@ function expandFunctionDecl(node: Node, expandedFuncs: ExpandedFunc[], ctx: Tran
 		}
 
 		if (isSpan) {
-			// Find the matching ExpandedParam
 			let ep: ExpandedParam = spanParams[0];
 			let epi = 0;
 			while (epi < spanParams.length) {

@@ -60,6 +60,10 @@ import {
 	SpliceManyData,
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
+// V3 — peel Union-backed generics (Result<T,E>, Option<T>) so codec macros see
+// substituted variants + disc info. Lazy-instantiate pattern from destructorLifting.
+import { instantiateGenericBody } from "../../checker/types";
+import { getGenericDecl } from "../../parser/context";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -269,13 +273,63 @@ function genericToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	}, loc);
 }
 
+// V3 — Union-backed generics (Result<T,E>, Option<T>) get peeled
+// so codec macros see substituted variants + disc info instead of opaque
+// TypeGeneric. Non-Union-backed generics (Container<T>, Map<K,V>, Promise<T>)
+// fall through to standard genericToAst.
+//
+// Lazy-instantiate pattern from src/transform/lowering/destructorLifting.ms:128 —
+// idempotent (gated on typeReturn === null), proven elsewhere in compiler.
+function genericInstanceToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+	if (t.typeExtra !== null && t.typeExtra.kind === TypeKind.Union) {
+		if (t.typeReturn === null) {
+			const decl = getGenericDecl(t.typeName);
+			if (decl !== "") instantiateGenericBody(t, decl);
+		}
+		if (t.typeReturn !== null && t.typeReturn.kind === TypeKind.Union) {
+			return unionToAst(t.typeReturn, loc, visited);
+		}
+	}
+	return genericToAst(t, loc, visited);
+}
+
 // Build a TypeUnion node for `A | B | C` types. typeChildren holds the variant
 // types after the checker's flatten + dedup pass (see createUnion in types.ms).
-// Discriminated-union metadata (typeNames[0] = disc field, typeExtra = disc info)
-// is intentionally not surfaced — codecs walk variant shape directly.
+//
+// V3: surface discriminator metadata when checker pre-stored it
+// in t.typeNames + t.typeExtra. Two populate paths:
+//   1. match-type DUs (`type V = match (k: K) { ... }`) — populated by
+//      resolveDiscriminatedUnion in resolvePass.ms
+//   2. Result<T,E> / Option<T> — peeled by genericInstanceToAst (above) which
+//      calls unionToAst on the substituted underlying Union
+// TS-style DUs (`{kind:"a"} | {kind:"b"}`) have at most disc field name (no
+// variant keys) — codecs walk variants directly to enumerate disc values.
+// See checker/types.ms isDiscriminatedUnion.
 function unionToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+	let discField: string = "";
+	const variantKeys: string[] = [];
+	let discKind: string = "";
+	if (t.typeExtra !== null && t.typeNames !== null && t.typeNames.length > 0) {
+		discField = t.typeNames[0];
+		// typeNames[1+] hold the variant keys ("K.A","K.B" for enum disc;
+		// "true","false" for boolean disc). Format kept verbatim — encode
+		// macros decide how to render in target format.
+		let i = 1;
+		while (i < t.typeNames.length) {
+			variantKeys.push(t.typeNames[i]);
+			i = i + 1;
+		}
+		discKind = match (t.typeExtra.kind) {
+			TypeKind.Boolean => "boolean",
+			TypeKind.Enum => "enum",
+			_ => "",
+		};
+	}
 	return createNodeAt(NodeKind.TypeUnion, {
 		typExprMembers: mapTypes(t.typeChildren, loc, visited),
+		discFieldName: discField,
+		variantKeys,
+		discKind,
 	}, loc);
 }
 
@@ -333,9 +387,18 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[]):
 			: fallbackTypeName(t, loc),
 		TypeKind.Struct => structToAst(t, loc, visited),
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => arrayToAst(t, loc, visited),
-		TypeKind.GenericInstance => genericToAst(t, loc, visited),
+		TypeKind.GenericInstance => genericInstanceToAst(t, loc, visited),
 		TypeKind.GenericParam => atomicTypeNode(nameOrDefault(t, "T"), loc),
 		TypeKind.Union => unionToAst(t, loc, visited),
+		// Literal types — emit as their literal Node kind so consumers can
+		// distinguish a literal value from a type-name Identifier. Without
+		// this, `kind: "circle"` (StringLiteral type with typeName="circle")
+		// became `Identifier(name="circle")`, indistinguishable from a user-
+		// defined type alias named `circle`. Consumers like JSON encode then
+		// fell through to the int-cast jsonInt branch, generating bad C
+		// (cast msString → int64). See bug028 for the regression test.
+		TypeKind.StringLiteral => createNodeAt(NodeKind.StringLiteral, { value: nameOrDefault(t, "") }, loc),
+		TypeKind.BooleanLiteral => createNodeAt(NodeKind.BooleanLiteral, { boolValue: nameOrDefault(t, "") === "true" }, loc),
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Sink | TypeKind.Lent | TypeKind.Var | TypeKind.Distinct
 			=> modifierToAst(t, loc, visited),
 		_ => fallbackTypeName(t, loc),
@@ -900,8 +963,14 @@ export function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: Rais
 			heapObjectSetField(objHeap, handle, "typExprSize", raiserInt(d.typExprSize));
 		},
 		NodeKind.TypeUnion => {
+			// V3 disc fields — symmetric with deserialize in this file
+			// + macro VM access path in src/compiler/meta/expand.ms.
+			// Update all 3 sites together when adding fields.
 			const d = node.data as TypeUnionData;
 			setNodes(objHeap, arrHeap, handle, "typExprMembers", d.typExprMembers);
+			setStr(objHeap, handle, "discFieldName", d.discFieldName);
+			setStrs(objHeap, arrHeap, handle, "variantKeys", d.variantKeys);
+			setStr(objHeap, handle, "discKind", d.discKind);
 		},
 		NodeKind.TypeIntersection => {
 			const d = node.data as TypeIntersectionData;
@@ -977,8 +1046,14 @@ function readFloat(objHeap: RaiserObjectHeap, h: number, name: string): number {
 }
 
 function readBool(objHeap: RaiserObjectHeap, h: number, name: string): boolean {
+	// Accept both Bool kind and Int kind (0/1) as boolean — aligns with
+	// the project convention used by unboxBool (raiser/marshal.ms:50),
+	// truthiness check (raiser/value.ms:80), and readInt (this file:1023+).
+	// Comparison codegen currently emits raiserInt(0/1) for boolean results,
+	// so without this leniency, BooleanLiteral fields stored from comparison
+	// expressions silently default to false. See bug026.
 	const v = heapObjectGetField(objHeap, h, name);
-	if (v.kind === RaiserValueKind.Bool) return v.intVal !== 0;
+	if (v.kind === RaiserValueKind.Bool || v.kind === RaiserValueKind.Int) return v.intVal !== 0;
 	return false;
 }
 
@@ -1562,6 +1637,23 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.SpliceMany => {
 			const spliceNodes = readNodes(objHeap, arrHeap, h, "spliceNodes", loc);
 			return createNodeAt(NodeKind.SpliceMany, { spliceNodes }, loc);
+		},
+
+		// === Type-AST kinds — V3: needed for nested-macro round-trip of type info ===
+		// Other Type-AST kinds (TypeArray/TypeObject/TypeGeneric/TypeFunction)
+		// retain default NullLiteral fallback — add cases as use cases surface.
+		NodeKind.TypeUnion => {
+			const typExprMembers = readNodes(objHeap, arrHeap, h, "typExprMembers", loc);
+			const discFieldName = readStr(objHeap, h, "discFieldName");
+			const variantKeys = readStrs(objHeap, arrHeap, h, "variantKeys");
+			const discKind = readStr(objHeap, h, "discKind");
+			return createNodeAt(NodeKind.TypeUnion, {
+				typExprMembers, discFieldName, variantKeys, discKind,
+			}, loc);
+		},
+		NodeKind.TypeIntersection => {
+			const typExprMembers = readNodes(objHeap, arrHeap, h, "typExprMembers", loc);
+			return createNodeAt(NodeKind.TypeIntersection, { typExprMembers }, loc);
 		},
 
 		// Unknown kind — return a NullLiteral as safe fallback

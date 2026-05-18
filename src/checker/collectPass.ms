@@ -173,7 +173,7 @@ function collectDecorated(ctx: CheckerContext, node: Node): void {
 	// onto its typeFlags via createGenericInstance, and isAwaitable() will
 	// recognize it via the registry.
 	// Restrict to type-like declarations — @awaitable on a function or variable
-	// makes no sense and would silently pollute the registry (audit finding #125).
+	// makes no sense and would silently pollute the registry.
 	if (info.isAwaitableAnnotated) {
 		const innerKind = dd.decoratedNode.kind;
 		if (innerKind === NodeKind.ClassDecl || innerKind === NodeKind.InterfaceDecl
@@ -311,7 +311,6 @@ function collectActor(ctx: CheckerContext, node: Node): void {
 	actorType.sym = sym;
 	innerType.sym = sym;
 	defineOrError(ctx, sym, node);
-	// Check for constructor
 	for (const member of d.actorBody) {
 		if (member.kind === NodeKind.ConstructorDecl) {
 			setFlag(sym, SymbolFlag.HasConstructor);
@@ -578,6 +577,12 @@ export function importSymFromRegistry(
 	nameLoc: SourceLocation, defNode: Node
 ): Symbol {
 	const sym = makeSymbol(alias, exportInfo.kind, exportInfo.symType, false);
+	// Imported symbols are already shaped by the defining module. Marking
+	// Shaped prevents ensureShaped from re-running resolveAnnotation on the
+	// original declNode in the importer's ctx — that lookup fails for types
+	// private to the defining module (e.g. SourceLocation in std/meta/node.ms)
+	// and emits spurious "Unresolved type" warnings.
+	sym.state = SymbolState.Shaped;
 	sym.modulePath = resolveDefiningModule(exportInfo, sourcePath);
 	const origName = resolveOriginalName(exportInfo, importName);
 	if (origName !== alias) sym.originalName = origName;
@@ -813,7 +818,11 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, unknownType(), false), node);
 			}
 		} else {
-			// std import or unresolvable — fallback to unknownType
+			// Crash-fast: source module couldn't be resolved. Silent fallback to
+			// Variable<Unknown> previously caused Unknown to leak into generic
+			// instantiations like Result<MyNode, X>, surfacing later as misleading
+			// "Property does not exist" errors. Fail loud at the import site.
+			addError(ctx, "Cannot resolve module '" + d.importSource + "' to import '" + importName + "'", node.location.line, node.location.column);
 			defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, unknownType(), false), node);
 		}
 	}
@@ -963,7 +972,7 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 							// exportInfo (built later by buildExportInfo from this ctx) carries
 							// macroBody=null, so downstream importers get a Macro sym with no
 							// body — recursive expansion fails on the empty registry. Mirrors
-							// the same population in collectImport (line 633-635).
+							// the same population in collectImport.
 							if (exportInfo.kind === SymbolKind.Macro
 									&& exportInfo.macroBody !== null
 									&& exportInfo.macroParams !== null) {
@@ -989,7 +998,7 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 					}
 				}
 			}
-			// Bug #73 fix: when `export { X } from "./y"` brings a class through,
+			// When `export { X } from "./y"` brings a class through,
 			// the class's per-method extension registrations live in ./y's ext
 			// registry, not the hub's. Without this auto-propagation, downstream
 			// consumers (`import { X } from "./hub"`) would see the class symbol
@@ -1339,9 +1348,16 @@ test "standalone directive parses" {
 }
 
 test "import + re-export dedup does not error" {
-	// import { X } from "./mod" + export { X } from "./mod" should not produce duplicate error
+	// import { X } from "./mod" + export { X } from "./mod" should not produce
+	// duplicate error. With crash-fast import resolution, single-file tests get
+	// "Cannot resolve module" errors for missing sources — assert no DUPLICATE
+	// definition error (the dedup-specific check) instead.
 	const ctx = collectFromSource("import { foo } from \"./other\";\nexport { foo } from \"./other\";");
-	assert ctx.errors.length === 0;
+	let dupErrCount = 0;
+	for (const e of ctx.errors) {
+		if (e.message.indexOf("already defined") >= 0 || e.message.indexOf("duplicate") >= 0) dupErrCount = dupErrCount + 1;
+	}
+	assert dupErrCount === 0;
 	const sym = lookupSymbol(ctx.table, "foo");
 	assert sym !== null;
 	if (sym !== null) {
@@ -1359,7 +1375,7 @@ test "VariableDecl collected in pass 1" {
 }
 
 test "re-export preserves original location and records sgSymRecord" {
-	// Set up: register a fake source module with an exported symbol at line 51
+	// Set up: register a fake source module with an exported symbol
 	const ctx = createContext();
 	ctx.modulePath = "/test/hub/index.ms";
 	const origLoc = makeLoc(51, 17);
@@ -1377,7 +1393,6 @@ test "re-export preserves original location and records sgSymRecord" {
 	};
 	registerModuleExports(ctx.exportRegistry, "/test/hub/accessors", [fakeExport]);
 
-	// Parse a re-export statement and collect
 	const pr = parseSource("export { get } from \"./accessors\";");
 	assert pr.ok;
 	collectTopLevel(ctx, pr.value);

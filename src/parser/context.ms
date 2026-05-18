@@ -123,7 +123,6 @@ export function addError(state: ParserState, msg: string): void {
 }
 
 // Skip tokens until a statement boundary to resume parsing after an error.
-// Pattern: Zig parser.zig:7504-7546
 export function synchronize(state: ParserState): void {
 	state.panicMode = false;
 	while (!isAtEnd(state)) {
@@ -256,7 +255,6 @@ export function captureGenericParams(state: ParserState): string {
 }
 
 // Lookahead: is this '<' the start of generic type args followed by '('?
-// Reference: parser.zig:4183 isGenericCallAhead()
 // Scans ahead for balanced <...> then checks for '(' immediately after.
 // Does NOT consume tokens — only peeks.
 export function isGenericCallAhead(state: ParserState): boolean {
@@ -269,7 +267,6 @@ export function isGenericCallAhead(state: ParserState): boolean {
 	for (let pos = 1; pos < 100; pos += 1) {
 		const tok = peek(state, pos);
 		if (tok.kind === TokenKind.Eof) return false;
-		// Track nested delimiters
 		if (tok.kind === TokenKind.LBrace) { braceDepth += 1; }
 		if (tok.kind === TokenKind.RBrace) { braceDepth -= 1; if (braceDepth < 0) return false; }
 		if (tok.kind === TokenKind.LBracket) { bracketDepth += 1; }

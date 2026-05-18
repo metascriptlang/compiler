@@ -193,10 +193,8 @@ function scanForMutation(node: Node, paramName: string): boolean {
 
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
-			let i = 0;
-			while (i < d.statements.length) {
-				if (scanForMutation(d.statements[i], paramName)) return true;
-				i = i + 1;
+			for (const stmt of d.statements) {
+				if (scanForMutation(stmt, paramName)) return true;
 			}
 			return false;
 		},
@@ -230,24 +228,18 @@ function scanForMutation(node: Node, paramName: string): boolean {
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
 			if (scanForMutation(d.switchDisc, paramName)) return true;
-			let i = 0;
-			while (i < d.switchCases.length) {
-				if (scanForMutation(d.switchCases[i], paramName)) return true;
-				i = i + 1;
+			for (const c of d.switchCases) {
+				if (scanForMutation(c, paramName)) return true;
 			}
 			return false;
 		},
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
-			let i = 0;
-			while (i < d.caseTests.length) {
-				if (scanForMutation(d.caseTests[i], paramName)) return true;
-				i = i + 1;
+			for (const t of d.caseTests) {
+				if (scanForMutation(t, paramName)) return true;
 			}
-			let j = 0;
-			while (j < d.caseStmts.length) {
-				if (scanForMutation(d.caseStmts[j], paramName)) return true;
-				j = j + 1;
+			for (const s of d.caseStmts) {
+				if (scanForMutation(s, paramName)) return true;
 			}
 			return false;
 		},
@@ -261,10 +253,8 @@ function scanForMutation(node: Node, paramName: string): boolean {
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
 			if (scanForMutation(d.callee, paramName)) return true;
-			let i = 0;
-			while (i < d.arguments.length) {
-				if (scanForMutation(d.arguments[i], paramName)) return true;
-				i = i + 1;
+			for (const arg of d.arguments) {
+				if (scanForMutation(arg, paramName)) return true;
 			}
 			return false;
 		},

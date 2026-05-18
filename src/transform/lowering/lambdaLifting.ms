@@ -560,10 +560,8 @@ function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 
 function applyActiveRewrites(node: Node, rewrites: PendingEnvRewrite[]): Node {
 	let result = node;
-	let i = 0;
-	while (i < rewrites.length) {
-		result = rewriteOuterRef(result, rewrites[i]);
-		i += 1;
+	for (const rw of rewrites) {
+		result = rewriteOuterRef(result, rw);
 	}
 	return result;
 }
@@ -888,7 +886,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 	envDeclInit.nodeType = refEnvType;
 	state.hoistedEnvDecls.push(envDeclInit);
 
-	// Reference parity (rawClosureCreation line 617-627): copy available values into env fields.
+	// Reference parity (rawClosureCreation): copy available values into env fields.
 	// Params and module-level vars/functions are available at function entry.
 	// Local vars (declared later) are handled by VarDecl→assignment rewrite.
 	//

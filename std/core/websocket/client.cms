@@ -43,25 +43,24 @@ import {
 } from "std/net";
 
 import {
-	OPCODE_CONTINUATION, OPCODE_TEXT, OPCODE_BINARY, OPCODE_CLOSE, OPCODE_PING, OPCODE_PONG,
+	OPCODE_TEXT, OPCODE_BINARY, OPCODE_CLOSE,
 	MAX_PAYLOAD_BYTES,
 	parseFrame, buildFrame, encodeClosePayload,
-	ParsedFrame,
 } from "./frame";
 
 import {
-	WsUrl, parseWsUrl, makeClientKey, deriveAcceptKey, buildUpgradeRequest, parse101Response,
+	parseWsUrl, makeClientKey, deriveAcceptKey, buildUpgradeRequest, parse101Response,
 } from "./handshake";
 
 import {
-	WsError, wsConnectionFailed, wsTimeout, wsHandshakeFailed, wsProtocolError,
+	WsError, wsConnectionFailed, wsHandshakeFailed, wsProtocolError,
 	wsPayloadTooLarge, wsClosed, wsSocketError, wsInternalError,
 } from "./errors";
 
 import {
-	WsState, WsMessageKind, WsCloseCode, WsMessage, FragState, FrameDecision,
+	WsState, WsCloseCode, WsMessage, FragState,
 	newFragState, processFrame,
-	appendBytes, dropPrefix, sliceBytes, findCRLFCRLF,
+	appendBytes, sliceBytes, findCRLFCRLF,
 } from "./state";
 
 export interface WsClient {
@@ -163,7 +162,7 @@ async function sendFrameAsync(ws: WsClient, opcode: int32, payload: number[]): P
 	if (!wireResult.ok) return Result.err(wireResult.error);
 	const sent = await sendAsync(ws.fd, wireResult.value);
 	if (sent < 0) return Result.err(wsSocketError("send failed"));
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 function sendFrameSync(ws: WsClient, opcode: int32, payload: number[]): Result<void, WsError> {
@@ -177,7 +176,7 @@ function sendFrameSync(ws: WsClient, opcode: int32, payload: number[]): Result<v
 	if (!wireResult.ok) return Result.err(wireResult.error);
 	const sent = netSend(ws.fd, wireResult.value);
 	if (sent < 0) return Result.err(wsSocketError("send failed"));
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 // ===== Public send API =====
@@ -311,12 +310,12 @@ export function recvSync(this ws: WsClient): Result<WsMessage, WsError> {
 // ===== Public close =====
 
 export async function close(this ws: WsClient, code: int32, reason: string): Promise<Result<void, WsError>> {
-	if (ws.state === WsState.Closed) return Result.ok(null as unknown as void);
+	if (ws.state === WsState.Closed) return Result.ok(null);
 	if (ws.state === WsState.Closing) {
 		// Already initiated. Just shut the socket.
 		netClose(ws.fd);
 		ws.state = WsState.Closed;
-		return Result.ok(null as unknown as void);
+		return Result.ok(null);
 	}
 
 	const reasonBytes = stringToBytes(reason);
@@ -330,15 +329,15 @@ export async function close(this ws: WsClient, code: int32, reason: string): Pro
 	netClose(ws.fd);
 	ws.state = WsState.Closed;
 	if (!sendResult.ok) return Result.err(sendResult.error);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 export function closeSync(this ws: WsClient, code: int32, reason: string): Result<void, WsError> {
-	if (ws.state === WsState.Closed) return Result.ok(null as unknown as void);
+	if (ws.state === WsState.Closed) return Result.ok(null);
 	if (ws.state === WsState.Closing) {
 		netClose(ws.fd);
 		ws.state = WsState.Closed;
-		return Result.ok(null as unknown as void);
+		return Result.ok(null);
 	}
 
 	const reasonBytes = stringToBytes(reason);
@@ -348,7 +347,7 @@ export function closeSync(this ws: WsClient, code: int32, reason: string): Resul
 	netClose(ws.fd);
 	ws.state = WsState.Closed;
 	if (!sendResult.ok) return Result.err(sendResult.error);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 // ===== Public connect =====

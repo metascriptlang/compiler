@@ -106,6 +106,24 @@ export function parseMemberChain(state: ParserState, base: Node): Node {
 	return node;
 }
 
+// Try-parse a literal-keyword token (true/false/null) into the corresponding
+// literal Node. Returns null if current token is not a literal keyword.
+// Shared by expression parser (core.ms) and match-pattern parser (match.ms)
+// — both must produce literal nodes (not Identifier-with-name) so downstream
+// passes treat them as literals rather than binding names. See bug025.
+export function tryParseLiteralKeyword(state: ParserState): Node {
+	const token = current(state);
+	if (token.kind === TokenKind.True || token.kind === TokenKind.False) {
+		advance(state);
+		return createNode(NodeKind.BooleanLiteral, { boolValue: token.kind === TokenKind.True }, token);
+	}
+	if (token.kind === TokenKind.Null) {
+		advance(state);
+		return createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, token);
+	}
+	return null as unknown as Node;
+}
+
 export function binLeftKind(input: string): NodeKind {
 	const lr = lex(input);
 	if (!lr.ok) return NodeKind.NumberLiteral;

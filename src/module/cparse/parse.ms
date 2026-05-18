@@ -1,5 +1,4 @@
 // cparse — Declaration parser
-// Port of: ~/projects/chibicc parse.c (declaration-level subset only).
 //
 // Parses preprocessed tokens into top-level declarations (Obj[]).
 // Skips function bodies (brace-matched), full expression parsing, and statements.
@@ -209,7 +208,7 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 		else if (s === "unsigned") counter = counter | SPEC_UNSIGNED;
 		else break;
 
-		// Map counter to type (chibicc switch at parse.c:508-568)
+		// Map counter to type
 		if (counter === SPEC_VOID) ty = makeVoid();
 		else if (counter === SPEC_BOOL) ty = makeBool();
 		else if (counter === SPEC_CHAR || counter === SPEC_SIGNED + SPEC_CHAR) ty = makeChar(ctx.target);
@@ -455,7 +454,6 @@ function skipDeclarator(ctx: ParseCtx): void {
 	} else if (ctx.tok.kind === CTokenKind.Ident) {
 		advance(ctx);
 	}
-	// Skip suffix
 	if (eq(ctx, "(")) {
 		advance(ctx);
 		let depth = 1;
@@ -534,7 +532,6 @@ function structMembers(ctx: ParseCtx): CMember[] {
 	const members: CMember[] = [];
 
 	while (!eq(ctx, "}") && !isEnd(ctx)) {
-		// Skip __attribute__
 		while (eq(ctx, "__attribute__")) skipAttribute(ctx);
 
 		const beforeDecl = ctx.tok;
@@ -715,7 +712,6 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 			continue;
 		}
 
-		// Parse declarator
 		const declResult = declarator(ctx, baseTy);
 		const ty = declResult.type;
 		const name = declResult.name;

@@ -50,6 +50,16 @@ extern function msFastParsePath(data: string): string;
 extern function msNetSetTcpNoDelay(fd: int32): void;
 extern function msNetSetNoSigpipe(fd: int32): void;
 
+// Cached "Date: <imf-fixdate>\r\n" header line — thread-local, refreshed at
+// most 1×/sec, returned as msString with literal flag (zero-alloc append).
+extern function msHttpDateLine(): string;
+
+// Static response cache (Layer D). See runtime/net/socket.h for design.
+extern function msEpochSec(): int64;
+extern function msStaticCacheHit(slotId: int32, sec: int64): int32;
+extern function msStaticCacheGet(slotId: int32): string;
+extern function msStaticCachePut(slotId: int32, sec: int64, source: string): void;
+
 // Zero-alloc hot path externs (Phase 1-4)
 extern function recvAll(this dest: string, fd: int32): int32 from "&msNetRecvAll";
 extern function buildResponseReuse(this dest: string, status: int32, st: string, ct: string, body: string): void from "&msBuildResponseReuse";
@@ -136,6 +146,62 @@ function sendBody(res: ServerResponse, contentType: string, body: string): void 
 // first request that lands on a dead pooled socket.
 let kaTimeoutSeconds: int32 = 60;
 
+// Pre-built status-line literals for common codes (Bun/uWebSockets pattern).
+// Returns full "HTTP/1.1 <code> <text>\r\n" string from a single match-table lookup —
+// 1 msStringAppend, zero alloc. Cold codes fall through to "" so the caller
+// rebuilds the line via status.toString() + statusText(status).
+function statusLine(code: int32): string {
+	return match (code) {
+		200 => "HTTP/1.1 200 OK\r\n",
+		201 => "HTTP/1.1 201 Created\r\n",
+		202 => "HTTP/1.1 202 Accepted\r\n",
+		204 => "HTTP/1.1 204 No Content\r\n",
+		301 => "HTTP/1.1 301 Moved Permanently\r\n",
+		302 => "HTTP/1.1 302 Found\r\n",
+		303 => "HTTP/1.1 303 See Other\r\n",
+		304 => "HTTP/1.1 304 Not Modified\r\n",
+		307 => "HTTP/1.1 307 Temporary Redirect\r\n",
+		308 => "HTTP/1.1 308 Permanent Redirect\r\n",
+		400 => "HTTP/1.1 400 Bad Request\r\n",
+		401 => "HTTP/1.1 401 Unauthorized\r\n",
+		403 => "HTTP/1.1 403 Forbidden\r\n",
+		404 => "HTTP/1.1 404 Not Found\r\n",
+		405 => "HTTP/1.1 405 Method Not Allowed\r\n",
+		409 => "HTTP/1.1 409 Conflict\r\n",
+		413 => "HTTP/1.1 413 Payload Too Large\r\n",
+		422 => "HTTP/1.1 422 Unprocessable Entity\r\n",
+		429 => "HTTP/1.1 429 Too Many Requests\r\n",
+		500 => "HTTP/1.1 500 Internal Server Error\r\n",
+		501 => "HTTP/1.1 501 Not Implemented\r\n",
+		502 => "HTTP/1.1 502 Bad Gateway\r\n",
+		503 => "HTTP/1.1 503 Service Unavailable\r\n",
+		504 => "HTTP/1.1 504 Gateway Timeout\r\n",
+		_ => "",
+	};
+}
+
+// Drift detector: statusLine literals must match statusText(code) exactly.
+// Adding a code to one but not the other is silently wrong — the cold path
+// in endResponse uses statusText, fast path uses statusLine. Mismatched
+// reason phrases would leak through to clients depending on the path taken.
+// Tests cover every code statusLine claims to handle; CI flags any drift.
+test "statusLine matches statusText for all fast-path codes" {
+	const codes: int32[] = [200, 201, 202, 204, 301, 302, 303, 304, 307, 308,
+	                        400, 401, 403, 404, 405, 409, 413, 422, 429,
+	                        500, 501, 502, 503, 504];
+	for (const c of codes) {
+		const expected = "HTTP/1.1 " + c.toString() + " " + statusText(c) + "\r\n";
+		assert statusLine(c) === expected;
+	}
+}
+
+test "statusLine returns empty string for uncommon codes (triggers fallback)" {
+	assert statusLine(206) === "";    // Partial Content — uncommon
+	assert statusLine(418) === "";    // Teapot — uncommon
+	assert statusLine(999) === "";    // bogus
+	assert statusLine(0) === "";      // bogus
+}
+
 // Internal: build wire response from res.status + res.headers + body.
 // Honors any user-set headers (Access-Control-*, etc.). Auto Content-Length
 // if not already set — note: uses string length, not UTF-8 byte length, so
@@ -166,9 +232,42 @@ function endResponse(res: ServerResponse, data: string): void {
 	if (!hdrs.hasHeader(res.headers, "keep-alive") && !hdrs.hasHeader(res.headers, "connection")) {
 		hdrs.setHeader(res.headers, "keep-alive", "timeout=" + kaTimeoutSeconds.toString());
 	}
-	const headerStr = hdrs.serializeHeaders(res.headers);
-	const body = noBodyAllowed ? "" : data;
-	res._responseData = "HTTP/1.1 " + status.toString() + " " + statusText(status) + "\r\n" + headerStr + "\r\n" + body;
+	// Build response in-place into _responseData (pre-allocated 4KB cap via initClient).
+	// Zero alloc for responses that fit in cap — buffer is reused across requests
+	// because resetResponse calls setLength(0) (preserves cap). Parity with
+	// httpbeast (Karax) and uWebSockets (Bun) which use the same in-place pattern.
+	//
+	// Compiler trick: every `res._responseData += X` below is lowered by
+	// src/transform/native/stringOpLower.ms to `msStringAppend(&res._responseData, X)`
+	// — an in-place byte-copy into the existing payload, NOT a fresh concat that
+	// would replace the msString and discard the pre-allocated capacity. The
+	// fast path requires HiddenAddr semantics on the LHS (see Fix E history).
+	res._responseData.setLength(0);
+	// Status line: try pre-built literal first (1 append, zero alloc).
+	// Falls back to dynamic build for uncommon codes — keeps slow path correct.
+	const fastLine = statusLine(status);
+	if (fastLine.length > 0) {
+		res._responseData += fastLine;
+	} else {
+		res._responseData += "HTTP/1.1 ";
+		res._responseData += status.toString();
+		res._responseData += " ";
+		res._responseData += statusText(status);
+		res._responseData += "\r\n";
+	}
+	// RFC 7231 §7.1.1.2: emit Date on every response. Cached thread-local
+	// regenerated at most once per wall-clock second — zero strftime per
+	// request in the hot path. Skipped on 1xx since they aren't full responses.
+	if (status >= 200) res._responseData += msHttpDateLine();
+	// Inline header serialization — avoids an intermediate string from serializeHeaders().
+	for (let i = 0; i < res.headers._names.length; i = i + 1) {
+		res._responseData += res.headers._names[i];
+		res._responseData += ": ";
+		res._responseData += res.headers._values[i];
+		res._responseData += "\r\n";
+	}
+	res._responseData += "\r\n";
+	if (!noBodyAllowed) res._responseData += data;
 	res.headersSent = true;
 	res._finished = true;
 }
@@ -198,6 +297,63 @@ export function sendRaw(res: ServerResponse, raw: string): void {
 	res._responseData = raw;
 	res.headersSent = true;
 	res._finished = true;
+}
+
+// ===== Static response cache (Layer D — Bun-parity for static endpoints) =====
+//
+// Cache an entire HTTP response (status line + headers + body) so static
+// endpoints like /health, /robots.txt, /version do ZERO build work on the
+// hot path — just one memcpy from a per-thread cache into the per-fd send
+// buffer.
+//
+// Usage: pick a distinct slotId (0..63) at each call site. The handler is
+// responsible for slot uniqueness across endpoints — collisions cause
+// undefined-but-safe behavior (different bodies overwrite each other every
+// rebuild).
+//
+//   if (req.path === "/health")
+//       sendStatic(res, 0, 200, "application/json", "{\"ok\":true}");
+//
+// Cache lifetime: per wall-clock second (matches Date header refresh cadence).
+// 64 slots per thread. Slots not in use cost nothing.
+//
+// Trade-off vs sendJson: only valid when status / contentType / body are
+// pinned at the call site. Dynamic responses (per-user data, timestamps)
+// should keep using sendJson/sendBody — every request would be a cache miss
+// AND the overhead of msStaticCachePut would hurt.
+export function sendStatic(res: ServerResponse, slotId: int32, status: int32, contentType: string, body: string): void {
+	const sec = msEpochSec();
+	if (msStaticCacheHit(slotId, sec) === 1) {
+		// HOT PATH — copy cached bytes into per-fd response buffer.
+		// _responseData keeps its own pre-allocated payload (4KB cap via
+		// initClient); the cached msString is literal-flagged so DRC won't
+		// touch refcount on it.
+		//
+		// Tried but reverted: `_responseData = cache` (struct assign, share
+		// payload, zero memcpy). Bench showed no win — memcpy of ~100 bytes
+		// is sub-noise (~5ns). The bug it exposed (per-second cache eviction
+		// race with in-flight io_uring SEND) drove the two-generation cache
+		// design in runtime/net/socket.h, which we keep for future use.
+		res._responseData.setLength(0);
+		res._responseData += msStaticCacheGet(slotId);
+		res.headersSent = true;
+		res._finished = true;
+		return;
+	}
+	// COLD PATH — runs at most once per second per slot. Delegate to
+	// endResponse to build the wire bytes, so the status-line / Date /
+	// Content-Length / Keep-Alive logic stays in ONE place. Then snapshot
+	// the result into the cache for subsequent requests in the same second.
+	//
+	// Headers are wiped first: sendStatic is for endpoints with no per-request
+	// customization (handler-set CORS / cookies / etc. don't apply). Callers
+	// that need custom headers should keep using sendJson + sendBody.
+	res.status = status;
+	res.headers._names.length = 0;
+	res.headers._values.length = 0;
+	hdrs.setHeader(res.headers, "content-type", contentType);
+	endResponse(res, body);
+	msStaticCachePut(slotId, sec, res._responseData);
 }
 
 // ===== Node-style extension methods on ServerResponse =====
@@ -294,11 +450,17 @@ interface ClientState {
 	response: ServerResponse;
 }
 
+// Lazy capacity: msStringNewCap(0) yields a zero-length msString with no
+// backing payload. First append on each field grows the buffer to fit —
+// after warmup the per-fd memory matches the typical response size
+// (~300 bytes) instead of the worst-case 4 KB. This makes a single
+// MetaScript HTTP process behave like Rust/C wrt resident memory: ~7 MB
+// pre-alloc instead of ~70 MB across 8 worker threads + 1024 fd slots.
 function initClient(fd: int32): ClientState {
 	return {
-		data: msStringNewCap(4096), sendQueue: "", bytesSent: 0, headersEndPos: -1, asyncPending: false,
+		data: msStringNewCap(0), sendQueue: "", bytesSent: 0, headersEndPos: -1, asyncPending: false,
 		request: {
-			method: HttpMethod.GET, path: msStringNewCap(256), version: "1.1",
+			method: HttpMethod.GET, path: msStringNewCap(0), version: "1.1",
 			headers: hdrs.createHeaders(), body: "", clientFd: fd,
 		},
 		response: {
@@ -306,7 +468,7 @@ function initClient(fd: int32): ClientState {
 			headers: hdrs.createHeaders(),
 			_chunks: [],
 			headersSent: false, _finished: false, _chunked: false,
-			_responseData: msStringNewCap(4096),
+			_responseData: msStringNewCap(0),
 			_upgraded: false,
 		},
 	};
@@ -764,14 +926,13 @@ function eventLoopUring(server: HttpServer, listenFd: int32, handler: RequestHan
 	}
 
 	const maxFds = 1024;
+	// Lazy ClientState — each slot allocates on first ACCEPT for that fd
+	// and is reused for all subsequent connections that reuse the fd. This
+	// keeps RSS proportional to ACTIVE connections, matching Rust hyper /
+	// C libmicrohttpd; pre-allocating 1024 × ~250 byte structs eagerly
+	// would inflate baseline by ~2 MB per worker thread for no gain.
 	const clients: ClientState[] = new Array(maxFds);
-	let ci = 0;
-	while (ci < maxFds) {
-		clients[ci] = initClient(ci);
-		ci = ci + 1;
-	}
 
-	// Start accepting
 	msUringSubmitAccept(listenFd);
 
 	while (server.running) {
@@ -788,7 +949,11 @@ function eventLoopUring(server: HttpServer, listenFd: int32, handler: RequestHan
 					msNetSetTcpNoDelay(res);
 					msNetSetNoSigpipe(res);
 					msNetSetNonBlocking(res);
-					clients[res] = initClient(res);
+					if (clients[res] === null as unknown as ClientState) {
+						clients[res] = initClient(res);
+					} else {
+						resetClient(clients[res], res);
+					}
 					msUringSubmitRecv(res, "", 4096);
 				} else if (res >= 0) {
 					msNetClose(res);

@@ -1,5 +1,4 @@
 // cparse — C tokenizer
-// Port of: ~/projects/chibicc tokenize.c
 //
 // Entry point: tokenizeFile(source, path) -> TokenizeResult
 // Byte-level scanning via byteAt (O(1)) — same pattern as src/lexer/state.ms.
@@ -426,7 +425,7 @@ export function convertPPInt(tok: CToken): boolean {
 
 	if (p !== len) return false;
 
-	// Map suffix to LitKind (chibicc tokenize.c:386-411)
+	// Map suffix to LitKind
 	if (isLL && isUnsigned) tok.litKind = LitKind.ULongLong;
 	else if (isLL) tok.litKind = LitKind.LongLong;
 	else if (isL && isUnsigned) tok.litKind = LitKind.ULong;

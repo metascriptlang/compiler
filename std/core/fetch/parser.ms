@@ -3,7 +3,7 @@
 
 import { HttpMethod, HttpHeaders, ParsedUrl, parseMethod } from "./types";
 import { HttpError, invalidRequest, invalidResponse, invalidHeader } from "./errors";
-import { createHeaders, addHeader, getContentLength, isChunked, getHeaderValues } from "./headers";
+import { createHeaders, addHeader, getContentLength, getHeaderValues } from "./headers";
 
 // ===== Parsed Results =====
 

@@ -6,9 +6,6 @@
 //
 // Actor isolation gives us a lock-free, race-free map: many parse workers
 // can hit get() concurrently via the mailbox.
-//
-// STATUS: skeleton. Will be populated alongside task #15 (preprocess port)
-// so the #include handler can hit this cache.
 
 import { CToken } from "../cparse/token";
 import { TargetInfo } from "../cparse/target";

@@ -147,10 +147,8 @@ export function fetchPackageInfo(name: string): Result<RegistryPackage, HttpErro
 
 	const versionItems = getArray(obj, "versions");
 	const versions: RegistryVersion[] = [];
-	let i = 0;
-	while (i < versionItems.length) {
-		versions.push(parseVersionRecord(versionItems[i]));
-		i = i + 1;
+	for (const item of versionItems) {
+		versions.push(parseVersionRecord(item));
 	}
 
 	return Result.ok({

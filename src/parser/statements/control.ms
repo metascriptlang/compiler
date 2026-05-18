@@ -538,7 +538,6 @@ test "if-else braceless" { assert programOk("if (x) a; else b;"); }
 test "while braceless" { assert programOk("while (x) y;"); }
 // While
 test "while" { assert programOk("while (x) { y; }"); }
-// Return
 test "return expr" { assert programOk("function f(x) { return x + 1; }"); }
 // Do-while
 test "do-while" { assert programOk("do { x; } while (y);"); }

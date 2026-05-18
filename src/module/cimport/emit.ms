@@ -1,8 +1,7 @@
 // C Header Parser — proper tokenize → preprocess → parse pipeline
 //
-// Replaces the previous regex-based scanner with the chibicc-ported
-// cparse library at src/cparse/. Walks the parsed Obj[] and emits
-// MetaScript extern declarations.
+// Walks the parsed Obj[] from the cparse library and emits MetaScript
+// extern declarations.
 
 import { tokenizeFile } from "../cparse/tokenize";
 import { preprocess } from "../cparse/preprocess";
@@ -167,7 +166,6 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 	const pp = preprocess(tokens.head, target, includePaths);
 	const parsed = parseTranslationUnit(pp.head, target);
 
-	// Build name filter set
 	const filterAll = importedNames.length === 0;
 
 	// Track which enum types we've already emitted

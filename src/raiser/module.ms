@@ -44,7 +44,7 @@ export function makeTestModule(code: RaiserInstruction[], constants: RaiserValue
 
 // --- Accessors ---
 // Helper functions to access module/function internals safely.
-// Function params generate pointer access (DRC workaround #15).
+// Function params generate pointer access (DRC workaround).
 
 export function getFuncName(func: RaiserFunction): string {
 	return func.name;

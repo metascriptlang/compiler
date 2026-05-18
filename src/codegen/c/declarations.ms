@@ -439,7 +439,7 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 	const methodOvIdx = node.resolvedSym !== null ? node.resolvedSym.overloadIdx : 0;
 	const methodName = mangledFunctionName(node.resolvedSym, (node.resolvedSym !== null && node.resolvedSym.name !== "") ? node.resolvedSym.name : fallbackName, methodOvIdx);
 	const methodType = node.nodeType;
-	// Bug 11: skip emission of generic method bodies (mirror line 150 guard in
+	// Skip emission of generic method bodies (mirror the same guard in
 	// genFunctionDecl). When a generic static method is mono-instantiated for
 	// concrete T (Bug 10 fix), the mono instance lands in `_pendingInstances`
 	// as a synthesized FunctionDecl and gets emitted by the regular function

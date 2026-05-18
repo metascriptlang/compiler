@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "./types";
+import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -553,7 +553,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		"void" => voidType(),
 		"null" => nullType(),
 		"never" => neverType(),
-		"unknown" | "any" | "undefined" => unknownType(),
+		"unknown" | "any" => unknownType(),
 		"int8" => createPrimitive(TypeKind.Int8),
 		"int16" => createPrimitive(TypeKind.Int16),
 		"int32" => createPrimitive(TypeKind.Int32),
@@ -755,7 +755,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 // where `Handler = (s: string) => void` produced two different mangled
 // suffixes — `string_Handler` (raw user spelling, struct path) vs
 // `string_function` (canonical, function path) — and the resulting
-// universe of struct/function symbols disagreed (Bug 5a / Task #11).
+// universe of struct/function symbols disagreed.
 // Routing both through `monoTypeKey` makes the struct mono path and the
 // function mono path agree on names without needing any further per-type
 // special-casing in `monoConcreteTypeName`.
@@ -1700,7 +1700,6 @@ function resolveActor(ctx: CheckerContext, node: Node): void {
 	node.resolvedSym = sym;
 	sym.state = SymbolState.Shaped;
 
-	// Check for generic params
 	const genericStr = getGenericDecl(d.actorName);
 	const hasGenerics = genericStr !== "";
 	if (hasGenerics) {

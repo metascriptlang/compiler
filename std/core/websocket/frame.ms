@@ -84,6 +84,10 @@ function needMore(): ParseFrameResult {
 // Used for masking client→server frames; same routine unmasks any inbound
 // masked frame (though server→client masked is a protocol violation we
 // reject before calling this).
+function xorByte(b: number, k: number): int32 {
+	return (b as int32) ^ (k as int32);
+}
+
 export function maskPayload(payload: number[], maskKey: number[]): number[] {
 	const keyLen = maskKey.length;
 	const payloadLen = payload.length;
@@ -97,7 +101,7 @@ export function maskPayload(payload: number[], maskKey: number[]): number[] {
 		return bytes;
 	}
 	for (let i: int32 = 0; i < payloadLen; i = i + 1) {
-		bytes.push(payload[i] ^ maskKey[i % keyLen]);
+		bytes.push(xorByte(payload[i], maskKey[i % keyLen]));
 	}
 	return bytes;
 }
@@ -153,7 +157,7 @@ export function buildFrame(opcode: int32, fin: boolean, payload: number[], maskK
 	// Masked payload
 	let i = 0;
 	while (i < len) {
-		frame.push(payload[i] ^ maskKey[i & 3]);
+		frame.push(xorByte(payload[i], maskKey[i & 3]));
 		i = i + 1;
 	}
 	return frame;
@@ -216,8 +220,8 @@ export function parseFrame(data: number[], offset: int32): Result<ParseFrameResu
 	const avail = data.length - offset;
 	if (avail < 2) return Result.ok(needMore());
 
-	const b0 = data[offset];
-	const b1 = data[offset + 1];
+	const b0: int32 = data[offset] as int32;
+	const b1: int32 = data[offset + 1] as int32;
 
 	const fin = (b0 & 0x80) !== 0;
 	const rsv = b0 & 0x70;

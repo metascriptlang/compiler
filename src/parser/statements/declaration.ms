@@ -201,7 +201,6 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 
 export function parseFunctionDecl(state: ParserState): NodeResult {
 	const fnToken = current(state);
-	// Check for 'async' before 'function'
 	let flags = "";
 	if (current(state).kind === TokenKind.Async) {
 		flags = "async";
@@ -216,7 +215,6 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	}
 	const nameToken = current(state);
 	// Accept Ident, OperatorIdent (backtick-quoted: `==`, `[]`), TemplateNoSub, or contextual keywords
-	// Reference compiler: parser.zig:864 — operator_identifier token accepted as function name
 	if (!isIdentLike(nameToken) && !isPropertyName(nameToken) && nameToken.kind !== TokenKind.TemplateNoSub && nameToken.kind !== TokenKind.OperatorIdent) {
 		return Result.err(`Expected function name at line ${nameToken.line}`);
 	}
@@ -565,7 +563,6 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, gene
 	}
 	advance(state); // consume '('
 
-	// Parse discriminant name
 	const discNameToken = current(state);
 	if (!isIdentLike(discNameToken)) {
 		return Result.err(`Expected discriminant name in discriminated union at line ${current(state).line}`);
@@ -1403,7 +1400,6 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 						propKey: keyToken.value,
 						propAlias: createNode(NodeKind.Identifier, { name: aliasToken.value }, aliasToken),
 					}, keyToken));
-					// Skip default value on alias
 					if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 						advance(state);
 						skipDefaultValue(state);
@@ -1639,9 +1635,9 @@ export function parseExternDecl(state: ParserState): NodeResult {
 
 	// Extern class with body: parse as ClassDecl with ExternC flag.
 	// Class body supports fields (name: Type) and extern methods (name(...): Type).
-	// parseClassMember already handles 'extern' modifier on methods (line 868).
+	// parseClassMember already handles 'extern' modifier on methods.
 	if (externKind === ExternKind.Class && !isAtEnd(state)) {
-		// genericNames already captured at line 1289 (before extern kind dispatch)
+		// genericNames already captured before extern kind dispatch
 		if (genericNames !== "") {
 			addGenericDecl(nameToken.value, genericNames);
 		}
@@ -1685,7 +1681,6 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	const externType = captureOptionalType(state);
 	const externTypeExpr = getLastTypeExpr();
 
-	// Skip optional 'extends' clause
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
 		advance(state);
 		skipTypeAnnotation(state);

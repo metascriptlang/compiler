@@ -973,12 +973,6 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	const isRefWrapped = baseType.kind === TypeKind.Ref && baseType.typeReturn !== null;
 	const innerBase = isRefWrapped ? baseType.typeReturn : baseType;
 	if (innerBase.kind !== TypeKind.Struct && innerBase.kind !== TypeKind.Union) return;
-	// Always instantiate, even when type args are still GenericParams. Inside a
-	// generic function body (e.g., `function makeOk<T, E>(...): Result<T, E>`),
-	// substituting `T → T` is identity but produces a body with the discriminant
-	// and variant fields exposed — needed for object-literal validation and field
-	// access against the generic instance. Without this, generic match-type
-	// aliases stay opaque during their own factory's body checking.
 	// Split declared param names (e.g. "K,V" → ["K", "V"])
 	const paramNames = splitTopLevel(declaredParams, ",");
 	if (paramNames.length === 0 || paramNames.length > gi.typeChildren.length) return;
@@ -2363,18 +2357,11 @@ test "instantiateGeneric multi-param" {
 	assert err !== null && err.kind === TypeKind.String;
 }
 
-// Bug 16 regression: substituteType keeps typeExtra un-substituted (would cost
-// ~20× compile time on self-host), so callers that need the substituted body
+// substituteType keeps typeExtra un-substituted (would cost ~20× compile
+// time on self-host), so callers that need the substituted body
 // must invoke instantiateGenericBody themselves. Built-in Result/Promise/Iterator
 // have no parser-side addGenericDecl entry — they get their param names from
 // the hardcoded fallback in `parser/context.ms:getGenericDecl`.
-//
-// Pre-fix, callers like inferGenericReturn / inferGenericReturnWithExplicit
-// either skipped the populate or had no way to look up "T,E" for Result, so
-// peelToStructOrUnion fell back to the un-substituted typeExtra and downstream
-// narrowing leaked GenericParam — forcing getDynamicField synthesis on
-// `r.value.field` accesses (visible warning: `incompatible pointer types
-// passing 'Person **' to parameter of type 'JsonValueData *'`).
 test "instantiateGenericBody populates substituted Result body" {
 	const r = createResult(createGenericParam("T"), stringType());
 	// Bare Result<T, string> — typeReturn is null (no eager body).

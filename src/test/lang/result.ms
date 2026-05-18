@@ -83,7 +83,7 @@ function doWork(): Result<number, string> {
 function process(): Result<void, string> {
 	const val = try doWork();
 	console.log("got value");
-	return Result.ok();
+	return Result.ok(null);
 }
 
 test "try inside Result void fn ok" {
@@ -97,7 +97,7 @@ function failWork(): Result<number, string> {
 
 function failProcess(): Result<void, string> {
 	const val = try failWork();
-	return Result.ok();
+	return Result.ok(null);
 }
 
 test "try inside Result void fn err propagation" {
@@ -115,7 +115,7 @@ function innerCalc(): Result<number, string> {
 function outerVoid(): Result<void, string> {
 	const n = try innerCalc();
 	console.log("nested ok");
-	return Result.ok();
+	return Result.ok(null);
 }
 
 test "try nested functions different Result types" {
@@ -309,9 +309,9 @@ test "Result + user-defined Either coexistence (cache collision regression)" {
 	if (e.ok) assert e.value === 3;
 }
 
-// --- Result.ok() with no arg (Result<void, E>) construction ---
-test "Result.ok() void construction" {
-	const r: Result<void, string> = Result.ok();
+// --- Result.ok(null) for Result<void, E> construction ---
+test "Result.ok(null) void construction" {
+	const r: Result<void, string> = Result.ok(null);
 	assert r.ok;
 }
 

@@ -88,7 +88,6 @@ function bareConfig(): ResolverConfig {
 export function resolveImportWithConfig(specifier: string, fromFile: string, config: ResolverConfig): ResolveCandidates {
 	let result: ResolveCandidates = [];
 
-	// Apply alias rewriting
 	const spec = applyAlias(specifier, config);
 
 	// If specifier already has a known extension, return just that path

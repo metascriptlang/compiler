@@ -14,6 +14,7 @@
 // Nested struct fields deferred until typeName is surfaced on TypeObjectData
 // (needed to construct the inner-type witness for recursive macro call).
 import { Node, NodeKind } from "std/meta";
+import { detectUnionDisc, pickAtomicAccessor } from "../discDetect";
 
 // Macro: jv must be a JsonValue. Witness expression must be typed `T | null`
 // (e.g., user passes `null as Person | null`). Honest nullable typing — null
@@ -22,19 +23,140 @@ import { Node, NodeKind } from "std/meta";
 // constructing T from per-field accessor calls.
 export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 	let tt = witness.nodeType;
-	// Peel `T | null` Union → T. mapTypeToAst produces TypeUnion with
-	// typExprMembers; the null variant lands as Identifier("null").
+	// Peel `T | null` Union → T (single non-null variant). For multi-variant
+	// unions (DU), keep tt as TypeUnion and fall through to the DU branch
+	// below. Pre-V3 code peeled to first non-null variant unconditionally —
+	// that silently dropped variant 2+ for `A | B | null` cases.
 	if (tt.kind === NodeKind.TypeUnion) {
+		let nonNullCount: int32 = 0;
+		let firstNonNull: Node = null as unknown as Node;
 		for (const m of tt.typExprMembers) {
 			if (m.kind === NodeKind.Identifier && m.name === "null") continue;
-			tt = m;
-			break;
+			if (firstNonNull === null) firstNonNull = m;
+			nonNullCount = nonNullCount + 1;
 		}
+		if (nonNullCount === 1) {
+			tt = firstNonNull;
+		}
+		// nonNullCount >= 2: leave tt as TypeUnion → DU branch below
 	}
 	// Peel Ref<Struct> wrapper (interface/class types are reference-typed).
 	if (tt.kind === NodeKind.TypeGeneric) {
 		tt = tt.typExprArgs[0];
 	}
+
+	// V3 — Tagged union (DU) decoding. Mirror encode shape: dispatch on disc
+	// field accessor, emit per-variant ObjectLiteral { disc: discLit, ...payload }.
+	// Supports boolean + string disc (enum disc deferred — needs name→enum
+	// mapping). Variant payload restricted to atomic fields (string/bool/
+	// number/int*/float*) — nested struct + array in variant deferred.
+	if (tt.kind === NodeKind.TypeUnion) {
+		const info = detectUnionDisc(tt);
+		const discField: string = info.discField;
+		const discKind: string = info.discKind;
+		const variants = info.variants;
+
+		if (discField === "" || variants.length === 0) {
+			error("jsonValueToStruct: cannot determine discriminator for union type — variants must share a literal-typed disc field", witness);
+		}
+		if (discKind === "enum") {
+			error("jsonValueToStruct: enum-discriminated unions not yet supported in decode (encode works); use boolean or string disc", witness);
+		}
+
+		// matchDisc: jv.getDynamicField(discField).asBoolean() | .asString()
+		const discAccessorName: string = discKind === "boolean" ? "asBoolean" : "asString";
+		const matchDisc: Node = {
+			kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+			callee: {
+				kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
+				object: {
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+					arguments: [
+						jv,
+						{ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: discField },
+					],
+				},
+				property: discAccessorName,
+			},
+			arguments: [],
+		};
+
+		const matchCases: Node[] = [];
+		for (const variant of variants) {
+			const variantKey: string = variant.key;
+			const v: Node = variant.member;
+			if (v.kind !== NodeKind.TypeObject) {
+				error("jsonValueToStruct: union variants must be struct types (got kind=" + v.kind + ")", witness);
+			}
+
+			// Pattern + disc literal (mirror encode shape).
+			let pattern: Node;
+			let discLiteral: Node;
+			if (discKind === "boolean") {
+				const bv: boolean = variantKey === "true";
+				pattern = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: bv };
+				discLiteral = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: bv };
+			} else {
+				pattern = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variantKey };
+				discLiteral = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variantKey };
+			}
+
+			// Build per-variant ObjectLiteral: disc field first, then payload.
+			const vKeyNodes: string[] = [discField];
+			const vValueNodes: Node[] = [discLiteral];
+			for (let fi = 0; fi < v.typExprFieldNames.length; fi = fi + 1) {
+				const fname: string = v.typExprFieldNames[fi];
+				const ftype: Node = v.typExprFieldTypes[fi];
+				if (fname === discField) continue;
+
+				if (ftype.kind !== NodeKind.Identifier) {
+					error("jsonValueToStruct: DU variant payload field '" + fname + "' must be atomic (string/bool/number/int*/float*); nested struct + array deferred", witness);
+				}
+				const a = pickAtomicAccessor(ftype.name);
+				const fieldAccess: Node = {
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: {
+						kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
+						object: {
+							kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+							callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+							arguments: [
+								jv,
+								{ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname },
+							],
+						},
+						property: a.methodName,
+					},
+					arguments: [],
+				};
+				const finalAccess: Node = a.needsCast
+					? { kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asExpr: fieldAccess, asType: a.castType }
+					: fieldAccess;
+				vKeyNodes.push(fname);
+				vValueNodes.push(finalAccess);
+			}
+
+			matchCases.push({
+				kind: NodeKind.MatchCase, line: jv.line, column: jv.column,
+				casePatterns: [pattern],
+				caseGuard: null as unknown as Node,
+				caseBody: {
+					kind: NodeKind.ObjectLiteral, line: jv.line, column: jv.column,
+					keys: vKeyNodes,
+					properties: vValueNodes,
+					keyLocations: [],
+				},
+			});
+		}
+
+		return {
+			kind: NodeKind.MatchExpr, line: jv.line, column: jv.column,
+			matchDisc,
+			matchCases,
+		};
+	}
+
 	if (tt.kind !== NodeKind.TypeObject) {
 		error("jsonValueToStruct: target type must be a struct/interface; atomic types not supported", witness);
 	}
@@ -247,97 +369,50 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			continue;
 		}
 
+		// Literal-typed field (e.g. `kind: "circle"`, `ok: true`). Bridge
+		// emits StringLiteral/BooleanLiteral nodes for these. Decoded value
+		// MUST equal the literal — emit the literal directly, ignore jv.
+		// Pre-Bug-A bridge made these Identifier(name=value), which fell
+		// through to the Identifier branch below and got mis-typed.
+		if (ftype.kind === NodeKind.StringLiteral) {
+			keyNodes.push(fname);
+			valueNodes.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ftype.value });
+			i = i + 1;
+			continue;
+		}
+		if (ftype.kind === NodeKind.BooleanLiteral) {
+			keyNodes.push(fname);
+			valueNodes.push({ kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: ftype.boolValue });
+			i = i + 1;
+			continue;
+		}
 		// Atomic field — Identifier with `.name` from mapTypeToAst's
 		// atomicTypeName. Anything else is rejected.
 		if (ftype.kind !== NodeKind.Identifier) {
 			error("jsonValueToStruct: union fields not supported in V1; field '" + fname + "'", witness);
 		}
-		const tn: string = ftype.name;
-
-		// Pick the bridge accessor for this atomic type. asString / asBoolean /
-		// asNumber / asInt64 each handle the runtime kind dispatch — crucial for
-		// numbers because the parser stores `30` as JsonKind.Int (intVal slot)
-		// and `30.5` as JsonKind.Number (numVal slot). Direct slot access
-		// (.numVal / .intVal) reads uninitialized memory when the kind doesn't
-		// match.
-		//
-		// Sized-int / enum / int-aliased fields go through asInt64 + TypeAssertion
-		// to narrow int64 → declared field type (int8 / int32 / Color enum / etc.).
-		// `number` field accepts either Int or Number JSON variants via asNumber.
-		const accessorName: string = match (tn) {
-			"string" => "asString",
-			"boolean" => "asBoolean",
-			"number" | "float32" | "float64" => "asNumber",
-			_ => "asInt64",   // sized int / uint / enum / int-aliased
-		};
-		// Only emit explicit TypeAssertion for builtin-named narrowing
-		// (`int8`/`int16`/.../`uint*`/`float32`). For user-defined names —
-		// enums, type aliases — skip the cast: the surrounding ObjectLiteral
-		// assignment context-types each property and fitNode inserts
-		// HiddenStdConv (range-check / implicit cast) for the int64→<field>
-		// narrowing. A TypeAssertion-by-name fails to resolve when the macro
-		// expands inside a generic helper's monomorphized body whose scope
-		// doesn't include user-defined types — see Bug 53 root cause.
-		const isBuiltinNarrowName: boolean = match (tn) {
-			"int8" | "int16" | "int32" | "int64"
-				| "uint8" | "uint16" | "uint32" | "uint64"
-				| "float32" => true,
-			_ => false,
-		};
-		const needsCast: boolean = match (tn) {
-			"string" | "boolean" | "number" | "float64" => false,
-			_ => isBuiltinNarrowName,
-		};
-
-		// getDynamicField(jv, "fname").<accessorName>()
-		// MemberExpr-callee style so the extension dispatcher resolves the
-		// accessor; Identifier-callee style fails because extensions are only
-		// reachable via member-call form.
+		const a = pickAtomicAccessor(ftype.name);
+		// getDynamicField(jv, "fname").<accessor>() — MemberExpr-callee style
+		// so the extension dispatcher resolves the accessor.
 		const fieldAccess: Node = {
-			kind: NodeKind.CallExpr,
-			line: jv.line,
-			column: jv.column,
+			kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 			callee: {
-				kind: NodeKind.MemberExpr,
-				line: jv.line,
-				column: jv.column,
+				kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
 				object: {
-					kind: NodeKind.CallExpr,
-					line: jv.line,
-					column: jv.column,
-					callee: {
-						kind: NodeKind.Identifier,
-						line: jv.line,
-						column: jv.column,
-						name: "getDynamicField",
-					},
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
 					arguments: [
 						jv,
-						{
-							kind: NodeKind.StringLiteral,
-							line: jv.line,
-							column: jv.column,
-							value: fname,
-						},
+						{ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname },
 					],
 				},
-				property: accessorName,
+				property: a.methodName,
 			},
 			arguments: [],
 		};
-
-		// Cast narrows the bridge accessor's wide return (int64 / number) down
-		// to the declared field type — int32, float32, Color enum, alias, etc.
-		const finalAccess: Node = needsCast
-			? {
-				kind: NodeKind.TypeAssertion,
-				line: jv.line,
-				column: jv.column,
-				asExpr: fieldAccess,
-				asType: tn,
-			}
+		const finalAccess: Node = a.needsCast
+			? { kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asExpr: fieldAccess, asType: a.castType }
 			: fieldAccess;
-
 		keyNodes.push(fname);
 		valueNodes.push(finalAccess);
 		i = i + 1;

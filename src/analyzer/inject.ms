@@ -808,15 +808,21 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 				for (const p of preStmts) { addPre(dctx, p); }
 				return stmt;
 			}
-			// Non-IsDecl: save old → assign → incref(new) → destroy(old)
-			// Identity-case safety: incref new before decref old (Reference: =copy on result)
-			if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
-				// Named/String: =copy(&dest, callResult) handles atomically.
-				// Reference parity (withTmpIfNeeded): hoist the call result to a temp
-				// before passing it to the copy function. Without this, multi-
-				// statement-expanding calls (msUnboxStruct, msSinkBoxStruct) inside
-				// a call argument position corrupt the iterative codegen's shared
-				// result stack via truncResults.
+			// Non-IsDecl dispatch by rcInfo kind:
+			//   Named/String (isBinaryCopy):    hoist call result to temp + =copy
+			//                                   (=copy handles destroy+assign atomically)
+			//   Ref/Closure:                    delegate to genSink — save → assign → destroy
+			//                                   (callee-side emitReturnWithIncref balances rc
+			//                                    for aliased passthrough; no caller incref)
+			if (isBinaryCopy(rcInfo) && (rcInfo.sinkFn !== "" || rcInfo.copyFn !== "")) {
+				// Named/String fresh CallExpr → SINK semantic (Reference parity:
+				// Nim nkCallKinds → eqsink, not eqcopy). Hoist call result to temp
+				// (also needed because multi-statement-expanding intrinsics like
+				// msUnboxStruct corrupt the iterative codegen's shared result stack
+				// via truncResults when inlined into a call argument position).
+				// Then: sinkFn(dest, $callRes) transfers heap; emit explicit
+				// wasMoved($callRes) so accidental future scope-cleanup registration
+				// won't double-free.
 				const callTmpSym = freshTempSym(dctx.ctx, "callRes", rhs.nodeType);
 				const callTmpDecl = makeVarDecl(callTmpSym.name, rhs, DeclKind.Const, loc);
 				callTmpDecl.nodeType = rhs.nodeType;
@@ -824,34 +830,55 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 				const callTmpRef = makeIdentResolved(callTmpSym, loc);
 				callTmpRef.nodeType = rhs.nodeType;
 				const lhsExpr = resolveLhs(flags, dest, destName, destSym, loc);
-				const destArg = needsDestAddr(rcInfo) ? makeHiddenAddr(lhsExpr, loc) : lhsExpr;
-				const srcArg = isCopySrcByValue(rcInfo) ? callTmpRef : makeHiddenAddr(callTmpRef, loc);
-				const copyCall = makeExprStmt(
-					makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
+				const useSink = rcInfo.sinkFn !== "";
+				const opFn = useSink ? rcInfo.sinkFn : rcInfo.copyFn;
+				// Argument shapes differ for sink vs copy:
+				//   copyFn (msStringCopy):    (&dest, srcValue)       — both per needsDestAddr/isCopySrcByValue
+				//   sinkFn for String:        (destLvalue, srcValue)   — both by value
+				//   sinkFn for Named seqLike: (destLvalue or &, srcValue)
+				//   sinkFn for Named !seqLike: (&dest, &src)
+				// Mirror makeSinkCall (line ~637) for sink path.
+				let destArg: Node;
+				let srcArg: Node;
+				if (useSink) {
+					if (rcInfo.rcKind === RcKind.Named) {
+						destArg = needsDestAddr(rcInfo) ? makeHiddenAddr(lhsExpr, loc) : lhsExpr;
+						srcArg = rcInfo.seqLike ? callTmpRef : makeHiddenAddr(callTmpRef, loc);
+					} else {
+						destArg = lhsExpr;
+						srcArg = callTmpRef;
+					}
+				} else {
+					destArg = needsDestAddr(rcInfo) ? makeHiddenAddr(lhsExpr, loc) : lhsExpr;
+					srcArg = isCopySrcByValue(rcInfo) ? callTmpRef : makeHiddenAddr(callTmpRef, loc);
+				}
+				const opCall = makeExprStmt(
+					makeCall(makeIdent(opFn, loc), [destArg, srcArg], loc), loc);
 				const hoisted: Node[] = [];
 				for (const p of preStmts) hoisted.push(p);
 				hoisted.push(callTmpDecl);
-				hoisted.push(copyCall);
+				hoisted.push(opCall);
+				if (useSink && rcInfo.wasMovedFn !== "") {
+					hoisted.push(makeWasMovedCall(callTmpSym.name, rcInfo, loc, callTmpSym));
+				}
 				return makeBlock(hoisted, loc);
 			}
-			// Ref/Closure: save → assign → incref → destroy
-			const saveType = dest.nodeType;
-			const saveExpr = resolveLhs(flags, dest, destName, destSym, loc);
-			const tmpSym = freshTempSym(dctx.ctx, "old", saveType);
-			const tmpName = tmpSym.name;
-			const saveTmp = makeVarDecl(tmpName, saveExpr, DeclKind.Const, loc);
-			saveTmp.nodeType = saveType;
-			saveTmp.resolvedSym = tmpSym;
-			const result: Node[] = [];
-			for (const p of preStmts) { result.push(p); }
-			result.push(saveTmp);
-			result.push(stmt);
-			if (rcInfo.copyFn !== "") {
-				result.push(makeExprStmt(
-					makeCall(makeIdent(rcInfo.copyFn, loc), [resolveLhs(flags, dest, destName, destSym, loc)], loc), loc));
+			// Ref/Closure: delegate to genSink (Reference parity: Nim's nkCallKinds
+			// → c.genSink at injectdestructors.nim:1189). The callee-side
+			// emitReturnWithIncref bumps rc on `return identifier` of Ref params,
+			// balancing rc accounting so save→assign→destroy is safe for aliased
+			// passthrough — no caller-side defensive incref needed.
+			const sinkResult = genSink(stmt, dest, destName, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
+			if (preStmts.length === 0) return sinkResult;
+			const wrapped: Node[] = [];
+			for (const p of preStmts) { wrapped.push(p); }
+			if (sinkResult.kind === NodeKind.BlockStmt) {
+				const sd = sinkResult.data as BlockStmtData;
+				for (const s of sd.statements) { wrapped.push(s); }
+			} else {
+				wrapped.push(sinkResult);
 			}
-			result.push(makeDestroyCall(tmpName, rcInfo, loc, tmpSym));
-			return makeBlock(result, loc);
+			return makeBlock(wrapped, loc);
 		},
 		NodeKind.NewExpr | NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.StringLiteral |
 		NodeKind.NumberLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral |
@@ -2058,9 +2085,13 @@ function markReturnedVarsMoved(node: Node, dctx: DrcContext): void {
 			markReturnedVarsMoved((node.data as MemberExprData).object, dctx);
 		},
 		NodeKind.CallExpr => {
-			const cd = node.data as CallExprData;
-			markReturnedVarsMoved(cd.callee, dctx);
-			for (const arg of cd.arguments) { markReturnedVarsMoved(arg, dctx); }
+			// Only walk callee — args are handled by processCall's per-arg sink/borrow
+			// detection. Recursively marking ALL args as moved is wrong: for borrow
+			// params (e.g. msStringConcatArr) the value's heap stays caller-owned, so
+			// the scope must emit destroy at cleanup, not wasMoved. processIdentifier
+			// in Consumed/SinkArg mode (used only for sink args) already records
+			// moves for the args that genuinely transfer ownership.
+			markReturnedVarsMoved((node.data as CallExprData).callee, dctx);
 		},
 		// CRITICAL: nested function bodies are scope stops. A returned closure
 		// captures outer vars via its env — those vars must NOT be marked moved

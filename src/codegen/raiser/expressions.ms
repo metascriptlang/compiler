@@ -2,13 +2,14 @@
 // AST expression nodes → typed bytecode instructions.
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, NodeFlag, TypeKind,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BinaryExprData, UnaryExprData,
 	CallExprData, IdentifierData, MemberExprData,
 	ConditionalExprData, TypeAssertionData, UpdateExprData,
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
-	MoveExprData
+	MoveExprData,
+	HiddenDerefData, HiddenStdConvData
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC } from "../../raiser/bytecode";
 import { raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
@@ -156,6 +157,16 @@ export function exprIsString(s: RaiserCompState, node: Node): boolean {
 		const d = node.data as ConditionalExprData;
 		return exprIsString(s, d.ternaryConsequent) || exprIsString(s, d.ternaryAlternate);
 	}
+	// Fallback: any expression with checker-resolved nodeType String is a string.
+	// Catches MemberExpr / ArrayAccess / CallExpr returning string. Without this,
+	// `obj.field === other.field` (both string fields) compiles to numeric BeqI64
+	// instead of EqStr — silently wrong because BeqI64 compares heap handles.
+	// Also accept StringLiteral type (e.g., literal-typed disc fields like `"click"`)
+	// so DU disc field comparisons dispatch to EqStr.
+	if (node.nodeType !== null) {
+		const tk = node.nodeType.kind;
+		if (tk === TypeKind.String || tk === TypeKind.StringLiteral) return true;
+	}
 	return false;
 }
 
@@ -222,6 +233,21 @@ export function compileExpr(s: RaiserCompState, node: Node): number {
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
 			return compileExpr(s, d.moveArg);
+		},
+		// Hidden* nodes are checker-inserted markers (deref point for Ref<Struct>,
+		// implicit type conversion). Raiser VM is dynamically typed and has no
+		// pointer-vs-value distinction — passthrough compile the inner expr.
+		// Mirrors C backend (expressions.ms:852,860,868) and JS backend
+		// (jsgen.ms:81-82). Without these arms the chain `o.inner.msg` on a
+		// Ref<Struct> field silently fell through to LoadConst nil, breaking
+		// every @comptime access on cross-module Ref<Struct> types.
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
+			const hd = node.data as HiddenDerefData;
+			return compileExpr(s, hd.expr);
+		},
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
+			const hd = node.data as HiddenStdConvData;
+			return compileExpr(s, hd.convExpr);
 		},
 		_ => {
 			const reg = allocReg(s);
@@ -290,18 +316,18 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): number {
 		const lReg = compileExpr(s, d.left);
 		const rReg = compileExpr(s, d.right);
 		const dest = allocReg(s);
-		emitLoadConst(s, dest, raiserInt(1));
+		emitLoadConst(s, dest, raiserBool(true));
 		emitInst(s, raiserABC(RaiserOpcode.EqStr, lReg, rReg, 1));
-		emitLoadConst(s, dest, raiserInt(0));
+		emitLoadConst(s, dest, raiserBool(false));
 		return dest;
 	}
 	if (isStrCmp && (op === "!=" || op === "!==")) {
 		const lReg = compileExpr(s, d.left);
 		const rReg = compileExpr(s, d.right);
 		const dest = allocReg(s);
-		emitLoadConst(s, dest, raiserInt(1));
+		emitLoadConst(s, dest, raiserBool(true));
 		emitInst(s, raiserABC(RaiserOpcode.NeStr, lReg, rReg, 1));
-		emitLoadConst(s, dest, raiserInt(0));
+		emitLoadConst(s, dest, raiserBool(false));
 		return dest;
 	}
 
@@ -316,15 +342,15 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): number {
 		return dest;
 	}
 
-	// Comparison: R_result = 1; BxxI64/BxxF64 L R 1; R_result = 0
+	// Comparison: R_result = true; BxxI64/BxxF64 L R 1; R_result = false
 	if (isComparisonOp(op)) {
-		emitLoadConst(s, dest, raiserInt(1));
+		emitLoadConst(s, dest, raiserBool(true));
 		if (useFloat) {
 			emitInst(s, raiserABC(comparisonOpcodeF64(op), lReg, rReg, 1));
 		} else {
 			emitInst(s, raiserABC(comparisonOpcode(op), lReg, rReg, 1));
 		}
-		emitLoadConst(s, dest, raiserInt(0));
+		emitLoadConst(s, dest, raiserBool(false));
 		return dest;
 	}
 
@@ -360,12 +386,12 @@ function compileUnaryExpr(s: RaiserCompState, node: Node): number {
 	} else if (d.unaryOp === "~") {
 		emitInst(s, raiserABC(RaiserOpcode.BitNot, dest, srcReg, 0));
 	} else if (d.unaryOp === "!") {
-		// Logical NOT: result = (src == 0) ? 1 : 0
+		// Logical NOT: result = (src == 0) ? true : false
 		const zeroReg = allocReg(s);
 		emitLoadConst(s, zeroReg, raiserInt(0));
-		emitLoadConst(s, dest, raiserInt(1));
+		emitLoadConst(s, dest, raiserBool(true));
 		emitInst(s, raiserABC(RaiserOpcode.BeqI64, srcReg, zeroReg, 1));
-		emitLoadConst(s, dest, raiserInt(0));
+		emitLoadConst(s, dest, raiserBool(false));
 	} else {
 		emitInst(s, raiserABC(RaiserOpcode.Move, dest, srcReg, 0));
 	}
@@ -460,6 +486,22 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): number {
 
 // --- Call ---
 
+// Allocate `args.length` slots after `dest`, compile each arg, and emit Move
+// instructions to land each result in its expected callee slot. Shared by
+// CallHost (extern) and direct user-function-call paths since both follow
+// the same calling convention (args sit at dest+1 .. dest+argCount).
+function emitCallArgs(s: RaiserCompState, dest: number, args: Node[]): void {
+	const argCount = args.length;
+	for (let i = 0; i < argCount; i = i + 1) { allocReg(s); }
+	for (let i = 0; i < argCount; i = i + 1) {
+		const argReg = compileExpr(s, args[i]);
+		const targetReg = dest + 1 + i;
+		if (argReg !== targetReg) {
+			emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, argReg, 0));
+		}
+	}
+}
+
 function compileCallExpr(s: RaiserCompState, node: Node): number {
 	const d = node.data as CallExprData;
 
@@ -488,56 +530,39 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 	}
 
 	// Generic native call: any callee resolved to a Symbol with nativeName
-	// (extern decl) becomes a CallHost lookup at the registered name.
-	// This is the path that scales — adding a new extern doesn't require any
-	// codegen edits. The hardcoded readFile/writeFile branch below remains
-	// only as a fallback for codegen paths that bypass the checker (e.g.,
-	// parse-only test helpers in rgen tests).
+	// (extern decl) becomes a CallHost lookup at the registered name. New
+	// stdlib externs need zero codegen edits — they self-register through
+	// hostTable.ms which feeds the registry consulted at dispatch time.
 	if (d.callee.kind === NodeKind.Identifier && d.callee.resolvedSym !== null) {
 		const sym = d.callee.resolvedSym;
 		if (sym.nativeName !== "") {
-			const argCount = d.arguments.length;
 			const dest = allocReg(s);
-			for (let i = 0; i < argCount; i = i + 1) { allocReg(s); }
-			for (let i = 0; i < argCount; i = i + 1) {
-				const argReg = compileExpr(s, d.arguments[i]);
-				const targetReg = dest + 1 + i;
-				if (argReg !== targetReg) {
-					emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, argReg, 0));
-				}
-			}
+			emitCallArgs(s, dest, d.arguments);
 			const nameIdx = addConst(s, raiserString(sym.nativeName));
-			emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, argCount));
+			emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, d.arguments.length));
 			return dest;
 		}
 	}
 
-	// Host builtins: readFile, writeFile
-	if (d.callee.kind === NodeKind.Identifier) {
-		const bid = d.callee.data as IdentifierData;
-		if (bid.name === "readFile" && d.arguments.length === 1) {
+	// Extension method native call: `obj.method(args)` where the checker
+	// resolved `.method` to an extern with nativeName. Mirrors the dispatch
+	// in transform/lowering/extensionMethodLower.ms — instance form prepends
+	// the receiver as first arg (UCS); static form (NodeFlag.ExtStatic) does
+	// not, since the object is a class identifier rather than a receiver
+	// value. Hardcoded special-cases above (charAt/slice/push) match first
+	// as the inline-opcode shortcut for hot methods.
+	if (d.callee.kind === NodeKind.MemberExpr && d.callee.resolvedSym !== null) {
+		const sym = d.callee.resolvedSym;
+		if (sym.nativeName !== "") {
+			const isStatic = (node.flags & NodeFlag.ExtStatic) !== 0;
+			const md = d.callee.data as MemberExprData;
+			const allArgs: Node[] = [];
+			if (!isStatic) allArgs.push(md.object);
+			for (const a of d.arguments) { allArgs.push(a); }
 			const dest = allocReg(s);
-			allocReg(s); // arg slot
-			const argReg = compileExpr(s, d.arguments[0]);
-			if (argReg !== dest + 1) {
-				emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1, argReg, 0));
-			}
-			emitInst(s, raiserABC(RaiserOpcode.Builtin, dest, 0, 1));
-			return dest;
-		}
-		if (bid.name === "writeFile" && d.arguments.length === 2) {
-			const dest = allocReg(s);
-			allocReg(s); // arg1 slot
-			allocReg(s); // arg2 slot
-			const arg1Reg = compileExpr(s, d.arguments[0]);
-			const arg2Reg = compileExpr(s, d.arguments[1]);
-			if (arg1Reg !== dest + 1) {
-				emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1, arg1Reg, 0));
-			}
-			if (arg2Reg !== dest + 2) {
-				emitInst(s, raiserABC(RaiserOpcode.Move, dest + 2, arg2Reg, 0));
-			}
-			emitInst(s, raiserABC(RaiserOpcode.Builtin, dest, 1, 2));
+			emitCallArgs(s, dest, allArgs);
+			const nameIdx = addConst(s, raiserString(sym.nativeName));
+			emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, allArgs.length));
 			return dest;
 		}
 	}
@@ -547,19 +572,9 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 		const calleeId = d.callee.data as IdentifierData;
 		const funcIdx = resolveFunc(s, calleeId.name);
 		if (funcIdx >= 0) {
-			const argCount = d.arguments.length;
-			// Allocate dest + arg slots (dest+1..dest+argCount)
 			const dest = allocReg(s);
-			for (let i = 0; i < argCount; i = i + 1) { allocReg(s); }
-			// Compile each arg, Move result into its expected slot
-			for (let i = 0; i < argCount; i = i + 1) {
-				const argReg = compileExpr(s, d.arguments[i]);
-				const targetReg = dest + 1 + i;
-				if (argReg !== targetReg) {
-					emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, argReg, 0));
-				}
-			}
-			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, argCount));
+			emitCallArgs(s, dest, d.arguments);
+			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, d.arguments.length));
 			return dest;
 		}
 	}
@@ -781,7 +796,6 @@ function compileArrayPushCall(s: RaiserCompState, node: Node): number {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
 	const arrReg = compileExpr(s, md.object);
-	// Push each argument
 	for (let i = 0; i < d.arguments.length; i = i + 1) {
 		const valReg = compileExpr(s, d.arguments[i]);
 		emitInst(s, raiserABC(RaiserOpcode.ArrayPush, arrReg, valReg, 0));

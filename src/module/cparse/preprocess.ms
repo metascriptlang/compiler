@@ -1,5 +1,4 @@
 // cparse — C preprocessor
-// Port of: ~/projects/chibicc preprocess.c
 //
 // Expands macros, handles #if/#include/#define directives.
 // No global state — all context passed explicitly via PPContext.
@@ -47,7 +46,7 @@ interface CondIncl {
 	parent: CondIncl;
 }
 
-// Preprocessing context (replaces chibicc's globals)
+// Preprocessing context (replaces the upstream parser's globals)
 interface PPContext {
 	macros: HashMap<string, Macro>;
 	condStack: CondIncl;      // null as CondIncl at top level
@@ -220,7 +219,6 @@ function readMacroDefinition(tok: CToken, ctx: PPContext): CToken {
 		}
 		if (tok.stringVal === ")") tok = tok.next;
 
-		// Copy body
 		const bodyParts = copyLine(tok);
 		const body = bodyParts[0];
 		const rest = bodyParts[1];
@@ -410,7 +408,7 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 		// Parameter substitution (normal)
 		const arg = findArg(args, body.stringVal);
 		if (arg !== null) {
-			// Expand the argument first (chibicc does this)
+			// Expand the argument first
 			let t = arg.tok;
 			if (t.kind === CTokenKind.Eof) {
 				// Empty argument — skip
@@ -809,7 +807,6 @@ function evalConstExpr(tok: CToken, ctx: PPContext): number {
 	let expanded = processed.next;
 	expanded = preprocessTokens(expanded, ctx);
 
-	// Convert pp-numbers to numbers
 	convertPPTokens(expanded, ctx.diags);
 
 	// Replace remaining identifiers with 0
@@ -888,7 +885,6 @@ function readIncludeFilename(tok: CToken, ctx: PPContext): string[] {
 
 // Detect include guard pattern: #ifndef GUARD / #define GUARD / ... / #endif
 // covering the entire file. Returns the guard macro name, or "" if no guard.
-// chibicc parity: detect_include_guard (preprocess.c)
 function detectIncludeGuard(tokens: CToken): string {
 	let t = tokens;
 	// Skip to first non-whitespace preprocessor token
@@ -926,7 +922,7 @@ function includeFile(filename: string, tok: CToken, ctx: PPContext): CToken {
 	const tokenized = tokenizeFile(source, resolved);
 	for (const d of tokenized.diagnostics) ctx.diags.push(d);
 
-	// Detect include guard before preprocessing (chibicc: detect_include_guard)
+	// Detect include guard before preprocessing
 	const guard = detectIncludeGuard(tokenized.head);
 
 	// Preprocess the included file
@@ -1175,7 +1171,6 @@ export function preprocess(
 		ctx.diags.push(makeDiag(DiagSeverity.Error, head.file, 0, 0, "unterminated #if"));
 	}
 
-	// Convert pp-tokens to final tokens
 	convertPPTokens(result, ctx.diags);
 
 	return { head: result, diagnostics: ctx.diags };

@@ -3,8 +3,6 @@
 // Flow graph query layer. Consumes the FlowNode graph built by src/binder/
 // and computes narrowed types for reference expressions at each program point.
 //
-// Reference: microsoft/typescript-go/internal/checker/flow.go
-//
 // Phase 2 scope: non-loop cases. Loop narrowing (LoopLabel fixed-point,
 // incomplete types, flowTypeCache save/restore) ships in Phase 3. Assignment
 // narrowing for let-variables ships in Phase 6.
@@ -49,7 +47,7 @@ function flowType(t: Type | null, incomplete: boolean): FlowType {
 
 // Shared-flow cache entry: memoize computed types for FlowNodes tagged
 // `Shared` within one query. A linear scan is fine because per-query N is
-// small (TS-go comment: "typically under ~20 entries per query").
+// small (typically under ~20 entries per query).
 interface SharedFlowEntry {
 	flow: FlowNode;
 	ft: FlowType;
@@ -58,7 +56,7 @@ interface SharedFlowEntry {
 // Loop label re-entry record. When a query recurses into its own loop label
 // back-edge, we detect the re-entry by scanning `flowLoopStack` and return
 // an incomplete union of types accumulated so far — this is what makes the
-// fixed-point terminate. Reference: typescript-go `flow.go:1293-1370`.
+// fixed-point terminate.
 interface FlowLoopInfo {
 	loopNode: FlowNode;
 	refKey: string;
@@ -73,13 +71,12 @@ export interface FlowState {
 	sharedFlows: SharedFlowEntry[];  // per-query Shared-flow cache
 	flowLoopStack: FlowLoopInfo[];   // in-progress loop analyses (re-entry detection)
 	// Phase 6 deferred fields (not yet used):
-	//   - initialType: Type — TS-go distinguishes declaredType (widened) from
+	//   - initialType: Type — distinguish declaredType (widened) from
 	//     initialType (usually equal, but differs for parameters with init
 	//     expressions). Needed when let-variable narrowing lands in Phase 6.
 	//   - flowContainer: Node — owning function/container, used by the Start
 	//     handler to implement the cross-container narrowing rule (`this.foo`
 	//     narrows across arrow boundaries; local identifiers do not). Phase 6.
-	//   - See typescript-go `flow.go:41-48` for the full FlowState layout.
 }
 
 function createFlowState(refNode: Node, declaredType: Type): FlowState {
@@ -97,7 +94,7 @@ function createFlowState(refNode: Node, declaredType: Type): FlowState {
 // references that share the same loop label. Returns the sentinel
 // "@nondotted" when the reference isn't a simple identifier or dotted
 // member-chain — non-dotted references bypass the loop cache entirely
-// (matches TS-go `writeFlowCacheKey` at `flow.go:1633-1693`).
+// (matches the reference `writeFlowCacheKey`).
 function getFlowCacheKey(refNode: Node): string {
 	if (refNode === null) return "@nondotted";
 	return writeFlowCacheKey(refNode);
@@ -347,7 +344,7 @@ function isNonNullCheckForRef(expr: Node, refNode: Node, assumeTrue: boolean): b
 // Condition / SwitchClause / BranchLabel node. Tail-recursive for mutations
 // that don't affect the reference (walks straight up the antecedent chain).
 //
-// Depth cap matches TypeScript (flow.go:117-123): pathological inputs stop
+// Depth cap matches the reference: pathological inputs stop
 // analysis and fall back to the declared type rather than stack-overflow.
 
 function getTypeAtFlowNode(state: FlowState, flow: FlowNode): FlowType {
@@ -357,7 +354,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode): FlowType {
 	let result: FlowType = flowType(state.declaredType, false);
 	// Track a pending Shared-flow node: if we detect one on entry, cache the
 	// final result under its key on exit. This memoizes expensive sub-walks
-	// within a single query (TS-go `flow.go:128-139`).
+	// within a single query.
 	let sharedFlow: FlowNode = null as unknown as FlowNode;
 	while (true) {
 		if (current === null) {
@@ -441,8 +438,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode): FlowType {
 	return result;
 }
 
-// Shared-flow cache lookup: linear scan by FlowNode identity. TS-go uses the
-// same linear-scan strategy because per-query N is typically < 20.
+// Shared-flow cache lookup: linear scan by FlowNode identity — per-query N is typically < 20.
 function lookupSharedFlow(state: FlowState, flow: FlowNode): FlowType {
 	let i = 0;
 	while (i < state.sharedFlows.length) {
@@ -610,7 +606,7 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 // the pre-loop flow (non-looping path); subsequent antecedents are the loop
 // back-edges (e.g., the end of the body, `continue` jumps).
 //
-// Algorithm (ref: typescript-go `flow.go:1293-1370`):
+// Algorithm:
 //   1. If we're already analyzing this (loopNode, refKey) pair — i.e., the
 //      current call recursed into the same loop via a back-edge — return a
 //      union of the types accumulated so far, marked incomplete. This breaks
@@ -695,13 +691,12 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 // Union a list of types with structural dedup. Single-element list returns
 // the element directly (no unnecessary union wrapper).
 //
-// Phase 3 gap: TS-go `flow.go:1348-1363` tracks a `subtypeReduction` flag —
-// set when any antecedent type is not a subset of `initialType`. When true,
-// TS-go uses UnionReductionSubtype (tighter collapse); otherwise
-// UnionReductionLiteral (looser). Our implementation always uses structural
-// dedup, producing a potentially coarser union. This is SOUND (supertype)
-// but less precise than TS-go. Phase 6 can tighten once we add `initialType`
-// and an `isSubsetOf` helper.
+// Phase 3 gap: the reference tracks a `subtypeReduction` flag — set when any
+// antecedent type is not a subset of `initialType`. When true, it uses
+// UnionReductionSubtype (tighter collapse); otherwise UnionReductionLiteral
+// (looser). Our implementation always uses structural dedup, producing a
+// potentially coarser union. This is SOUND (supertype) but less precise.
+// Phase 6 can tighten once we add `initialType` and an `isSubsetOf` helper.
 function unionOfTypes(types: Type[]): Type {
 	if (types.length === 0) return unknownType();
 	if (types.length === 1) return types[0];
@@ -799,7 +794,7 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 	// Aliased condition: `const isX = <predicate>; if (isX) { ... }` — look up
 	// the identifier's declaration. If it's a const binding initialized to a
 	// condition expression, recursively narrow using that expression. Matches
-	// TS-go `checker.go:25824` (getTypeOfDottedName + narrowTypeByAliasedCondition).
+	// (matches the reference's getTypeOfDottedName + narrowTypeByAliasedCondition).
 	if (expr.kind === NodeKind.Identifier) {
 		const aliased = getAliasedCondition(expr);
 		if (aliased !== null) {

@@ -74,7 +74,6 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 		emitIncludeDirectives(g, ctx.includeDirectives);
 	}
 
-	// Walk program statements
 	if (program !== null && program.kind === NodeKind.Program) {
 		const pd = program.data as ProgramData;
 		for (const stmt of pd.programStmts) {
@@ -90,7 +89,6 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 
 
 
-	// Emit string literal pool declarations
 	emitStringPoolDecls(g.stringPool, sec(g, CSection.StringPool));
 
 	return assembleOutput(g);

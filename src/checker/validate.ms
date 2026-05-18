@@ -12,8 +12,13 @@ import { CheckerContext, addError } from "./context";
 export function validateTypedAST(ctx: CheckerContext, node: Node): void {
 	if (node === null) return;
 
-	// Skip function bodies — already validated by checkFunctionBody/semProcBody
+	// Skip function/method bodies — already validated by checkFunctionBody.
+	// Skip macro bodies — they're handled by the macro VM, not the regular
+	// type-checker, so their identifiers don't carry runtime nodeType.
 	if (node.kind === NodeKind.FunctionDecl) return;
+	if (node.kind === NodeKind.MethodDecl) return;
+	if (node.kind === NodeKind.ConstructorDecl) return;
+	if (node.kind === NodeKind.MacroDecl) return;
 
 	// Flag missing nodeType on non-type identifiers (critical for codegen)
 	if (node.kind === NodeKind.Identifier && node.nodeType === null) {

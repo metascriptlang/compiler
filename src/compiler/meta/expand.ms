@@ -27,7 +27,7 @@ import {
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BinaryExprData, CallExprData,
 	QuoteExprData,
-	// Phase B audit fixes — additional NodeKinds for full walker coverage
+	// Additional NodeKinds for full walker coverage
 	UnaryExprData, ArrayAccessData, ConditionalExprData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData,
 	SwitchStmtData, SwitchCaseData, TryCatchStmtData,
@@ -42,10 +42,14 @@ import {
 	// SERIALIZE A2 — macro multi-decl emission
 	SpliceManyData,
 } from "../../ast/node";
-import { CheckerContext, addError, addErrorFullRange, createContext } from "../../checker/context";
+import { CheckerContext, addError, addErrorFullRange, createContext, ExportRegistry } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
+import { forEachChild } from "../../ast/visitor";
 import { hasGenericParams } from "../../checker/types";
-import { callMacroEvaluator } from "./callbacks";
+import { callMacroEvaluator, getComptimeOuterCtx } from "./callbacks";
+import { lookupFunctionDeclByName } from "./comptime";
+import { lookupModuleProgram } from "../../checker/instantiate";
+import { lookupSymbol } from "../../checker/symbol";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { valueToNode, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst } from "./bridge";
@@ -427,6 +431,10 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 	if (k === NodeKind.TypeUnion) {
 		const d = node.data as TypeUnionData;
 		addNodeArrayField(keys, values, "typExprMembers", d.typExprMembers, loc);
+		// V3 disc metadata — bridge populates for match-type DUs; empty for TS-style.
+		addStrField(keys, values, "discFieldName", d.discFieldName, loc);
+		addStrArrayField(keys, values, "variantKeys", d.variantKeys, loc);
+		addStrField(keys, values, "discKind", d.discKind, loc);
 		return;
 	}
 	if (k === NodeKind.TypeIntersection) {
@@ -941,6 +949,56 @@ function preprocessMacroBody(body: Node): void {
 	preprocessNode(body);
 }
 
+// Find a FunctionDecl by name in a module's top-level statements.
+// Handles both bare FunctionDecl and ExportDecl-wrapped (export function f(){}).
+// Returns null if not found. Used by macro inject to surface PRIVATE
+// same-module helpers (not visible via ExportRegistry).
+function findFunctionDeclInProgram(program: Node, name: string): Node {
+	if (program === null) return null as unknown as Node;
+	const pd = program.data as ProgramData;
+	for (const stmt of pd.programStmts) {
+		let target = stmt;
+		if (target.kind === NodeKind.ExportDecl) {
+			target = (target.data as ExportDeclData).exportedDecl;
+		}
+		if (target !== null && target.kind === NodeKind.FunctionDecl) {
+			const fd = target.data as FunctionDeclData;
+			if (fd.fnName === name) return target;
+		}
+	}
+	return null as unknown as Node;
+}
+
+// Walk a body for CallExpr → Identifier names, look each up FIRST in the
+// macro's defining module (catches private helpers), THEN in the outer
+// ExportRegistry (catches cross-module exports). Push discovered FunctionDecls
+// onto the queue. Cycle-safe via visited set.
+function walkBodyForMacroCallees(
+	body: Node, definingProgram: Node, registry: ExportRegistry,
+	visited: HashSet<string>, queue: Node[],
+): void {
+	if (body === null) return;
+	if (body.kind === NodeKind.CallExpr) {
+		const c = body.data as CallExprData;
+		if (c.callee !== null && c.callee.kind === NodeKind.Identifier) {
+			const name = (c.callee.data as IdentifierData).name;
+			if (!visited.has(name)) {
+				visited.add(name);
+				// Try defining module first (catches private helpers)
+				let fnDecl: Node = findFunctionDeclInProgram(definingProgram, name);
+				// Fall back to ExportRegistry (cross-module exports)
+				if (fnDecl === null && registry !== null) {
+					fnDecl = lookupFunctionDeclByName(registry, name);
+				}
+				if (fnDecl !== null) queue.push(fnDecl);
+			}
+		}
+	}
+	forEachChild(body, (child: Node) => {
+		walkBodyForMacroCallees(child, definingProgram, registry, visited, queue);
+	});
+}
+
 // ===== rewriteCallExprToMacroInvocation: post-expansion macro-call detection =====
 //
 // SERIALIZE Bug 6: when a deferred macro (held by A3 defer) expands post-mono,
@@ -1026,10 +1084,53 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	}
 
 	// Build wrapper Program:
+	//   [cross-module helper FunctionDecls reachable from macro body]
 	//   const param1 = <arg1 as ObjectLiteral>;
 	//   const param2 = <arg2 as ObjectLiteral>;
 	//   ...macro body statements... (last ExprStmt → ReturnStmt)
 	const wrapperStmts: Node[] = [];
+
+	// RAISER-CALLHOST.md Phase 8a caveat #5 resolution — macro path was the
+	// only path bypassing cross-module helper injection. @comptime had this
+	// since Phase 8b. Now macros do too, plus PRIVATE same-module helpers:
+	//   1. Lookup macro's defining module program (registerModuleProgram)
+	//   2. Walk macro body for CallExpr → identifier names
+	//   3. Resolve each name FIRST in defining module's programStmts
+	//      (catches PRIVATE helpers like peelVariant in discDetect.ms),
+	//      THEN in outer ExportRegistry (cross-module exports)
+	//   4. Apply preprocessMacroBody to each helper body so NodeKind.X /
+	//      DeclKind.X references rewrite to int literals — without this,
+	//      helper bodies fail comparisons like `n.kind === NodeKind.X`
+	//      in the macro VM (where NodeKind isn't a runtime value).
+	const outerCtxForInject = getComptimeOuterCtx();
+	if (outerCtxForInject !== null && outerCtxForInject.registry !== null) {
+		// Find macro's defining module program for private-helper lookup.
+		let macroDefiningProgram: Node = null as unknown as Node;
+		const macroSym = lookupSymbol(ctx.table, d.macroName);
+		if (macroSym !== null && macroSym.modulePath !== "") {
+			macroDefiningProgram = lookupModuleProgram(macroSym.modulePath);
+		}
+		const visited = new HashSet<string>();
+		const queue: Node[] = [];
+		walkBodyForMacroCallees(body, macroDefiningProgram, outerCtxForInject.registry, visited, queue);
+		while (queue.length > 0) {
+			const decl = queue.pop();
+			const fd = decl.data as FunctionDeclData;
+			if (fd.fnBody !== null) preprocessMacroBody(fd.fnBody);
+			wrapperStmts.push(decl);
+			// Walk THIS helper's body with ITS OWN defining module — private
+			// helpers (peelVariant in discDetect.ms) live in helper's module,
+			// not macro's module. Without per-helper module tracking, transitive
+			// private helpers in cross-module helpers stay invisible.
+			let helperDefiningProgram: Node = macroDefiningProgram;
+			if (decl.resolvedSym !== null && decl.resolvedSym.modulePath !== "") {
+				const dp = lookupModuleProgram(decl.resolvedSym.modulePath);
+				if (dp !== null) helperDefiningProgram = dp;
+			}
+			walkBodyForMacroCallees(fd.fnBody, helperDefiningProgram, outerCtxForInject.registry, visited, queue);
+		}
+	}
+
 	let pi = 0;
 	while (pi < params.length) {
 		const argLiteral = nodeToASTLiteral(d.macroArgs[pi], node.location);
@@ -1144,16 +1245,16 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	clearArrayHeap(vmCtx.arrayHeap);
 	vmCtx = null;
 
-	// Bug 6 fix: deserialized result has fresh CallExpr nodes for any nested
+	// Deserialized result has fresh CallExpr nodes for any nested
 	// macro references — the checker's CallExpr→MacroInvocation rewrite at
 	// checkExprPass.ms:1652 only ran on the original AST, not on this freshly
 	// reconstructed tree. Walk the result and rewrite so the re-walk loop
 	// below picks them up.
 	//
 	// Only apply in POST-MONO context. ctx.macroExpansionDepth > 0 indicates
-	// we're inside the checker's eager-expansion path (incremented at
-	// checkExprPass.ms:1684 before calling us). In eager path, the checker's
-	// re-check at line 1686 already re-traverses the result and converts
+	// we're inside the checker's eager-expansion path (incremented in
+	// checkExprPass before calling us). In eager path, the checker's
+	// re-check already re-traverses the result and converts
 	// CallExpr-of-macro to MacroInvocation via its normal flow — applying
 	// the rewrite here too would double-expand nested macros.
 	if (ctx.macroExpansionDepth === 0) {
@@ -1169,7 +1270,6 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 }
 
 // ===== walkExpand: recursive AST walker =====
-// Uses if-else (not match) to avoid DRC workaround #24, same as comptime.ms.
 
 // Walks an array of nodes, replacing each with its expansion in place.
 function walkExpandArray(arr: Node[], ctx: CheckerContext, depth: int32): void {
@@ -1216,222 +1316,218 @@ function walkExpandArray(arr: Node[], ctx: CheckerContext, depth: int32): void {
 // rebuilding via createNode for every NodeKind.
 function walkExpand(node: Node, ctx: CheckerContext, depth: int32): Node {
 	if (node === null) return node;
-	const k = node.kind;
 
-	if (k === NodeKind.MacroInvocation) {
-		return expandMacroInvocation(node, ctx, depth);
-	}
+	return match (node.kind) {
+		NodeKind.MacroInvocation => expandMacroInvocation(node, ctx, depth),
 
-	// Statements
-	if (k === NodeKind.VariableDecl) {
-		const d = node.data as VariableDeclData;
-		d.initializer = walkExpand(d.initializer, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ExprStmt) {
-		const d = node.data as ExprStmtData;
-		d.expr = walkExpand(d.expr, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ReturnStmt) {
-		const d = node.data as ReturnStmtData;
-		d.argument = walkExpand(d.argument, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ThrowStmt) {
-		const d = node.data as ThrowStmtData;
-		d.throwArg = walkExpand(d.throwArg, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.DeferStmt) {
-		const d = node.data as DeferStmtData;
-		d.deferExpr = walkExpand(d.deferExpr, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.BlockStmt) {
-		const d = node.data as BlockStmtData;
-		walkExpandArray(d.statements, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.IfStmt) {
-		const d = node.data as IfStmtData;
-		d.condition = walkExpand(d.condition, ctx, depth);
-		d.consequent = walkExpand(d.consequent, ctx, depth);
-		d.alternate = walkExpand(d.alternate, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.WhileStmt) {
-		const d = node.data as WhileStmtData;
-		d.whileCondition = walkExpand(d.whileCondition, ctx, depth);
-		d.whileBody = walkExpand(d.whileBody, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.DoWhileStmt) {
-		const d = node.data as DoWhileStmtData;
-		d.doBody = walkExpand(d.doBody, ctx, depth);
-		d.doCondition = walkExpand(d.doCondition, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ForStmt) {
-		const d = node.data as ForStmtData;
-		d.forInit = walkExpand(d.forInit, ctx, depth);
-		d.forCondition = walkExpand(d.forCondition, ctx, depth);
-		d.forUpdate = walkExpand(d.forUpdate, ctx, depth);
-		d.forBody = walkExpand(d.forBody, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ForOfStmt) {
-		const d = node.data as ForOfStmtData;
-		d.forOfIterable = walkExpand(d.forOfIterable, ctx, depth);
-		d.forOfBody = walkExpand(d.forOfBody, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ForInStmt) {
-		const d = node.data as ForInStmtData;
-		d.forInObject = walkExpand(d.forInObject, ctx, depth);
-		d.forInBody = walkExpand(d.forInBody, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.SwitchStmt) {
-		const d = node.data as SwitchStmtData;
-		d.switchDisc = walkExpand(d.switchDisc, ctx, depth);
-		walkExpandArray(d.switchCases, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.SwitchCase) {
-		const d = node.data as SwitchCaseData;
-		walkExpandArray(d.caseTests, ctx, depth);
-		walkExpandArray(d.caseStmts, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.MatchStmt) {
-		const d = node.data as MatchStmtData;
-		d.matchStmtDisc = walkExpand(d.matchStmtDisc, ctx, depth);
-		walkExpandArray(d.matchStmtCases, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.MatchExpr) {
-		const d = node.data as MatchExprData;
-		d.matchDisc = walkExpand(d.matchDisc, ctx, depth);
-		walkExpandArray(d.matchCases, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.MatchCase) {
-		const d = node.data as MatchCaseData;
-		walkExpandArray(d.casePatterns, ctx, depth);
-		d.caseGuard = walkExpand(d.caseGuard, ctx, depth);
-		d.caseBody = walkExpand(d.caseBody, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.TryCatchStmt) {
-		const d = node.data as TryCatchStmtData;
-		d.tryBody = walkExpand(d.tryBody, ctx, depth);
-		d.catchBody = walkExpand(d.catchBody, ctx, depth);
-		d.finallyBody = walkExpand(d.finallyBody, ctx, depth);
-		return node;
-	}
+		NodeKind.VariableDecl => {
+			const d = node.data as VariableDeclData;
+			d.initializer = walkExpand(d.initializer, ctx, depth);
+			return node;
+		},
+		NodeKind.ExprStmt => {
+			const d = node.data as ExprStmtData;
+			d.expr = walkExpand(d.expr, ctx, depth);
+			return node;
+		},
+		NodeKind.ReturnStmt => {
+			const d = node.data as ReturnStmtData;
+			d.argument = walkExpand(d.argument, ctx, depth);
+			return node;
+		},
+		NodeKind.ThrowStmt => {
+			const d = node.data as ThrowStmtData;
+			d.throwArg = walkExpand(d.throwArg, ctx, depth);
+			return node;
+		},
+		NodeKind.DeferStmt => {
+			const d = node.data as DeferStmtData;
+			d.deferExpr = walkExpand(d.deferExpr, ctx, depth);
+			return node;
+		},
+		NodeKind.BlockStmt => {
+			const d = node.data as BlockStmtData;
+			walkExpandArray(d.statements, ctx, depth);
+			return node;
+		},
+		NodeKind.IfStmt => {
+			const d = node.data as IfStmtData;
+			d.condition = walkExpand(d.condition, ctx, depth);
+			d.consequent = walkExpand(d.consequent, ctx, depth);
+			d.alternate = walkExpand(d.alternate, ctx, depth);
+			return node;
+		},
+		NodeKind.WhileStmt => {
+			const d = node.data as WhileStmtData;
+			d.whileCondition = walkExpand(d.whileCondition, ctx, depth);
+			d.whileBody = walkExpand(d.whileBody, ctx, depth);
+			return node;
+		},
+		NodeKind.DoWhileStmt => {
+			const d = node.data as DoWhileStmtData;
+			d.doBody = walkExpand(d.doBody, ctx, depth);
+			d.doCondition = walkExpand(d.doCondition, ctx, depth);
+			return node;
+		},
+		NodeKind.ForStmt => {
+			const d = node.data as ForStmtData;
+			d.forInit = walkExpand(d.forInit, ctx, depth);
+			d.forCondition = walkExpand(d.forCondition, ctx, depth);
+			d.forUpdate = walkExpand(d.forUpdate, ctx, depth);
+			d.forBody = walkExpand(d.forBody, ctx, depth);
+			return node;
+		},
+		NodeKind.ForOfStmt => {
+			const d = node.data as ForOfStmtData;
+			d.forOfIterable = walkExpand(d.forOfIterable, ctx, depth);
+			d.forOfBody = walkExpand(d.forOfBody, ctx, depth);
+			return node;
+		},
+		NodeKind.ForInStmt => {
+			const d = node.data as ForInStmtData;
+			d.forInObject = walkExpand(d.forInObject, ctx, depth);
+			d.forInBody = walkExpand(d.forInBody, ctx, depth);
+			return node;
+		},
+		NodeKind.SwitchStmt => {
+			const d = node.data as SwitchStmtData;
+			d.switchDisc = walkExpand(d.switchDisc, ctx, depth);
+			walkExpandArray(d.switchCases, ctx, depth);
+			return node;
+		},
+		NodeKind.SwitchCase => {
+			const d = node.data as SwitchCaseData;
+			walkExpandArray(d.caseTests, ctx, depth);
+			walkExpandArray(d.caseStmts, ctx, depth);
+			return node;
+		},
+		NodeKind.MatchStmt => {
+			const d = node.data as MatchStmtData;
+			d.matchStmtDisc = walkExpand(d.matchStmtDisc, ctx, depth);
+			walkExpandArray(d.matchStmtCases, ctx, depth);
+			return node;
+		},
+		NodeKind.MatchExpr => {
+			const d = node.data as MatchExprData;
+			d.matchDisc = walkExpand(d.matchDisc, ctx, depth);
+			walkExpandArray(d.matchCases, ctx, depth);
+			return node;
+		},
+		NodeKind.MatchCase => {
+			const d = node.data as MatchCaseData;
+			walkExpandArray(d.casePatterns, ctx, depth);
+			d.caseGuard = walkExpand(d.caseGuard, ctx, depth);
+			d.caseBody = walkExpand(d.caseBody, ctx, depth);
+			return node;
+		},
+		NodeKind.TryCatchStmt => {
+			const d = node.data as TryCatchStmtData;
+			d.tryBody = walkExpand(d.tryBody, ctx, depth);
+			d.catchBody = walkExpand(d.catchBody, ctx, depth);
+			d.finallyBody = walkExpand(d.finallyBody, ctx, depth);
+			return node;
+		},
 
-	// Expressions
-	if (k === NodeKind.BinaryExpr) {
-		const d = node.data as BinaryExprData;
-		d.left = walkExpand(d.left, ctx, depth);
-		d.right = walkExpand(d.right, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.UnaryExpr) {
-		const d = node.data as UnaryExprData;
-		d.operand = walkExpand(d.operand, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.CallExpr) {
-		const d = node.data as CallExprData;
-		d.callee = walkExpand(d.callee, ctx, depth);
-		walkExpandArray(d.arguments, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.MemberExpr) {
-		const d = node.data as MemberExprData;
-		d.object = walkExpand(d.object, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ArrayAccess) {
-		const d = node.data as ArrayAccessData;
-		d.array = walkExpand(d.array, ctx, depth);
-		d.index = walkExpand(d.index, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ConditionalExpr) {
-		const d = node.data as ConditionalExprData;
-		d.ternaryCondition = walkExpand(d.ternaryCondition, ctx, depth);
-		d.ternaryConsequent = walkExpand(d.ternaryConsequent, ctx, depth);
-		d.ternaryAlternate = walkExpand(d.ternaryAlternate, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ObjectLiteral) {
-		const d = node.data as ObjectLiteralData;
-		walkExpandArray(d.properties, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ArrayLiteral) {
-		const d = node.data as ArrayLiteralData;
-		walkExpandArray(d.elements, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ArrowFunction) {
-		const d = node.data as ArrowFunctionData;
-		d.arrowBody = walkExpand(d.arrowBody, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.FunctionExpr) {
-		const d = node.data as FunctionExprData;
-		d.funcExprBody = walkExpand(d.funcExprBody, ctx, depth);
-		return node;
-	}
+		NodeKind.BinaryExpr => {
+			const d = node.data as BinaryExprData;
+			d.left = walkExpand(d.left, ctx, depth);
+			d.right = walkExpand(d.right, ctx, depth);
+			return node;
+		},
+		NodeKind.UnaryExpr => {
+			const d = node.data as UnaryExprData;
+			d.operand = walkExpand(d.operand, ctx, depth);
+			return node;
+		},
+		NodeKind.CallExpr => {
+			const d = node.data as CallExprData;
+			d.callee = walkExpand(d.callee, ctx, depth);
+			walkExpandArray(d.arguments, ctx, depth);
+			return node;
+		},
+		NodeKind.MemberExpr => {
+			const d = node.data as MemberExprData;
+			d.object = walkExpand(d.object, ctx, depth);
+			return node;
+		},
+		NodeKind.ArrayAccess => {
+			const d = node.data as ArrayAccessData;
+			d.array = walkExpand(d.array, ctx, depth);
+			d.index = walkExpand(d.index, ctx, depth);
+			return node;
+		},
+		NodeKind.ConditionalExpr => {
+			const d = node.data as ConditionalExprData;
+			d.ternaryCondition = walkExpand(d.ternaryCondition, ctx, depth);
+			d.ternaryConsequent = walkExpand(d.ternaryConsequent, ctx, depth);
+			d.ternaryAlternate = walkExpand(d.ternaryAlternate, ctx, depth);
+			return node;
+		},
+		NodeKind.ObjectLiteral => {
+			const d = node.data as ObjectLiteralData;
+			walkExpandArray(d.properties, ctx, depth);
+			return node;
+		},
+		NodeKind.ArrayLiteral => {
+			const d = node.data as ArrayLiteralData;
+			walkExpandArray(d.elements, ctx, depth);
+			return node;
+		},
+		NodeKind.ArrowFunction => {
+			const d = node.data as ArrowFunctionData;
+			d.arrowBody = walkExpand(d.arrowBody, ctx, depth);
+			return node;
+		},
+		NodeKind.FunctionExpr => {
+			const d = node.data as FunctionExprData;
+			d.funcExprBody = walkExpand(d.funcExprBody, ctx, depth);
+			return node;
+		},
 
-	// Declarations
-	if (k === NodeKind.FunctionDecl) {
-		const d = node.data as FunctionDeclData;
-		d.fnBody = walkExpand(d.fnBody, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		d.exportedDecl = walkExpand(d.exportedDecl, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ClassDecl) {
-		const d = node.data as ClassDeclData;
-		walkExpandArray(d.classBody, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.MethodDecl) {
-		const d = node.data as MethodDeclData;
-		d.methodBody = walkExpand(d.methodBody, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.ConstructorDecl) {
-		const d = node.data as ConstructorDeclData;
-		d.ctorBody = walkExpand(d.ctorBody, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.PropertyDecl) {
-		const d = node.data as PropertyDeclData;
-		d.propInitializer = walkExpand(d.propInitializer, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		walkExpandArray(d.decorators, ctx, depth);
-		d.decoratedNode = walkExpand(d.decoratedNode, ctx, depth);
-		return node;
-	}
-	if (k === NodeKind.Program) {
-		const d = node.data as ProgramData;
-		walkExpandArray(d.programStmts, ctx, depth);
-		return node;
-	}
+		NodeKind.FunctionDecl => {
+			const d = node.data as FunctionDeclData;
+			d.fnBody = walkExpand(d.fnBody, ctx, depth);
+			return node;
+		},
+		NodeKind.ExportDecl => {
+			const d = node.data as ExportDeclData;
+			d.exportedDecl = walkExpand(d.exportedDecl, ctx, depth);
+			return node;
+		},
+		NodeKind.ClassDecl => {
+			const d = node.data as ClassDeclData;
+			walkExpandArray(d.classBody, ctx, depth);
+			return node;
+		},
+		NodeKind.MethodDecl => {
+			const d = node.data as MethodDeclData;
+			d.methodBody = walkExpand(d.methodBody, ctx, depth);
+			return node;
+		},
+		NodeKind.ConstructorDecl => {
+			const d = node.data as ConstructorDeclData;
+			d.ctorBody = walkExpand(d.ctorBody, ctx, depth);
+			return node;
+		},
+		NodeKind.PropertyDecl => {
+			const d = node.data as PropertyDeclData;
+			d.propInitializer = walkExpand(d.propInitializer, ctx, depth);
+			return node;
+		},
+		NodeKind.DecoratedDecl => {
+			const d = node.data as DecoratedDeclData;
+			walkExpandArray(d.decorators, ctx, depth);
+			d.decoratedNode = walkExpand(d.decoratedNode, ctx, depth);
+			return node;
+		},
+		NodeKind.Program => {
+			const d = node.data as ProgramData;
+			walkExpandArray(d.programStmts, ctx, depth);
+			return node;
+		},
 
-	return node;
+		_ => node,
+	};
 }
 
 // ===== Public API =====
@@ -1440,6 +1536,11 @@ export function expandMacros(program: Node, ctx: CheckerContext): Node {
 	if (!hasUserMacroInvocation(program, ctx)) return program;
 	return walkExpand(program, ctx, 0);
 }
+
+// Register expandMacroInvocation as a callback so checkExprPass can invoke it
+// without importing this module directly (breaks the checker ↔ compiler/meta cycle).
+import { registerExpandMacroInvocation } from "../../checker/checkerCallbacks";
+registerExpandMacroInvocation(expandMacroInvocation);
 
 // ===== Tests =====
 

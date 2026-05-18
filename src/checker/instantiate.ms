@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, VariableDeclData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, NewExprData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { instantiateGeneric, substituteType, createFunction } from "./types";
+import { instantiateGeneric, substituteType, createFunction, createGenericInstance, createRef } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag } from "./context";
@@ -43,6 +43,30 @@ export function lookupModuleCtx(modulePath: string): CheckerContext | null {
 	if (modulePath === "") return null;
 	if (!_moduleCtxMap.has(modulePath)) return null;
 	return _moduleCtxMap.get(modulePath);
+}
+
+// Module-level parsed Program registry. Populated post-parse by orchestrator.ms;
+// looked up by macro VM (src/compiler/meta/expand.ms) to find PRIVATE same-module
+// helpers (e.g. peelVariant, extractVariantKey in discDetect.ms) that the
+// ExportRegistry can't surface (only exported symbols).
+//
+// Lightweight — stores reference, no snapshot. Macro inject walks programStmts
+// for FunctionDecl reachable from macro body, then applies preprocessMacroBody
+// to each (so NodeKind.X → int literal rewrite reaches helper bodies).
+//
+// Stored here (not as Module field) because src/module/graph.ms is forbidden
+// from importing ast/ types. Same pattern as _moduleCtxMap above.
+let _moduleProgramMap: HashMap<string, Node> = new HashMap<string, Node>();
+
+export function registerModuleProgram(modulePath: string, program: Node): void {
+	if (modulePath === "") return;
+	_moduleProgramMap.set(modulePath, program);
+}
+
+export function lookupModuleProgram(modulePath: string): Node | null {
+	if (modulePath === "") return null;
+	if (!_moduleProgramMap.has(modulePath)) return null;
+	return _moduleProgramMap.get(modulePath);
 }
 
 // Pick the right ctx for re-checking a body defined in `definingModulePath`:
@@ -199,7 +223,7 @@ function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
 // Limitation: only static methods are handled. Generic INSTANCE methods on
 // non-generic classes (e.g., `class Foo { method<T>(x: T): T }`) fall
 // through to null — the call site won't mono and the body emits with
-// T=Unknown. Reference parity (Nim's seminst.nim handles skMethod natively
+// T=Unknown. Reference parity (the reference handles skMethod natively
 // alongside skProc); long-term fix is to extend instantiateGenericFunction
 // to dispatch on declNode.kind directly instead of synthesizing.
 function unwrapToFunctionDecl(node: Node): Node {
@@ -408,7 +432,6 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		return existing;
 	}
 
-	// Get the original function AST
 	const fnNode = unwrapToFunctionDecl(sym.declNode);
 	if (fnNode === null) {
 		ctx.genericInstDepth = ctx.genericInstDepth - 1;
@@ -428,7 +451,6 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	// Strip gen: (type params) and ext: (extension metadata) but keep generator/async.
 	cd.fnFlags = stripGenFlag(cd.fnFlags);
 
-	// Build instantiated function type
 	const instType = sym.symbolType !== null ? instantiateGeneric(sym.symbolType, dedup.names, dedup.types) : sym.symbolType;
 	cloned.nodeType = instType;
 
@@ -500,7 +522,6 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		if (existing.kind === NodeKind.ClassDecl && (existing.data as ClassDeclData).className === mangledClass) return;
 	}
 
-	// Find ConstructorDecl in class body
 	if (classSym.declNode === null || classSym.declNode.kind !== NodeKind.ClassDecl) return;
 	const classData = classSym.declNode.data as ClassDeclData;
 	let ctorNode: Node = null as unknown as Node;
@@ -547,10 +568,12 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	}
 	ctorDeclNode.nodeType = createFunction(resolvedParamTypes, fnParams, null as unknown as Type);
 
-	// Concrete (instantiated) class type — used both by body re-check (as the
-	// `this` receiver type) and by the synthetic ClassDecl below (so the
-	// methodToFunction transform sees the right receiver when lifting the ctor).
-	const concreteClassType = instantiateGeneric(classSym.symbolType, dedup.names, dedup.types);
+	// Mono'd receiver type for `this` and the synthetic ClassDecl. Wrapped
+	// as Ref<GenericInstance> so codegen renders `Class__args*` (e.g.
+	// `HashSet__string*`) rather than the un-instantiated `HashSet*` — the
+	// latter shares its field layout with whichever mono instance landed
+	// first, so cross-mono field assignments would type-mismatch in C.
+	const concreteClassType = createRef(createGenericInstance(classSym.symbolType, dedup.types));
 
 	// Re-check constructor body with concrete types in the class's DEFINING module ctx
 	// (from _moduleCtxMap registry). This resolves private module-level symbols

@@ -429,10 +429,8 @@ function liveRangesExpr(p: Partitions, node: Node): void {
 	if (node.kind === NodeKind.CallExpr) {
 		const d = node.data as CallExprData;
 		liveRangesExpr(p, d.callee);
-		let i = 0;
-		while (i < d.arguments.length) {
-			liveRangesExpr(p, d.arguments[i]);
-			i = i + 1;
+		for (const arg of d.arguments) {
+			liveRangesExpr(p, arg);
 		}
 		return;
 	}
@@ -978,9 +976,7 @@ function traverseStmt(p: Partitions, node: Node): void {
 // ===== Post-Analysis =====
 
 function hasSideEffect(p: Partitions): string {
-	let i = 0;
-	while (i < p.graphs.length) {
-		const g = p.graphs[i];
+	for (const g of p.graphs) {
 		const hasMut = (g.flags & FLAG_MUTATED) !== 0;
 		const hasConst = (g.flags & FLAG_CONNECTS_CONST) !== 0;
 		if (hasMut && hasConst) {
@@ -989,7 +985,6 @@ function hasSideEffect(p: Partitions): string {
 				return g.paramName;
 			}
 		}
-		i = i + 1;
 	}
 	return "";
 }

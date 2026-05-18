@@ -63,7 +63,7 @@ export function runCli(args: string[]): number {
 
 	// File I/O via MS standard runtime. For now we delegate to the caller —
 	// wire with std/io once the rest of the pipeline exists.
-	// TODO(task #21): read file bytes here.
+	// TODO: read file bytes here.
 	const source = "";
 
 	const out = parseHeader(source, headerPath, opts);

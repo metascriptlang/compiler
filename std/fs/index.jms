@@ -26,32 +26,32 @@ export function readFile(path: string): Result<string, IoError> {
 
 export function writeFile(path: string, content: string): Result<void, IoError> {
 	writeFileSync(path, content);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 export function appendFile(path: string, content: string): Result<void, IoError> {
 	writeFileSync(path, content);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 export function mkdir(path: string): Result<void, IoError> {
 	mkdirSync(path);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 export function rmdir(path: string): Result<void, IoError> {
 	rmdirSync(path);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 export function remove(path: string): Result<void, IoError> {
 	unlinkSync(path);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 export function rename(oldPath: string, newPath: string): Result<void, IoError> {
 	renameSync(oldPath, newPath);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 // ===== Predicates (boolean, not fallible) =====

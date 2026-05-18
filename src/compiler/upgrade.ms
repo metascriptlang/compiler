@@ -158,8 +158,8 @@ export function cmdUpgrade(opts: CliOptions): number {
 		if (r.value !== "") console.log(r.value);
 		return 0;
 	}
-	if (r.error.stdout !== "") console.log(r.error.stdout);
-	if (r.error.stderr !== "") console.log(r.error.stderr);
+	if (r.error.output !== "") console.log(r.error.output);
+	if (r.error.errorOutput !== "") console.log(r.error.errorOutput);
 	console.log(`${yellow("warn")}: installer exited with code ${r.error.exitCode}`);
 	return r.error.exitCode !== 0 ? r.error.exitCode : 1;
 }

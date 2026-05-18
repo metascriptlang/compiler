@@ -5,8 +5,6 @@
 // each expression Node so getFlowTypeOfReference can compute narrowed types
 // at each program point.
 //
-// Reference: microsoft/typescript-go/internal/binder/binder.go
-//
 // Phase 1 scope: build the graph. Queries come in Phase 2 (src/checker/flow.ms).
 // Existing tests must still pass — the binder touches NO checker state.
 
@@ -82,7 +80,6 @@ function createFlowMutation(flags: int32, antecedent: FlowNode, node: Node): Flo
 	// flags = Assignment or ArrayMutation
 	if (antecedent === null) return antecedent;
 	// Short-circuit on unreachable — no point recording a mutation in dead code.
-	// Matches typescript-go/internal/binder/binder.go behavior.
 	if ((antecedent.flags & FlowFlags.Unreachable) !== 0) return antecedent;
 	const f = createFlowNode(flags);
 	f.antecedent = antecedent;
@@ -175,10 +172,8 @@ export function bindFlowGraph(program: Node): void {
 	const state = createBinderState();
 	state.currentFlow = createStartFlow(program);
 	const d = program.data as ProgramData;
-	let i = 0;
-	while (i < d.programStmts.length) {
-		bindStatement(state, d.programStmts[i]);
-		i = i + 1;
+	for (const stmt of d.programStmts) {
+		bindStatement(state, stmt);
 	}
 }
 
@@ -254,19 +249,15 @@ function bindStatement(state: BinderState, node: Node): void {
 
 function bindProgram(state: BinderState, node: Node): void {
 	const d = node.data as ProgramData;
-	let i = 0;
-	while (i < d.programStmts.length) {
-		bindStatement(state, d.programStmts[i]);
-		i = i + 1;
+	for (const stmt of d.programStmts) {
+		bindStatement(state, stmt);
 	}
 }
 
 function bindBlockStmt(state: BinderState, node: Node): void {
 	const d = node.data as BlockStmtData;
-	let i = 0;
-	while (i < d.statements.length) {
-		bindStatement(state, d.statements[i]);
-		i = i + 1;
+	for (const stmt of d.statements) {
+		bindStatement(state, stmt);
 	}
 }
 
@@ -459,10 +450,8 @@ function bindMatchStmt(state: BinderState, node: Node): void {
 
 function bindMatchCase(state: BinderState, caseNode: Node): void {
 	const d = caseNode.data as MatchCaseData;
-	let i = 0;
-	while (i < d.casePatterns.length) {
-		bindExpression(state, d.casePatterns[i]);
-		i = i + 1;
+	for (const pat of d.casePatterns) {
+		bindExpression(state, pat);
 	}
 	if (d.caseBody !== null) bindStatement(state, d.caseBody);
 }
@@ -575,10 +564,7 @@ function bindFunctionDecl(state: BinderState, node: Node): void {
 
 function bindClassDecl(state: BinderState, node: Node): void {
 	const d = node.data as ClassDeclData;
-	let i = 0;
-	while (i < d.classBody.length) {
-		const member = d.classBody[i];
-		i = i + 1;
+	for (const member of d.classBody) {
 		if (member === null) continue;
 		match (member.kind) {
 			NodeKind.MethodDecl => {
@@ -597,10 +583,7 @@ function bindClassDecl(state: BinderState, node: Node): void {
 
 function bindActorDecl(state: BinderState, node: Node): void {
 	const d = node.data as ActorDeclData;
-	let i = 0;
-	while (i < d.actorBody.length) {
-		const member = d.actorBody[i];
-		i = i + 1;
+	for (const member of d.actorBody) {
 		if (member === null) continue;
 		match (member.kind) {
 			NodeKind.MethodDecl => {
@@ -623,10 +606,8 @@ function bindExportDecl(state: BinderState, node: Node): void {
 
 function bindDecoratedDecl(state: BinderState, node: Node): void {
 	const d = node.data as DecoratedDeclData;
-	let i = 0;
-	while (i < d.decorators.length) {
-		bindExpression(state, d.decorators[i]);
-		i = i + 1;
+	for (const dec of d.decorators) {
+		bindExpression(state, dec);
 	}
 	if (d.decoratedNode !== null) bindStatement(state, d.decoratedNode);
 }
@@ -722,10 +703,8 @@ function bindExpression(state: BinderState, node: Node): void {
 		},
 		NodeKind.MacroInvocation => {
 			const d = node.data as MacroInvocationData;
-			let i = 0;
-			while (i < d.macroArgs.length) {
-				bindExpression(state, d.macroArgs[i]);
-				i = i + 1;
+			for (const arg of d.macroArgs) {
+				bindExpression(state, arg);
 			}
 		},
 		// Leaf literals — nothing to bind
@@ -791,20 +770,16 @@ function bindLogicalExpr(state: BinderState, node: Node): void {
 function bindCallExpr(state: BinderState, node: Node): void {
 	const d = node.data as CallExprData;
 	if (d.callee !== null) bindExpression(state, d.callee);
-	let i = 0;
-	while (i < d.arguments.length) {
-		bindExpression(state, d.arguments[i]);
-		i = i + 1;
+	for (const arg of d.arguments) {
+		bindExpression(state, arg);
 	}
 }
 
 function bindNewExpr(state: BinderState, node: Node): void {
 	const d = node.data as NewExprData;
 	if (d.newCallee !== null) bindExpression(state, d.newCallee);
-	let i = 0;
-	while (i < d.newArguments.length) {
-		bindExpression(state, d.newArguments[i]);
-		i = i + 1;
+	for (const arg of d.newArguments) {
+		bindExpression(state, arg);
 	}
 }
 
@@ -824,19 +799,15 @@ function bindArrayAccess(state: BinderState, node: Node): void {
 
 function bindObjectLiteral(state: BinderState, node: Node): void {
 	const d = node.data as ObjectLiteralData;
-	let i = 0;
-	while (i < d.properties.length) {
-		bindExpression(state, d.properties[i]);
-		i = i + 1;
+	for (const prop of d.properties) {
+		bindExpression(state, prop);
 	}
 }
 
 function bindArrayLiteral(state: BinderState, node: Node): void {
 	const d = node.data as ArrayLiteralData;
-	let i = 0;
-	while (i < d.elements.length) {
-		bindExpression(state, d.elements[i]);
-		i = i + 1;
+	for (const elem of d.elements) {
+		bindExpression(state, elem);
 	}
 }
 
@@ -1060,7 +1031,7 @@ test "binder splits flow on if condition" {
 
 test "binder handles while loop back-edge" {
 	// The while body is reachable via a LoopLabel. The loop label's first
-	// antecedent must be the pre-loop flow (TypeScript-go invariant — critical
+	// antecedent must be the pre-loop flow (invariant — critical
 	// for Phase 3 fixed-point correctness).
 	const program = bindSource(
 		"function f(x: number): void { while (x > 0) { const y = x; } }");

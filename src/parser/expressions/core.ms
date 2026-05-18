@@ -12,7 +12,7 @@ import { isArrowFunction, parseArrowFunction, parseBareIdentArrow } from "./arro
 import { parseObjectLiteral } from "./object";
 import { parseExprList, parseCallExpr } from "./call";
 import { parseTemplateLiteral } from "./template";
-import { registerParseExpr, parseOk, exprKind, exprNode, exprOp, binLeftKind } from "./util";
+import { registerParseExpr, parseOk, exprKind, exprNode, exprOp, binLeftKind, tryParseLiteralKeyword } from "./util";
 import { parseNumberLiteral } from "../../utils/string";
 
 
@@ -211,7 +211,6 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 	if (!isAtEnd(state) && isIdentLike(current(state))) {
 		advance(state);
 	}
-	// Parse params
 	const raw = parseParamList(state, "");
 	const feParamTypeExprs = getLastParamTypeExprs();
 	const funcExprParams = extractParamNames(raw);
@@ -259,17 +258,9 @@ function parsePrimary(state: ParserState): ExprResult {
 		return parseTemplateLiteral(state, parseExprWithPrec);
 	}
 
-	// Boolean literal: true / false
-	if (token.kind === TokenKind.True || token.kind === TokenKind.False) {
-		advance(state);
-		return Result.ok(createNode(NodeKind.BooleanLiteral, { boolValue: token.kind === TokenKind.True }, token));
-	}
-
-	// Null literal
-	if (token.kind === TokenKind.Null) {
-		advance(state);
-		return Result.ok(createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, token));
-	}
+	// Literal keywords (true/false/null) — shared helper with match-pattern parser.
+	const literalNode = tryParseLiteralKeyword(state);
+	if (literalNode !== null) return Result.ok(literalNode);
 
 	// BigInt literal: 123n
 	if (token.kind === TokenKind.BigInt) {
@@ -673,7 +664,6 @@ test "assign right assoc" { assert parseOk("a = b = c"); }
 test "complex mixed" { assert parseOk("f(a).b + g(c).d"); }
 
 test "nested arrays" { assert parseOk("[[1], [2]][0]"); }
-// Try
 test "try catch" { assert parseOk("try f() catch 0"); }
 
 test "nested try" { assert parseOk("try f(try g())"); }
@@ -687,7 +677,6 @@ test "instanceof" { assert parseOk("a instanceof Foo"); }
 test "pipe" { assert parseOk("a |> b"); }
 // New with member
 test "new member" { assert parseOk("new A.B()"); }
-// Delete/void
 test "delete" { assert parseOk("delete obj.x"); }
 
 test "void" { assert parseOk("void 0"); }

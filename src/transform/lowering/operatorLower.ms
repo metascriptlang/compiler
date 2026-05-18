@@ -15,13 +15,11 @@
 //   reference comparisons  — template `!=` = not(==)        → derived from ==
 //   reference comparisons  — template `>` = y < x           → derived from <
 //   reference comparisons  — template `>=` = y <= x         → derived from <=
-//
-// Reference compiler: parser.zig:7162 isOperatorName, lexer.zig:422 scanBacktick
 
 import { Node, NodeKind, BinaryExprData, IdentifierData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary } from "../util";
+import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension, ExtensionMethod } from "../../checker/context";
@@ -173,7 +171,6 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	const opName = d.operator;
 	const isNotEqual = opName === "!=" || opName === "!==";
 
-	// Resolve left operand type
 	const leftType = resolveType(ctx, d.left);
 	const loc = node.location;
 
@@ -200,13 +197,16 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		if (valueType !== null && valueType.kind === TypeKind.Array) {
 			return makeBool(isNotEqual, loc);
 		}
-		// Closure null check: closure !== null → closure.fn !== null
-		// msClosure is a value struct { fn, env } — check the function pointer field.
+		// Closure null check: `closure === null` → `closure.fn === NULL`.
+		// Both sides re-bound: the null side must be a bare null literal — a
+		// typed `null as Closure` codegens as `(msClosure){0}` and mismatches
+		// the function pointer field on the other side.
 		if (valueType !== null && valueType.kind === TypeKind.Function) {
 			const nonNullSide = hasNullLeft ? d.right : d.left;
 			const fnMember = makeMember(nonNullSide, "fn", loc);
-			d.left = hasNullLeft ? d.left : fnMember;
-			d.right = hasNullLeft ? fnMember : d.right;
+			const bareNull = makeNull(loc);
+			d.left = hasNullLeft ? bareNull : fnMember;
+			d.right = hasNullLeft ? fnMember : bareNull;
 			return node;
 		}
 		// Other value types (Result, Tuple, String, plain Union) can never be null —

@@ -325,13 +325,12 @@ void msStringArrayPush(msStringArray* arr, msString value) {
 	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
 		arr->p = (msStringPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(msString));
 	}
-	/* Deep-copy non-literal strings so the array owns its elements independently.
-	   Prevents use-after-free when the source variable is destroyed. */
-	if (value.p != NULL && !msIsLiteral(value)) {
-		arr->p->data[arr->len] = msStringNew(value.p->data, value.len);
-	} else {
-		arr->p->data[arr->len] = value;
-	}
+	/* Sink semantics — take ownership of value. The analyzer marks the source
+	   wasMoved at the call site (push value param is sink-bound). No deep copy:
+	   the original heap is transferred into the array and freed when the array
+	   element is destroyed. Reference parity: seq.add(x: sink T) in standard
+	   reference compilers. Literals store by value (no heap to transfer). */
+	arr->p->data[arr->len] = value;
 	arr->len++;
 }
 

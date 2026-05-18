@@ -117,7 +117,12 @@ export function parseTypeExpr(state: ParserState): Node {
 			advance(state);
 			members.push(parseIntersectionTail(state, parseTypeAtom(state)));
 		}
-		return createNodeAt(NodeKind.TypeUnion, { typExprMembers: members }, first.location);
+		return createNodeAt(NodeKind.TypeUnion, {
+			typExprMembers: members,
+			discFieldName: "",
+			variantKeys: [],
+			discKind: "",
+		}, first.location);
 	}
 
 	return first;
@@ -203,7 +208,6 @@ function parseGenericTypeArgs(state: ParserState): Node[] {
 	advance(state); // consume <
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
-		// Parse each type arg
 		const arg = parseTypeExpr(state);
 		args.push(arg);
 		// Comma separator
@@ -358,7 +362,6 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 				fieldTypes.push(createNode(NodeKind.Identifier, { name: "unknown" }, braceToken));
 			}
 		} else {
-			// Skip unexpected tokens
 			advance(state);
 		}
 		if (!isAtEnd(state) && (current(state).kind === TokenKind.Semicolon || current(state).kind === TokenKind.Comma)) {

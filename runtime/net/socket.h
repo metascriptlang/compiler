@@ -24,6 +24,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>  /* offsetof — used by _Static_assert below for layout invariants */
 #include <string.h>
 #include <time.h>
 #include "runtime/core/system.h"
@@ -521,20 +522,160 @@ static inline void msStringShiftLeft(msString* s, int32_t offset) {
 	s->p->data[remaining] = '\0';
 }
 
-/* Thread-local cached Date header (httpbeast pattern).
- * Updated at most once per second — avoids strftime per response. */
-static _Thread_local char _msDateBuf[64];
+/* Thread-local cached Date header line (httpbeast/Bun pattern).
+ * Updated at most once per second — avoids strftime per response.
+ *
+ * Bakes the full header line "Date: <imf-fixdate>\r\n" (37 bytes) into a
+ * payload structure with msStrPayload's binary layout. The cap field gets
+ * MS_STRLIT_FLAG set so DRC treats the returned msString as a literal —
+ * no refcount touch, no free attempt on the thread-local backing buffer.
+ *
+ * Result: msHttpDateLine() returns a zero-alloc msString that MS code can
+ * append into response buffers via the standard msStringAppend path.
+ *
+ * Layout invariant: _msDatePayloadBox MUST share msStrPayload's prefix —
+ * `int64_t cap` first, then char data. Verified at compile time via the
+ * static asserts below. If msStrPayload changes, these break the build. */
+typedef struct {
+	int64_t cap;        /* matches msStrPayload.cap (holds MS_STRLIT_FLAG | len) */
+	char data[48];      /* "Date: Sun, 06 Nov 1994 08:49:37 GMT\r\n" + nul */
+} _msDatePayloadBox;
+
+_Static_assert(offsetof(_msDatePayloadBox, cap) == offsetof(msStrPayload, cap),
+               "_msDatePayloadBox cap offset must match msStrPayload");
+_Static_assert(offsetof(_msDatePayloadBox, data) == offsetof(msStrPayload, data),
+               "_msDatePayloadBox data offset must match msStrPayload");
+
+static _Thread_local _msDatePayloadBox _msDatePayload;
+static _Thread_local int64_t _msDateLen = 0;
 static _Thread_local time_t _msDateEpoch = 0;
 
-static inline const char* msGetDateHeader(void) {
+static inline void _msEnsureDate(void) {
 	time_t now = time(NULL);
 	if (now != _msDateEpoch) {
 		_msDateEpoch = now;
 		struct tm tm;
 		ms_gmtime(&now, &tm);
-		strftime(_msDateBuf, sizeof(_msDateBuf), "%a, %d %b %Y %H:%M:%S GMT", &tm);
+		/* "Date: " (6) + IMF-fixdate (29) + "\r\n" (2) = 37 bytes */
+		int n = (int)strftime(_msDatePayload.data, sizeof(_msDatePayload.data),
+		                      "Date: %a, %d %b %Y %H:%M:%S GMT\r\n", &tm);
+		_msDateLen = (int64_t)n;
+		_msDatePayload.cap = _msDateLen | MS_STRLIT_FLAG;
 	}
-	return _msDateBuf;
+}
+
+/* C-string accessor — kept for any legacy callers. */
+static inline const char* msGetDateHeader(void) {
+	_msEnsureDate();
+	return _msDatePayload.data + 6; /* skip "Date: " prefix for raw date value */
+}
+
+/* Zero-alloc msString accessor — bakes full "Date: ...\r\n" header line.
+ * Caller is expected to msStringAppend this into a response buffer; the
+ * literal flag prevents DRC from freeing the thread-local backing. */
+static inline msString msHttpDateLine(void) {
+	_msEnsureDate();
+	return (msString){ .len = _msDateLen, .p = (msStrPayload*)&_msDatePayload };
+}
+
+/* ===== Static response cache (Layer D — Bun parity for hello-world hot path) =====
+ *
+ * Per-thread cache of complete HTTP responses for endpoints whose status,
+ * headers, and body don't change request-to-request. Bun's `Bun.serve` does
+ * the same for `new Response("body")` returned from `fetch`.
+ *
+ * Lifecycle:
+ *   - Caller picks a slotId (0..63) at the call site — same slot per endpoint.
+ *   - On hit (same wall-clock second), the cached msString is returned for
+ *     the caller to msStringAppend into the response buffer. ZERO allocation,
+ *     zero rebuild work in the hot path.
+ *   - On miss (first call OR second rolled over OR slot empty), caller rebuilds
+ *     the full response, then msStaticCachePut stores a fresh copy.
+ *
+ * Why per-thread (not shared):
+ *   - serveConcurrent spawns N event loops; each owns its own client fds.
+ *   - Sharing would require atomics or a CAS pointer swap for safety.
+ *   - Thread-local removes the race entirely at the cost of N copies of
+ *     ~100 bytes each (negligible).
+ *
+ * Why per-second invalidation:
+ *   - The Date header changes every second (RFC 7231). Cached responses
+ *     bake in the Date header at build time, so the cache must refresh
+ *     in lockstep with the date.
+ *
+ * Cache ownership:
+ *   - Stored msString has its own payload (allocated by msStringNew during put).
+ *   - The literal flag is set so DRC treats it as immutable when shared with
+ *     MS callers. The cache explicitly frees the old payload on overwrite,
+ *     bypassing the literal check via direct free(). */
+#define MS_STATIC_SLOTS 64
+
+/* Two-generation cache to avoid use-after-free under load.
+ *
+ * Naive single-generation design races with in-flight io_uring SEND:
+ *   1. Hot path: response shares cache.fullResponse payload via msString
+ *      struct copy; SEND submitted, kernel reads bytes async.
+ *   2. Wall second rolls; msStaticCachePut frees the old payload BEFORE
+ *      the kernel finishes reading it → UAF, garbage on the wire.
+ *
+ * Two-generation fix: each slot keeps `current` + `prev`. On eviction we
+ * shift current→prev and only free prev (which is guaranteed >= 1 second
+ * older than any possibly-in-flight SEND, since the kernel processes the
+ * ring well within that window). Cost: 2× cache RAM per slot (~200 bytes
+ * total for a /health response). Trivial. */
+typedef struct {
+	int64_t epoch;          /* Wall-clock second when `current` was filled */
+	msString current;       /* Active response — readers point here */
+	msString prev;           /* Previous generation — freed on next rollover */
+	uint8_t valid;          /* 0 = empty slot, 1 = filled */
+} _msStaticSlot;
+
+static _Thread_local _msStaticSlot _msStaticCache[MS_STATIC_SLOTS];
+
+/* Current wall-clock second — used as cache key. */
+static inline int64_t msEpochSec(void) {
+	return (int64_t)time(NULL);
+}
+
+/* Cache hit predicate: slot filled AND epoch matches current second. */
+static inline int32_t msStaticCacheHit(int32_t slotId, int64_t currentSec) {
+	if (slotId < 0 || slotId >= MS_STATIC_SLOTS) return 0;
+	return (_msStaticCache[slotId].valid && _msStaticCache[slotId].epoch == currentSec) ? 1 : 0;
+}
+
+/* Return the current generation's msString. Readers may share this payload
+ * (via msString struct copy) for the duration of one io_uring SEND; it is
+ * guaranteed alive until at least the NEXT eviction (which only happens
+ * when the wall second changes, see msStaticCachePut). */
+static inline msString msStaticCacheGet(int32_t slotId) {
+	if (slotId < 0 || slotId >= MS_STATIC_SLOTS) return MS_EMPTY_STRING;
+	return _msStaticCache[slotId].current;
+}
+
+/* Rotate generations and install `source` as `current`.
+ *
+ * Sequence: free prev (older than 1 second now → no SENDs possibly still
+ * referencing it) → prev = current (cooling generation) → current = new
+ * copy of source. The "still in-flight" SEND submissions from the previous
+ * second now point at `prev`, which is alive for one more second. */
+static inline void msStaticCachePut(int32_t slotId, int64_t currentSec, msString source) {
+	if (slotId < 0 || slotId >= MS_STATIC_SLOTS) return;
+	if (_msStaticCache[slotId].valid) {
+		/* Free the GRAND-prev (2 seconds old) — any SEND referencing it
+		 * has long since completed. The previous `current` becomes `prev`. */
+		msStringDestroyForce(_msStaticCache[slotId].prev);
+		_msStaticCache[slotId].prev = _msStaticCache[slotId].current;
+	}
+	if (source.len > 0 && source.p != NULL) {
+		_msStaticCache[slotId].current = msStringNew((const char*)source.p->data, source.len);
+		if (_msStaticCache[slotId].current.p != NULL) {
+			_msStaticCache[slotId].current.p->cap |= MS_STRLIT_FLAG;
+		}
+	} else {
+		_msStaticCache[slotId].current = MS_EMPTY_STRING;
+	}
+	_msStaticCache[slotId].epoch = currentSec;
+	_msStaticCache[slotId].valid = 1;
 }
 
 /* Build HTTP response in one allocation (httpbeast pattern).

@@ -1,8 +1,7 @@
 // cparse — Type system
-// Port of: ~/projects/chibicc type.c + target.ms parameterization.
 //
 // All constructors take TargetInfo for size/align instead of hardcoding x86-64.
-// chibicc's add_type (expression type inference) is NOT ported — we parse
+// add_type (expression type inference) is NOT ported — we parse
 // headers only, so we don't need full expression typing. We port:
 // - Type constructors: primitives, pointer, array, func, struct, union, enum
 // - Helpers: isInteger, isFlonum, isNumeric, copyType

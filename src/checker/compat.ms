@@ -122,10 +122,10 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// null assignable to legacy nullable kinds (value-struct/array/function/span).
 	// TS-strict shift: Ref/Ptr are NO LONGER auto-nullable — callers must use
 	// `T | null` (handled by the Union-target check above) to opt into nullability.
-	// (Struct/Array/Function/Span allowances kept for now — separate migration.)
+	// Void target lets callers write `Result.ok(null)` for Result<void, E> (§7.5).
 	if (source.kind === TypeKind.Null) {
 		return match (target.kind) {
-			TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Function => true,
+			TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Function | TypeKind.Void => true,
 			_ => false,
 		};
 	}
@@ -415,11 +415,12 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 		&& integerRank(actual) <= integerRank(formal)) {
 		return TypeRelation.IntConv;
 	}
-	// Null to nullable
+	// Null to nullable (mirrors isAssignableInner's null-source switch).
 	if (actual.kind === TypeKind.Null) {
 		if (formal.kind === TypeKind.Struct || formal.kind === TypeKind.Array ||
 			formal.kind === TypeKind.SizedArray || formal.kind === TypeKind.Span ||
-			formal.kind === TypeKind.Function || formal.kind === TypeKind.Ref || formal.kind === TypeKind.Ptr) {
+			formal.kind === TypeKind.Function || formal.kind === TypeKind.Ref || formal.kind === TypeKind.Ptr ||
+			formal.kind === TypeKind.Void) {
 			return TypeRelation.Subtype;
 		}
 	}

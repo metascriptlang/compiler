@@ -45,7 +45,7 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 	if (program === null) return;
 	const source = dbGetSource(db, path);
 	// Build minimal items (label + kind + sortText only) for fast stdio transfer.
-	// rust-analyzer pattern: defer detail/docs/textEdit to completionItem/resolve.
+	// Defer detail/docs/textEdit to completionItem/resolve.
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null);
 	const items: string[] = [];
 	for (const c of candidates) {
@@ -619,7 +619,6 @@ function lspCompleteImportName(program: Node, source: string, pos: LspCursorPara
 	const importSpec = sgExtractImportSource(program, pos.line);
 	if (importSpec === "") return [];
 
-	// Resolve the module path
 	const targetPath = dbResolveImport(db, filePath, importSpec);
 	if (targetPath === "") return [];
 
@@ -630,7 +629,6 @@ function lspCompleteImportName(program: Node, source: string, pos: LspCursorPara
 		dbEnsureModuleExports(db, targetPath);
 	}
 
-	// Get exports from registry
 	const modExports = findModuleExports(db.exportRegistry, targetPath);
 	if (modExports === null) return [];
 

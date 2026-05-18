@@ -3,7 +3,6 @@
 // Subscript operators (declared as `function `[]`(this self: Type, idx: number)`)
 // are registered in the ExtensionRegistry by the checker but the AST is NOT rewritten.
 // C codegen needs direct function call form.
-// Reference compiler: subscript_lower.zig.
 //
 // Detection: checks ExtensionRegistry for "[]"/"[]=" operators on receiver type.
 // Builtin indexable types (Array, string, @builtin("IndexableMap") classes) are never rewritten.

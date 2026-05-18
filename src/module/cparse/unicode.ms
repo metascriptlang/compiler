@@ -1,5 +1,4 @@
 // cparse — UTF-8 + Unicode helpers
-// Port of: ~/projects/chibicc unicode.c
 //
 // All functions use byteAt/byteLength for O(1) byte-level access.
 // MS strings store UTF-8 bytes internally — byteAt gives raw bytes.

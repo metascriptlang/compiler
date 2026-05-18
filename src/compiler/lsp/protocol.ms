@@ -126,7 +126,6 @@ export function lspGetNumberField(json: string, field: string): number {
 	if (i < 0) return -1;
 	// Found key. Parse digits.
 	let j = i + pattern.byteLength;
-	// Skip whitespace
 	while (j < json.byteLength && json.charAt(j) === " ") { j = j + 1; }
 	let neg = false;
 	if (j < json.byteLength && json.charAt(j) === "-") {
@@ -157,7 +156,6 @@ export function lspGetObjectField(json: string, field: string): string {
 		const i = json.indexOf(pattern, pos);
 		if (i < 0) return "";
 		let j = i + pattern.byteLength;
-		// Skip whitespace
 		while (j < json.byteLength && json.charAt(j) === " ") { j = j + 1; }
 		const opener = j < json.byteLength ? json.charAt(j) : "";
 		if (opener === "{" || opener === "[") {

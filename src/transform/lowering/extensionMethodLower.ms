@@ -4,8 +4,6 @@
 // on the CallExpr node, along with resolvedSym pointing to the winning extension.
 // This transform only does the structural AST rewrite (MemberExpr → direct call).
 // No registry re-lookup needed — follows reference pattern where sem resolves UFCS.
-//
-// Reference compiler: normalize.zig Pass 7.
 
 import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, ExprStmtData, SymbolKind, Symbol } from "../../ast/node";
 import { TransformContext } from "../context";

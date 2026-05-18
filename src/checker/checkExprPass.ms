@@ -1,9 +1,9 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
+import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion } from "./types";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn } from "./context";
 import {
@@ -15,8 +15,7 @@ import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
-import { expandMacroInvocation } from "../compiler/meta/expand";
-import { evalComptimeBlock } from "../compiler/meta/comptime";
+import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallbacks";
 import { findChar, splitTopLevel } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 import { markConsumedName, isConsumedName, symbolConsumeKey } from "./spawnAffinity";
@@ -266,7 +265,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// fossilizes X's symbol type as `unknown`, emitting `void* X` in C
 			// codegen, because the post-check evaluateComptimeBlocks pass
 			// replaces the AST node AFTER the variable's symbol type is set.
-			const expanded = evalComptimeBlock(node);
+			const expanded = callEvalComptimeBlock(node, ctx);
 			node.kind = expanded.kind;
 			node.data = expanded.data;
 			if (expanded.location !== null) node.location = expanded.location;
@@ -315,15 +314,19 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 			}
 			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.name.length, sym, sym.symbolType, sym.symbolKind, d.name, "", false);
-			// Phase 4: narrow via the flow graph per use site. For identifiers
-			// with no flowNode (non-reference positions) this is a no-op;
-			// otherwise it walks back through TrueCondition/FalseCondition
-			// edges to compute the refined type at this program point.
+			// Assignment LHS: return the declared type, not the flow-narrowed
+			// one. Inside `if (x === null) { x = {...} }` the RHS otherwise
+			// gets `null` as contextualType and falls through to anon-struct
+			// synthesis instead of widening to x's declared type.
+			if (ctx.initTracker.leftPartOfAsgn > 0) {
+				node.nodeType = sym.symbolType;
+				return sym.symbolType;
+			}
 			return getFlowTypeOfReference(node, sym.symbolType);
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			// Ref parity: leftPartOfAsgn (sempass2 lines 1286-1288)
+			// Ref parity: leftPartOfAsgn
 			const isAsgn = d.operator === "=" || d.operator === "+=" || d.operator === "-=" ||
 				d.operator === "*=" || d.operator === "/=" || d.operator === "%=" ||
 				d.operator === "&&=" || d.operator === "||=" || d.operator === "??=";
@@ -399,7 +402,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// when:
 			//   - foo is not a real field of obj's declared type, AND
 			//   - obj's type has a registered extension `setDynamicField(this T, key: string, value: U): void`.
-			// Mirrors the getDynamicField synthesis for reads (~line 3727) and the
+			// Mirrors the getDynamicField synthesis for reads and the
 			// HashMap `m[k]=v` rewrite below. Compound ops (`+=`, etc.) are rejected
 			// with a clear error since they need a read-modify-write cycle that the
 			// protocol does not express.
@@ -413,8 +416,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					// wrapping for reference types like JsonValue). Property-lookup
 					// mirrors `checkMember`'s full chain: peel Alias/Ref/Struct/Union,
 					// try `getProperty`, fall back to `lookupSymbol`+shape on the
-					// type's name (the same "class-aware field delegation" path
-					// at line 3512). Skipping the fallback would mis-fire synthesis
+					// type's name (the same "class-aware field delegation" path).
+					// Skipping the fallback would mis-fire synthesis
 					// on real fields like `MacroInvocationData.macroArgs` whose
 					// alias isn't shaped until a read primes it.
 					const recvType = md.object.nodeType;
@@ -536,7 +539,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					return rewriteAsMethodCall(ctx, node, ad.array, "set", wargs);
 				}
 			}
-			// Ref parity: initVar on assignment LHS (sempass2 line 1284)
+			// Ref parity: initVar on assignment LHS
 			if (isAsgn && d.left.kind === NodeKind.Identifier) {
 				const lhsId = d.left.data as IdentifierData;
 				// Ref parity: nfFirstWrite — set when first assignment is in same block as declaration
@@ -895,7 +898,6 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					while (ki < d.keys.length) {
 						const key = d.keys[ki];
 						if (key !== "..." && key !== "__computed__") {
-							// Check field exists in type
 							let found = false;
 							let ni = 0;
 							while (ni < objNames.length) {
@@ -1279,7 +1281,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// surrounding ReturnStmt/VariableDecl gets voidType, breaking the
 			// declared-return-type assignability check.
 			//
-			// Mirrors the CallExpr eager path (line 1684-1700). Only fires for
+			// Mirrors the CallExpr eager path. Only fires for
 			// user macros (in registry); builtin directives (emit, include, ...)
 			// keep the voidType behavior. If args still contain GenericParam
 			// (defer convention), return unknownType — let the next mono level
@@ -1292,8 +1294,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 				if (anyArgIsParametric(md.macroArgs)) return unknownType();
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
-				const expanded = expandMacroInvocation(node, ctx, 0);
-				// Bug 18: when a user macro emits a sentinel error (or VM fails),
+				const expanded = callExpandMacroInvocation(node, ctx, 0);
+				// When a user macro emits a sentinel error (or VM fails),
 				// expandMacroInvocation returns the SAME MacroInvocation node and
 				// has already called addError. Re-checking would route back into
 				// this same branch and re-fire the macro, multiplying the error
@@ -2073,8 +2075,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			// Eagerly expand right now via the Raiser VM. Track depth across the
 			// re-check below so recursive macros hit the limit cleanly.
 			ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
-			const expanded = expandMacroInvocation(node, ctx, 0);
-			// Bug 18 — see checkExpr MacroInvocation branch for full rationale.
+			const expanded = callExpandMacroInvocation(node, ctx, 0);
+			// See checkExpr MacroInvocation branch for full rationale.
 			// Sentinel/VM errors leave node.kind = MacroInvocation; skip re-check
 			// to avoid duplicating diagnostics + spurious recursive-macro warning.
 			if (expanded.kind === NodeKind.MacroInvocation) {
@@ -2275,7 +2277,17 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			const me = d.callee.data as MemberExprData;
 			fillDefaultArgsForNode(ctx, node, me.property, calleeType.typeChildren.length, extDefaultOffset);
 		}
-		// Bug 10 (extended): static class methods need mono-instantiation
+		// Arity gates — the generic gates below are unreachable when this
+		// branch returns early.
+		const extMinAr = getMinArity(calleeType);
+		if (d.arguments.length < extMinAr) {
+			const me = d.callee.data as MemberExprData;
+			addError(ctx, `Too few arguments to '${me.property}': expected at least ${extMinAr}, got ${d.arguments.length}`, node.location.line, node.location.column);
+		} else if (d.arguments.length > calleeType.typeChildren.length) {
+			const me = d.callee.data as MemberExprData;
+			addError(ctx, `Too many arguments to '${me.property}': expected at most ${calleeType.typeChildren.length}, got ${d.arguments.length}`, node.location.line, node.location.column);
+		}
+		// Static class methods need mono-instantiation
 		// for both explicit `<T>` AND arg-driven inference (e.g.
 		// `JSON.stringify(person)` without `<T>` should infer T=Person from
 		// the arg). The shared `tryInstantiateGenericCallee` helper handles
@@ -2333,6 +2345,10 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		return spawnRet;
 	}
 	// Check argument types + infer generic return
+	// DIAGNOSTIC PROBE — remove after root cause found
+	if (d.callee.resolvedSym !== null && d.callee.resolvedSym.builtinKind === "ResultOk") {
+		console.log(`[PROBE] ResultOk call: argTypes.length=${argTypes.length} calleeType.kind=${calleeType !== null ? calleeType.kind : -1} resolvedSym.builtinKind=${d.callee.resolvedSym.builtinKind}`);
+	}
 	// @builtin("Echo"): accept any number of args of any type (reference echo parity)
 	const isEchoBuiltin = node.resolvedSym !== null && node.resolvedSym.builtinKind === "Echo";
 	if (calleeType.kind === TypeKind.Function && !isEchoBuiltin) {
@@ -2653,7 +2669,7 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 	}
 
 	returnType = applySubstitutions(returnType, argBindings);
-	// Bug 16: eagerly instantiate body for concrete GenericInstance — mirrors
+	// Eagerly instantiate body for concrete GenericInstance — mirrors
 	// inferGenericReturnWithExplicit. Without this, downstream peelToStructOrUnion
 	// falls back to the un-substituted typeExtra and `r.value.field` access
 	// leaks GenericParam (synthesizes getDynamicField against JsonValue).
@@ -2757,9 +2773,9 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	// Pass 3: contextual return-type binding (Nim parity — `inheritBindings` in
 	// semcall.nim:777-859). When args + explicit <T> together don't bind all
 	// generic params, walk return type vs expected type to derive bindings from
-	// caller context. Mirrors local pattern in `inferGenericReturn` (line 2621+):
+	// caller context. Mirrors local pattern in `inferGenericReturn`:
 	// gated on !isNakedGenericReturn to preserve TS-flavored naked-T rule.
-	// `mergeUnifyBindings` preserves earlier bindings (types.ms:1612) so Pass 3
+	// `mergeUnifyBindings` preserves earlier bindings so Pass 3
 	// only fills gaps — no overwrite risk.
 	//
 	// Fixes Bug 3 V2: macro emit `_jsonToIntArray(jv, null)` with caller-side
@@ -2916,12 +2932,11 @@ function checkArgsAgainstCandidate(ctx: CheckerContext, args: Node[], candType: 
 	return argTypes;
 }
 
-// Phase 5: two-pass overload resolution (ref: typescript-go
-// `internal/checker/checker.go:8682-8903`, `chooseOverload`).
+// Phase 5: two-pass overload resolution (ref parity: `chooseOverload`).
 //
 // Pass 1 (scoring): check each arg once with `null` expected type. Object
 // literals become anonymous structs (`checkObjectLiteral` anon-synthesis
-// path at ~line 762). Enum member accesses rewrite `K.A` to Identifier
+// path). Enum member accesses rewrite `K.A` to Identifier
 // `K_A` once, with `resolvedSym.symbolType` set to `EnumLiteral(K, A)` —
 // `checkArgWithExpected` narrows via resolvedSym even when `nodeType`
 // remains the wider `Enum(K)`. Score candidates via the existing
@@ -2960,7 +2975,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	// Pass 1: check non-context-sensitive args with null expected type.
 	// Context-sensitive args (object literals, arrow functions) are SKIPPED
 	// entirely — Pass 2 checks them against the winner's param type. This
-	// matches TypeScript-go's `CheckModeSkipContextSensitive` (checker.go:8682-8686).
+	// matches the reference's `CheckModeSkipContextSensitive`.
 	// Skipping (rather than null-checking) avoids stamping cached types on the
 	// literal's children that would survive into Pass 2 and defeat inference.
 	const argTypes: Type[] = [];
@@ -3007,7 +3022,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 		// When ALL args are context-sensitive (skipMask all-true), every
 		// candidate gets the same score (N subtypeMatches). This is not a
 		// real ambiguity — it's the degenerate "no discriminating args" case.
-		// Fall through to Pass 2 with the first matching candidate (TS-go
+		// Fall through to Pass 2 with the first matching candidate (ref parity:
 		// `chooseOverload` picks the first applicable candidate when scores
 		// are tied). Only report ambiguity when at least one non-skipped arg
 		// actually discriminates but two candidates still tie.
@@ -3442,7 +3457,6 @@ function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: Obje
 		discValue = sd.value;
 	}
 
-	// Find matching variant
 	let variantIdx = -1;
 	if (discValue !== "") {
 		variantIdx = findVariantByDiscriminant(unionType, discValue);
@@ -3601,15 +3615,15 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	// to reach the underlying Union body. Required for field resolution +
 	// narrowing on `Result<T, E> = Ref<ResultData<T, E>>` style types.
 	//
-	// Bug 16 family fix: eagerly instantiate GI body BEFORE peeling so that
+	// Eagerly instantiate GI body BEFORE peeling so that
 	// `peelToStructOrUnion` reaches the substituted typeReturn rather than
 	// falling back to the un-substituted typeExtra. Without this, accessing
 	// `.value` / `.error` on `Result<T, _>` leaks GenericParam("T") to the
 	// field type — downstream MemberExpr code then falls through to the
 	// `getDynamicField` synthesis path and matches stray protocol exts
-	// (manifested as `_rxBuf: Array ≠ JsonValueData...` after Bug #2 fix
+	// (manifested as `_rxBuf: Array ≠ JsonValueData...` after a fix
 	// removed the bake-in workaround). Mirrors the same fix at
-	// `inferGenericReturn` (~line 2664) which handles call-return paths.
+	// `inferGenericReturn` which handles call-return paths.
 	//
 	// Guard: only instantiate when typeChildren are CONCRETE (no GenericParam).
 	// Instantiating with un-substituted GenericParam args caches an identity-
@@ -4002,13 +4016,13 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		// Suppress error in LHS-of-assignment context when type opts into the
 		// `setDynamicField` write protocol. The enclosing BinaryExpr handler
 		// rewrites the assignment as `obj.setDynamicField("key", value)`.
-		// Counterpart of the getDynamicField synthesis for reads (~line 3727).
+		// Counterpart of the getDynamicField synthesis for reads.
 		// Receiver match uses the un-peeled object type (Ref<T> intact) — the
 		// extension is declared on the wrapping reference type, not the inner
 		// variant Union. Mirrors the getDynamicField synthesis below.
 		//
 		// Defense in depth: before suppressing the error, mirror the class-aware
-		// fallback at line 3518 — type aliases over records are only shaped after
+		// fallback — type aliases over records are only shaped after
 		// a read primes them, so the initial `getProperty` on the alias may
 		// return Unknown even though the underlying record owns the field. Walk
 		// the type's name via `lookupSymbol`+`ensureShaped` to surface the real
@@ -4152,7 +4166,7 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 				const id = p.data as IdentifierData;
 				if (id.name !== "_") {
 					const sym = lookupSymbol(ctx.table, id.name);
-					if (sym !== null && sym.symbolKind === SymbolKind.Variable && !sym.mutable) {
+					if (sym !== null && sym.symbolKind === SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable)) {
 						p.resolvedSym = sym;
 						checkExpr(ctx, p, discType);
 						continue;

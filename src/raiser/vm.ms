@@ -1,7 +1,6 @@
 // Raiser VM — Bytecode executor
 // If/else dispatch loop. C backend has optional computed-goto fast path (vm_dispatch.c).
 
-import { readFile as hostReadFile, writeFile as hostWriteFile } from "std/fs";
 import {
 	RaiserOpcode, RaiserInstruction,
 	raiserABC, raiserABx, raiserAx,
@@ -313,8 +312,6 @@ export function execModule(mod: RaiserModule): RaiserVM {
 			vmCmpBranchF64(vm, inst, 4);
 		} else if (op === RaiserOpcode.BgeF64) {
 			vmCmpBranchF64(vm, inst, 5);
-		} else if (op === RaiserOpcode.Builtin) {
-			vmHandleBuiltin(vm, inst);
 		} else if (op === RaiserOpcode.CallHost) {
 			vmHandleCallHost(vm, inst);
 		} else {
@@ -734,48 +731,11 @@ function vmCmpBranchF64(vm: RaiserVM, inst: RaiserInstruction, cmpOp: number): v
 // Bitwise ops are handled entirely in C dispatch (vm_dispatch.c)
 // using int64_t casts — MetaScript fallback not needed.
 
-// --- Builtin handler ---
-// Builtin IDs: 0 = readFile, 1 = writeFile
-
-function vmHandleBuiltin(vm: RaiserVM, inst: RaiserInstruction): void {
-	const builtinId = inst.b;
-	const base = vm.baseReg;
-
-	match (builtinId) {
-		0 => {
-			// readFile(path: string): Result<string, IoError>
-			const pathVal = getReg(vm, base + inst.a + 1);
-			const result = hostReadFile(pathVal.strVal);
-			const content = result.ok ? result.value : "";
-			const dst = getReg(vm, base + inst.a);
-			dst.kind = RaiserValueKind.String;
-			dst.intVal = 0;
-			dst.floatVal = 0.0;
-			dst.strVal = content;
-		},
-		1 => {
-			// writeFile(path: string, content: string): Result<void, IoError>
-			const pathVal = getReg(vm, base + inst.a + 1);
-			const contentVal = getReg(vm, base + inst.a + 2);
-			const result = hostWriteFile(pathVal.strVal, contentVal.strVal);
-			const ok = result.ok;
-			const dst = getReg(vm, base + inst.a);
-			dst.kind = RaiserValueKind.Bool;
-			let rv = 0;
-			if (ok) { rv = 1; }
-			dst.intVal = rv;
-			dst.floatVal = 0.0;
-			dst.strVal = "";
-		},
-		_ => { vmError(vm, `Unknown builtin ID: ${builtinId}`); },
-	};
-}
-
 // --- CallHost handler ---
-// Generic name-resolved native call. Replaces the per-function hardcoded
-// `Builtin` dispatch above. Lookup is O(n) over the registry, but n is small
-// (~50-200 host fns) and the registered wrappers (auto-generated in Phase 3)
-// own all type-specific marshalling.
+// Generic name-resolved native call. The only host-call mechanism. Lookup
+// is O(n) over the registry, but n is small (~20-200 host fns) and the
+// registered wrappers (in src/compiler/meta/hostTable.ms) own all
+// type-specific marshalling.
 
 function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 	const base = vm.baseReg;
@@ -1401,32 +1361,6 @@ test "stack trace with function calls" {
 	// The VM halted inside inner — stack trace should show the call chain
 	const trace = vmDumpStack(vm);
 	assert trace.length > 0;
-}
-
-test "builtin readFile reads package.json" {
-	// Build bytecode: R1 = "package.json", Builtin(R0, 0, 1) → R0 = readFile(R1)
-	const code: RaiserInstruction[] = [
-		raiserABx(RaiserOpcode.LoadConst, 1, 0),         // R1 = "package.json"
-		raiserABC(RaiserOpcode.Builtin, 0, 0, 1),        // R0 = readFile(R1)
-		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
-	];
-	const consts: RaiserValue[] = [raiserString("package.json")];
-	const vm = execModule(makeTestModule(code, consts));
-	assert vm.error === "";
-	assert vm.exitValue.kind === RaiserValueKind.String;
-	assert vm.exitValue.strVal.length > 0;
-}
-
-test "builtin readFile missing file returns empty" {
-	const code: RaiserInstruction[] = [
-		raiserABx(RaiserOpcode.LoadConst, 1, 0),
-		raiserABC(RaiserOpcode.Builtin, 0, 0, 1),
-		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
-	];
-	const consts: RaiserValue[] = [raiserString("/tmp/__nonexistent_file_12345__")];
-	const vm = execModule(makeTestModule(code, consts));
-	assert vm.error === "";
-	assert vm.exitValue.strVal === "";
 }
 
 // --- CallHost tests ---

@@ -118,8 +118,8 @@ export function linkSolana(oFileList: string, outBinary: string): Result<void, P
 			command: "linkSolana",
 			exitCode: 1,
 			signal: 0,
-			stdout: "",
-			stderr: "",
+			output: "",
+			errorOutput: "",
 			message: "no BPF-valid bitcode files to link",
 		});
 	}
@@ -135,14 +135,14 @@ export function linkSolana(oFileList: string, outBinary: string): Result<void, P
 			command: "sbpf-linker",
 			exitCode: 0,
 			signal: 0,
-			stdout: "",
-			stderr: "",
+			output: "",
+			errorOutput: "",
 			message: "sbpf-linker not found on PATH",
 		});
 	}
 	const sbpfRes = exec(`${linker} "${combined}" --export entrypoint -o "${outBinary}" 2>/dev/null`);
 	if (!sbpfRes.ok) return Result.err(sbpfRes.error);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 export function getCompilerName(ccOption: number, ccBinary: string): string {
@@ -420,7 +420,7 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 	const cmd = buildCompileCommand(cFile, outBinary, extraFlags, mode, ccOption, ccBinary);
 	const r = exec(cmd);
 	if (!r.ok) return Result.err(r.error);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 // Compile a .c file to an object file only (-c flag, no linking).
@@ -441,7 +441,7 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 	if (extraFlags !== "") cmd = `${cmd} ${extraFlags}`;
 	const r = exec(cmd);
 	if (!r.ok) return Result.err(r.error);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 // Windows cmd.exe caps command lines at 8191 chars. Link commands with hundreds
@@ -474,7 +474,7 @@ export function linkObjects(oFileList: string, outBinary: string, extraFlags: st
 		r = exec(`${compiler}${rtFlag} @${rspPath} -o ${outBinary} -lm`);
 	}
 	if (!r.ok) return Result.err(r.error);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 // Get the runtime directory path (for -I include path).

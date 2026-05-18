@@ -1173,10 +1173,10 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 // ===== (Removed: `ensureTypeHooks` and `ensureTypeHooksForType`.)
 //
 // Both old entry points replaced by the unified `ensureHooks(typeName, objType,
-// refType, emitTypeInfo, lctx, loc)` above (around line 950). The old names
-// lived here historically but diverged — one emitted TypeInfo, the other
-// didn't, and the guard registry could race between them. See the block
-// comment on `ensureHooks` for the semantics.
+// refType, emitTypeInfo, lctx, loc)` above. The old names lived here
+// historically but diverged — one emitted TypeInfo, the other didn't, and
+// the guard registry could race between them. See the block comment on
+// `ensureHooks` for the semantics.
 
 // ===== Auto-Generated == (reference parity: generic proc `==`*[T: tuple|object]) =====
 // Generates TypeName_eq(a, b): boolean with field-by-field comparison.
@@ -1690,7 +1690,6 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 		scanStmtForArrayTypes(stmt, lctx);
 	}
 
-	// Generate standalone array lifecycle hooks
 	const defaultLoc = makeLoc(0, 0);
 	generateArrayHooks(lctx, defaultLoc);
 

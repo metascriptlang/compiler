@@ -16,13 +16,12 @@ import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, Me
 import { isNumeric, createResult, createArray, createPrimitive, stringType, unknownType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType } from "../../checker/types";
 import { findExtension } from "../../checker/context";
 import { TransformContext } from "../context";
-import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
 import {
-	makeIdent, makeCall, makeString, makeNumber, makeMember, makeUnary,
+	makeIdent, makeCall, makeString, makeNumber, makeMember,
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringName,
+	makeHiddenAddr,
 } from "../util";
-import { findCallTypeArg } from "../../parser/context";
 import { rewriteEcho } from "./debugLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 import { tryLowerPromiseBuiltin, lowerNewPromise } from "../lowering/promiseLower";
@@ -263,9 +262,15 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 
 	const payloadType = isOk ? getResultOkType(resType) : getResultErrType(resType);
 	if (payloadType !== null && payloadType.kind !== TypeKind.Void) {
-		keys.push(isOk ? "value" : "error");
-		values.push(cd.arguments[0]);
+		if (cd.arguments.length > 0) {
+			keys.push(isOk ? "value" : "error");
+			values.push(cd.arguments[0]);
+		}
 	}
+	// When payloadType IS Void: arg is null/undefined (typed as Null per
+	// compat.ms null→void rule) and discarded — Result<void> has no value slot.
+	// When payloadType is concrete but args empty: the checker arity gate
+	// (checkCallExpr) is responsible for rejecting before reaching this pass.
 
 	const literal = makeObjectLiteral(keys, values, loc);
 	literal.nodeType = resType;
@@ -344,7 +349,7 @@ function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 	}
 
 	// setLength takes &arr (mutates in place)
-	const addrOf = makeUnary("&", md.object, loc);
+	const addrOf = makeHiddenAddr(md.object, loc);
 	const result = makeCall(makeIdent(fn, loc), [addrOf, d.right], loc);
 	result.nodeType = node.nodeType;
 	return result;

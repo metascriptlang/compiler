@@ -120,3 +120,120 @@ function main(): void {
 	const c = compileToC(src);
 	assert !c.ok;  // expect explicit error, not silent miscompile
 }
+
+// ===== Stdlib helper sanity tests =====
+//
+// These tests exist because of a 2026-05-15 incident where:
+//   - Em refactored encode.ms to use a new discDetect.ms helper
+//   - test-ms (Bun TS transpile) reported all-pass
+//   - run-ms (full MS compile) reported 30 type errors
+//   - The test-ms vs run-ms gap hid stdlib type errors for several hours
+//
+// Lesson: stdlib changes need pipeline tests via compileToC, not test-ms only.
+// compileToC exercises the full MS pipeline (parse → check → mono → ... → codegen)
+// including loading the prelude + std/serialize. Type errors in any prelude
+// file (e.g., missing transitive imports in discDetect.ms) surface here.
+
+test "E2E C: minimal program compiles (smoke for stdlib loadability)" {
+	// Empty program forces the full prelude to load + type-check. If any
+	// stdlib file (including std/serialize/discDetect.ms) has type errors
+	// — e.g. missing transitive imports — this test fails.
+	const c = compileToC("function main(): void {}");
+	assert c.ok;
+}
+
+test "E2E C: importing detectUnionDisc helper compiles" {
+	// Direct user-space import of the discDetect helper. Catches:
+	//   - Missing transitive type imports in discDetect.ms
+	//   - Helper signature changes that break callers
+	const src = `
+import { detectUnionDisc } from "std/serialize/discDetect";
+
+function main(): void {
+	// Reference detectUnionDisc to force resolution + import-graph load
+	const _ref = detectUnionDisc;
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: stdlib JSON encode/decode surface usable" {
+	// Smoke test for the most common JSON pattern (parse + stringify of a
+	// plain struct). If em's recent encode.ms / decode.ms refactor breaks
+	// the basic struct path, this catches it.
+	const src = `
+interface Item { id: int32; label: string; }
+
+function main(): void {
+	const it: Item = { id: 1, label: "x" };
+	const s = JSON.stringify(it);
+	const r = JSON.parse<Item>(s);
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: JSON.stringify literal-string disc field (Bug A)" {
+	// Bug A regression — bridge used to emit literal types as
+	// Identifier(name=literal_value), making `kind: "circle"` look like a
+	// type alias named "circle". Encode atomic dispatch fell to jsonInt
+	// with a bad msString-as-int64 cast → C compile error in
+	// _jsonStringifyTyped<Circle>. Fixed by emitting StringLiteral nodes
+	// for TypeKind.StringLiteral in bridge.ms mapTypeToAstWith.
+	const src = `
+interface Circle { kind: "circle"; r: int32; }
+
+function main(): void {
+	const c: Circle = { kind: "circle", r: 5 };
+	const s = JSON.stringify(c);
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: JSON.stringify literal-bool disc field (Bug A)" {
+	// Same Bug A pattern but for BooleanLiteral types (`ok: true`).
+	const src = `
+interface OkBag { ok: true; val: int32; }
+
+function main(): void {
+	const o: OkBag = { ok: true, val: 42 };
+	const s = JSON.stringify(o);
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: CBOR literal-string disc field (Bug A mirror)" {
+	const src = `
+import { cborEncode } from "std/serialize/cbor";
+
+interface Circle { kind: "circle"; r: int32; }
+
+function main(): void {
+	const c: Circle = { kind: "circle", r: 5 };
+	const bytes = cborEncode(c);
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "E2E C: CBOR literal-bool disc field (Bug A mirror)" {
+	const src = `
+import { cborEncode } from "std/serialize/cbor";
+
+interface OkBag { ok: true; val: int32; }
+
+function main(): void {
+	const o: OkBag = { ok: true, val: 42 };
+	const bytes = cborEncode(o);
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}

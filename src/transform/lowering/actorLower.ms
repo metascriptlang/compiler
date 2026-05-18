@@ -823,14 +823,12 @@ function extractActorNewExprs(stmt: Node, names: string[], dispatchSyms: Symbol[
 	}
 	// Get the expression(s) from the statement. containsExprKind/replaceInExpr
 	// use mapExprChildren which only traverses expression nodes, not statement wrappers.
-	let targetExpr: Node = null as unknown as Node;
-	if (stmt.kind === NodeKind.ExprStmt) {
-		targetExpr = (stmt.data as ExprStmtData).expr;
-	} else if (stmt.kind === NodeKind.VariableDecl) {
-		targetExpr = (stmt.data as VariableDeclData).initializer;
-	} else if (stmt.kind === NodeKind.ReturnStmt) {
-		targetExpr = (stmt.data as ReturnStmtData).argument;
-	}
+	const targetExpr: Node = match (stmt.kind) {
+		NodeKind.ExprStmt => (stmt.data as ExprStmtData).expr,
+		NodeKind.VariableDecl => (stmt.data as VariableDeclData).initializer,
+		NodeKind.ReturnStmt => (stmt.data as ReturnStmtData).argument,
+		_ => null as unknown as Node,
+	};
 	if (targetExpr === null) return [];
 	if (!containsExprKind(targetExpr, NodeKind.NewExpr)) return [];
 
@@ -856,7 +854,6 @@ function extractActorNewExprs(stmt: Node, names: string[], dispatchSyms: Symbol[
 		return makeIdentResolved(tmpSym, loc);
 	};
 	const replaced = replaceInExpr(targetExpr, replacer);
-	// Write back the replaced expression
 	if (stmt.kind === NodeKind.ExprStmt) {
 		(stmt.data as ExprStmtData).expr = replaced;
 	} else if (stmt.kind === NodeKind.VariableDecl) {
@@ -908,49 +905,62 @@ function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[]
 // ===== Recursively walk into nodes that contain statement lists =====
 
 function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], ctx: TransformContext): void {
-	if (node.kind === NodeKind.FunctionDecl) {
-		const fd = node.data as FunctionDeclData;
-		if (fd.fnBody !== null) wireActorInNode(fd.fnBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-	} else if (node.kind === NodeKind.ExportDecl) {
-		// `export function foo() { const w = new Actor(); }` — drill into the
-		// wrapped decl so the function body gets wired. Without this branch,
-		// any `new ActorType()` inside an exported function is silently
-		// skipped, leaving the actor pid uninitialized and SEND a no-op.
-		const ed = node.data as ExportDeclData;
-		if (ed.exportedDecl !== null) {
-			wireActorInNode(ed.exportedDecl, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-		}
-	} else if (node.kind === NodeKind.BlockStmt) {
-		const bd = node.data as BlockStmtData;
-		bd.statements = wireActorInStmts(bd.statements, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-	} else if (node.kind === NodeKind.IfStmt) {
-		const id = node.data as IfStmtData;
-		wireActorInNode(id.consequent, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-		if (id.alternate !== null) wireActorInNode(id.alternate, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-	} else if (node.kind === NodeKind.WhileStmt) {
-		const wd = node.data as WhileStmtData;
-		wireActorInNode(wd.whileBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-	} else if (node.kind === NodeKind.DoWhileStmt) {
-		const dd = node.data as DoWhileStmtData;
-		wireActorInNode(dd.doBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-	} else if (node.kind === NodeKind.ForOfStmt) {
-		const fd = node.data as ForOfStmtData;
-		wireActorInNode(fd.forOfBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-	} else if (node.kind === NodeKind.ForStmt) {
-		const fd = node.data as ForStmtData;
-		wireActorInNode(fd.forBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-	} else if (node.kind === NodeKind.TryCatchStmt) {
-		const td = node.data as TryCatchStmtData;
-		wireActorInNode(td.tryBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-		if (td.catchBody !== null) wireActorInNode(td.catchBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-		if (td.finallyBody !== null) wireActorInNode(td.finallyBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-	} else if (node.kind === NodeKind.SwitchStmt) {
-		const sd = node.data as SwitchStmtData;
-		for (const c of sd.switchCases) wireActorInNode(c, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-	} else if (node.kind === NodeKind.SwitchCase) {
-		const sc = node.data as SwitchCaseData;
-		sc.caseStmts = wireActorInStmts(sc.caseStmts, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-	}
+	match (node.kind) {
+		NodeKind.FunctionDecl => {
+			const fd = node.data as FunctionDeclData;
+			if (fd.fnBody !== null) wireActorInNode(fd.fnBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		},
+		NodeKind.ExportDecl => {
+			// `export function foo() { const w = new Actor(); }` — drill into the
+			// wrapped decl so the function body gets wired. Without this branch,
+			// any `new ActorType()` inside an exported function is silently
+			// skipped, leaving the actor pid uninitialized and SEND a no-op.
+			const ed = node.data as ExportDeclData;
+			if (ed.exportedDecl !== null) {
+				wireActorInNode(ed.exportedDecl, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			}
+		},
+		NodeKind.BlockStmt => {
+			const bd = node.data as BlockStmtData;
+			bd.statements = wireActorInStmts(bd.statements, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		},
+		NodeKind.IfStmt => {
+			const id = node.data as IfStmtData;
+			wireActorInNode(id.consequent, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			if (id.alternate !== null) wireActorInNode(id.alternate, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		},
+		NodeKind.WhileStmt => {
+			const wd = node.data as WhileStmtData;
+			wireActorInNode(wd.whileBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		},
+		NodeKind.DoWhileStmt => {
+			const dd = node.data as DoWhileStmtData;
+			wireActorInNode(dd.doBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		},
+		NodeKind.ForOfStmt => {
+			const fd = node.data as ForOfStmtData;
+			wireActorInNode(fd.forOfBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		},
+		NodeKind.ForStmt => {
+			const fd = node.data as ForStmtData;
+			wireActorInNode(fd.forBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		},
+		NodeKind.TryCatchStmt => {
+			const td = node.data as TryCatchStmtData;
+			wireActorInNode(td.tryBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			if (td.catchBody !== null) wireActorInNode(td.catchBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			if (td.finallyBody !== null) wireActorInNode(td.finallyBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		},
+		NodeKind.SwitchStmt => {
+			const sd = node.data as SwitchStmtData;
+			for (const c of sd.switchCases) wireActorInNode(c, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		},
+		NodeKind.SwitchCase => {
+			const sc = node.data as SwitchCaseData;
+			sc.caseStmts = wireActorInStmts(sc.caseStmts, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		},
+		_ => {},
+	};
 }
 
 // ===== Top-level: wire actors at all scopes + inject poll at exit =====

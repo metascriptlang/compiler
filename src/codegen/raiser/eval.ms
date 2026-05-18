@@ -4,11 +4,12 @@
 
 import { Node } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
-import { checkProgram } from "../../checker/checkPass";
+import { checkProgram, checkProgramWithRegistry } from "../../checker/checkPass";
 import { CheckerContext } from "../../checker/context";
 import { RaiserValueKind, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput } from "./rgen";
+import { getComptimeOuterCtx } from "../../compiler/meta/callbacks";
 
 // --- Full Pipeline API ---
 
@@ -20,12 +21,25 @@ export function evalSourceFull(code: string): RaiserContext {
 
 // --- AST-based eval (no parsing step) ---
 // Used by @comptime evaluation — takes a pre-built Program node.
+//
+// Spike 2: if the outer compile pipeline set the multi-module context
+// (registry + graph + module + prelude), reuse it via checkProgramWithRegistry
+// so cross-module imports inside the @comptime body resolve. Otherwise fall
+// back to the single-file checkProgram path (used by direct tests).
 
 export function evalASTFull(program: Node): RaiserContext {
-	const checkerCtx = checkProgram(program);
-	const mod = generateRaiser(program, checkerCtx);
+	const outer = getComptimeOuterCtx();
+	const hasFullOuterCtx = outer !== null
+		&& outer.registry !== null
+		&& outer.graph !== null
+		&& outer.module !== null
+		&& outer.preludeCtx !== null;
+	const checkerCtx = hasFullOuterCtx
+		? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, outer.preludeCtx)
+		: checkProgram(program);
+	const raiserMod = generateRaiser(program, checkerCtx);
 	const ctx = createContext();
-	load(ctx, mod);
+	load(ctx, raiserMod);
 	execute(ctx);
 	return ctx;
 }

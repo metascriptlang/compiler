@@ -316,7 +316,6 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	addModule(graph, mod);
 	pushImportStack(graph, path);
 
-	// Read source
 	const sourceResult = provideSource(provider, path);
 	if (!sourceResult.ok) {
 		mod.errors.push(createModuleError(sourceResult.error, 0, 0, ErrorSeverity.Error));

@@ -1,5 +1,4 @@
 // cparse — Token definitions
-// Port of: ~/projects/chibicc chibicc.h (CToken, CTokenKind section)
 
 export enum CTokenKind {
 	Ident,       // identifiers
@@ -14,7 +13,7 @@ export enum CTokenKind {
 // Literal type classification attached to Num / Str tokens. Driven by numeric
 // suffix (L, LL, U, UL, ULL, f) or string prefix (L"", u"", U"", u8""). Needed
 // by the const expression evaluator to pick the right width for #if conditions
-// and enum values. chibicc stores a Type* here; we store a small enum to avoid
+// and enum values. We store a small enum here (rather than a Type*) to avoid
 // a circular dependency between token.ms and type.ms.
 export enum LitKind {
 	None,        // not a Num/Str token
@@ -34,8 +33,8 @@ export enum LitKind {
 	StrUtf8,     // u8"..."
 }
 
-// A single token. Linked-list threaded via `next` to mirror chibicc's structure
-// and allow cheap splicing during macro expansion.
+// A single token. Linked-list threaded via `next` to allow cheap splicing
+// during macro expansion.
 export interface CToken {
 	kind: CTokenKind;
 	next: CToken;            // next token; null as CToken at end
@@ -56,7 +55,7 @@ export interface CToken {
 	// Preprocessor bookkeeping
 	atBol: boolean;         // token sits at beginning of line (for # directive detection)
 	hasSpace: boolean;      // token was preceded by whitespace (for # stringify spacing)
-	// Macro expansion hide-set (Kernighan & Ritchie algorithm from chibicc)
+	// Macro expansion hide-set (Kernighan & Ritchie algorithm)
 	hideset: string[];      // macro names that must not expand inside this token
 	// Macro expansion provenance — if this token was produced by expanding a
 	// macro, `origin` points at the token that triggered expansion. Used for

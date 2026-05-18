@@ -9,10 +9,9 @@
 // reason about — no parallel `genMethodAsFunction` path that drifts from
 // `genFunctionDecl` (Bug 9 was exactly that drift).
 //
-// Nim parity: `cgmeth.nim` synthesises dispatcher procs pre-codegen, then
-// `cgen.nim` line 1023 dispatches `skProc | skFunc | skMethod | …` through
-// the same `genProc`. We do the equivalent — produce FunctionDecl, codegen
-// only sees FunctionDecl.
+// Ref parity: the reference synthesises dispatcher procs pre-codegen, then
+// dispatches `skProc | skFunc | skMethod | …` through the same `genProc`.
+// We do the equivalent — produce FunctionDecl, codegen only sees FunctionDecl.
 //
 // Scope (this pass): instance + static methods AND constructors. The
 // constructor body lifts to a top-level `<Class>_init(this, ...)` function;
@@ -25,7 +24,7 @@
 // dispatch on `this`, prototype chain). The transform is wired in the
 // `!jsBackend` branch of the pipeline.
 
-import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, FunctionDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind, Symbol } from "../../ast/node";
+import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { createFunction, voidType, unknownType } from "../../checker/types";

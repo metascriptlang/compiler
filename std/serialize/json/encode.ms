@@ -11,6 +11,7 @@
 // Walks t.nodeType (synthesized type-AST per SERIALIZE Phase A1). Refs/Ptrs
 // unwrap via TypeGeneric (modifierToAst maps to TypeGeneric with base name).
 import { Node, NodeKind } from "std/meta";
+import { detectUnionDisc, parseDiscKey } from "../discDetect";
 
 export macro jsonValueOf(t: Node): Node {
 	// Resolve underlying type-AST node (peel Ref<Struct> wrapper).
@@ -20,7 +21,7 @@ export macro jsonValueOf(t: Node): Node {
 	}
 
 	// Array field — emit a call to a per-element-type runtime helper.
-	// V2 (2026-05-10): atomic-builtin, enum/alias, struct/interface elements.
+	// V2: atomic-builtin, enum/alias, struct/interface elements.
 	// Builtin elements → per-type fast helpers (jsonArrayOfX).
 	// Non-builtin Identifier (enum / type alias) → `_jsonArrayOfInts<T>` generic.
 	// TypeObject element (struct/interface) → `_jsonArrayOfStructs<T>` generic.
@@ -89,8 +90,7 @@ export macro jsonValueOf(t: Node): Node {
 			};
 		}
 		// Builtin atomic element → per-element-type fast helper.
-		// IF-ELSE not match: macro VM string-match dispatch bug (always
-		// picks `_` arm). See memory project_macro_vm_string_match_bug.
+		// IF-ELSE not match: macro VM string-match dispatch always picks `_`.
 		let helperName: string = "jsonArrayOfInt64";
 		if (en === "string") helperName = "jsonArrayOfStrings";
 		else if (en === "boolean") helperName = "jsonArrayOfBooleans";
@@ -118,8 +118,144 @@ export macro jsonValueOf(t: Node): Node {
 		};
 	}
 
+	// V3 — Tagged-union (discriminated union) field. Emit runtime match on
+	// the disc field that dispatches to per-variant jsonObject construction.
+	// Step 2: bridge-populated path only (match-type DUs + Result/Option peeled).
+	// TS-style auto-detect deferred to step 4.
+	//
+	// Per-variant code structure:
+	//   <pattern> => jsonObject(["disc", payload-keys...], [discValueLit, jsonValueOf(t.field)...])
+	//
+	// Pattern type by discKind:
+	//   "boolean" → BooleanLiteral pattern, jsonBool disc value
+	//   "enum"    → MemberExpr(EnumName, MemberName) pattern, jsonString member name
+	//   default   → StringLiteral pattern, jsonString variantKey value
+	if (tt.kind === NodeKind.TypeUnion) {
+		// V3 — Tagged union (DU) encoding. Auto-detect disc info via shared
+		// helper (combines bridge-populated fields + TS-style fallback).
+		// info.variants pairs each disc key with its peeled variant struct
+		// — no parallel-list indexing fragility.
+		const info = detectUnionDisc(tt);
+		const discField: string = info.discField;
+		const discKind: string = info.discKind;
+		const variants = info.variants;
+
+		if (discField === "" || variants.length === 0) {
+			error("jsonValueOf: cannot determine discriminator for union type — variants must share a literal-typed disc field", t);
+		}
+
+		const matchCases: Node[] = [];
+		for (const variant of variants) {
+			const variantKey: string = variant.key;
+			const v: Node = variant.member;
+			if (v.kind !== NodeKind.TypeObject) {
+				error("jsonValueOf: union variants must be struct types (got kind=" + v.kind + ")", t);
+			}
+
+			// Build pattern + disc value Node based on discKind.
+			// parseDiscKey splits "K.A" enum keys into enumName + memberName.
+			const dp = parseDiscKey(discKind, variantKey);
+			let pattern: Node;
+			let discValueNode: Node;
+			if (discKind === "boolean") {
+				pattern = { kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: dp.boolValue };
+				discValueNode = {
+					kind: NodeKind.CallExpr, line: t.line, column: t.column,
+					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonBool" },
+					arguments: [{ kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: dp.boolValue }],
+				};
+			} else if (discKind === "enum") {
+				pattern = {
+					kind: NodeKind.MemberExpr, line: t.line, column: t.column,
+					object: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: dp.enumName },
+					property: dp.memberName,
+					isOptional: false,
+				};
+				discValueNode = {
+					kind: NodeKind.CallExpr, line: t.line, column: t.column,
+					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonString" },
+					arguments: [{ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: dp.memberName }],
+				};
+			} else {
+				// String disc (TS-style) — pattern + value both StringLiteral.
+				pattern = { kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: variantKey };
+				discValueNode = {
+					kind: NodeKind.CallExpr, line: t.line, column: t.column,
+					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonString" },
+					arguments: [{ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: variantKey }],
+				};
+			}
+
+			// Build key/value arrays for jsonObject — disc first, then payload.
+			const vKeyNodes: Node[] = [{ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: discField }];
+			const vValueNodes: Node[] = [discValueNode];
+			let fi = 0;
+			while (fi < v.typExprFieldNames.length) {
+				const fname: string = v.typExprFieldNames[fi];
+				const ft: Node = v.typExprFieldTypes[fi];
+				if (fname !== discField) {
+					vKeyNodes.push({ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: fname });
+					const memberExpr: Node = {
+						kind: NodeKind.MemberExpr, line: t.line, column: t.column,
+						object: t, property: fname, nodeType: ft, isOptional: false,
+					};
+					vValueNodes.push({
+						kind: NodeKind.CallExpr, line: t.line, column: t.column,
+						callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonValueOf" },
+						arguments: [memberExpr],
+					});
+				}
+				fi = fi + 1;
+			}
+
+			// Build match case in 1 expression — avoid `let pattern` capture-by-ref bug
+			// (MS macro VM appears to share let-var refs across loop iterations,
+			// causing all matchCases to see the LAST iteration's pattern).
+			matchCases.push({
+				kind: NodeKind.MatchCase, line: t.line, column: t.column,
+				casePatterns: [pattern],
+				caseGuard: null as unknown as Node,
+				caseBody: {
+					kind: NodeKind.CallExpr, line: t.line, column: t.column,
+					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonObject" },
+					arguments: [
+						{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vKeyNodes },
+						{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vValueNodes },
+					],
+				},
+			});
+		}
+
+		return {
+			kind: NodeKind.MatchExpr, line: t.line, column: t.column,
+			matchDisc: {
+				kind: NodeKind.MemberExpr, line: t.line, column: t.column,
+				object: t, property: discField, isOptional: false,
+			},
+			matchCases,
+		};
+	}
+
 	// Non-struct (atomic) types — emit a direct builder call on `t`.
 	if (tt.kind !== NodeKind.TypeObject) {
+		// Literal-typed field (TS-style DU disc, e.g. `kind: "circle"`).
+		// Bridge emits StringLiteral/BooleanLiteral nodes for these — the
+		// runtime field value is just a regular string/bool, so route to
+		// jsonString/jsonBool. Without this branch they fell through to the
+		// Identifier path below, got tn="circle", missed the atomic match,
+		// and landed in jsonInt with a bad msString-as-int64 cast.
+		const literalBuilder: string = match (tt.kind) {
+			NodeKind.StringLiteral => "jsonString",
+			NodeKind.BooleanLiteral => "jsonBool",
+			_ => "",
+		};
+		if (literalBuilder !== "") {
+			return {
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: literalBuilder },
+				arguments: [t],
+			};
+		}
 		// V1 supports atomic types and arrays-of-atomic. Unions / Functions
 		// land as TypeUnion / TypeFunction kinds (not Identifier) → reject.
 		if (tt.kind !== NodeKind.Identifier) {

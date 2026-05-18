@@ -132,6 +132,16 @@ msString msStringNewLen(int64_t len);
 /* Free if not literal */
 void msStringDestroy(msString s);
 
+/* Force-free a cache-owned msString that has MS_STRLIT_FLAG set.
+ * Caches (e.g. static response cache in net/socket.h) flag their entries as
+ * literal so MS callers don't refcount-touch them, but the cache still owns
+ * the heap allocation and must free it on eviction. msStringDestroy refuses
+ * to free literals (correct for actual literals), so callers needing the
+ * eviction semantic use this helper. Not for general use. */
+static inline void msStringDestroyForce(msString s) {
+	if (s.p != NULL) free(s.p);
+}
+
 /* Deep copy assignment */
 void msStringAssign(msString* a, msString b);
 

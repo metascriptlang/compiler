@@ -156,7 +156,7 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 	if (!isContinuation) advanceChar(s); // skip ` (} already consumed by caller)
 
 	// Detect operator identifiers: `==`, `[]`, `[]=`, `+`, `<>`, etc.
-	// Reference compiler: lexer.zig:422 scanBacktick — peek ahead for stropped identifiers
+	// Peek ahead for stropped identifiers.
 	if (!isContinuation) {
 		let tempPos = s.pos;
 		let hasInterpolation = false;
@@ -180,7 +180,6 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 					ci = ci + 1;
 				}
 				if (isOperatorName(content)) {
-					// Skip content and closing backtick
 					s.pos = tempPos;
 					s.column = s.column + contentLen;
 					advanceChar(s); // closing backtick
@@ -214,7 +213,6 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 }
 
 // Check if a backtick-quoted string is an operator name.
-// Reference compiler: parser.zig:7162 isOperatorName
 function isOperatorChar(ch: number): boolean {
 	return ch === "|".code || ch === ">".code || ch === "<".code || ch === "=".code
 		|| ch === "+".code || ch === "-".code || ch === "*".code || ch === "/".code

@@ -18,6 +18,7 @@ import { join } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { globalImports } from "./prelude";
+import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
 import { isAssignable } from "./compat";
 import { setConditionalAssignFn } from "./types";
 setConditionalAssignFn(isAssignable);
@@ -294,13 +295,27 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	}
 	// Ref parity: varDecl — record declaration block for nfFirstWrite logic
 	varDecl(ctx.initTracker, d.declName);
-	// Ref parity: initVar if initializer present (sempass2 lines 1317-1318)
+	// Ref parity: initVar if initializer present
 	// Any initializer counts — even `null as unknown as T` (initialized, just null-valued)
 	if (d.initializer !== null) {
 		node.flags = node.flags | NodeFlag.FirstWrite;
 		markInitialized(ctx.initTracker, d.declName);
 	}
 	// `let x;` with no initializer → NOT marked → will warn on use
+}
+
+// Lightweight walk of a generic function/method body that calls markUsed for
+// each resolvable Identifier. Full type-checking is deferred to instantiation
+// (parity with Nim's semProcAux), but the unused-import detector would
+// otherwise flag any symbol referenced only inside generic bodies as unused.
+function markBodyIdentifiersUsed(ctx: CheckerContext, body: Node): void {
+	if (body === null) return;
+	if (body.kind === NodeKind.Identifier) {
+		const d = body.data as IdentifierData;
+		const sym = lookupSymbol(ctx.table, d.name);
+		if (sym !== null) markUsed(sym);
+	}
+	forEachChild(body, (child: Node): void => { markBodyIdentifiersUsed(ctx, child); });
 }
 
 function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
@@ -356,6 +371,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	// bad instantiations (push__unknown) from unresolved GenericParam types.
 	const isGeneric = isGenericFn(d.fnFlags);
 	if (isGeneric) {
+		markBodyIdentifiersUsed(ctx, d.fnBody);
 		sym.state = SymbolState.Checked;
 		return;
 	}
@@ -534,9 +550,12 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			const methodSym = node.resolvedSym;
 			const sym = methodSym !== null ? methodSym : makeSymbol(d.methodName, SymbolKind.Method, unknownType(), false);
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
-			// Skip body check for extern methods (no body to check)
-			if (d.methodFlags !== "extern") {
+			// Skip body check for extern (no body) and generic methods (body re-checked
+			// per instantiation, like top-level generic fns at checkFunctionDecl:358).
+			if (d.methodFlags !== "extern" && !isGenericFn(d.methodFlags)) {
 				checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations);
+			} else if (isGenericFn(d.methodFlags)) {
+				markBodyIdentifiersUsed(ctx, d.methodBody);
 			}
 		},
 		NodeKind.ConstructorDecl => {
@@ -686,7 +705,6 @@ function checkIfStmt(ctx: CheckerContext, node: Node): void {
 	const branchBreaks: BreakState[] = [];
 	const branchConsumes: string[][] = [];
 
-	// Track consequent
 	checkStmt(ctx, d.consequent);
 	branchInits.push(collectNewInits(ctx.initTracker, oldState));
 	branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
@@ -717,7 +735,7 @@ function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	// PARALOCK Phase 1: snapshot affine state + outer affine Promise keys before the body
 	const affineSnap = saveConsumeState(ctx.affineTracker);
 	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
-	// Ref parity (sempass2 lines 1346-1360): while(true) propagates, others conservative
+	// Ref parity: while(true) propagates, others conservative
 	if (isAlwaysTrue(d.whileCondition)) {
 		const saved = enterLoopScope(ctx);
 		checkStmt(ctx, d.whileBody);
@@ -1009,7 +1027,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 
 function checkTryCatch(ctx: CheckerContext, node: Node): void {
 	const d = node.data as TryCatchStmtData;
-	// Ref parity: trackTryStmt (sempass2 lines 524-597) — merge try + except
+	// Ref parity: trackTryStmt — merge try + except
 	const oldState = saveInitState(ctx.initTracker);
 	const oldAffine = saveConsumeState(ctx.affineTracker);
 	const oldInTry = ctx.inTryExpr;
@@ -1052,7 +1070,7 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as SwitchStmtData;
 	checkExpr(ctx, d.switchDisc, null);
-	// Ref parity: trackCase (sempass2 lines 809-845)
+	// Ref parity: trackCase
 	const oldState = saveInitState(ctx.initTracker);
 	const oldAffine = saveConsumeState(ctx.affineTracker);
 	const branchInits: string[][] = [];
@@ -1211,7 +1229,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	const savedMatchDepth = ctx.matchExprDepth;
 	ctx.currentFunction = sym;
 	ctx.matchExprDepth = 0;
-	// Ref parity: trackProc (sempass2 lines 1662-1698) — scope + param init
+	// Ref parity: trackProc — scope + param init
 	const savedBlock = ctx.initTracker.currentBlock;
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
 	const initSnap = saveInitState(ctx.initTracker);
@@ -1300,6 +1318,16 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 
 // Run all 3 passes on a program node with an existing context
 export function runThreePasses(ctx: CheckerContext, program: Node): void {
+	// Phase 8b: expose this module's outer state to the @comptime evaluator
+	// so eager-fold (fired inside checkProgramBody) can resolve names and
+	// inject cross-module decls into the synthetic Program. Orchestrator
+	// Phase 2 enters here directly (not via checkProgramWithRegistry), so
+	// this is the entry point that production compile actually hits when
+	// processing module @comptime blocks.
+	setOuterProgramForComptime(program);
+	if (ctx.exportRegistry !== null && ctx.moduleGraph !== null && ctx.currentModule !== null && ctx.preludeCtx !== null) {
+		setOuterCheckContext(ctx.exportRegistry, ctx.moduleGraph, ctx.currentModule, ctx.preludeCtx);
+	}
 	collectTopLevel(ctx, program);
 	resolveDeclarations(ctx, program);
 	bindFlowGraph(program);  // Phase 1: build the CFG (unused by checker yet — Phase 2 will query)
@@ -1755,7 +1783,6 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 			}
 		}
 
-		// Register sub-module's exported symbols in ExportRegistry
 		const subExports: ExportedSymInfo[] = [];
 		for (const sym of subScope.symbols.values()) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
@@ -1902,10 +1929,17 @@ export function checkProgram(program: Node): CheckerContext {
 	const root = resolveRuntimeDir();
 	const stdPath = root !== "" ? join(root, "std") : "";
 	const preludeCtx = buildPreludeContext(stdPath);
+	// Phase 8a POC: expose outer Program to @comptime evaluator so it can
+	// see module-level FunctionDecls/ImportDecls beyond the @comptime body.
+	setOuterProgramForComptime(program);
 	return checkProgramCore(program, preludeCtx, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, null as unknown as CancelCtx, 0);
 }
 
 export function checkProgramWithRegistry(program: Node, registry: ExportRegistry, graph: ModuleGraph, mod: Module, preludeCtx: CheckerContext): CheckerContext {
+	setOuterProgramForComptime(program);
+	// Spike 2: expose full multi-module context so @comptime evaluator's inner
+	// check can resolve cross-module imports via the same registry/graph.
+	setOuterCheckContext(registry, graph, mod, preludeCtx);
 	return checkProgramCore(program, preludeCtx, registry, graph, mod, null as unknown as CancelCtx, 0);
 }
 

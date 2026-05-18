@@ -81,15 +81,11 @@ export enum RaiserOpcode {
 	ShiftLeft,        // ABC: R[A] = R[B] << R[C]
 	ShiftRight,       // ABC: R[A] = R[B] >> R[C]
 
-	// Host builtins (1)
-	Builtin,          // ABC: R[A] = builtin[B](args from R[A+1]..R[A+C])
-
 	// Host call by name (1)
-	// Generic native-call opcode. Replaces hardcoded numeric Builtin IDs:
-	// the name is looked up in the host registry at dispatch time, and
-	// arguments are marshalled per the registered signature tag.
+	// Generic native-call opcode. Name is looked up in the host registry at
+	// dispatch time; arguments are marshalled per the registered signature.
 	// New stdlib externs require zero VM/codegen edits — they self-register
-	// through the auto-generated host table (see runtime/raiser/hostTable.c).
+	// through the host table (see src/compiler/meta/hostTable.ms).
 	CallHost,         // ABC: R[A] = hostFn[constants[B].strVal](R[A+1]..R[A+C])
 }
 
@@ -218,10 +214,6 @@ test "CallHost ABC round-trip" {
 	assert inst.a === 3;
 	assert inst.b === 7;
 	assert inst.c === 2;
-}
-
-test "CallHost distinct from Builtin" {
-	assert RaiserOpcode.CallHost !== RaiserOpcode.Builtin;
 }
 
 test "CallHost zero args" {

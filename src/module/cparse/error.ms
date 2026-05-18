@@ -1,6 +1,6 @@
 // cparse — Diagnostic collection
-// Unlike chibicc's error() → exit(1), we collect diagnostics and continue
-// parsing. A single bad declaration is skipped, not fatal.
+// Collects diagnostics and continues parsing. A single bad declaration is
+// skipped, not fatal.
 
 export enum DiagSeverity {
 	Warning,

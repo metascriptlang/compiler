@@ -15,7 +15,6 @@ export function lex(source: string): Result<Token[], string> {
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 
-		// Skip whitespace and newlines
 		if (isWhitespace(ch) || isNewline(ch)) {
 			advanceChar(s);
 			continue;
@@ -60,7 +59,6 @@ export function lex(source: string): Result<Token[], string> {
 		return Result.err(`Unknown character at line ${s.line}, column ${s.column}`);
 	}
 
-	// Add EOF token
 	addToken(s, TokenKind.Eof, "", s.line, s.column);
 	return Result.ok(move s.tokens);
 }
@@ -188,7 +186,6 @@ test "template strings" {
 
 test "operator identifiers" {
 	// Backtick-quoted operator names → OperatorIdent token
-	// Reference compiler: lexer.zig:422 scanBacktick
 	assert lexFirst("`==`") === TokenKind.OperatorIdent;
 	assert lexFirstVal("`==`") === "==";
 	assert lexFirst("`!=`") === TokenKind.OperatorIdent;

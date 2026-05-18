@@ -90,7 +90,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerTryExpr(result, ctx); }
 	if (jsBackend) { result = lowerResultConstructors(result); }
 	// resultFieldCheck wraps .value/.error in BlockStmt — invalid in C expression position.
-	// Zig reference uses StmtExpr node (GNU statement expressions). Skip for C until StmtExpr added.
+	// Skip for C until a StmtExpr-equivalent node (GNU statement expressions) is added.
 	if (jsBackend) { result = lowerResultFieldCheck(result, ctx); }
 	result = lowerMatch(result, ctx);
 	if (!jsBackend) { result = lowerTailCall(result, ctx); }

@@ -1471,8 +1471,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// nilable reinterpret, fallback cast). Common after monomorphization and
 		// whenever the checker propagates the target type into the inner
 		// expression (e.g., ObjectLiteral under `{...} as Union` already emits
-		// the outer Union via its own self-wrap path — see ~line 1574).
-		// Reference parity: Nim's ccgexprs.nim:genConv does the same via
+		// the outer Union via its own self-wrap path).
+		// Reference parity: the reference's genConv does the same via
 		// `ignoreConv(e) → expr(p, e[1], d)` before calling genSomeCast.
 		const srcType = (d.asExpr !== null) ? d.asExpr.nodeType : null;
 		if (srcType !== null && node.nodeType !== null) {

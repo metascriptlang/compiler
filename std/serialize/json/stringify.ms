@@ -19,7 +19,7 @@ export function stringify(value: JsonValue, color: boolean = false): string {
 			return color ? "\x1b[36m" + s + "\x1b[0m" : s;
 		},
 		JsonKind.Number => {
-			const s = value.numVal.toString();
+			const s = jsonNumberStr(value.numVal);
 			return color ? "\x1b[33m" + s + "\x1b[0m" : s;
 		},
 		JsonKind.String => {
@@ -68,7 +68,7 @@ function prettyImpl(value: JsonValue, indent: number, depth: number): string {
 	return match (value.kind) {
 		JsonKind.Null => "null",
 		JsonKind.Bool => { return value.boolVal ? "true" : "false"; },
-		JsonKind.Number => value.numVal.toString(),
+		JsonKind.Number => jsonNumberStr(value.numVal),
 		JsonKind.Int => value.intVal.toString(),
 		JsonKind.String => escapeString(value.strVal),
 		JsonKind.Array => {
@@ -119,6 +119,14 @@ function hexDigit(n: number): string {
 	return fromCodePoint("a".code + n - 10);
 }
 
+// RFC 8259 §6 — JSON numbers must be finite. NaN / ±Infinity have no JSON
+// representation; emit `null` (Python json default-strict convention).
+// Finite check: `x - x === 0` iff x is finite (NaN−NaN = NaN, Inf−Inf = NaN).
+function jsonNumberStr(v: number): string {
+	if (v - v !== 0) return "null";
+	return v.toString();
+}
+
 function escapeString(s: string): string {
 	let result = "\"";
 	let i = 0;
@@ -165,6 +173,28 @@ test "stringify bool" {
 
 test "stringify number" {
 	assert stringify(jsonNumber(42)) === "42";
+}
+
+test "stringify NaN → null (RFC 8259 §6 — JSON has no NaN representation)" {
+	// 0.0/0.0 produces NaN — fallback to "null" per Python json default-strict
+	const nan: number = 0.0 / 0.0;
+	assert stringify(jsonNumber(nan)) === "null";
+}
+
+test "stringify +Infinity → null (RFC 8259 §6 — JSON has no Infinity)" {
+	const posInf: number = 1.0 / 0.0;
+	assert stringify(jsonNumber(posInf)) === "null";
+}
+
+test "stringify -Infinity → null" {
+	const negInf: number = -1.0 / 0.0;
+	assert stringify(jsonNumber(negInf)) === "null";
+}
+
+test "stringify finite zero → 0 (not null)" {
+	// Boundary — 0 should NOT trip the non-finite check
+	assert stringify(jsonNumber(0.0)) === "0";
+	assert stringify(jsonNumber(-0.0)) === "0";  // ±0 collapse
 }
 
 test "stringify string" {

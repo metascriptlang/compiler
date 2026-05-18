@@ -276,7 +276,7 @@ function getCompilerHash(ccOption: number): string {
 	const name = getCompilerName(ccOption, "");
 	// New exec() captures stdout; no more tmp-file shell redirect needed.
 	const r = exec(`${name} --version 2>&1`);
-	const version = r.ok ? r.value : (r.error.stdout !== "" ? r.error.stdout : r.error.stderr);
+	const version = r.ok ? r.value : (r.error.output !== "" ? r.error.output : r.error.errorOutput);
 	if (version.length > 0) {
 		_compilerHash = hashContent(version);
 	} else {
@@ -457,13 +457,13 @@ export function writeCCodeCache(modPath: string, cCode: string, compileCmd: stri
 	writeCompileFingerprint(modPath, cCode, compileCmd);
 }
 
-// Bug 6 fix: write only the .c source. Always safe — .c is debug-friendly
+// Write only the .c source. Always safe — .c is debug-friendly
 // (lets user inspect generated C even when zig cc fails).
 export function writeCSource(modPath: string, cCode: string): void {
 	writeFile(stableCFile(modPath), cCode);
 }
 
-// Bug 6 fix: write the compile-success fingerprint (.cfp). Call ONLY after
+// Write the compile-success fingerprint (.cfp). Call ONLY after
 // `compileCFile` returns 0. Cache lookup uses this to skip recompilation —
 // writing it on failure causes future runs to false-claim cache hit and try
 // to link a partial/empty .o.
@@ -472,9 +472,9 @@ export function writeCompileFingerprint(modPath: string, cCode: string, compileC
 	writeFile(stableOFile(modPath) + ".cfp", fp);
 }
 
-// Bug 6 fix: remove cache artifacts after a failed compile so the next run
+// Remove cache artifacts after a failed compile so the next run
 // triggers a clean retry. Removes .o (potentially partial/empty from failed
-// zig cc) + .cfp (defensive — should never be written on failure path post-fix,
+// zig cc) + .cfp (defensive — should never be written on the failure path,
 // but harmless if accidentally present from older runs).
 export function invalidateCompileCache(modPath: string): void {
 	tryRemoveFile(stableOFile(modPath));

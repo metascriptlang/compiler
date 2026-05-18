@@ -1,8 +1,5 @@
 // Module Graph — core data structures for compilation
 //
-// Reference implementation equivalent: the module graph structures.
-// Zig reference: module/loader.zig (Module struct, ModuleState, dependency graph)
-//
 // Arrays passed by pointer — bare T[] types (wrappers removed).
 //
 // IMPORTANT: No imports from ast/ or checker/ — DRC lifecycle mangling bug generates

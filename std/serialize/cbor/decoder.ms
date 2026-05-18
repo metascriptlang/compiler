@@ -91,6 +91,21 @@ function readByte(r: CborReader): number {
 	return b & 0xff;
 }
 
+// Peek next byte without advancing. Used by indefinite-length decoders to
+// detect the 0xff break code before deciding to read another chunk/item.
+function peekByte(r: CborReader): number {
+	if (r.pos >= r.buf.length) return -1;
+	return r.buf[r.pos] & 0xff;
+}
+
+// Consume next byte iff it is the break code (0xff = major 7 + info 31).
+// Returns true on consume, false if next byte is something else (caller
+// continues reading another chunk/item).
+function tryConsumeBreak(r: CborReader): boolean {
+	if (peekByte(r) === 0xff) { r.pos = r.pos + 1; return true; }
+	return false;
+}
+
 // Read `byteCount` bytes BE, return as number. Caller ensures byteCount ≤ 6
 // to keep result < 2^48 (well within JS safe integer). For 8-byte case use
 // readInt64BE. Sets error if not enough bytes.
@@ -172,9 +187,10 @@ export function readHead(r: CborReader): CborHead {
 		return { major, arg: a, info };
 	}
 	if (info === 31) {
-		// Indefinite-length marker — V1 doesn't support
-		setError(r, "indefinite-length encoding not supported in V1");
-		return { major: 0, arg: 0 as int64, info };
+		// Indefinite-length marker (RFC 8949 §3.2). Valid for major 2/3/4/5
+		// (content terminated by break code) and major 7 (the break code
+		// itself). Invalid for 0/1/6 — caller verifies after dispatch.
+		return { major, arg: 0 as int64, info };
 	}
 	// 28..30 reserved per RFC 8949 §3
 	setError(r, "reserved additional-info value (28..30) in head byte");
@@ -335,11 +351,126 @@ function decodeMapLen(r: CborReader, pairCount: number): CborValue {
 	return cborMap(keys, values);
 }
 
+// --- Indefinite-length decoders (RFC 8949 §3.2) ---
+//
+// Major 2/3 indefinite: sequence of finite-length chunks of the SAME major
+// type, terminated by break (0xff). Nesting prohibited (no indefinite chunk
+// inside indefinite parent of the same type) — caller enforces by requiring
+// info < 31 on each chunk's head.
+//
+// Major 4/5 indefinite: sequence of items (4) or key-value pairs (5),
+// terminated by break. Items may themselves be indefinite — no length cap
+// pre-check possible (use depth limit + per-item enterDepth on nested).
+
+// Append finite-length chunks of major-type `expectedMajor` until break.
+// Chunks must NOT themselves be indefinite (RFC §3.2.3 prohibits nesting).
+// Returns the concatenated byte buffer.
+function readIndefiniteByteChunks(r: CborReader, expectedMajor: number, label: string): number[] {
+	const out: number[] = [];
+	while (true) {
+		if (r.error !== "") return out;
+		if (tryConsumeBreak(r)) return out;
+		const head = readHead(r);
+		if (r.error !== "") return out;
+		if (head.major !== expectedMajor) {
+			setError(r, `indefinite-length ${label}: chunk has wrong major type`);
+			return out;
+		}
+		if (head.info === 31) {
+			setError(r, `indefinite-length ${label}: nested indefinite chunk prohibited (RFC 8949 §3.2.3)`);
+			return out;
+		}
+		const length = head.arg as number;
+		if (remaining(r) < length) {
+			setError(r, `indefinite-length ${label}: truncated chunk payload`);
+			return out;
+		}
+		// DoS cap — match array/map indef ceiling (MAX_COLLECTION_SIZE). A
+		// malicious stream of millions of small chunks otherwise grows `out`
+		// unbounded.
+		if (out.length + length > MAX_COLLECTION_SIZE) {
+			setError(r, `indefinite-length ${label}: total bytes exceeds sanity cap`);
+			return out;
+		}
+		for (let i = 0; i < length; i = i + 1) {
+			out.push(r.buf[r.pos + i] & 0xff);
+		}
+		r.pos = r.pos + length;
+	}
+	return out;  // unreachable
+}
+
+function decodeBytesIndef(r: CborReader): CborValue {
+	if (!enterDepth(r)) return cborNull();
+	const bytes = readIndefiniteByteChunks(r, 2, "byte string");
+	exitDepth(r);
+	if (r.error !== "") return cborNull();
+	const buf = bytesToBuffer(bytes, 0, bytes.length);
+	return cborBytes(buf);
+}
+
+function decodeTextIndef(r: CborReader): CborValue {
+	if (!enterDepth(r)) return cborNull();
+	const bytes = readIndefiniteByteChunks(r, 3, "text string");
+	exitDepth(r);
+	if (r.error !== "") return cborNull();
+	return cborText(utf8FromBytes(bytes, 0, bytes.length));
+}
+
+function decodeArrayIndef(r: CborReader): CborValue {
+	if (!enterDepth(r)) return cborNull();
+	const items: CborValue[] = [];
+	while (true) {
+		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		if (tryConsumeBreak(r)) break;
+		if (items.length >= MAX_COLLECTION_SIZE) {
+			setError(r, "indefinite-length array exceeds sanity cap");
+			exitDepth(r);
+			return cborNull();
+		}
+		const v = decodeValue(r);
+		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		items.push(v);
+	}
+	exitDepth(r);
+	return cborArray(items);
+}
+
+function decodeMapIndef(r: CborReader): CborValue {
+	if (!enterDepth(r)) return cborNull();
+	const keys: CborValue[] = [];
+	const values: CborValue[] = [];
+	while (true) {
+		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		if (tryConsumeBreak(r)) break;
+		if (keys.length >= MAX_COLLECTION_SIZE) {
+			setError(r, "indefinite-length map exceeds sanity cap");
+			exitDepth(r);
+			return cborNull();
+		}
+		const k = decodeValue(r);
+		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		// Break code after key but before value is malformed per RFC §3.2.2.
+		if (peekByte(r) === 0xff) {
+			setError(r, "indefinite-length map: break code between key and value");
+			exitDepth(r);
+			return cborNull();
+		}
+		const v = decodeValue(r);
+		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		keys.push(k);
+		values.push(v);
+	}
+	exitDepth(r);
+	return cborMap(keys, values);
+}
+
 // Major 7 special values: dispatch by additional_info.
 //   20 = false, 21 = true, 22 = null, 23 = undefined
 //   24 = 1-byte simple value follows
 //   25 = half float, 26 = single float, 27 = double float
-//   31 = break (only valid inside indefinite — V1 unsupported)
+// info=31 (break code) is intercepted in decodeValue before this dispatch
+// fires — see indefinite-length branch.
 function decodeSpecial(r: CborReader, info: number, arg: int64): CborValue {
 	return match (info) {
 		20 => cborBool(false),
@@ -347,10 +478,9 @@ function decodeSpecial(r: CborReader, info: number, arg: int64): CborValue {
 		22 => cborNull(),
 		23 => cborUndefined(),
 		24 => cborSimple(arg as number),
-		25 => decodeHalfFloat(r),
+		25 => decodeHalfFloat(arg),
 		26 => decodeSingleFloat(arg),
 		27 => decodeDoubleFloat(r),
-		31 => decodeError(r, "break code outside indefinite-length context"),
 		_ when (info < 24) => cborSimple(info),  // inline simple value 0..19
 		_ => decodeError(r, "invalid major-7 additional-info"),
 	};
@@ -364,11 +494,62 @@ function decodeError(r: CborReader, msg: string): CborValue {
 	return cborNull();
 }
 
-// Half-precision decode — V1 unsupported (RFC 8949 §3.4 makes it optional).
-// Implementing needs manual IEEE half→double conversion with subnormal/Inf/
-// NaN special cases.
-function decodeHalfFloat(r: CborReader): CborValue {
-	return decodeError(r, "half-precision float decoding not supported in V1");
+// Compute 2^exp where -24 ≤ exp ≤ 15 (half-precision normal/subnormal range).
+// MS has no Math.pow; small loop is sufficient since exp is bounded.
+function pow2(exp: int32): number {
+	let r: number = 1.0;
+	if (exp >= 0) {
+		for (let i = 0; i < exp; i = i + 1) {
+			r = r * 2.0;
+		}
+	} else {
+		const n: int32 = -exp;
+		for (let i = 0; i < n; i = i + 1) {
+			r = r / 2.0;
+		}
+	}
+	return r;
+}
+
+// Bit-cast an explicit IEEE 754 double from its two MSBs via Buffer round-trip.
+// Used to produce ±Infinity (0x7FF0…/0xFFF0…) and quiet NaN (0x7FF8…) without
+// relying on `0.0/0.0`-style arithmetic (MS runtime may catch divide-by-zero).
+function bitsToDouble(b0: number, b1: number): number {
+	const buf: string = msBufferAlloc(8);
+	msBufferSet(buf, 0, b0);
+	msBufferSet(buf, 1, b1);
+	// bytes 2-7 default to zero — produces the exact IEEE 754 bit pattern
+	return msBufferReadDoubleBE(buf, 0);
+}
+
+// Half-precision (binary16) → double per IEEE 754 §3.4 + RFC 8949 §3.4.
+// `arg` holds the 16-bit raw value (readHead consumed 2 bytes BE into arg
+// for info=25). Layout:
+//   bit 15:     sign
+//   bits 10-14: exp (5-bit, biased by 15)
+//   bits 0-9:   mantissa (10-bit; implicit leading 1 for normal values)
+// Cases:
+//   exp=0, mant=0:   ±0 (both collapse to 0.0)
+//   exp=0, mant>0:   subnormal: sign × 2^-14 × (mant/1024) = sign × mant / 2^24
+//   exp=31, mant=0:  ±Infinity (bit-cast)
+//   exp=31, mant>0:  NaN (quiet, bit-cast)
+//   else (normal):   sign × 2^(exp-15) × (1 + mant/1024)
+function decodeHalfFloat(arg: int64): CborValue {
+	const v: int32 = arg as int32;
+	const sign: int32 = (v >> 15) & 0x1;
+	const exp: int32 = (v >> 10) & 0x1f;
+	const mant: int32 = v & 0x3ff;
+	const signMul: number = sign === 0 ? 1.0 : -1.0;
+
+	if (exp === 0) {
+		if (mant === 0) return cborFloat(0.0);
+		return cborFloat(signMul * (mant as number) / 16777216.0);
+	}
+	if (exp === 31) {
+		if (mant === 0) return cborFloat(bitsToDouble(sign === 0 ? 0x7F : 0xFF, 0xF0));
+		return cborFloat(bitsToDouble(0x7F, 0xF8));
+	}
+	return cborFloat(signMul * pow2(exp - 15) * (1.0 + (mant as number) / 1024.0));
 }
 
 // Single-precision (4 bytes). arg holds the 32-bit IEEE bit pattern in its
@@ -403,6 +584,20 @@ export function decodeValue(r: CborReader): CborValue {
 	if (r.error !== "") return cborNull();
 	const head = readHead(r);
 	if (r.error !== "") return cborNull();
+	// Indefinite-length (info=31) — RFC 8949 §3.2 allows only for major
+	// 2/3/4/5 (content + break) and major 7 (the break code itself).
+	// At top level (and inside arrays/maps), break code is illegal —
+	// indefinite-collection decoders consume their own terminator.
+	if (head.info === 31) {
+		return match (head.major) {
+			2 => decodeBytesIndef(r),
+			3 => decodeTextIndef(r),
+			4 => decodeArrayIndef(r),
+			5 => decodeMapIndef(r),
+			7 => decodeError(r, "break code outside indefinite-length context"),
+			_ => decodeError(r, `indefinite-length not allowed for major type ${head.major}`),
+		};
+	}
 	return match (head.major) {
 		0 => cborInt(head.arg),
 		1 => cborInt(((-1 as int64) - head.arg) as int64),  // -1 - arg per RFC 8949 §3.1
@@ -782,8 +977,84 @@ test "decode trailing bytes → error" {
 	assert !r.ok;
 }
 
-test "decode indefinite-length array (0x9f) → error" {
+test "decode indefinite-length empty array (0x9f 0xff)" {
 	const r = decodeAll([0x9f, 0xff]);
+	assert r.ok;
+	assert r.value.kind === CborKind.Array;
+	if (r.value.kind === CborKind.Array) assert r.value.items.length === 0;
+}
+
+test "decode indefinite-length array [1, 2, 3] (0x9f 0x01 0x02 0x03 0xff)" {
+	const r = decodeAll([0x9f, 0x01, 0x02, 0x03, 0xff]);
+	assert r.ok;
+	assert r.value.kind === CborKind.Array;
+	if (r.value.kind === CborKind.Array) {
+		assert r.value.items.length === 3;
+		const i0 = r.value.items[0];
+		if (i0.kind === CborKind.Int) assert i0.intVal === (1 as int64);
+	}
+}
+
+test "decode indefinite-length empty map (0xbf 0xff)" {
+	const r = decodeAll([0xbf, 0xff]);
+	assert r.ok;
+	assert r.value.kind === CborKind.Map;
+	if (r.value.kind === CborKind.Map) assert r.value.keys.length === 0;
+}
+
+test "decode indefinite-length map {a: 1} (0xbf 0x61 'a' 0x01 0xff)" {
+	const r = decodeAll([0xbf, 0x61, 0x61, 0x01, 0xff]);
+	assert r.ok;
+	if (!r.ok) return;
+	const m = r.value;
+	assert m.kind === CborKind.Map;
+	if (m.kind !== CborKind.Map) return;
+	assert m.keys.length === 1;
+	const k0 = m.keys[0];
+	assert k0.kind === CborKind.Text;
+	if (k0.kind === CborKind.Text) assert k0.textVal === "a";
+	const v0 = m.values[0];
+	assert v0.kind === CborKind.Int;
+	if (v0.kind === CborKind.Int) assert v0.intVal === (1 as int64);
+}
+
+test "decode indefinite-length text 'foobar' (0x7f 'foo' 'bar' 0xff)" {
+	// Two finite-length text chunks concat to "foobar"
+	const r = decodeAll([0x7f, 0x63, 0x66, 0x6f, 0x6f, 0x63, 0x62, 0x61, 0x72, 0xff]);
+	assert r.ok;
+	if (!r.ok) return;
+	const t = r.value;
+	assert t.kind === CborKind.Text;
+	if (t.kind === CborKind.Text) assert t.textVal === "foobar";
+}
+
+test "decode indefinite-length array — break after key in map → error" {
+	// 0xbf opens indef map, 0x61 'a' is key, then break (no value) → malformed
+	const r = decodeAll([0xbf, 0x61, 0x61, 0xff]);
+	assert !r.ok;
+}
+
+test "decode indefinite-length text — nested indef chunk → error (RFC §3.2.3)" {
+	// 0x7f opens, 0x7f attempts nested indef → must reject
+	const r = decodeAll([0x7f, 0x7f, 0xff, 0xff]);
+	assert !r.ok;
+}
+
+test "decode indefinite-length text — wrong major chunk → error" {
+	// 0x7f opens indef text, but inner chunk is byte string (0x41) not text
+	const r = decodeAll([0x7f, 0x41, 0x61, 0xff]);
+	assert !r.ok;
+}
+
+test "decode indefinite-length integer (0x1f) → error" {
+	// Major 0 + info 31 is not allowed per RFC 8949 §3.2
+	const r = decodeAll([0x1f]);
+	assert !r.ok;
+}
+
+test "decode break code at top level (0xff) → error" {
+	// 0xff = major 7 info 31 = break, illegal outside indefinite container
+	const r = decodeAll([0xff]);
 	assert !r.ok;
 }
 
@@ -792,7 +1063,7 @@ test "decode reserved info 28 → error" {
 	assert !r.ok;
 }
 
-// === Safety limits (audit fix #1, #2) ===
+// === Safety limits ===
 
 test "decode oversized array length → error (DoS guard)" {
 	// 0x9b = array, info 27 (8-byte length)
@@ -843,11 +1114,16 @@ test "decode tag chain just under depth limit succeeds" {
 	assert r.value.kind === CborKind.Tag;
 }
 
-test "decode half-precision float (0xf9...) → error V1 (deferred)" {
-	// 0xf9 = major 7 + info 25 (half float). V1 doesn't support half;
-	// the bytes after are `0x3c 0x00` = 1.0 in half-precision.
+test "decode half-precision float marker (parses without error)" {
+	// 0xf9 = major 7 + info 25 (half float). NATIVE-ONLY path — Bun-test
+	// stubs msBufferAlloc/msBufferReadDoubleBE return 0, so numVal value
+	// can't be checked inline (same gap as single/double float decode at
+	// decoder.ms:50). Coverage via run-ms probe: examples/_probe_cbor_half.ms.
+	// Inline test verifies decoder accepts the byte sequence without
+	// erroring — value correctness verified at native run.
 	const r = decodeAll([0xf9, 0x3c, 0x00]);
-	assert !r.ok;
+	assert r.ok;
+	assert r.value.kind === CborKind.Float;
 }
 
 // === Round-trip via encoder integration ===

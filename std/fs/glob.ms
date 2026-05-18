@@ -72,8 +72,8 @@ export function compileGlob(pattern: string): Result<Glob, string> {
 	}
 
 	// Collapse relative-path segments uniformly. Matches Bun's GlobWalker
-	// semantics (src/glob/GlobWalker.zig:1434-1443 — .Dot / .DotBack syntax
-	// hints): "." is a no-op segment (skip without consuming path input);
+	// semantics (.Dot / .DotBack syntax hints): "." is a no-op segment (skip
+	// without consuming path input);
 	// ".." is rejected because publish globs must not escape the project
 	// root. A leading "." additionally anchors the pattern at the root,
 	// the standard Unix spelling of "foo in current directory".

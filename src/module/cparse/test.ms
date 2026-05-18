@@ -20,7 +20,7 @@ test "end-to-end skeleton runs without crashing" {
 	assert out.diagnostics.length === 0;
 }
 
-// TODO(task #21): acceptance tests that exercise the full pipeline against
+// TODO: acceptance tests that exercise the full pipeline against
 // fixture headers once tokenize/preprocess/parse land.
 //
 // Planned tests:

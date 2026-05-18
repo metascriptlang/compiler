@@ -4,7 +4,7 @@
 import { Node, NodeKind } from "../../../ast/node";
 import { FormatOptions } from "../options";
 import { Doc, docNil, docText, docGroup, docHardLine, docLineSuffix } from "../doc";
-import { registerNodePrinter, callPrintNode } from "./callbacks";
+import { registerNodePrinter } from "./callbacks";
 
 import {
 	printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
