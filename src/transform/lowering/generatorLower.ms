@@ -32,7 +32,7 @@ import { TransformContext, NameSet, createNameSet, nameSetContains } from "../co
 import {
 	makeIdent, makeIdentResolved, makeTypedIdent, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
-	makeIf, makeWhile, makeBinary, makeAssign,
+	makeIf, makeWhile, makeBinary, makeAssign, makeContinue,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
 	collectDeclNames,
 } from "../util";
@@ -50,8 +50,17 @@ export interface GenState {
 	yieldVarType: Type;     // type of the variable (for unboxing msFutureRead)
 }
 
+// Active while-with-yield scope. break/continue inside the body must
+// transition to these states; a bare C `break;`/`continue;` would exit the
+// outer dispatcher while(1) and leave the future un-completed.
+export interface LoopFrame {
+	breakState: number;
+	continueState: number;
+}
+
 export interface StateCollector {
 	items: GenState[];
+	loopStack: LoopFrame[];
 }
 
 
@@ -124,6 +133,49 @@ export function makeStateAssign(stateNum: number, loc: SourceLocation): Node {
 		makeAssign(makeTypedIdent("$state", numberType(), loc), makeNumber(stateNum, loc), loc),
 		loc,
 	);
+}
+
+// `{ $state = N; continue; }` — trailing continue skips dead code after the
+// source-level break/continue so it doesn't overwrite $state before the
+// dispatcher re-evaluates. Safe only when no nested loop sits between the
+// rewrite point and the dispatcher; rewriteLoopExits enforces by not
+// descending into nested loops/switch.
+function makeStateGoto(stateNum: number, loc: SourceLocation): Node {
+	return makeBlock([makeStateAssign(stateNum, loc), makeContinue(loc)], loc);
+}
+
+// Descends Block/If/Try only — nested loops and switch own their own
+// break/continue scope.
+function rewriteOrRecurse(stmt: Node, top: LoopFrame, loc: SourceLocation): Node {
+	if (stmt === null) return stmt;
+	if (stmt.kind === NodeKind.BreakStmt) return makeStateGoto(top.breakState, loc);
+	if (stmt.kind === NodeKind.ContinueStmt) return makeStateGoto(top.continueState, loc);
+	rewriteLoopExits(stmt, top, loc);
+	return stmt;
+}
+
+function rewriteLoopExits(node: Node, top: LoopFrame, loc: SourceLocation): void {
+	if (node === null) return;
+	match (node.kind) {
+		NodeKind.BlockStmt => {
+			const d = node.data as BlockStmtData;
+			for (let i = 0; i < d.statements.length; i += 1) {
+				d.statements[i] = rewriteOrRecurse(d.statements[i], top, loc);
+			}
+		},
+		NodeKind.IfStmt => {
+			const d = node.data as IfStmtData;
+			d.consequent = rewriteOrRecurse(d.consequent, top, loc);
+			d.alternate = rewriteOrRecurse(d.alternate, top, loc);
+		},
+		NodeKind.TryCatchStmt => {
+			const d = node.data as TryCatchStmtData;
+			d.tryBody = rewriteOrRecurse(d.tryBody, top, loc);
+			d.catchBody = rewriteOrRecurse(d.catchBody, top, loc);
+			d.finallyBody = rewriteOrRecurse(d.finallyBody, top, loc);
+		},
+		_ => {},
+	};
 }
 
 export function allocState(sc: StateCollector): number {
@@ -201,7 +253,24 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 	let i = 0;
 	while (i < stmts.length) {
 		const stmt = stmts[i];
-		if (!containsYield(stmt)) {
+		// break/continue inside a while-with-yield: rewrite to state transition
+		// (see LoopFrame). No active frame → enclosing while has no yield,
+		// natural C semantics apply, leave as-is.
+		if (stmt.kind === NodeKind.BreakStmt && sc.loopStack.length > 0) {
+			// Direct break: post-break stmts are dead, no need for trailing continue.
+			const top = sc.loopStack[sc.loopStack.length - 1];
+			sc.items[currentState].stmts.push(makeStateAssign(top.breakState, loc));
+			return;
+		} else if (stmt.kind === NodeKind.ContinueStmt && sc.loopStack.length > 0) {
+			const top = sc.loopStack[sc.loopStack.length - 1];
+			sc.items[currentState].stmts.push(makeStateAssign(top.continueState, loc));
+			return;
+		} else if (!containsYield(stmt)) {
+			// Nested break/continue inside pushed-as-is stmt (e.g. `if (x) break;`
+			// where the if has no yield) needs the trailing-continue form.
+			if (sc.loopStack.length > 0) {
+				rewriteLoopExits(stmt, sc.loopStack[sc.loopStack.length - 1], loc);
+			}
 			sc.items[currentState].stmts.push(stmt);
 			i += 1;
 		} else if (stmt.kind === NodeKind.ExprStmt) {
@@ -304,9 +373,10 @@ function splitWhile(node: Node, sc: StateCollector, currentState: number, exitSt
 		),
 	);
 
-	// Split body statements, looping back to condState
 	const bodyStmts = extractBodyStmts(wd.whileBody);
+	sc.loopStack.push({ breakState: exitState, continueState: condState });
 	splitStmts(bodyStmts, sc, bodyStart, condState, loc, resultType);
+	sc.loopStack.pop();
 }
 
 // Split if-else containing yield:
@@ -441,7 +511,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	rewriteReturns(bodyStmts, loc, iterResultType);
 
 	// 4. Split at yield points
-	const sc: StateCollector = { items: [] };
+	const sc: StateCollector = { items: [], loopStack: [] };
 	const initState = allocState(sc);
 	const doneState = -1;  // terminal
 

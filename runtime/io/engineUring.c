@@ -290,6 +290,11 @@ void msIoEngineCancelFd(msIoEngine* e, int fd) {
 	(void)e; (void)fd;
 }
 
+/* No-op: io_uring needs IORING_OP_POLL_ADD instead of selector registration. */
+void msIoEngineAddWakeFd(msIoEngine* e, int fd) {
+	(void)e; (void)fd;
+}
+
 int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 	struct msUring* ring = &e->ring;
 

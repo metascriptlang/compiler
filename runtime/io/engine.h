@@ -85,6 +85,16 @@ static inline void msIoEngineCancelFd_ms(int32_t fd) {
 	if (eng != NULL) msIoEngineCancelFd(eng, fd);
 }
 
+/* Watch (don't drain) an external fd — caller's selector drains the
+ * underlying state. Used to chain-poll the dispatcher selector / wake pipe
+ * so cross-thread completions wake the engine immediately. */
+void msIoEngineAddWakeFd(msIoEngine* e, int fd);
+
+static inline void msIoEngineAddWakeFd_ms(int32_t fd) {
+	msIoEngine* eng = msGetIoEngineIfExists();
+	if (eng != NULL) msIoEngineAddWakeFd(eng, fd);
+}
+
 /* ===== MetaScript Bridge Wrappers ===== */
 
 static inline void* msIoAccept_ms(int32_t listenFd) {

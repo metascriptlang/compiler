@@ -170,7 +170,7 @@ function abortConnection(c: SurrealClient): void {
 export function rpcVoid(c: SurrealClient, method: string, params: CborValue[]): Result<void, SurrealError> {
 	const r = rpc(c, method, params);
 	if (!r.ok) return Result.err(r.error);
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 // RPC that expects a Text result. Wraps `rpc` + kind check + asString.
@@ -245,11 +245,11 @@ export function ping(this c: SurrealClient): Result<void, SurrealError> {
 
 // Close the connection cleanly. Idempotent.
 export function close(this c: SurrealClient): Result<void, SurrealError> {
-	if (!c.open) return Result.ok(null as unknown as void);
+	if (!c.open) return Result.ok(null);
 	c.open = false;
 	const cr = c.ws.closeSync(WsCloseCode.Normal as int32, "bye");
 	if (!cr.ok) return Result.err(connectionFailed("ws close: " + cr.error.message));
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 // Mark the connection torn down without sending a close frame. Exported for

@@ -47,6 +47,28 @@ async function asyncFind(arr: number[], target: number): number {
 	return -1;
 }
 
+// Exercises break/continue inside async loop. Pre-bug031 fix the generator
+// state-machine emitted bare C `break;`/`continue;` which exited the outer
+// dispatcher while(1) without completing the return future → deadlock.
+// for..of is lowered to while BEFORE generatorLower so this hits the same fix path.
+async function asyncTakeUntil(arr: number[], stopAt: number): number {
+	let sum = 0;
+	for (const v of arr) {
+		if (v === stopAt) break;
+		sum += v;
+	}
+	return sum;
+}
+
+async function asyncSumSkipping(arr: number[], skip: number): number {
+	let total = 0;
+	for (const v of arr) {
+		if (v === skip) continue;
+		total += v;
+	}
+	return total;
+}
+
 async function asyncDistance(a: Point, b: Point): number {
 	const dx = a.x - b.x;
 	const dy = a.y - b.y;

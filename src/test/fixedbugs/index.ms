@@ -44,3 +44,4 @@ import "./bug027";
 import "./bug028";
 import "./bug029";
 import "./bug030";
+import "./bug031";

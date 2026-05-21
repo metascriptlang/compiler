@@ -118,5 +118,5 @@ export function dispatchLoop(this c: SurrealClient): Result<void, SurrealError> 
 		const r = c.dispatchOnce();
 		if (!r.ok) return Result.err(r.error);
 	}
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }

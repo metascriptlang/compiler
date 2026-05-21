@@ -151,6 +151,13 @@ void* msIoSend(msIoEngine* e, int fd, const char* data, int32_t len) {
 	return fut;
 }
 
+/* Watch-only — no req, no fdMap entry. msIoEnginePoll skips it via the
+ * req==NULL `continue` branch. Caller's poll drains the underlying fd. */
+void msIoEngineAddWakeFd(msIoEngine* e, int fd) {
+	if (e == NULL || fd < 0) return;
+	msSelectorRegister(e->selector, fd, MS_EVENT_READ, NULL);
+}
+
 void* msIoSendString(msIoEngine* e, int fd, msString data) {
 	if (data.p) msStringIncref(data);  /* keep alive during async send */
 	msIoRequest* req = allocRequest(e);

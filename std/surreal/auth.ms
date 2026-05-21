@@ -38,7 +38,7 @@ export function signup(this c: SurrealClient, creds: CborValue): Result<string, 
 export function authenticate(this c: SurrealClient, token: string): Result<void, SurrealError> {
 	const r = rpc(c, "authenticate", [cborText(token)]);
 	if (!r.ok) return Result.err(mapAuthErr(r.error));
-	return Result.ok(null as unknown as void);
+	return Result.ok(null);
 }
 
 // Drop the current session's auth state (logout). The connection itself

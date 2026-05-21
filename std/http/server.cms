@@ -77,6 +77,8 @@ import { frameRequest, FrameResult } from "./parser";
 import { acceptAsync, recvAsync, sendAsync } from "std/net";
 extern function msIoRunOnce(timeoutMs: int32): int32;
 extern function msIoEngineCancelFd_ms(fd: int32): void;
+extern function msIoEngineAddWakeFd_ms(fd: int32): void;
+extern function msGetWakePipeFd(): int32;
 extern function msMonoTimeMs(): int64 from "msMonoTimeMs";
 extern function msOsCpuCount(): int32;
 
@@ -619,7 +621,20 @@ function idleSweep(clients: ClientState[], server: HttpServer): void {
 	}
 }
 
+// Register the global wake pipe in our I/O engine selector so cross-thread
+// future completions (worker → dispatcher MPSC) wake us immediately instead
+// of waiting up to DRIVER_POLL_MS. Engine treats the fd as watch-only (NULL
+// userdata); msRunOnce drains the pipe + MPSC on the dispatcher side.
+// Pipe fd (level-triggered regular fd) — not dispatcher selector fd, which
+// has a nested-kqueue stuck-readable quirk on macOS.
+// See PARALOCK Amendment A for the Layer 2 contract.
+function wireDispatcherWake(): void {
+	const wakeFd = msGetWakePipeFd();
+	if (wakeFd >= 0) msIoEngineAddWakeFd_ms(wakeFd);
+}
+
 function driveWithSweep(server: HttpServer, clients: ClientState[]): void {
+	wireDispatcherWake();
 	let sweepTick: int32 = 0;
 	while (server.running) {
 		msIoRunOnce(DRIVER_POLL_MS);

@@ -311,6 +311,11 @@ void msIoEngineCancelFd(msIoEngine* e, int fd) {
 	(void)e; (void)fd;
 }
 
+/* No-op: IOCP has no shared selector fd; chained-poll not applicable. */
+void msIoEngineAddWakeFd(msIoEngine* e, int fd) {
+	(void)e; (void)fd;
+}
+
 int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 	OVERLAPPED_ENTRY entries[64];
 	ULONG count = 0;
