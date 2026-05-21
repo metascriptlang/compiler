@@ -137,6 +137,34 @@ static inline double msMsgGetDouble(msMessage* m, int idx) {
     return ((double*)m->data)[idx];
 }
 
+/* Typed int/bool slot helpers. Each slot is 8 bytes; int32/bool occupy the
+ * lower 4/1 bytes (msAlloc zeros the slot first). Avoiding the double-encoding
+ * path preserves int64 precision above 2^53 and lets read side use the same
+ * typed view that msFutureReadInt32/Int64/Bool already use. */
+static inline void msMsgSetInt32(msMessage* m, int idx, int32_t val) {
+    ((int32_t*)m->data)[idx * 2] = val;
+}
+
+static inline int32_t msMsgGetInt32(msMessage* m, int idx) {
+    return ((int32_t*)m->data)[idx * 2];
+}
+
+static inline void msMsgSetInt64(msMessage* m, int idx, int64_t val) {
+    ((int64_t*)m->data)[idx] = val;
+}
+
+static inline int64_t msMsgGetInt64(msMessage* m, int idx) {
+    return ((int64_t*)m->data)[idx];
+}
+
+static inline void msMsgSetBool(msMessage* m, int idx, bool val) {
+    ((int32_t*)m->data)[idx * 2] = val ? 1 : 0;
+}
+
+static inline bool msMsgGetBool(msMessage* m, int idx) {
+    return ((int32_t*)m->data)[idx * 2] != 0;
+}
+
 /* msString packing: msString = {int64_t len, msStrPayload* p} = 16 bytes = 2 slots.
  * Pack as two void* slots. Cast m to msMessage* for void* compatibility. */
 #define msMsgSetString(m, idx, s) do { \

@@ -68,6 +68,11 @@ int msSelectorUnregister(msSelector* sel, int fd) {
 	return 0;
 }
 
+int msSelectorGetFd(msSelector* sel) {
+	if (sel == NULL) return -1;
+	return sel->kqfd;
+}
+
 int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEvents) {
 	struct timespec ts;
 	struct timespec* tsp = NULL;

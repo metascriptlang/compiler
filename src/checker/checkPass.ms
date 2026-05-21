@@ -1428,37 +1428,78 @@ function reportUnusedImports(ctx: CheckerContext, program: Node): void {
 	}
 }
 
+// Resolve a directive arg node to its string value. Accepts:
+//   - StringLiteral: direct value.
+//   - Identifier referencing `const x = "..."` — including consts whose
+//     initializer is a @comptime block that the checker has already folded
+//     in-place to a StringLiteral (see checkExprPass.ms ComptimeBlock case).
+// Returns the empty string when the arg can't be resolved. Callers treat
+// an unresolvable Identifier as a silent skip (preserves pre-existing
+// behavior, which early-returned on any non-StringLiteral first arg).
+function resolveDirectiveString(ctx: CheckerContext, node: Node): string {
+	if (node.kind === NodeKind.StringLiteral) {
+		return (node.data as StringLiteralData).value;
+	}
+	if (node.kind === NodeKind.Identifier) {
+		const id = node.data as IdentifierData;
+		// Prefer the resolvedSym stamped during the check pass (line 293 of
+		// checkExprPass.ms); fall back to table lookup when collectDirectives
+		// runs against nodes the checker didn't visit.
+		const sym = node.resolvedSym !== null ? node.resolvedSym : lookupSymbol(ctx.table, id.name);
+		if (sym !== null && sym.declNode !== null && sym.declNode.kind === NodeKind.VariableDecl) {
+			const vd = sym.declNode.data as VariableDeclData;
+			if (vd.initializer !== null && vd.initializer.kind === NodeKind.StringLiteral) {
+				return (vd.initializer.data as StringLiteralData).value;
+			}
+		}
+	}
+	return "";
+}
+
 // Process a single MacroInvocation node as a directive (@include/@link/@passC/@passL).
 function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	if (mi.kind !== NodeKind.MacroInvocation) return;
 	const md = mi.data as MacroInvocationData;
-	if (md.macroArgs.length === 0 || md.macroArgs[0].kind !== NodeKind.StringLiteral) return;
-	const sd = md.macroArgs[0].data as StringLiteralData;
+	if (md.macroArgs.length === 0) return;
+	const arg0Kind = md.macroArgs[0].kind;
+	// Accept StringLiteral directly or Identifier-to-const-string. Other
+	// kinds (NumberLiteral, expression, etc.) are silently skipped — matches
+	// the original early-return on `kind !== StringLiteral`.
+	if (arg0Kind !== NodeKind.StringLiteral && arg0Kind !== NodeKind.Identifier) return;
+	const arg0Str = resolveDirectiveString(ctx, md.macroArgs[0]);
+	// Identifier that didn't resolve to a string const: skip (preserves
+	// pre-fix behavior). Empty literal `@passC("")` still flows through —
+	// downstream appendFlag handles empty as no-op.
+	if (arg0Kind === NodeKind.Identifier && arg0Str === "") return;
 	const name = md.macroName;
 	if (name === "include") {
 		if (ctx.includeDirectives !== "") ctx.includeDirectives = ctx.includeDirectives + "\n";
-		ctx.includeDirectives = ctx.includeDirectives + sd.value;
+		ctx.includeDirectives = ctx.includeDirectives + arg0Str;
 		const modDir = getModuleDir(ctx.modulePath);
 		if (modDir !== "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, "-iquote" + modDir);
 	} else if (name === "compile") {
 		if (ctx.compileDirectives !== "") ctx.compileDirectives = ctx.compileDirectives + "\n";
-		// Per-file custom flags: @compile("file.c", "-O3") → "file.c\t-O3" (tab-separated)
-		let entry = sd.value;
-		if (md.macroArgs.length >= 2 && md.macroArgs[1].kind === NodeKind.StringLiteral) {
-			const flagsArg = md.macroArgs[1].data as StringLiteralData;
-			entry = entry + "\t" + flagsArg.value;
+		// Per-file custom flags: @compile("file.c", "-O3") → "file.c\t-O3" (tab-separated).
+		// Second arg resolves through the same StringLiteral|Identifier path.
+		let entry = arg0Str;
+		if (md.macroArgs.length >= 2) {
+			const arg1Kind = md.macroArgs[1].kind;
+			if (arg1Kind === NodeKind.StringLiteral || arg1Kind === NodeKind.Identifier) {
+				const arg1Str = resolveDirectiveString(ctx, md.macroArgs[1]);
+				if (arg1Str !== "") entry = entry + "\t" + arg1Str;
+			}
 		}
 		ctx.compileDirectives = ctx.compileDirectives + entry;
 	} else if (name === "passC") {
-		ctx.compilerFlags = appendFlag(ctx.compilerFlags, sd.value);
+		ctx.compilerFlags = appendFlag(ctx.compilerFlags, arg0Str);
 	} else if (name === "link") {
 		// Resolve @link paths relative to declaring module's directory (like @compile).
 		// Prepend to link list (reference-aligned: linked first, like addExternalFileToLink).
 		const modDir = getModuleDir(ctx.modulePath);
-		const resolved = modDir !== "" ? modDir + "/" + sd.value : sd.value;
+		const resolved = modDir !== "" ? modDir + "/" + arg0Str : arg0Str;
 		linkObjects().add(resolved);
 	} else if (name === "passL") {
-		linkFlags().add(sd.value);
+		linkFlags().add(arg0Str);
 	} else if (name === "import") {
 		// @import("module", { name1, name2 }) — JS external module registry.
 		// First arg is module path (string), second is ObjectLiteral with keys = import names.
@@ -1469,7 +1510,7 @@ function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 				names.push(k);
 			}
 		}
-		const entry: JsImportEntry = { modulePath: sd.value, names };
+		const entry: JsImportEntry = { modulePath: arg0Str, names };
 		ctx.jsImportRegistry.push(entry);
 	}
 }
@@ -3773,4 +3814,45 @@ test "@platform: standalone @platform without block — no-op (no pairing)" {
 		+ "@passC(\"-Dnopair_active\");\n"
 	);
 	assert ctx.compilerFlags.indexOf("-Dnopair_active") >= 0;
+}
+
+// Directive args may be Identifiers resolving to string consts. Required so
+// `const x = @comptime { ... }; @passC(x);` works — without this, the
+// hoisted form silently drops the flag while inline @passC(@comptime{...})
+// works (because the checker mutates the comptime node in-place to a
+// StringLiteral at the directive's arg position).
+test "directive arg: Identifier referencing const string resolves through" {
+	const ctx = checkSource(
+		"const myFlag = \"-Dident_resolves_through\";\n"
+		+ "@passC(myFlag);\n"
+	);
+	assert ctx.compilerFlags.indexOf("-Dident_resolves_through") >= 0;
+}
+
+test "directive arg: Identifier in @platform block resolves through" {
+	const here = hostPlatformName();
+	const ctx = checkSource(
+		`const platFlag = "-Dplat_ident_flag";\n`
+		+ `@platform("${here}") {\n`
+		+ `	@passC(platFlag);\n`
+		+ `}\n`
+	);
+	assert ctx.compilerFlags.indexOf("-Dplat_ident_flag") >= 0;
+}
+
+test "directive arg: @compile second-arg Identifier resolves through" {
+	const ctx = checkSource(
+		"const cflags = \"-O2\";\n"
+		+ "@compile(\"foo.c\", cflags);\n"
+	);
+	// Encoding is "file\tflags" (tab-separated).
+	assert ctx.compileDirectives.indexOf("foo.c\t-O2") >= 0;
+}
+
+test "directive arg: undefined Identifier silently skipped (no crash)" {
+	// `unresolvedConst` is undefined — the check pass surfaces an "Undefined
+	// variable" error, but collectDirectives must not crash and must not
+	// inject a bogus flag.
+	const ctx = checkSource("@passC(unresolvedConst);\n");
+	assert ctx.compilerFlags.indexOf("unresolvedConst") < 0;
 }

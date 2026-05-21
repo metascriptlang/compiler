@@ -217,6 +217,37 @@ static void completeSend(msIoRequest* req) {
 	msFutureCompleteT((msFuture_int32*)req->fut, (int32_t)bytesSent);
 }
 
+/* msFutureCompleteT (not msFutureCancel) — Cancel skips callbacks so the
+ * stepper would never resume; CompleteT with empty/-1 mimics peer-close
+ * and the fiber takes its existing close path. */
+void msIoEngineCancelFd(msIoEngine* e, int fd) {
+	if (e == NULL || fd < 0 || fd >= e->fdMapCap) return;
+	msIoRequest* req = e->fdMap[fd];
+	if (req == NULL) return;
+	e->fdMap[fd] = NULL;
+	msSelectorUnregister(e->selector, fd);
+	if (req->strRef.p != NULL) {
+		msStringDecref(req->strRef);
+		req->strRef = MS_EMPTY_STRING;
+	}
+	if (req->fut != NULL) {
+		switch (req->op) {
+		case MS_IO_RECV:
+			msFutureCompleteT((msFuture_msString*)req->fut, MS_EMPTY_STRING);
+			break;
+		case MS_IO_ACCEPT:
+		case MS_IO_SEND:
+			msFutureCompleteT((msFuture_int32*)req->fut, (int32_t)-1);
+			break;
+		case MS_IO_CLOSE:
+			msFutureCompleteVoid(req->fut);
+			break;
+		}
+	}
+	if (req->buf != NULL) { free(req->buf); req->buf = NULL; }
+	freeRequest(e, req);
+}
+
 int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 	msReadyEvent readyBuf[64];
 	int n = msSelectorPoll(e->selector, timeoutMs, readyBuf, 64);

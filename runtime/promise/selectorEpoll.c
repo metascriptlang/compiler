@@ -78,6 +78,11 @@ int msSelectorUnregister(msSelector* sel, int fd) {
 	return epoll_ctl(sel->epfd, EPOLL_CTL_DEL, fd, NULL) < 0 ? -1 : 0;
 }
 
+int msSelectorGetFd(msSelector* sel) {
+	if (sel == NULL) return -1;
+	return sel->epfd;
+}
+
 int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEvents) {
 	struct epoll_event events[64];
 	int limit = maxEvents < 64 ? maxEvents : 64;

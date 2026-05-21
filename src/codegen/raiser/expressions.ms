@@ -310,6 +310,26 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): number {
 		return dest;
 	}
 
+	// Null comparison: `expr === null` / `expr !== null` (and `==`/`!=`).
+	// BeqI64/BneI64 only compare intVal — Array(handle=0) shares intVal=0 with
+	// nil and would compare equal under the generic path. Mirror Nim's opcIsNil
+	// and HashLink's OJNotNull: emit a kind-aware check via the dedicated
+	// IsNil opcode whenever one side is a NullLiteral.
+	const isEqOp = op === "===" || op === "==" || op === "!==" || op === "!=";
+	const hasNullLit = d.left.kind === NodeKind.NullLiteral || d.right.kind === NodeKind.NullLiteral;
+	if (isEqOp && hasNullLit) {
+		const otherSide: Node = d.left.kind === NodeKind.NullLiteral ? d.right : d.left;
+		const valReg = compileExpr(s, otherSide);
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.IsNil, dest, valReg, 0));
+		if (op === "===" || op === "==") return dest;
+		// `!== null` → bool XOR 1 negates without a separate Not opcode.
+		const oneReg = allocReg(s);
+		emitLoadConst(s, oneReg, raiserInt(1));
+		emitInst(s, raiserABC(RaiserOpcode.BitXor, dest, dest, oneReg));
+		return dest;
+	}
+
 	// String comparison: == / != / === / !== where either operand is a string
 	const isStrCmp = isComparisonOp(op) && (exprIsString(s, d.left) || exprIsString(s, d.right));
 	if (isStrCmp && (op === "==" || op === "===")) {

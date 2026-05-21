@@ -293,6 +293,19 @@ bool msHasDispatcher(void) {
 	return gDispatcher != NULL;
 }
 
+/* Expose the dispatcher's selector fd (kqueue/epoll). Returns -1 when no
+ * dispatcher is initialized or the backend has no fd (poll/Windows). Used
+ * by I/O engine to chain-poll the dispatcher's selector with its own. */
+int msGetDispatcherSelectorFd(void) {
+#ifdef _WIN32
+	/* Windows dispatcher uses IOCP, not a selector with an fd. */
+	return -1;
+#else
+	if (gDispatcher == NULL || gDispatcher->selector == NULL) return -1;
+	return msSelectorGetFd(gDispatcher->selector);
+#endif
+}
+
 /* ===== Timer Heap (binary min-heap on finishAtMs) ===== */
 
 static void msTimerHeapGrow(msTimerHeap* h) {
@@ -412,7 +425,10 @@ bool msRunOnce(int timeoutMs) {
 	/* Step 2: Poll for cross-thread completions + I/O events */
 	int adj = msAdjustTimeout(d, timeoutMs, nextTimer);
 #ifdef _WIN32
-	/* Windows: IOCP — drain thread-pool completions (and future I/O engine completions) */
+	/* Windows: IOCP — drain thread-pool completions (and future I/O engine completions).
+	 * Worker already set value + finished (Step 1, see thread.h:99-103); main thread
+	 * just fires callbacks (Step 2). Using msFutureComplete/msFutureFail here would
+	 * hit the finished-guard and skip callbacks — leaving async steppers stuck. */
 	if (d->iocp != NULL) {
 		OVERLAPPED_ENTRY entries[64];
 		ULONG count = 0;
@@ -421,8 +437,7 @@ bool msRunOnce(int timeoutMs) {
 			for (ULONG i = 0; i < count; i++) {
 				didWork = true;
 				msCompletionMsg* msg = (msCompletionMsg*)entries[i].lpOverlapped;
-				if (msg->isFail) msFutureFail(msg->fut, msg->error);
-				else msFutureComplete(msg->fut, msg->value);
+				if (msg->fut != NULL) msFutureFireCallbacks((msFutureBase*)msg->fut);
 				free(msg);
 			}
 		}

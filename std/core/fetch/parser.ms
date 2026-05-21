@@ -24,26 +24,32 @@ export interface ParsedResponse {
 }
 
 // ===== Internal Helpers =====
+//
+// HTTP buffers are accumulated bytes from the network — header bytes are
+// ASCII (RFC 7230) but the body may be arbitrary binary (.dmg, .zip, image).
+// Codepoint-based indexing (.length / .charCodeAt) under-counts non-ASCII
+// bytes and corrupts offsets once the buffer extends into a binary body.
+// All scanning helpers use byte semantics (byteAt / byteLength / byteSlice);
+// for pure-ASCII inputs the underlying msString fast path makes this a
+// no-op vs the codepoint variants, so existing header-only callers see
+// identical behavior.
 
-// Find index of "\r\n" starting from pos. Returns -1 if not found.
+// Find byte index of "\r\n" starting from pos. Returns -1 if not found.
 function findCRLF(data: string, pos: int32): int32 {
-	let i = pos;
-	const len = data.length - 1;
-	while (i < len) {
-		if (data.charCodeAt(i) === "\r".code && data.charCodeAt(i + 1) === "\n".code) {
+	const len = (data.byteLength as int32) - 1;
+	for (let i = pos; i < len; i = i + 1) {
+		if (data.byteAt(i) === "\r".code && data.byteAt(i + 1) === "\n".code) {
 			return i;
 		}
-		i = i + 1;
 	}
 	return -1;
 }
 
-// Find index of a single char starting from pos. Returns -1 if not found.
+// Find byte index of a single byte value starting from pos. Returns -1.
 function findChar(data: string, ch: number, pos: int32): int32 {
-	let i = pos;
-	while (i < data.length) {
-		if (data.charCodeAt(i) === ch) return i;
-		i = i + 1;
+	const len = data.byteLength as int32;
+	for (let i = pos; i < len; i = i + 1) {
+		if (data.byteAt(i) === ch) return i;
 	}
 	return -1;
 }
@@ -54,12 +60,14 @@ interface HeaderParseResult {
 	endPos: int32;
 }
 
-// Parse headers from data starting at pos. Returns offset after final \r\n\r\n.
+// Parse headers from data starting at byte pos. Returns byte offset after
+// final \r\n\r\n. All positions are byte offsets — see header comment above.
 function parseHeaderBlock(data: string, pos: int32, h: HttpHeaders): Result<HeaderParseResult, HttpError> {
 	let cur = pos;
-	while (cur < data.length) {
+	const len = data.byteLength as int32;
+	while (cur < len) {
 		// Empty line = end of headers
-		if (cur + 1 < data.length && data.charCodeAt(cur) === "\r".code && data.charCodeAt(cur + 1) === "\n".code) {
+		if (cur + 1 < len && data.byteAt(cur) === "\r".code && data.byteAt(cur + 1) === "\n".code) {
 			return Result.ok({ endPos: cur + 2 });
 		}
 		// Find end of this header line
@@ -70,13 +78,13 @@ function parseHeaderBlock(data: string, pos: int32, h: HttpHeaders): Result<Head
 		const colon = findChar(data, ":".code, cur);
 		if (colon < 0 || colon >= lineEnd) return Result.err(invalidHeader("missing colon in header"));
 
-		const name = data.slice(cur, colon);
+		const name = data.byteSlice(cur, colon);
 		// Skip colon + optional whitespace
 		let valStart = colon + 1;
-		while (valStart < lineEnd && (data.charCodeAt(valStart) === " ".code || data.charCodeAt(valStart) === "\t".code)) {
+		while (valStart < lineEnd && (data.byteAt(valStart) === " ".code || data.byteAt(valStart) === "\t".code)) {
 			valStart = valStart + 1;
 		}
-		const value = data.slice(valStart, lineEnd);
+		const value = data.byteSlice(valStart, lineEnd);
 		addHeader(h, name, value);
 
 		cur = lineEnd + 2;
@@ -231,15 +239,17 @@ export function parseUrl(url: string): Result<ParsedUrl, HttpError> {
 
 // Decode chunked transfer-encoding body.
 // Format: hex-size\r\ndata\r\n... 0\r\n\r\n
+// Body bytes may be arbitrary binary — all offsets/slices are byte-based.
 export function decodeChunked(data: string): Result<string, HttpError> {
 	let result = "";
 	let pos = 0;
-	while (pos < data.length) {
+	const len = data.byteLength as int32;
+	while (pos < len) {
 		// Read chunk size (hex)
 		const sizeEnd = findCRLF(data, pos);
 		if (sizeEnd < 0) return Result.err(invalidResponse("unterminated chunk size"));
 
-		const sizeStr = data.slice(pos, sizeEnd);
+		const sizeStr = data.byteSlice(pos, sizeEnd);
 		const chunkSize = parseHex(sizeStr);
 		if (chunkSize < 0) return Result.err(invalidResponse("invalid chunk size: " + sizeStr));
 		if (chunkSize === 0) return Result.ok(result);
@@ -247,17 +257,18 @@ export function decodeChunked(data: string): Result<string, HttpError> {
 		// Read chunk data
 		const dataStart = sizeEnd + 2;
 		const dataEnd = dataStart + chunkSize;
-		if (dataEnd + 2 > data.length) return Result.err(invalidResponse("truncated chunk data"));
+		if (dataEnd + 2 > len) return Result.err(invalidResponse("truncated chunk data"));
 
-		result = result + data.slice(dataStart, dataEnd);
+		result = result + data.byteSlice(dataStart, dataEnd);
 		pos = dataEnd + 2; // skip trailing \r\n
 	}
 	return Result.err(invalidResponse("chunked body not terminated"));
 }
 
-// Encode a single chunk for chunked transfer-encoding.
+// Encode a single chunk for chunked transfer-encoding. Chunk size header
+// is the BYTE count per RFC 7230 §4.1.
 export function encodeChunk(data: string): string {
-	return toHex(data.length) + "\r\n" + data + "\r\n";
+	return toHex(data.byteLength) + "\r\n" + data + "\r\n";
 }
 
 // Final chunk marker.
@@ -293,32 +304,33 @@ function chunkedMalformed(): ChunkedDecodeResult {
 
 // Verify two bytes at `pos` form a CRLF separator.
 function isCRLFAt(data: string, pos: int32): boolean {
-	return data.charCodeAt(pos) === 13 && data.charCodeAt(pos + 1) === 10;
+	return data.byteAt(pos) === 13 && data.byteAt(pos + 1) === 10;
 }
 
 export function tryDecodeChunked(data: string): ChunkedDecodeResult {
 	let result = "";
 	let pos: int32 = 0;
-	while (pos < data.length) {
+	const len = data.byteLength as int32;
+	while (pos < len) {
 		const sizeEnd = findCRLF(data, pos);
 		if (sizeEnd < 0) return chunkedNeedMore();
 
-		const chunkSize = parseHex(data.slice(pos, sizeEnd));
+		const chunkSize = parseHex(data.byteSlice(pos, sizeEnd));
 		if (chunkSize < 0) return chunkedMalformed();
 
 		const dataStart = sizeEnd + 2;
 		if (chunkSize === 0) {
 			// Final chunk — expect trailing CRLF (no trailers support in v1).
-			if (dataStart + 1 >= data.length) return chunkedNeedMore();
+			if (dataStart + 1 >= len) return chunkedNeedMore();
 			if (!isCRLFAt(data, dataStart as int32)) return chunkedMalformed();
 			return chunkedReady(result, (dataStart + 2) as int32);
 		}
 
 		const dataEnd = dataStart + chunkSize;
-		if (dataEnd + 2 > data.length) return chunkedNeedMore();
+		if (dataEnd + 2 > len) return chunkedNeedMore();
 		if (!isCRLFAt(data, dataEnd as int32)) return chunkedMalformed();
 
-		result = result + data.slice(dataStart, dataEnd);
+		result = result + data.byteSlice(dataStart, dataEnd);
 		pos = (dataEnd + 2) as int32;
 	}
 	return chunkedNeedMore();

@@ -154,6 +154,50 @@ test "multiple arrows" {
 	assert ctx.lastResult.intVal === 8;
 }
 
+// --- Continue inside for-of / for-stmt — regression tests ---
+// Pre-fix: ContinueStmt jumped to loopStart (before update step), so
+// for-of skipped the increment → infinite loop. patchLoopContinues now
+// patches each continue placeholder to the update emit point.
+test "continue inside for-of advances index" {
+	const ctx = evalFull("const arr = [1, 2, 3, 4, 5]; let sum = 0; for (const x of arr) { if (x === 3) continue; sum = sum + x; } return sum;");
+	assert ctx.lastResult.intVal === 12;
+}
+
+test "continue inside C-style for runs update" {
+	const ctx = evalFull("let sum = 0; for (let i = 0; i < 5; i = i + 1) { if (i === 2) continue; sum = sum + i; } return sum;");
+	assert ctx.lastResult.intVal === 8;
+}
+
+test "continue inside while re-checks condition" {
+	const ctx = evalFull("let i = 0; let sum = 0; while (i < 5) { i = i + 1; if (i === 3) continue; sum = sum + i; } return sum;");
+	assert ctx.lastResult.intVal === 12;
+}
+
+// --- Nil identity check — kind-aware equality (regression) ---
+// Pre-fix: `arr !== null` compiled to BneI64 which only checks intVal;
+// Array(handle=0) and Nil both have intVal=0, so the comparison returned
+// false-equal. IsNil opcode now performs kind-aware identity (mirrors Nim
+// opcIsNil + HashLink OJNotNull).
+test "first-allocated array compares correctly against null" {
+	const ctx = evalFull("const arr = [1, 2]; return arr !== null ? 1 : 0;");
+	assert ctx.lastResult.intVal === 1;
+}
+
+test "first-allocated object compares correctly against null" {
+	const ctx = evalFull("const o = { x: 1 }; return o !== null ? 1 : 0;");
+	assert ctx.lastResult.intVal === 1;
+}
+
+test "null === null is true" {
+	const ctx = evalFull("return null === null ? 1 : 0;");
+	assert ctx.lastResult.intVal === 1;
+}
+
+test "null === 0 is false (kind differs)" {
+	const ctx = evalFull("return null === 0 ? 1 : 0;");
+	assert ctx.lastResult.intVal === 0;
+}
+
 // --- Closure with captures ---
 
 // Helper: parse → codegen → execute (no checker, no transforms)

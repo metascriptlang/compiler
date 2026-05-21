@@ -303,7 +303,8 @@ test "parse false" {
 test "parse integer" {
 	const r = parseJson("42");
 	assert r.ok;
-	assert r.value.numVal === 42;
+	assert r.value.kind === JsonKind.Int;
+	if (r.value.kind === JsonKind.Int) assert r.value.intVal === (42 as int64);
 }
 
 test "parse negative" {
@@ -345,8 +346,12 @@ test "parse empty array" {
 test "parse array" {
 	const r = parseJson("[1, 2, 3]");
 	assert r.ok;
-	assert r.value.items.length === 3;
-	assert r.value.items[0].numVal === 1;
+	assert r.value.kind === JsonKind.Array;
+	if (r.value.kind === JsonKind.Array) {
+		assert r.value.items.length === 3;
+		const first = r.value.items[0];
+		if (first.kind === JsonKind.Int) assert first.intVal === (1 as int64);
+	}
 }
 
 test "parse empty object" {
@@ -359,19 +364,32 @@ test "parse empty object" {
 test "parse object" {
 	const r = parseJson("{\"name\": \"Alice\", \"age\": 30}");
 	assert r.ok;
-	assert r.value.keys.length === 2;
-	assert r.value.keys[0] === "name";
-	assert r.value.values[0].strVal === "Alice";
-	assert r.value.values[1].numVal === 30;
+	assert r.value.kind === JsonKind.Object;
+	if (r.value.kind === JsonKind.Object) {
+		assert r.value.keys.length === 2;
+		assert r.value.keys[0] === "name";
+		const v0 = r.value.values[0];
+		if (v0.kind === JsonKind.String) assert v0.strVal === "Alice";
+		const v1 = r.value.values[1];
+		if (v1.kind === JsonKind.Int) assert v1.intVal === (30 as int64);
+	}
 }
 
 test "parse nested" {
 	const r = parseJson("{\"data\": [1, true, null]}");
 	assert r.ok;
-	assert r.value.values[0].items.length === 3;
-	assert r.value.values[0].items[0].numVal === 1;
-	assert r.value.values[0].items[1].boolVal === true;
-	assert r.value.values[0].items[2].kind === JsonKind.Null;
+	assert r.value.kind === JsonKind.Object;
+	if (r.value.kind === JsonKind.Object) {
+		const arr = r.value.values[0];
+		if (arr.kind === JsonKind.Array) {
+			assert arr.items.length === 3;
+			const i0 = arr.items[0];
+			if (i0.kind === JsonKind.Int) assert i0.intVal === (1 as int64);
+			const i1 = arr.items[1];
+			if (i1.kind === JsonKind.Bool) assert i1.boolVal === true;
+			assert arr.items[2].kind === JsonKind.Null;
+		}
+	}
 }
 
 test "parse error trailing" {

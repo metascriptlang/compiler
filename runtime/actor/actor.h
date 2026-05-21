@@ -530,6 +530,27 @@ static inline void msMsgCompleteDouble(void* fut, double val) {
     msFutureCompleteT((msFuture_double*)fut, val);
 }
 
+/* Typed completers for integral and bool actor returns. Mirror Double: the
+ * reply future was sized via msFutureCreate (msFuture_ptr layout, 8B value
+ * slot); int and bool fit within that slot. The receive side uses
+ * msFutureReadInt32/Int64/Bool which read from the SAME typed-struct offset,
+ * so write side must use matching cast (msFuture_int32* etc.); otherwise
+ * the byte pattern diverges (e.g. double 3.0 vs int32 3). */
+static inline void msMsgCompleteInt32(void* fut, int32_t val) {
+    if (fut == NULL) return;
+    msFutureCompleteT((msFuture_int32*)fut, val);
+}
+
+static inline void msMsgCompleteInt64(void* fut, int64_t val) {
+    if (fut == NULL) return;
+    msFutureCompleteT((msFuture_int64*)fut, val);
+}
+
+static inline void msMsgCompleteBool(void* fut, bool val) {
+    if (fut == NULL) return;
+    msFutureCompleteT((msFuture_bool*)fut, val);
+}
+
 static inline void msMsgCompletePtr(void* fut, void* val) {
     if (fut == NULL) return;
     msFutureComplete(fut, val);

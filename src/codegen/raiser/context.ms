@@ -28,6 +28,11 @@ export interface RaiserBreakPatches {
 export interface RaiserLoopInfo {
 	startIp: number;
 	breakPatches: RaiserBreakPatches;
+	// Each loop kind patches these to its own "re-enter" point: for-of/for-stmt
+	// to the update step (NOT loop start — else continue skips the update and
+	// the loop counter never advances), while to before the backjump, do-while
+	// to before the bottom condition.
+	continuePatches: RaiserBreakPatches;
 }
 
 export interface RaiserLoopStack {
@@ -216,9 +221,11 @@ export function codeLen(s: RaiserCompState): number {
 // --- Loop helpers ---
 
 export function pushLoop(s: RaiserCompState, startIp: number): void {
-	const patchItems: number[] = [];
-	const breakPatches: RaiserBreakPatches = { items: patchItems };
-	const info: RaiserLoopInfo = { startIp, breakPatches };
+	const info: RaiserLoopInfo = {
+		startIp,
+		breakPatches: { items: [] },
+		continuePatches: { items: [] },
+	};
 	s.loopStack.items.push(info);
 }
 
@@ -346,6 +353,16 @@ export function patchLoopBreaks(s: RaiserCompState): void {
 	const loop = popLoop(s);
 	const target = codeLen(s);
 	for (const patchIdx of loop.breakPatches.items) {
+		patchJumpTo(s, patchIdx, target);
+	}
+}
+
+// Patch all `continue` placeholders to land at the current code position.
+// Each loop kind calls this at its own re-enter point — see RaiserLoopInfo.
+export function patchLoopContinues(s: RaiserCompState): void {
+	const loop = currentLoop(s);
+	const target = codeLen(s);
+	for (const patchIdx of loop.continuePatches.items) {
 		patchJumpTo(s, patchIdx, target);
 	}
 }

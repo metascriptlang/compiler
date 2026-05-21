@@ -13,9 +13,10 @@ import {
 	Node, NodeKind, createNode,
 	VariableDeclData, FunctionDeclData,
 	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
-	BlockStmtData, ExportDeclData,
+	BlockStmtData, ExportDeclData, DecoratedDeclData, ExternDeclData,
 	ComptimeBlockData, ProgramData,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
+	ImportDeclData, CallExprData, IdentifierData, Type,
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram } from "../../checker/checkPass";
@@ -28,7 +29,7 @@ import { valueToNode, synthToken } from "./bridge";
 import { ensureHostTableLoaded } from "./hostTable";
 import { getComptimeOuterCtx } from "./callbacks";
 import { findExportsByName, ExportRegistry, CheckerContext, addError } from "../../checker/context";
-import { ImportDeclData, CallExprData, IdentifierData, FunctionDeclData, Type } from "../../ast/node";
+import { lookupModuleProgram } from "../../checker/instantiate";
 import { forEachChild } from "../../ast/visitor";
 import { isPrimitiveKind } from "../../checker/types";
 
@@ -58,17 +59,63 @@ function _isInjectableTopLevelDecl(stmt: Node): boolean {
 // cross-module callee resolution that @comptime uses. Macro wrapper Program
 // must include helper FunctionDecls or cross-module calls return nil
 // (RAISER-CALLHOST.md Phase 8a caveat #5).
+
+// Find a callable declaration (FunctionDecl or ExternDecl) by name in a
+// module's top-level statements. Handles bare + ExportDecl-wrapped +
+// DecoratedDecl-wrapped forms. Returns null if not found. Shared between
+// the @comptime cross-module injector (here) and the macro cross-module
+// injector (expand.ms).
+export function findFunctionDeclInProgram(program: Node, name: string): Node {
+	if (program === null || program.kind !== NodeKind.Program) return null as unknown as Node;
+	const pd = program.data as ProgramData;
+	for (const stmt of pd.programStmts) {
+		const fd = unwrapToCallableDecl(stmt, name);
+		if (fd !== null) return fd;
+	}
+	return null as unknown as Node;
+}
+
+function unwrapToCallableDecl(stmt: Node, name: string): Node {
+	if (stmt === null) return null as unknown as Node;
+	return match (stmt.kind) {
+		NodeKind.FunctionDecl => (stmt.data as FunctionDeclData).fnName === name ? stmt : null as unknown as Node,
+		NodeKind.ExternDecl => (stmt.data as ExternDeclData).externName === name ? stmt : null as unknown as Node,
+		NodeKind.ExportDecl => unwrapToCallableDecl((stmt.data as ExportDeclData).exportedDecl, name),
+		NodeKind.DecoratedDecl => unwrapToCallableDecl((stmt.data as DecoratedDeclData).decoratedNode, name),
+		_ => null as unknown as Node,
+	};
+}
+
 export function lookupFunctionDeclByName(registry: ExportRegistry, name: string): Node {
+	// Returns first callable AST decl (FunctionDecl or ExternDecl variant
+	// like `extern class`) matching `name`. `extern function` is parsed as
+	// FunctionDecl with extern flag, so the FunctionDecl branch covers it.
+	// ExternDecl is reserved for the other extern kinds (class/const/var/
+	// type/enum/interface/struct/macro — parseExternDecl).
+	//
 	// NOTE: scans ALL modules with that name. If two modules export the
-	// same name, picks first FunctionDecl match — may pick wrong fn when
-	// names collide. Phase 8b follow-up: resolve through ModuleGraph for
-	// disambiguation. For std/* surface (no name collisions today) this
-	// is unambiguous enough.
+	// same name, picks first match — may pick wrong decl when names collide.
+	// Phase 8b follow-up: resolve through ModuleGraph for disambiguation.
+	// For std/* surface (no name collisions today) this is unambiguous enough.
+	//
+	// Fallback path: ExportRegistry's Phase 1 placeholder leaves declNode=null
+	// (filled in by Phase 2 buildExportInfo). When @comptime eager-folds during
+	// Phase 2 checking and the defining module's Phase 2 update hasn't run yet,
+	// declNode is still null. Recover by walking the module's registered Program
+	// AST — Program is registered during Phase 1 (orchestrator.ms), so it's
+	// always available before any @comptime in any module fires.
 	const matches = findExportsByName(registry, name);
 	for (const expInfo of matches) {
 		if (expInfo.declNode !== null && expInfo.declNode.kind === NodeKind.FunctionDecl) {
 			return expInfo.declNode;
 		}
+	}
+	for (const expInfo of matches) {
+		if (expInfo.definingModule === "") continue;
+		const prog = lookupModuleProgram(expInfo.definingModule);
+		if (prog === null) continue;
+		const fd = findFunctionDeclInProgram(prog, name);
+		if (fd !== null) return fd;
 	}
 	return null as unknown as Node;
 }
@@ -80,7 +127,7 @@ export function lookupFunctionDeclByName(registry: ExportRegistry, name: string)
 //
 // Exported for macro path reuse (see lookupFunctionDeclByName note).
 export function walkBodyForCallees(
-	body: Node, registry: ExportRegistry, visited: HashSet<string>, queue: Node[],
+	body: Node, registry: ExportRegistry, definingProgram: Node, visited: HashSet<string>, queue: Node[],
 ): void {
 	if (body === null) return;
 	if (body.kind === NodeKind.CallExpr) {
@@ -89,13 +136,20 @@ export function walkBodyForCallees(
 			const name = (c.callee.data as IdentifierData).name;
 			if (!visited.has(name)) {
 				visited.add(name);
-				const fnDecl = lookupFunctionDeclByName(registry, name);
+				// Try defining module's Program FIRST — catches PRIVATE helpers
+				// and `extern function` decls (parsed as FunctionDecl, not exported
+				// so registry.nameIndex misses them). Mirrors expand.ms macro path.
+				let fnDecl: Node = null as unknown as Node;
+				if (definingProgram !== null) {
+					fnDecl = findFunctionDeclInProgram(definingProgram, name);
+				}
+				if (fnDecl === null) fnDecl = lookupFunctionDeclByName(registry, name);
 				if (fnDecl !== null) queue.push(fnDecl);
 			}
 		}
 	}
 	forEachChild(body, (child: Node) => {
-		walkBodyForCallees(child, registry, visited, queue);
+		walkBodyForCallees(child, registry, definingProgram, visited, queue);
 	});
 }
 
@@ -191,12 +245,20 @@ function _collectCrossModuleTypeDecls(fnDecls: Node[]): Node[] {
 	return decls;
 }
 
-function _collectCrossModuleFunctionDecls(outerProgram: Node): Node[] {
+function _collectCrossModuleFunctionDecls(outerProgram: Node, comptimeBody: Node): Node[] {
 	// Phase 8b: walk outer ImportDecls, look up each imported name in the
 	// outer ExportRegistry, and collect the cross-module FunctionDecl AST
 	// nodes (plus transitive helpers their bodies call into) so Raiser
 	// codegen can compile them into bytecode. Requires context.ms:
 	// buildExportInfo to preserve declNode for ALL FunctionDecls.
+	//
+	// Also walks the @comptime body itself so names referenced there but not
+	// imported by the outer module (e.g. `exec("…")` inside a module that
+	// only imports unrelated symbols) still get their FunctionDecl injected.
+	// Without this seed, the checker resolves them via the full registry but
+	// Raiser codegen sees an unresolved Identifier → emits LoadConst(Nil) →
+	// CallExpr falls into compileClosureCall → LoadField on Nil →
+	// "object handle out of bounds: 0".
 	const decls: Node[] = [];
 	const outer = getComptimeOuterCtx();
 	if (outer === null || outer.registry === null) return decls;
@@ -217,17 +279,32 @@ function _collectCrossModuleFunctionDecls(outerProgram: Node): Node[] {
 		}
 	}
 
-	// Transitive: drain queue, walk each body for further callees.
-	// Injected by reference; inner check mutates resolvedSym/nodeType on
-	// shared AST. Verified safe for the happy-path cases — same-Symbol
-	// re-resolution is idempotent. Cross-module nested type access
-	// (`r.error.kind`) still has known gaps from MISSING type-level inject,
-	// not from AST mutation.
+	// Seed: names referenced directly inside the @comptime body. Defining
+	// program null — body lives in outer module which has its own decls
+	// injected via _isInjectableTopLevelDecl path (FunctionDecl + ImportDecl).
+	if (comptimeBody !== null) {
+		walkBodyForCallees(comptimeBody, registry, null as unknown as Node, visited, queue);
+	}
+
+	// Transitive: drain queue, walk each body for further callees. For each
+	// injected FunctionDecl, look up its defining module so the body walker
+	// can resolve PRIVATE helpers and `extern function` decls (parsed as
+	// FunctionDecl, not in registry because not exported). Without this,
+	// e.g. exec() references msProcessSpawnSync which the registry doesn't
+	// surface → re-check on synthetic Program can't resolve → silent Nil.
 	while (queue.length > 0) {
 		const decl = queue.pop();
 		decls.push(decl);
+		if (decl.kind !== NodeKind.FunctionDecl) continue;
 		const fd = decl.data as FunctionDeclData;
-		walkBodyForCallees(fd.fnBody, registry, visited, queue);
+		const matches = findExportsByName(registry, fd.fnName);
+		let definingProgram: Node = null as unknown as Node;
+		for (const m of matches) {
+			if (m.definingModule === "") continue;
+			const p = lookupModuleProgram(m.definingModule);
+			if (p !== null) { definingProgram = p; break; }
+		}
+		walkBodyForCallees(fd.fnBody, registry, definingProgram, visited, queue);
 	}
 
 	return decls;
@@ -292,7 +369,7 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 				injectedStmts.push(stmt);
 			}
 		}
-		const crossModule = _collectCrossModuleFunctionDecls(outerProgram);
+		const crossModule = _collectCrossModuleFunctionDecls(outerProgram, body);
 		for (const s of crossModule) { injectedStmts.push(s); }
 		// Phase 8c: inject type-level decls (Interface/Enum/TypeAlias) reachable
 		// from the injected fns' signatures, transitively. Required so the inner

@@ -252,14 +252,18 @@ static inline msString msUringBuildResponse(int32_t fd, int32_t status, msString
 	return _uringRespBufs[slot];
 }
 
-/* Fast header end check on raw recv buffer (avoids msString creation for incomplete headers) */
+/* Find CRLFCRLF header terminator anywhere in recv buffer. Returns position
+ * immediately AFTER the terminator (i.e. body start offset) or -1 if not yet
+ * complete. Scanning the whole buffer is required: POST/PUT with body in the
+ * first recv ends with body bytes, not \r\n\r\n. */
 static inline int32_t msUringFastHeaderCheck(int32_t fd, int32_t bytesRecv) {
 	if (bytesRecv < 4 || _uringRecvBufs == NULL) return -1;
 	int slot = fd < URING_MAX_FDS ? fd : 0;
 	const char* d = _uringRecvBufs[slot];
-	/* O(1) last-4-bytes check */
-	if (d[bytesRecv-4]=='\r' && d[bytesRecv-3]=='\n' && d[bytesRecv-2]=='\r' && d[bytesRecv-1]=='\n')
-		return bytesRecv;
+	for (int32_t i = 0; i <= bytesRecv - 4; i++) {
+		if (d[i]=='\r' && d[i+1]=='\n' && d[i+2]=='\r' && d[i+3]=='\n')
+			return i + 4;
+	}
 	return -1;
 }
 

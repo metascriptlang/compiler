@@ -22,6 +22,53 @@ export function isStructLikeType(t: Type | null): boolean {
 		|| t.kind === TypeKind.Tuple || t.kind === TypeKind.String;
 }
 
+// Primitive unbox helper name for a value-bearing void* (result of msWaitFor /
+// msAwaitGroupResult / msAwaitSlotResult / msFutureRead). Returns "" when
+// the type isn't a boxed primitive — caller dispatches to msUnboxStruct or
+// passthrough based on storage shape.
+export function unboxFnNameForType(t: Type | null): string {
+	if (t === null) return "";
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
+		TypeKind.Boolean => "msUnboxBool",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
+			| TypeKind.Enum => "msUnboxInt32",
+		TypeKind.String => "msUnboxString",
+		_ => "",
+	};
+}
+
+// Shared classifier for ALL "void* -> typed value" call sites
+// (awaitLower.makeUnboxCall, promiseLower.lowerWaitFor's boxed branches,
+// asyncBridge's spawn-result reads). Centralizes the 4-tier dispatch so
+// adding a new TypeKind only requires editing one place — previously three
+// drifted copies caused Bug B (Array missing in awaitLower only).
+//
+// Tiers (matches spawnLower.boxForType / actor dispatch):
+//   primitive       → msUnbox<T>(voidPtr)        (bits stored in void* slot)
+//   struct-like     → msUnboxStruct(voidPtr)     (cast+deref+free — heap-boxed)
+//   pointer-shape   → voidPtr unchanged           (Ref/Ptr/Function — already void*)
+//   void            → voidPtr unchanged           (no value to extract)
+export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, loc: SourceLocation): Node {
+	if (innerType === null || innerType.kind === TypeKind.Void) return voidPtrExpr;
+	const fn = unboxFnNameForType(innerType);
+	if (fn !== "") {
+		const c = makeCall(makeIdent(fn, loc), [voidPtrExpr], loc);
+		c.nodeType = innerType;
+		return c;
+	}
+	// Heap-boxed via msSinkBoxStruct → cast+deref+free shell.
+	if (isStructLikeType(innerType) || innerType.kind === TypeKind.Array) {
+		const call = makeCall(makeIdent("msUnboxStruct", loc), [voidPtrExpr], loc);
+		call.nodeType = innerType;
+		return call;
+	}
+	// Pointer-shape (Ref/Ptr/Function): spawnLower returns these unboxed —
+	// the void* IS the pointer. C handles implicit conversion at assignment.
+	return voidPtrExpr;
+}
+
 // ===== Naming Conventions =====
 
 // Canonical name for auto-generated enum-to-string function (e.g., "Color_toString").

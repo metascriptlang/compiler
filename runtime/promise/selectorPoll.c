@@ -95,6 +95,12 @@ int msSelectorUnregister(msSelector* sel, int fd) {
 	return 0;
 }
 
+int msSelectorGetFd(msSelector* sel) {
+	(void)sel;
+	/* poll() backend has no underlying fd — caller falls back to timeout-polling */
+	return -1;
+}
+
 int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEvents) {
 	if (sel->len == 0) {
 		/* No fds to poll — just sleep for timeout */

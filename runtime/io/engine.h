@@ -74,6 +74,17 @@ void* msIoSendString(msIoEngine* e, int fd, msString data);
  * Returns number of completions processed. */
 int msIoEnginePoll(msIoEngine* e, int timeoutMs);
 
+/* Drop pending I/O on fd and complete its future (peer-close shape).
+ * Readiness does real cleanup — kqueue/epoll silently drop closed fds
+ * so userspace must clear fdMap and complete the future. uring + IOCP
+ * stubs: kernel cancels pending ops on close. */
+void msIoEngineCancelFd(msIoEngine* e, int fd);
+
+static inline void msIoEngineCancelFd_ms(int32_t fd) {
+	msIoEngine* eng = msGetIoEngineIfExists();
+	if (eng != NULL) msIoEngineCancelFd(eng, fd);
+}
+
 /* ===== MetaScript Bridge Wrappers ===== */
 
 static inline void* msIoAccept_ms(int32_t listenFd) {

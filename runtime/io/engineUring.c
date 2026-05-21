@@ -285,6 +285,11 @@ void* msIoSendString(msIoEngine* e, int fd, msString data) {
 
 /* ===== Process Completions ===== */
 
+/* No-op: Linux 5.5+ emits -ECANCELED CQE on fd close. */
+void msIoEngineCancelFd(msIoEngine* e, int fd) {
+	(void)e; (void)fd;
+}
+
 int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 	struct msUring* ring = &e->ring;
 

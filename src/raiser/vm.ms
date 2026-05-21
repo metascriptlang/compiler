@@ -8,7 +8,7 @@ import {
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind,
-	raiserNil, raiserInt, raiserString, raiserArray, raiserToString, copyValueInto,
+	raiserNil, raiserInt, raiserBool, raiserString, raiserArray, raiserToString, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject
 } from "./value";
@@ -314,6 +314,9 @@ export function execModule(mod: RaiserModule): RaiserVM {
 			vmCmpBranchF64(vm, inst, 5);
 		} else if (op === RaiserOpcode.CallHost) {
 			vmHandleCallHost(vm, inst);
+		} else if (op === RaiserOpcode.IsNil) {
+			const v = getReg(vm, base + inst.b);
+			setReg(vm, base + inst.a, raiserBool(v.kind === RaiserValueKind.Nil));
 		} else {
 			vmError(vm, `Unknown opcode: ${op}`);
 		}

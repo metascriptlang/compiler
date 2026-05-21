@@ -41,13 +41,14 @@ import {
 	TypeObjectData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeGenericData, TypeFunctionData,
 	// SERIALIZE A2 — macro multi-decl emission
 	SpliceManyData,
+	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
+	SymbolKind,
 } from "../../ast/node";
-import { CheckerContext, addError, addErrorFullRange, createContext, ExportRegistry } from "../../checker/context";
+import { CheckerContext, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
-import { forEachChild } from "../../ast/visitor";
 import { hasGenericParams } from "../../checker/types";
 import { callMacroEvaluator, getComptimeOuterCtx } from "./callbacks";
-import { lookupFunctionDeclByName } from "./comptime";
+import { walkBodyForCallees } from "./comptime";
 import { lookupModuleProgram } from "../../checker/instantiate";
 import { lookupSymbol } from "../../checker/symbol";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind } from "../../raiser/value";
@@ -752,23 +753,47 @@ function declKindOrdinal(name: string): number {
 	};
 }
 
-// Try to rewrite a single MemberExpr — returns the new node if rewritten,
-// or the original node unchanged if it doesn't match a known pattern.
+// Lookup a member ordinal for our known macro-facing enums. Returns -1 for
+// unknown enum names so callers can no-op.
+function macroEnumOrdinal(enumName: string, memberName: string): number {
+	return match (enumName) {
+		"NodeKind" => nodeKindOrdinal(memberName),
+		"DeclKind" => declKindOrdinal(memberName),
+		_ => -1,
+	};
+}
+
+// Try to rewrite a known enum-member access to its integer ordinal.
+// Returns the new node if rewritten, or the original node unchanged.
+//
+// Two surface forms must be handled — they look identical in source but the
+// checker resolves them differently depending on when preprocessing runs:
+//
+//   1. Raw MemberExpr(Identifier("NodeKind"), "TypeObject") — pre-check form.
+//      Matches macro bodies that get preprocessed BEFORE the checker walks
+//      them (preprocessMacroBody on the macro body in expandMacroInvocation).
+//
+//   2. Resolved Identifier with resolvedSym.symbolKind=EnumMember — post-check
+//      form. Matches injected helper bodies whose source module was already
+//      checked when its file was first compiled (checkExprPass.ms:3573 mutates
+//      the node in place: kind→Identifier, data→{name:mangledName},
+//      resolvedSym→memberSym). Without this case, helpers like
+//      detectUnionDisc calling peelVariant see `NodeKind.TypeObject` as a
+//      mangled Identifier the Raiser VM can't look up (evaluates to nil), and
+//      `v0.kind === NodeKind.TypeObject` always returns false (Bug B Layer 2).
 function tryRewriteEnumMember(node: Node): Node {
-	if (node === null || node.kind !== NodeKind.MemberExpr) return node;
-	const d = node.data as MemberExprData;
-	if (d.object === null || d.object.kind !== NodeKind.Identifier) return node;
-	const objName = (d.object.data as IdentifierData).name;
-	if (objName === "NodeKind") {
-		const ord = nodeKindOrdinal(d.property);
-		if (ord >= 0) {
-			return mkNumber(ord, node.location);
-		}
+	if (node === null) return node;
+	if (node.kind === NodeKind.MemberExpr) {
+		const d = node.data as MemberExprData;
+		if (d.object === null || d.object.kind !== NodeKind.Identifier) return node;
+		const ord = macroEnumOrdinal((d.object.data as IdentifierData).name, d.property);
+		return ord >= 0 ? mkNumber(ord, node.location) : node;
 	}
-	if (objName === "DeclKind") {
-		const ord = declKindOrdinal(d.property);
-		if (ord >= 0) {
-			return mkNumber(ord, node.location);
+	if (node.kind === NodeKind.Identifier && node.resolvedSym !== null) {
+		const sym = node.resolvedSym;
+		if (sym.symbolKind === SymbolKind.EnumMember && sym.symbolType !== null) {
+			const ord = macroEnumOrdinal(sym.symbolType.typeName, sym.name);
+			if (ord >= 0) return mkNumber(ord, node.location);
 		}
 	}
 	return node;
@@ -949,55 +974,10 @@ function preprocessMacroBody(body: Node): void {
 	preprocessNode(body);
 }
 
-// Find a FunctionDecl by name in a module's top-level statements.
-// Handles both bare FunctionDecl and ExportDecl-wrapped (export function f(){}).
-// Returns null if not found. Used by macro inject to surface PRIVATE
-// same-module helpers (not visible via ExportRegistry).
-function findFunctionDeclInProgram(program: Node, name: string): Node {
-	if (program === null) return null as unknown as Node;
-	const pd = program.data as ProgramData;
-	for (const stmt of pd.programStmts) {
-		let target = stmt;
-		if (target.kind === NodeKind.ExportDecl) {
-			target = (target.data as ExportDeclData).exportedDecl;
-		}
-		if (target !== null && target.kind === NodeKind.FunctionDecl) {
-			const fd = target.data as FunctionDeclData;
-			if (fd.fnName === name) return target;
-		}
-	}
-	return null as unknown as Node;
-}
-
-// Walk a body for CallExpr → Identifier names, look each up FIRST in the
-// macro's defining module (catches private helpers), THEN in the outer
-// ExportRegistry (catches cross-module exports). Push discovered FunctionDecls
-// onto the queue. Cycle-safe via visited set.
-function walkBodyForMacroCallees(
-	body: Node, definingProgram: Node, registry: ExportRegistry,
-	visited: HashSet<string>, queue: Node[],
-): void {
-	if (body === null) return;
-	if (body.kind === NodeKind.CallExpr) {
-		const c = body.data as CallExprData;
-		if (c.callee !== null && c.callee.kind === NodeKind.Identifier) {
-			const name = (c.callee.data as IdentifierData).name;
-			if (!visited.has(name)) {
-				visited.add(name);
-				// Try defining module first (catches private helpers)
-				let fnDecl: Node = findFunctionDeclInProgram(definingProgram, name);
-				// Fall back to ExportRegistry (cross-module exports)
-				if (fnDecl === null && registry !== null) {
-					fnDecl = lookupFunctionDeclByName(registry, name);
-				}
-				if (fnDecl !== null) queue.push(fnDecl);
-			}
-		}
-	}
-	forEachChild(body, (child: Node) => {
-		walkBodyForMacroCallees(child, definingProgram, registry, visited, queue);
-	});
-}
+// walkBodyForMacroCallees was identical to ./comptime.walkBodyForCallees after
+// the @comptime injector adopted the defining-program-first lookup pattern.
+// Use the shared helper to keep cross-module callee discovery consistent
+// between the macro path and the @comptime path.
 
 // ===== rewriteCallExprToMacroInvocation: post-expansion macro-call detection =====
 //
@@ -1112,7 +1092,7 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		}
 		const visited = new HashSet<string>();
 		const queue: Node[] = [];
-		walkBodyForMacroCallees(body, macroDefiningProgram, outerCtxForInject.registry, visited, queue);
+		walkBodyForCallees(body, outerCtxForInject.registry, macroDefiningProgram, visited, queue);
 		while (queue.length > 0) {
 			const decl = queue.pop();
 			const fd = decl.data as FunctionDeclData;
@@ -1127,7 +1107,7 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 				const dp = lookupModuleProgram(decl.resolvedSym.modulePath);
 				if (dp !== null) helperDefiningProgram = dp;
 			}
-			walkBodyForMacroCallees(fd.fnBody, helperDefiningProgram, outerCtxForInject.registry, visited, queue);
+			walkBodyForCallees(fd.fnBody, outerCtxForInject.registry, helperDefiningProgram, visited, queue);
 		}
 	}
 

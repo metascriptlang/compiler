@@ -16,7 +16,7 @@ import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
 import { lowerTypeCoercion } from "./coercion/typeCoercion";
 import { lowerDestructuring } from "./desugar/destructuringLower";
 import { lowerSpread } from "./desugar/spreadExpand";
-import { lowerTryExpr } from "./desugar/resultDesugar";
+import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerResultFieldCheck } from "./desugar/resultFieldCheck";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerLambda } from "./lowering/lambdaLifting";
@@ -31,6 +31,12 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerDestructuring(result, ctx);
 	result = lowerSpread(result, ctx);
 	result = lowerTryExpr(result, ctx);
+	// Result.ok/err are `static extern` (no body, no nativeName) — Raiser
+	// cannot dispatch via either funcMap or CallHost. Desugar to ObjectLiteral
+	// here, matching the JS-backend pattern (transform/index.ms:91). Without
+	// this, calls to Result.ok/err fall through to compileClosureCall →
+	// LoadField on Nil → "object handle out of bounds: 0".
+	result = lowerResultConstructors(result);
 	result = lowerResultFieldCheck(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = lowerLambda(result, ctx);

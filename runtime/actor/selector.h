@@ -44,6 +44,12 @@ int msSelectorUnregister(msSelector* sel, int fd);
  * Results written to out array, up to maxEvents entries. */
 int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEvents);
 
+/* Expose the underlying selector fd (kqueue/epoll). Returns -1 if the
+ * backend has no fd (poll(), Windows fallback) — caller falls back to
+ * timeout-polling. Use this to register the selector as a watched fd in
+ * another selector (chained-poll pattern, httpbeast-style). */
+int msSelectorGetFd(msSelector* sel);
+
 /* ===== MetaScript Bridge =====
  * Thin wrappers that cast int64 handles ↔ msSelector* pointers.
  * MetaScript has no raw pointer type, so selector handles are passed as int64.
@@ -86,6 +92,10 @@ static inline int32_t msSelectorEventFd(int32_t index) {
 
 static inline int32_t msSelectorEventFlags(int32_t index) {
 	return (int32_t)_msEvtBuf[index].events;
+}
+
+static inline int32_t msSelectorFd(int64_t sel) {
+	return (int32_t)msSelectorGetFd((msSelector*)(intptr_t)sel);
 }
 
 /* end bridge */

@@ -334,24 +334,29 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 		const elseStmts = extractBodyStmts(id.alternate);
 		splitStmts(elseStmts, sc, elseStart, joinState, loc, resultType);
 	} else {
-		// Only then branch has yield (or no else)
+		// Only then branch has yield (or no else). Since else has no await,
+		// inline its body inside the if-else's else branch (executed
+		// conditionally when cond=false), followed by transition to joinState.
+		// Earlier this incorrectly pushed else body into joinState's stmts,
+		// which leaked the else body into the parent context (e.g. an
+		// enclosing while-condition state ran the else body unconditionally).
+		const elseBlockStmts: Node[] = [];
+		if (hasElse) {
+			const elseStmts = extractBodyStmts(id.alternate);
+			for (const s of elseStmts) elseBlockStmts.push(s);
+		}
+		elseBlockStmts.push(makeStateAssign(joinState, loc));
+
 		sc.items[currentState].stmts.push(
 			makeIf(
 				id.condition,
 				makeBlock([makeStateAssign(thenStart, loc)], loc),
-				makeBlock([makeStateAssign(joinState, loc)], loc),
+				makeBlock(elseBlockStmts, loc),
 				loc,
 			),
 		);
 		const thenStmts = extractBodyStmts(id.consequent);
 		splitStmts(thenStmts, sc, thenStart, joinState, loc, resultType);
-		// Else branch (no yield) goes directly into joinState
-		if (hasElse) {
-			const elseStmts = extractBodyStmts(id.alternate);
-			for (const s of elseStmts) {
-				sc.items[joinState].stmts.push(s);
-			}
-		}
 	}
 }
 

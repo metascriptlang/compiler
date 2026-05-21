@@ -14,7 +14,6 @@ test "Post-pipeline: new Item { value: 42 }" {
 	while (i < pd.programStmts.length) {
 		const stmt = pd.programStmts[i];
 		console.log("post stmt[" + i + "] kind: " + stmt.kind);
-		// Check for VariableDecl
 		if (stmt.kind === NodeKind.VariableDecl) {
 			const vd = stmt.data as VariableDeclData;
 			console.log("  init kind: " + vd.initializer.kind + " NewExpr=" + NodeKind.NewExpr);

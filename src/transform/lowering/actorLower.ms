@@ -29,20 +29,21 @@ const MS_MSG_MAX_ARGS = 7;
 // void* type for HiddenStdConv casts in actor message packing/completion.
 const VOID_PTR: Type = createPtr(createPrimitive(TypeKind.Void));
 
-// Classify a Type for message slot packing:
-//   "double" → msMsgSetDouble/GetDouble, msMsgCompleteDouble (1 slot, 8 bytes)
-//   "string" → msMsgSetString/GetString, msMsgCompleteString (2 slots, 16 bytes)
-//   "array"  → msMsgSetString/GetString + reinterpret cast (2 slots, 16 bytes — same layout as string)
-//   "ptr"    → msMsgSetPtr/GetPtr, msMsgCompletePtr (1 slot — pointers, Ref<T>)
+// Single Type→kind classifier shared by params (set/get) and return
+// (complete/chain). 1 slot = 8 bytes; string/array use 2 slots.
+// Receive side (msFutureReadInt32/Int64/Bool) requires typed encoding —
+// lumping int*/bool into "double" corrupts values via IEEE bit-pattern.
 function typeMsgKind(t: Type): string {
 	if (t === null) return "ptr";
 	return match (t.kind) {
 		TypeKind.String => "string",
 		TypeKind.Array => "array",
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32
-			| TypeKind.Int32 | TypeKind.Int64 | TypeKind.Int16 | TypeKind.Int8
-			| TypeKind.Uint32 | TypeKind.Uint64 | TypeKind.Uint16 | TypeKind.Uint8
-			| TypeKind.Boolean | TypeKind.Enum => "double",
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "double",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32
+			| TypeKind.Enum => "int32",
+		TypeKind.Int64 | TypeKind.Uint64 => "int64",
+		TypeKind.Boolean => "bool",
 		_ => "ptr",
 	};
 }
@@ -52,10 +53,16 @@ function paramMsgKind(paramTypes: Type[], idx: number): string {
 	return typeMsgKind(paramTypes[idx]);
 }
 
-// Map message kind to C setter/getter function names
+// Name tables — one per direction of the wire. Each kind picks the typed
+// runtime helper. Params share slot layout; return path needs typed Complete
+// so receive-side msFutureReadT casts read the right field.
+
 function msgSetterName(mk: string): string {
 	return match (mk) {
 		"double" => "msMsgSetDouble",
+		"int32"  => "msMsgSetInt32",
+		"int64"  => "msMsgSetInt64",
+		"bool"   => "msMsgSetBool",
 		"string" | "array" => "msMsgSetString",
 		_ => "msMsgSetPtr",
 	};
@@ -64,6 +71,9 @@ function msgSetterName(mk: string): string {
 function msgGetterName(mk: string): string {
 	return match (mk) {
 		"double" => "msMsgGetDouble",
+		"int32"  => "msMsgGetInt32",
+		"int64"  => "msMsgGetInt64",
+		"bool"   => "msMsgGetBool",
 		"string" | "array" => "msMsgGetString",
 		_ => "msMsgGetPtr",
 	};
@@ -72,33 +82,33 @@ function msgGetterName(mk: string): string {
 function msgCompleteName(mk: string): string {
 	return match (mk) {
 		"double" => "msMsgCompleteDouble",
+		"int32"  => "msMsgCompleteInt32",
+		"int64"  => "msMsgCompleteInt64",
+		"bool"   => "msMsgCompleteBool",
 		"string" => "msMsgCompleteString",
 		"array" => "msMsgCompletePtr",
 		_ => "msMsgCompletePtr",
 	};
 }
 
-// Map a Promise<T> inner type to the matching msFutureChain_<T> variant.
-// Async _impl returns msFuture_<T>* — we must read .value with the right
-// type to preserve msString (16B) and primitive widths.
-// Fallback to generic msFutureChain for struct/array (truncates but matches
-// current behavior until spawn/async allocation is unified).
-function futureChainFnForReturn(retType: Type): string {
-	if (retType === null) return "msFutureChain";
-	// retType is Promise<T> — peel to T
-	const inner = retType.typeReturn !== null ? retType.typeReturn : retType;
-	if (inner === null) return "msFutureChain";
-	return match (inner.kind) {
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureChain_double",
-		TypeKind.Int32 | TypeKind.Int16 | TypeKind.Int8
-			| TypeKind.Uint32 | TypeKind.Uint16 | TypeKind.Uint8
-			| TypeKind.Enum => "msFutureChain_int32",
-		TypeKind.Int64 | TypeKind.Uint64 => "msFutureChain_int64",
-		TypeKind.Boolean => "msFutureChain_bool",
-		TypeKind.String => "msFutureChain_msString",
-		TypeKind.Ref | TypeKind.Ptr | TypeKind.Function => "msFutureChain_ptr",
+function futureChainFn(mk: string): string {
+	return match (mk) {
+		"double" => "msFutureChain_double",
+		"int32"  => "msFutureChain_int32",
+		"int64"  => "msFutureChain_int64",
+		"bool"   => "msFutureChain_bool",
+		"string" => "msFutureChain_msString",
+		"ptr"    => "msFutureChain_ptr",
 		_ => "msFutureChain",
 	};
+}
+
+// Async _impl returns msFuture_<T>* — chain its value into the reply future.
+// retType is Function whose typeReturn = Promise<T>; peel and classify T.
+function futureChainFnForReturn(retType: Type): string {
+	if (retType === null) return "msFutureChain";
+	const inner = retType.typeReturn !== null ? retType.typeReturn : retType;
+	return futureChainFn(typeMsgKind(inner));
 }
 
 // Slot width: strings and arrays use 2 slots (16 bytes), everything else 1 slot (8 bytes).

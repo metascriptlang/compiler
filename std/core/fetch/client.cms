@@ -123,15 +123,17 @@ export function doRequestOver(
 		return Result.err(socketError("send failed"));
 	}
 
-	// Read response headers — loop until \r\n\r\n.
+	// Read response headers — loop until \r\n\r\n. Buffer may also contain
+	// the start of a binary body once headers terminate, so length checks
+	// here must be byte-accurate (UTF-16 .length undercounts binary bytes).
 	let data = "";
 	while (!data.contains("\r\n\r\n")) {
 		const chunk = recvFn(RECV_CHUNK_SIZE);
-		if (chunk.length === 0) break;
+		if (chunk.byteLength === 0) break;
 		data = data + chunk;
-		if (data.length > MAX_HEADER_BYTES) break;
+		if (data.byteLength > MAX_HEADER_BYTES) break;
 	}
-	if (data.length === 0) {
+	if (data.byteLength === 0) {
 		closeFn();
 		return Result.err(invalidResponse("empty response"));
 	}
@@ -146,10 +148,13 @@ export function doRequestOver(
 	let body = "";
 
 	if (isChunked(parsed.value.headers)) {
-		let chunkedData = data.slice(parsed.value.bodyStart, data.length);
+		// bodyStart is a byte offset (header bytes are always ASCII so the
+		// parser's codepoint-based scan coincides with byte positions). Use
+		// byteSlice/byteLength so binary body content is preserved.
+		let chunkedData = data.byteSlice(parsed.value.bodyStart, data.byteLength);
 		while (!chunkedData.startsWith("0\r\n") && !chunkedData.contains("\r\n0\r\n")) {
 			const more = recvFn(RECV_CHUNK_SIZE);
-			if (more.length === 0) break;
+			if (more.byteLength === 0) break;
 			chunkedData = chunkedData + more;
 		}
 		closeFn();
@@ -174,27 +179,32 @@ export function doRequestOver(
 	});
 }
 
+// Body content may be binary (e.g. .dmg / .zip download). All offsets and
+// lengths below are BYTE-based — codepoint-counting via .length / .slice
+// undercounts non-ASCII bytes and truncates the body.
 function readFullBodyOver(recvFn: (maxBytes: int32) => string, initialData: string, bodyStart: int32, contentLength: int32): string {
-	const available = initialData.length - bodyStart;
+	const initialBytes = initialData.byteLength as int32;
+	const available    = initialBytes - bodyStart;
 	if (available >= contentLength) {
-		return initialData.slice(bodyStart, bodyStart + contentLength);
+		return initialData.byteSlice(bodyStart, bodyStart + contentLength);
 	}
-	let body = initialData.slice(bodyStart, initialData.length);
+	let body = initialData.byteSlice(bodyStart, initialBytes);
 	let remaining = contentLength - available;
 	while (remaining > 0) {
 		const chunk = recvFn(remaining);
-		if (chunk.length === 0) break;
+		const chunkBytes = chunk.byteLength as int32;
+		if (chunkBytes === 0) break;
 		body = body + chunk;
-		remaining = remaining - chunk.length;
+		remaining = remaining - chunkBytes;
 	}
 	return body;
 }
 
 function readUntilCloseOver(recvFn: (maxBytes: int32) => string, initialData: string, bodyStart: int32): string {
-	let body = initialData.slice(bodyStart, initialData.length);
+	let body = initialData.byteSlice(bodyStart, initialData.byteLength as int32);
 	while (true) {
 		const chunk = recvFn(RECV_CHUNK_SIZE);
-		if (chunk.length === 0) break;
+		if (chunk.byteLength === 0) break;
 		body = body + chunk;
 	}
 	return body;
@@ -303,3 +313,15 @@ export function requestWithRedirects(options: RequestOptions, maxRedirects: int3
 	}
 	return requestWithRedirectsOver(options, maxRedirects, doRequestPlain);
 }
+
+// Binary-body regression: verified natively, NOT via bun:test
+// ----------------------------------------------------------
+// The `bun:test` shim (bun/transform.ts) rewrites `.byteLength → .length`
+// and `.byteSlice(...) → .slice(...)`, so JS-runtime tests can't observe
+// the byte-vs-codepoint distinction this fix targets. The fix is verified:
+//   1. Native MS probe — `bun bun/run.ts run <probe>` confirms byteSlice
+//      preserves all 4 bytes of "AéZ" (4 UTF-8 bytes, 3 codepoints).
+//   2. End-to-end against live OTA — Lightcube's ion update.check() flow
+//      downloads a real .dmg artifact and hash-matches sha256 exactly.
+// Both live in lightcube vendor probes; revisit when the test shim grows
+// native-buffer support.

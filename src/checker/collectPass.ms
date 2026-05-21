@@ -204,6 +204,19 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 
 function collectFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
+	// 3-pass idempotency contract — Pass 1 (collect) parity with Pass 2/3.
+	// If this FunctionDecl was already collected in another context (macro
+	// helper injection — RAISER-CALLHOST.md Phase 8a caveat #2), reuse the
+	// existing Symbol instead of minting a new one. Mints would orphan the
+	// original Sym, leaving subsequent macro invocations to read a polluted
+	// resolvedSym.modulePath and fail transitive helper lookup (Bug B).
+	// Matches Pass 2 `ensureShaped` state guard + Pass 3 `resolvedSym !== null`
+	// preservation. Modeled on the "transform exactly once" cache check at
+	// transf.nim:1307 in the reference compiler.
+	if (node.resolvedSym !== null && node.resolvedSym.modulePath !== "") {
+		defineSymbol(ctx.table, node.resolvedSym);
+		return;
+	}
 	// Define symbol first — needed so extension can link to it
 	const sym = makeSymbol(d.fnName, SymbolKind.Function, unknownType(), false);
 	sym.symbolType.sym = sym;

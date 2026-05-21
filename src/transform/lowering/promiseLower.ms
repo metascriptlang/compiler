@@ -24,7 +24,7 @@
 import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind } from "../../ast/node";
 import { isAwaitable, awaitedType } from "../../checker/types";
 import { TransformContext } from "../context";
-import { makeIdent, makeCall, makeNumber, makeNull, isStructLikeType } from "../util";
+import { makeIdent, makeCall, makeNumber, makeNull, isStructLikeType, unboxVoidPtrToTyped } from "../util";
 
 // ===== Type-tag dispatch =====
 
@@ -130,18 +130,6 @@ function boxValueForFuture(node: Node, loc: SourceLocation): Node {
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 |
 		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => makeCall(makeIdent("msBoxInt32", loc), [node], loc),
 		_ => node,
-	};
-}
-
-function unboxFnForType(t: Type): string {
-	if (t === null) return "";
-	return match (t.kind) {
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
-		TypeKind.Boolean => "msUnboxBool",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "msUnboxInt32",
-		TypeKind.String => "msUnboxString",
-		_ => "",
 	};
 }
 
@@ -251,23 +239,18 @@ function lowerWaitFor(node: Node, loc: SourceLocation): Node {
 	if (retType === null || retType.kind === TypeKind.Void) {
 		return makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
 	}
-	const unboxFn = unboxFnForType(retType);
-	if (unboxFn !== "") {
-		const waitCall = makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
-		const unboxCall = makeCall(makeIdent(unboxFn, loc), [waitCall], loc);
-		unboxCall.nodeType = retType;
-		return unboxCall;
-	}
+	// Typed inline shortcut: struct futures (msFutureCreateInline) carry their
+	// value at the same offset as the typed struct cast, so msWaitForStruct
+	// avoids the heap-box round-trip msUnboxStruct would otherwise unbox.
 	if (isStructLikeType(retType)) {
 		const waitStruct = makeCall(makeIdent("msWaitForStruct", loc), cd.arguments, loc);
 		waitStruct.nodeType = retType;
 		return waitStruct;
 	}
-	// Fallback: array/ref → boxed path (msSinkBoxStruct + msUnboxStruct)
+	// Everything else (primitive boxed in void*, Array/Ref heap-boxed): wait
+	// then dispatch through the shared unbox helper.
 	const waitCall = makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
-	const unboxCall = makeCall(makeIdent("msUnboxStruct", loc), [waitCall], loc);
-	unboxCall.nodeType = retType;
-	return unboxCall;
+	return unboxVoidPtrToTyped(waitCall, retType, loc);
 }
 
 // ===== Public dispatch =====

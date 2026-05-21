@@ -300,7 +300,7 @@ When you're porting and want to find something in chibicc:
 ## Concurrency architecture
 
 This module is designed from day one to leverage MetaScript's concurrency
-primitives (`spawn()`, `actor {}`). See `docs/LANG-PARALLEL.md`.
+primitives (`spawn()`, `actor {}`). See `docs/LANG-ASYNC.md`.
 
 **What is and isn't parallelizable in a C parser**:
 
@@ -480,7 +480,7 @@ actor DiagnosticSink {
 
 ### `.parallel()` — future use (PLANNED)
 
-When `.parallel()` lands (see `docs/LANG-PARALLEL.md` Phase 7), these
+When `.parallel()` lands (see `docs/LANG-ASYNC.md` Phase 7), these
 sites become trivial one-liners:
 
 ```metascript

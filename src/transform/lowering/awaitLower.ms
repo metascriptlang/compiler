@@ -34,7 +34,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
-import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeString, makeIf, makeBinary } from "../util";
+import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeString, makeIf, makeBinary, unboxVoidPtrToTyped } from "../util";
 import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
 import { typedFutureReadFn } from "./promiseLower";
 import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
@@ -62,27 +62,10 @@ export function makeTempDecl(ctx: TransformContext, prefix: string, initExpr: No
 }
 
 // ===== Unboxing =====
-// spawnLower.ms boxes primitive return values via msBoxDouble/msBoxInt32/msBoxBool/msBoxString.
-// After await, we unbox the void* result back to the original type. Struct types don't need
-// unboxing — they're already pointers in the C representation.
-function unboxFnName(kind: TypeKind): string {
-	return match (kind) {
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
-		TypeKind.Boolean => "msUnboxBool",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "msUnboxInt32",
-		TypeKind.String => "msUnboxString",
-		_ => "",
-	};
-}
-
+// Thin wrapper around the shared util helper. Kept named for callers below.
+// Dispatch lives in util.ts to stay in sync with promiseLower's waitFor.
 export function makeUnboxCall(voidPtrExpr: Node, innerType: Type | null, loc: SourceLocation): Node {
-	if (innerType === null) return voidPtrExpr;
-	const fn = unboxFnName(innerType.kind);
-	if (fn === "") return voidPtrExpr;
-	const c = makeCall(makeIdent(fn, loc), [voidPtrExpr], loc);
-	c.nodeType = innerType;
-	return c;
+	return unboxVoidPtrToTyped(voidPtrExpr, innerType, loc);
 }
 
 // Get the inner type that an await expression should produce.

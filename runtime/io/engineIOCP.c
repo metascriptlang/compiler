@@ -306,6 +306,11 @@ void* msIoSendString(msIoEngine* e, int fd, msString data) {
 
 /* ===== Process Completions ===== */
 
+/* No-op: closesocket() queues ABORTED packet to the IOCP. */
+void msIoEngineCancelFd(msIoEngine* e, int fd) {
+	(void)e; (void)fd;
+}
+
 int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 	OVERLAPPED_ENTRY entries[64];
 	ULONG count = 0;

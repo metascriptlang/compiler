@@ -15,7 +15,7 @@ import {
 	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
 	declareLocal, declareLocalStr,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
-	pushLoop, currentLoop, hasLoop, patchLoopBreaks,
+	pushLoop, currentLoop, hasLoop, patchLoopBreaks, patchLoopContinues,
 	resolveBuiltin, registerFunc, resolveFunc, emitClosurePair
 } from "./context";
 import { compileExpr, exprIsString } from "./expressions";
@@ -52,9 +52,11 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 		},
 		NodeKind.ContinueStmt => {
 			if (hasLoop(s)) {
+				// Defer the target — each loop kind patches at its re-enter
+				// point via patchLoopContinues (see context.ms).
 				const loop = currentLoop(s);
-				const offset = loop.startIp - codeLen(s) - 1;
-				emitInst(s, raiserAx(RaiserOpcode.Jump, offset));
+				const jumpIdx = emitJumpPlaceholder(s);
+				loop.continuePatches.items.push(jumpIdx);
 			}
 		},
 		NodeKind.FunctionDecl => {},
@@ -148,6 +150,8 @@ function compileDoWhileStmt(s: RaiserCompState, node: Node): void {
 
 	compileStmt(s, d.doBody);
 
+	patchLoopContinues(s);
+
 	// Condition at the end — loop back if truthy
 	const condReg = compileExpr(s, d.doCondition);
 	const exitJump = emitBranchIfFalsy(s, condReg);
@@ -169,6 +173,8 @@ function compileWhileStmt(s: RaiserCompState, node: Node): void {
 	const exitJump = emitBranchIfFalsy(s, condReg);
 
 	compileStmt(s, d.whileBody);
+
+	patchLoopContinues(s);
 
 	// Jump back to loop start
 	const backOffset = loopStart - codeLen(s) - 1;
@@ -202,6 +208,8 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 
 	// Body
 	compileStmt(s, d.forBody);
+
+	patchLoopContinues(s);
 
 	// Update
 	if (d.forUpdate !== null) {
@@ -252,6 +260,8 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 
 	// Body
 	compileStmt(s, d.forOfBody);
+
+	patchLoopContinues(s);
 
 	// Increment index: __i++
 	const oneReg = allocReg(s);

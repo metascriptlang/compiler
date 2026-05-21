@@ -71,6 +71,16 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		const pr = callStateProgramParser(parseState);
 		if (!pr.ok) continue;
 
+		// Register parsed Program in Phase 1 so cross-module @comptime / macro
+		// resolution can find ANY module's AST regardless of where it falls in
+		// the Phase 2 loadOrder. Phase 2 re-registers with its own parse, which
+		// overwrites harmlessly. Without this, sibling modules in the dep tree
+		// race: a module whose @comptime eager-folds in Phase 2 cannot reach
+		// the Program AST of a sibling that hasn't hit Phase 2 yet. Manifests
+		// platform-sensitively — observed on Linux ARM where the schedule
+		// happens to put the @comptime owner before its non-imported callees.
+		registerModuleProgram(path, pr.value);
+
 		// Temporary context for Phase 1 (discarded after) — shared IdentCache
 		const p1ctx = createModuleContextWithCache(graph, mod, sharedCache);
 		p1ctx.exportRegistry = registry;

@@ -87,6 +87,14 @@ export enum RaiserOpcode {
 	// New stdlib externs require zero VM/codegen edits — they self-register
 	// through the host table (see src/compiler/meta/hostTable.ms).
 	CallHost,         // ABC: R[A] = hostFn[constants[B].strVal](R[A+1]..R[A+C])
+
+	// Nil identity check (1)
+	// Compares value KIND (not just intVal). Required because BneI64/BeqI64
+	// only look at intVal — Array(handle=0) and Nil both have intVal=0 and
+	// would compare equal under BneI64. Codegen emits this opcode whenever
+	// either side of === / !== is a NullLiteral, mirroring the kind-aware
+	// equality treatment Nim and HashLink give to nil checks.
+	IsNil,            // ABC: R[A] = (R[B].kind === Nil) as bool
 }
 
 // --- Instruction ---

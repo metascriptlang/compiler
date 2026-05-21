@@ -14,7 +14,7 @@ import {
 import { genExpr } from "./expressions";
 import { genStmt, resolveEmitArgs } from "./statements";
 import { mangle, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfoDef } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfoDef, isNilableValueType } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumber, cBoolLiteral, cStringLiteral } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -703,6 +703,20 @@ function genGlobalVar(g: CGen, node: Node): void {
 	// produces) so dedup works across decl + extern paths.
 	nameSetAdd(g.declaredGlobals, varName);
 
+	// NullLiteral initializer on a value-type global → C-compound-literal zero
+	// init (`x = (T){0};`) instead of `x = MS_NIL;`. MS_NIL is `void*` and a
+	// struct/union/array can't accept it. Mirrors the local var path in
+	// statements.ms (genVarDecl, NullLiteral + isStructCType branch). Without
+	// this, matchLower's `let x = null` placeholder for top-level `const x: T =
+	// match(...){...}` (where T is a value type — Struct/Union/Array/Tuple)
+	// emits invalid C.
+	if (d.initializer !== null
+			&& d.initializer.kind === NodeKind.NullLiteral
+			&& node.nodeType !== null
+			&& isNilableValueType(node.nodeType)) {
+		addLine(sec(g, CSection.ModuleInit), `  ${varName} = (${cType}){0};`);
+		return;
+	}
 	// Non-trivial initializers go to ModuleInit (not valid as C global initializers)
 	if (d.initializer !== null) {
 		const p = g.initProc;

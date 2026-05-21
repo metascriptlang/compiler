@@ -201,24 +201,38 @@ function extractVariantKey(v: Node, discField: string): string {
 	return "";
 }
 
+// `T | null` witnesses (common decode pattern) carry a literal `null`
+// Identifier alongside real variants. The null arm isn't a real DU variant —
+// drop it so auto-detect / variant building treats only the typed members.
+function isNullVariant(m: Node): boolean {
+	if (m.kind !== NodeKind.Identifier) return false;
+	const id: IdentifierData = m as unknown as IdentifierData;
+	return id.name === "null";
+}
+
 export function detectUnionDisc(tt: Node): DiscInfo {
 	const ttd: TypeUnionData = tt as unknown as TypeUnionData;
 	let discField: string = ttd.discFieldName;
 	let discKind: string = ttd.discKind;
+
+	const realMembers: Node[] = [];
+	for (const m of ttd.typExprMembers) {
+		if (!isNullVariant(m)) realMembers.push(m);
+	}
 
 	// Step 1: auto-detect discFieldName by walking variant[0]'s field names
 	// and confirming each candidate exists in ALL other variants (skip [0]
 	// since the candidate came from it). Requires ≥2 variants — a DU by
 	// definition has multiple variants; with only 1 the inner-loop never
 	// iterates and we'd vacuously pick variant[0]'s first field as disc.
-	if (discField === "" && ttd.typExprMembers.length >= 2) {
-		const v0: Node = peelVariant(ttd.typExprMembers[0]);
+	if (discField === "" && realMembers.length >= 2) {
+		const v0: Node = peelVariant(realMembers[0]);
 		if (v0.kind === NodeKind.TypeObject) {
 			const v0d: TypeObjectData = v0 as unknown as TypeObjectData;
 			for (const candidate of v0d.typExprFieldNames) {
 				let foundInAll: boolean = true;
-				for (let vi = 1; vi < ttd.typExprMembers.length; vi = vi + 1) {
-					const v: Node = peelVariant(ttd.typExprMembers[vi]);
+				for (let vi = 1; vi < realMembers.length; vi = vi + 1) {
+					const v: Node = peelVariant(realMembers[vi]);
 					if (v.kind !== NodeKind.TypeObject) { foundInAll = false; break; }
 					const vd: TypeObjectData = v as unknown as TypeObjectData;
 					let inV: boolean = false;
@@ -235,7 +249,7 @@ export function detectUnionDisc(tt: Node): DiscInfo {
 	// Step 2: build paired (key, member) variants. Two paths:
 	//   (a) Bridge already populated tt.variantKeys — pair with typExprMembers
 	//       by index (bridge guarantees same length + order).
-	//   (b) Auto-extract: walk typExprMembers, derive key from each variant's
+	//   (b) Auto-extract: walk realMembers, derive key from each variant's
 	//       disc-field literal type. Variants that fail to yield a key are
 	//       SKIPPED (kept out of variants[]) — no parallel-list misalignment
 	//       downstream because key + member always travel together.
@@ -246,7 +260,7 @@ export function detectUnionDisc(tt: Node): DiscInfo {
 			variants.push({ key: ttd.variantKeys[vi], member });
 		}
 	} else if (discField !== "") {
-		for (const vRaw of ttd.typExprMembers) {
+		for (const vRaw of realMembers) {
 			const member: Node = peelVariant(vRaw);
 			const key: string = extractVariantKey(member, discField);
 			if (key !== "") {

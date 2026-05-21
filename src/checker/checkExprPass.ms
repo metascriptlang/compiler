@@ -1181,7 +1181,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		},
 		NodeKind.NewExpr => checkNewExpr(ctx, node, expectedType),
 		NodeKind.TryExpr => checkTryExpr(ctx, node),
-		NodeKind.MatchExpr => checkMatchExpr(ctx, node),
+		NodeKind.MatchExpr => checkMatchExpr(ctx, node, expectedType),
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;
 			checkExpr(ctx, d.awaitArg, null);
@@ -4123,7 +4123,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 
 // ===== Match Expression =====
 
-function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
+function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MatchExprData;
 	checkExpr(ctx, d.matchDisc, null);
 	const discType = d.matchDisc.nodeType;
@@ -4207,12 +4207,12 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 				if (last.kind === NodeKind.ReturnStmt) {
 					const rd = last.data as ReturnStmtData;
 					if (rd.argument !== null) {
-						checkExpr(ctx, rd.argument, null); bodyType = rd.argument.nodeType;
+						checkExpr(ctx, rd.argument, expectedType); bodyType = rd.argument.nodeType;
 					}
 				}
 			}
 		} else {
-			checkExpr(ctx, cd.caseBody, null); bodyType = cd.caseBody.nodeType;
+			checkExpr(ctx, cd.caseBody, expectedType); bodyType = cd.caseBody.nodeType;
 		}
 
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));

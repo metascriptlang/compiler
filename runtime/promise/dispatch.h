@@ -73,6 +73,11 @@ msDispatcher* msGetDispatcher(void);
 void msDestroyDispatcher(void);
 bool msHasDispatcher(void);
 
+/* Returns the dispatcher's selector fd (kqueue/epoll), or -1 if not
+ * available. Used by std/http to chain-poll the dispatcher's wake pipe
+ * with its own HTTP selector. */
+int msGetDispatcherSelectorFd(void);
+
 int msProcessTimers(msDispatcher* d, bool* didWork);
 void msProcessCallbacks(msDispatcher* d, bool* didWork);
 int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs);
