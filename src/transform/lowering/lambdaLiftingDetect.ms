@@ -90,15 +90,50 @@ let _detectAllNames: NameSet = createNameSet();
 let _detectAllSS: ScopeStack = { names: [], funcMarkers: [] };
 let _detectAllIdents: Node[] = [];
 let _detectClosureDepth: number = 0;  // >0 when inside a closure
+// Number of funcMarkers at start of the current detectAllCaptures call.
+// Used to filter out captures whose defining frame was pushed DURING the walk
+// (i.e., locals of nested closures owned by their own envs, not by F's env).
+let _detectInitialMarkers: number = 0;
+
+// True if `name`'s defining frame index is < `_detectInitialMarkers`,
+// i.e., the var lives in F's own frame or one of F's ancestors — never in a
+// frame pushed during F's body walk.
+function definedAtOrAboveInitial(name: string): boolean {
+	let nameIdx = -1;
+	let i = _detectAllSS.names.length - 1;
+	while (i >= 0) {
+		if (_detectAllSS.names[i] === name) { nameIdx = i; break; }
+		i -= 1;
+	}
+	if (nameIdx < 0) return false;
+	// Find defining frame: highest funcMarker idx s.t. funcMarkers[idx] <= nameIdx.
+	// If no funcMarker is <= nameIdx, the var is module-level — keep it (handled
+	// elsewhere by isModuleLevelVar filter).
+	let frameIdx = _detectAllSS.funcMarkers.length;
+	let j = _detectAllSS.funcMarkers.length - 1;
+	while (j >= 0) {
+		if (_detectAllSS.funcMarkers[j] <= nameIdx) { frameIdx = j; break; }
+		j -= 1;
+	}
+	if (frameIdx >= _detectAllSS.funcMarkers.length) return true;
+	return frameIdx < _detectInitialMarkers;
+}
 
 // Detect all captures from a function body. Single entry point; returns both
 // the captured-name set and the parallel array of original Identifier nodes
 // (preserved for symbol/type info during lifting).
+//
+// Only counts refs to vars defined in F's frame or one of F's ancestors. Vars
+// declared inside a NESTED closure's body (e.g., `state` in an outer arrow when
+// detection runs for the enclosing FunctionDecl) are EXCLUDED here — they
+// belong to that nested closure's own env. Each closure boundary records its
+// own captures via separate detectAllCaptures calls (see `detectPassWalk`).
 export function detectAllCaptures(body: Node, ss: ScopeStack): DetectResult {
 	_detectAllNames = createNameSet();
 	_detectAllIdents = [];
 	_detectClosureDepth = 0;
 	_detectAllSS = cloneScopeStack(ss);
+	_detectInitialMarkers = _detectAllSS.funcMarkers.length;
 	detectAllWalk(body);
 	const result: DetectResult = {
 		captures: _detectAllNames,
@@ -115,7 +150,7 @@ function detectAllWalk(node: Node): void {
 		const d = node.data as IdentifierData;
 		// Only capture at closure depth > 0 (inside ArrowFunction/FunctionExpr).
 		// Variables in the main function body are directly accessible — no capture needed.
-		if (_detectClosureDepth > 0 && !isBuiltinName(d.name) && !isLocalVar(_detectAllSS, d.name) && isOuterVar(_detectAllSS, d.name)) {
+		if (_detectClosureDepth > 0 && !isBuiltinName(d.name) && !isLocalVar(_detectAllSS, d.name) && isOuterVar(_detectAllSS, d.name) && definedAtOrAboveInitial(d.name)) {
 			// Reference parity (interestingVar): only capture variables and params.
 			// Skip types (Class, Interface, TypeAlias, Enum) — they're not runtime values.
 			if (node.resolvedSym !== null) {
@@ -281,16 +316,6 @@ function recordFnCaptures(node: Node, body: Node, params: string[], state: Detec
 	detectPassWalk(body, state, fnSS, node);
 }
 
-// Walk an Arrow/FunctionExpr body in a scope-aware way so nested FunctionDecls
-// land with correct frames. The arrow itself isn't recorded — its captures roll
-// up into the enclosing fn's `fnCaptures`.
-function walkClosureBody(body: Node, params: string[], state: DetectionState, ss: ScopeStack, enclosingFn: Node): void {
-	const closureSS = cloneScopeStack(ss);
-	pushFuncBoundary(closureSS);
-	for (const p of params) defineVar(closureSS, p);
-	detectPassWalk(body, state, closureSS, enclosingFn);
-}
-
 // Recursive walker. `enclosingFn` is the nearest containing FunctionDecl /
 // MethodDecl / ConstructorDecl, or null at module scope.
 function detectPassWalk(node: Node, state: DetectionState, ss: ScopeStack, enclosingFn: Node): void {
@@ -312,12 +337,17 @@ function detectPassWalk(node: Node, state: DetectionState, ss: ScopeStack, enclo
 	}
 	if (node.kind === NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
-		walkClosureBody(d.arrowBody, d.arrowParams, state, ss, enclosingFn);
+		// Arrows are env-owners too (Nim parity): each arrow that has captures
+		// gets its own per-call env, so locals declared inside its body don't
+		// share storage across multiple invocations of the same arrow. See
+		// `detectAllCaptures`'s defined-at-or-above-initial filter for how each
+		// boundary's captures are scoped.
+		recordFnCaptures(node, d.arrowBody, d.arrowParams, state, ss);
 		return;
 	}
 	if (node.kind === NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
-		walkClosureBody(d.funcExprBody, d.funcExprParams, state, ss, enclosingFn);
+		recordFnCaptures(node, d.funcExprBody, d.funcExprParams, state, ss);
 		return;
 	}
 	if (node.kind === NodeKind.VariableDecl) {

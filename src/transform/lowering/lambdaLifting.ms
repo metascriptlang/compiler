@@ -848,6 +848,13 @@ function makeEnvVarAndClosurePair(envVarName: string, liftedName: string, envStr
 // Called after detectAllCaptures finds captures, before walkLiftBody.
 
 function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdents: Node[], loc: SourceLocation): void {
+	// Snapshot OUTER (enclosing) shared env BEFORE we override — used below to
+	// emit copy-from-_envP stmts for ancestor captures (vars defined in an
+	// enclosing closure's frame, neither this closure's param nor module-level).
+	// When sharedEnvName === "" the closure has no enclosing env (top-level
+	// FunctionDecl), so ancestor copies don't apply.
+	const outerEnvName = state.sharedEnvName;
+	const outerEnvStructType = state.sharedEnvStructType;
 	state.sharedEnvActive = true;
 	state.sharedEnvName = `$Env_${state.currentFnName}_shared`;
 	state.sharedEnvVarName = `_env_${state.currentFnName}_`;
@@ -947,6 +954,29 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 			state.hoistedEnvDecls.push(makeExprStmt(makeAssign(
 				lhs, rhs, loc
 			), loc));
+		} else if (outerEnvName !== "" && outerEnvStructType !== null && envHasField(outerEnvStructType, name)) {
+			// Ancestor capture (Nim parity, `up`-chain copy): name is neither a
+			// param of this closure nor module-level — it's defined in some
+			// enclosing closure's frame. Copy from outer env at this closure's
+			// entry so inner closures (which use this closure's per-call env as
+			// their $up) see the value. RHS is constructed as a cast on _envP
+			// to the outer env struct, mirroring `chainWalkAccess` but as an
+			// init stmt rather than a read in the body. Skips locals declared
+			// inside this body — those are still handled by VarDecl rewrite.
+			const lhs = makeMember(makeIdent(state.sharedEnvVarName, loc), name, loc);
+			if (orig !== null && orig.nodeType !== null) {
+				lhs.nodeType = orig.nodeType;
+			}
+			const envIdent = makeIdent(ENV_PARAM_NAME, loc);
+			const cast = createNode(NodeKind.TypeAssertion, { asExpr: envIdent, asType: outerEnvName }, syntheticToken(loc));
+			cast.nodeType = createPtr(outerEnvStructType);
+			const deref = makeHiddenDeref(cast, loc);
+			deref.nodeType = outerEnvStructType;
+			const rhs = makeMember(deref, name, loc);
+			if (orig !== null && orig.nodeType !== null) {
+				rhs.nodeType = orig.nodeType;
+			}
+			state.hoistedEnvDecls.push(makeExprStmt(makeAssign(lhs, rhs, loc), loc));
 		}
 	}
 
@@ -1441,6 +1471,90 @@ function restoreSharedEnv(state: LiftState, snap: SharedEnvSnapshot): void {
 	state.sharedEnvCapturedIdents = snap.capturedIdents;
 }
 
+// Walk + lift one capturing closure (Arrow or FunctionExpr). Drives the
+// per-closure env setup: bumps the closure counter so this closure's shared
+// env gets a unique name, calls `setupSharedEnv` in walkLiftBody's preWalk
+// when detection found nested-capture refs, then restores currentFnName /
+// currentParams. Returns the new body root (only ArrowFunction's
+// body-is-closure shortcut may replace the body wholesale).
+//
+// `lifter` is the per-kind closure constructor (liftArrow vs liftFuncExpr);
+// `allowBodyClosureShortcut` is true only for ArrowFunction (FunctionExpr
+// bodies are always BlockStmt). `nodeKindBody` is the original body — the
+// returned body is what callers should reattach to the AST node.
+function liftCapturingClosureBody(
+	state: LiftState,
+	node: Node,
+	body: Node,
+	params: string[],
+	paramTypes: string[],
+	flags: string,
+	returnType: string,
+	suffix: string,
+	savedActiveRewrites: PendingEnvRewrite[],
+	savedShared: SharedEnvSnapshot,
+	allowBodyClosureShortcut: boolean,
+	lifter: (n: Node, captures: NameSet, state: LiftState) => Node,
+): { result: Node, replacedBody: Node } {
+	for (const p of params) { defineVar(state.ss, p); }
+	// Each capturing closure is its own env-owner (Nim parity). Locals
+	// declared inside its body MUST live in this closure's per-call env, not
+	// in an enclosing FunctionDecl's shared env — otherwise multiple
+	// invocations of the same closure share storage and overwrite each
+	// other's per-call state. Detection's `fnCaptures` for this node = vars
+	// in the closure's frame or above referenced by its nested closures
+	// (already filtered by `definedAtOrAboveInitial`).
+	const ownCaptures = detectionGetCaptures(state.detection, node);
+	const ownCapturedIdents = detectionGetCapturedIdents(state.detection, node);
+	const savedFnName = state.currentFnName;
+	const savedCurrentParams = state.currentParams;
+	if (ownCaptures.items.length > 0) {
+		state.closureCounter += 1;
+		state.currentFnName = `${savedFnName}_${suffix}${state.closureCounter}`;
+		state.currentParams = createNameSet();
+		for (const p of params) nameSetAdd(state.currentParams, p);
+		preRegisterVarTypes(body, state);
+	}
+	const loc = node.location;
+	let replacedBody: Node = null as unknown as Node;
+	if (allowBodyClosureShortcut && body !== null
+		&& (body.kind === NodeKind.ArrowFunction
+			|| body.kind === NodeKind.FunctionExpr)) {
+		// Expression-bodied arrow returning another closure — no statements
+		// to host an env decl, fall back to old behavior (lift inner only).
+		replacedBody = walkOrLift(body, state);
+	} else {
+		walkLiftBody(body, state, () => {
+			if (ownCaptures.items.length > 0) {
+				setupSharedEnv(state, ownCaptures, ownCapturedIdents, loc);
+			}
+		});
+	}
+	const effectiveBody = (replacedBody !== null as unknown as Node) ? replacedBody : body;
+	state.capturedIdents = [];
+	const captures = detectCaptures(effectiveBody, state.ss, state.capturedIdents);
+	popFuncBoundary(state.ss);
+	state.activeEnvRewrites = savedActiveRewrites;
+	restoreSharedEnv(state, savedShared);
+	state.currentFnName = savedFnName;
+	state.currentParams = savedCurrentParams;
+	// The closure needs the outer env at runtime if either its body has
+	// direct outer refs (captured) OR detection found refs from nested
+	// closures (ownCaptures). In the latter case, walkLiftBody's per-closure
+	// shared env already rewrote body refs through its own env var, so
+	// `captures` is empty post-walk — fall back to ownCaptures to keep the
+	// closure-pair carrying its outer env, which the body now needs to copy
+	// ancestor captures from at entry.
+	let result: Node;
+	if (captures.items.length > 0 || ownCaptures.items.length > 0) {
+		computeLastUseCapturesForState(captures, state);
+		result = lifter(node, captures, state);
+	} else {
+		result = liftNonCapturing(effectiveBody, params, paramTypes, flags, returnType, state, loc, node.nodeType);
+	}
+	return { result, replacedBody };
+}
+
 // Try to lift a closure. Returns the original node if no captures, or a closure pair if lifted.
 function tryLiftClosure(node: Node, state: LiftState): Node {
 	// Save+clear scope state: closure body is a new scope.
@@ -1451,38 +1565,13 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 
 	if (node.kind === NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
-		for (const p of d.arrowParams) { defineVar(state.ss, p); }
-		if (d.arrowBody !== null
-			&& (d.arrowBody.kind === NodeKind.ArrowFunction
-				|| d.arrowBody.kind === NodeKind.FunctionExpr)) {
-			d.arrowBody = walkOrLift(d.arrowBody, state);
-		} else {
-			walkLiftBody(d.arrowBody, state);
-		}
-		state.capturedIdents = [];
-		const captures = detectCaptures(d.arrowBody, state.ss, state.capturedIdents);
-		popFuncBoundary(state.ss);
-		state.activeEnvRewrites = savedActiveRewrites;
-		restoreSharedEnv(state, savedShared);
-		if (captures.items.length > 0) {
-			computeLastUseCapturesForState(captures, state);
-			return liftArrow(node, captures, state);
-		}
-		return liftNonCapturing(d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, state, node.location, node.nodeType);
+		const r = liftCapturingClosureBody(state, node, d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, "arrow", savedActiveRewrites, savedShared, true, liftArrow);
+		if (r.replacedBody !== null as unknown as Node) d.arrowBody = r.replacedBody;
+		return r.result;
 	} else if (node.kind === NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
-		for (const p of d.funcExprParams) { defineVar(state.ss, p); }
-		walkLiftBody(d.funcExprBody, state);
-		state.capturedIdents = [];
-		const captures = detectCaptures(d.funcExprBody, state.ss, state.capturedIdents);
-		popFuncBoundary(state.ss);
-		state.activeEnvRewrites = savedActiveRewrites;
-		restoreSharedEnv(state, savedShared);
-		if (captures.items.length > 0) {
-			computeLastUseCapturesForState(captures, state);
-			return liftFuncExpr(node, captures, state);
-		}
-		return liftNonCapturing(d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, state, node.location, node.nodeType);
+		const r = liftCapturingClosureBody(state, node, d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, "fexpr", savedActiveRewrites, savedShared, false, liftFuncExpr);
+		return r.result;
 	} else {
 		popFuncBoundary(state.ss);
 		state.activeEnvRewrites = savedActiveRewrites;
