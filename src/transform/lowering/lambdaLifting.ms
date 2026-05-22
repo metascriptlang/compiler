@@ -296,14 +296,29 @@ function computeLastUseCaptures(captures: NameSet, closureIdx: number, stmts: No
 	return result;
 }
 
-// Phase F + loop safety: inside a loop body, captures are NEVER last-use
-// (loop back-edge repeats the capture). Outside loops, use forward scan.
+// Loop safety: captures inside a loop body are never last-use (back-edge
+// repeats them).
+// Shared-env safety: captures stored in an enclosing function's shared env
+// outlive any single invocation of this closure — moving from them nulls the
+// field for the next call. sharedActive is unreliable here (deactivated on
+// descent into nested closures); sharedEnvCapturedNames stays populated.
 function computeLastUseCapturesForState(captures: NameSet, state: LiftState): void {
 	if (state.insideLoop > 0) {
 		state.lastUseCaptures = createNameSet();
-	} else {
-		state.lastUseCaptures = computeLastUseCaptures(captures, state.currentStmtIdx, state.currentStmts);
+		return;
 	}
+	const candidates = computeLastUseCaptures(captures, state.currentStmtIdx, state.currentStmts);
+	if (state.sharedEnvCapturedNames.items.length === 0) {
+		state.lastUseCaptures = candidates;
+		return;
+	}
+	const filtered: NameSet = createNameSet();
+	for (const name of candidates.items) {
+		if (!nameSetContains(state.sharedEnvCapturedNames, name)) {
+			nameSetAdd(filtered, name);
+		}
+	}
+	state.lastUseCaptures = filtered;
 }
 
 // ===== Detection Pre-Pass (reference parity: DetectionPass) =====
