@@ -5,6 +5,7 @@
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 
 #include "runtime/actor/selector.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/event.h>
@@ -49,22 +50,50 @@ int msSelectorRegister(msSelector* sel, int fd, uint32_t events, void* userdata)
 }
 
 int msSelectorUpdate(msSelector* sel, int fd, uint32_t events, void* userdata) {
-	/* kqueue: delete old filters, add new ones */
+	/* kqueue: delete old filters, add new ones. Same eventlist guard as
+	 * msSelectorUnregister — NULL eventlist would abort kevent() on the
+	 * first ENOENT, leaving the other filter live and the subsequent
+	 * msSelectorRegister adding on top of stale state. */
 	struct kevent deletes[2];
-	EV_SET(&deletes[0], fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+	struct kevent errs[2];
+	EV_SET(&deletes[0], fd, EVFILT_READ,  EV_DELETE, 0, 0, NULL);
 	EV_SET(&deletes[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-	/* Ignore errors from deleting non-existent filters */
-	kevent(sel->kqfd, deletes, 2, NULL, 0, NULL);
+	int n = kevent(sel->kqfd, deletes, 2, errs, 2, NULL);
+	if (n > 0) {
+		for (int i = 0; i < n; i++) {
+			if ((errs[i].flags & EV_ERROR) == 0) continue;
+			if (errs[i].data == 0 || errs[i].data == ENOENT) continue;
+			fprintf(stderr,
+				"FATAL: kevent EV_DELETE (update) failed on fd=%d filter=%d data=%lld — selector state diverged.\n",
+				(int)errs[i].ident, (int)errs[i].filter, (long long)errs[i].data);
+			abort();
+		}
+	}
 
 	return msSelectorRegister(sel, fd, events, userdata);
 }
 
 int msSelectorUnregister(msSelector* sel, int fd) {
 	struct kevent deletes[2];
-	EV_SET(&deletes[0], fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+	struct kevent errs[2];
+	EV_SET(&deletes[0], fd, EVFILT_READ,  EV_DELETE, 0, 0, NULL);
 	EV_SET(&deletes[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-	/* Ignore errors from deleting non-existent filters */
-	kevent(sel->kqfd, deletes, 2, NULL, 0, NULL);
+	/* Eventlist absorbs per-change errors. Without it, NULL eventlist makes
+	 * kevent() abort on the first ENOENT and skip the rest — so a one-shot
+	 * recv leaves the WRITE filter live and vice versa. The leaked filter
+	 * then re-fires level-triggered on the next poll, dispatched against a
+	 * pool-reused request whose op no longer matches (recv routed to write
+	 * path or vice versa). */
+	int n = kevent(sel->kqfd, deletes, 2, errs, 2, NULL);
+	if (n < 0) return -1;
+	for (int i = 0; i < n; i++) {
+		if ((errs[i].flags & EV_ERROR) == 0) continue;
+		if (errs[i].data == 0 || errs[i].data == ENOENT) continue;  /* filter wasn't registered — fine */
+		fprintf(stderr,
+			"FATAL: kevent EV_DELETE failed on fd=%d filter=%d data=%lld — selector state diverged.\n",
+			(int)errs[i].ident, (int)errs[i].filter, (long long)errs[i].data);
+		abort();
+	}
 	return 0;
 }
 

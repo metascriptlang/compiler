@@ -7,6 +7,7 @@
  * Used on all platforms except when MS_USE_IO_URING is defined on Linux.
  */
 /* Included from engineSelect.c — engine.h already included by parent */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -184,11 +185,27 @@ static void completeRecv(msIoRequest* req) {
 	} while (n < 0 && errno == EINTR);
 
 	msString result;
-	if (n <= 0) {
-		result = MS_EMPTY_STRING;
-	} else {
+	if (n > 0) {
 		req->buf[n] = '\0';
 		result = msStringNew(req->buf, (int64_t)n);
+	} else if (n == 0) {
+		/* Legitimate EOF — peer sent FIN. */
+		result = MS_EMPTY_STRING;
+	} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+		/* Selector told us fd is readable but recv has no data — stale event
+		 * or leaked filter. completeRecv must not silently treat this as EOF;
+		 * that masks selector/registration bugs. Abort loudly so the cause is
+		 * visible in CI/logs rather than surfacing as "connection closed after
+		 * one keep-alive request" weeks later. */
+		fprintf(stderr,
+			"FATAL: completeRecv fd=%d got EAGAIN — selector fired spuriously. "
+			"Likely a leaked filter in the kqueue/epoll registration path.\n",
+			req->fd);
+		abort();
+	} else {
+		/* Real socket error (ECONNRESET, EPIPE, EBADF, ...) — surface as EOF
+		 * for the caller. The fd will be closed by the caller's close path. */
+		result = MS_EMPTY_STRING;
 	}
 	/* Typed completion — no heap boxing, msFutureReadString reads inline value */
 	msFutureCompleteT((msFuture_msString*)req->fut, result);
@@ -216,6 +233,16 @@ static void completeSend(msIoRequest* req) {
 	do {
 		bytesSent = send(req->fd, req->buf + req->offset, (size_t)(req->len - req->offset), 0);
 	} while (bytesSent < 0 && errno == EINTR);
+
+	if (bytesSent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+		/* Same rationale as completeRecv: selector said writable, but send
+		 * blocked. That means our filter state is out of sync — abort loud. */
+		fprintf(stderr,
+			"FATAL: completeSend fd=%d got EAGAIN — selector fired spuriously. "
+			"Likely a leaked filter in the kqueue/epoll registration path.\n",
+			req->fd);
+		abort();
+	}
 
 	/* Decref the msString that msIoSendString incref'd */
 	if (req->strRef.p) msStringDecref(req->strRef);
