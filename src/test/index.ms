@@ -64,3 +64,6 @@ import "./js/result";
 
 // -- phase handoff tests --
 import "./handoff/index";
+
+// -- 3-pass checker isolation tests (Phase F infrastructure) --
+import "./checker3pass/index";

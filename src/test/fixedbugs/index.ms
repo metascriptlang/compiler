@@ -45,3 +45,4 @@ import "./bug028";
 import "./bug029";
 import "./bug030";
 import "./bug031";
+import "./bug032";

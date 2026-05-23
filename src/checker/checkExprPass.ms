@@ -1637,6 +1637,43 @@ function rewriteAsMethodCall(ctx: CheckerContext, node: Node, receiver: Node, me
 	return checkCallExpr(ctx, node, null);
 }
 
+// ===== deriveCallBindings — Shared explicit+backward binding derivation =====
+//
+// Pre-arg-walk helper for generic calls. Computes Sources 1+2 only:
+//   1. Explicit type args from the call node (`f<int32>(...)`).
+//   2. Backward inference from caller's expectedType (return-type unify).
+//
+// Source 3 (forward inference from concrete arg types) stays at each
+// call site since it accumulates during the arg loop.
+//
+// Used by checkCallExpr's non-overload arg-walk and resolveOverloadCall's
+// Pass-2 winnerType substitution. Constructor path (checkNewExpr) uses
+// a different shape (class generic decl, no return-unify) and stays
+// inlined there.
+function deriveCallBindings(
+	ctx: CheckerContext,
+	callNode: Node,
+	calleeSym: Symbol,
+	calleeType: Type,
+	expectedType: Type | null,
+): UnifyBindings {
+	const bindings = createUnifyBindings();
+	if (calleeSym !== null
+		&& calleeSym.declNode !== null
+		&& calleeSym.declNode.kind === NodeKind.FunctionDecl) {
+		const names = extractGenericNames(getGenericDeclFlags(calleeSym.declNode));
+		if (names.length > 0) {
+			mergeUnifyBindings(bindings, bindFromExplicitTypeArgs(callNode, names, ctx));
+		}
+	}
+	if (expectedType !== null && calleeType !== null && calleeType.typeReturn !== null) {
+		const backBindings = createUnifyBindings();
+		unifyType(calleeType.typeReturn, expectedType, backBindings);
+		mergeUnifyBindings(bindings, backBindings);
+	}
+	return bindings;
+}
+
 // ===== fitNode — Central Implicit Conversion Insertion =====
 // Parity: standard reference's node fitting, conversion matching, and implicit conversion patterns
 // Called at every "value flows into typed slot" point:
@@ -1918,13 +1955,47 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): T
 	const innerType = (resolvedType !== null && resolvedType.kind === TypeKind.Ref && resolvedType.typeReturn !== null)
 		? resolvedType.typeReturn : resolvedType;
 	// Type-check constructor arguments.
-	// If class has constructor, let args self-infer (constructor function handles param types).
-	// Otherwise use struct field types as expected types (positional field initialization).
+	// If class has constructor, use constructor's param types as argExpected
+	// (with class generic params substituted from explicit `<T,U>` so
+	// closure args see concrete types — Phase C parity with checkCallExpr).
+	// Otherwise use struct field types as expected (positional initialization).
 	const hasCtor = d.newCallee.resolvedSym !== null && hasFlag(d.newCallee.resolvedSym, SymbolFlag.HasConstructor);
+	let ctorFormalTypes: Type[] = null as unknown as Type[];
+	if (hasCtor && d.newCallee.resolvedSym !== null) {
+		const rawCtorTypes = getCtorParamTypes(d.newCallee.resolvedSym);
+		if (rawCtorTypes !== null && rawCtorTypes.length > 0) {
+			ctorFormalTypes = rawCtorTypes;
+			// Substitute class generic params (T, U, ...) with explicit type
+			// args from `new X<int32, string>(...)`. Class generic param names
+			// come from the parser-recorded `getGenericDecl(className)`.
+			const className = d.newCallee.resolvedSym.name;
+			const classGenericDecl = getGenericDecl(className);
+			if (classGenericDecl !== "") {
+				// Format: "T:Constraint,U" — strip constraints, split by comma
+				const classGenericNames: string[] = [];
+				const segs = splitTopLevel(classGenericDecl, ",");
+				for (const seg of segs) {
+					const trimmed = seg.trim();
+					const colonAt = findChar(trimmed, ":");
+					classGenericNames.push(colonAt > 0 ? trimmed.slice(0, colonAt).trim() : trimmed);
+				}
+				const explicitBindings = bindFromExplicitTypeArgs(node, classGenericNames, ctx);
+				if (explicitBindings.names.length > 0) {
+					const substituted: Type[] = [];
+					for (const t of rawCtorTypes) {
+						substituted.push(instantiateGeneric(t, explicitBindings.names, explicitBindings.types));
+					}
+					ctorFormalTypes = substituted;
+				}
+			}
+		}
+	}
 	let ai = 0;
 	while (ai < d.newArguments.length) {
 		let argExpected: Type | null = null;
-		if (!hasCtor && innerType !== null && innerType.typeChildren !== null && ai < innerType.typeChildren.length) {
+		if (hasCtor && ctorFormalTypes !== null && ai < ctorFormalTypes.length) {
+			argExpected = ctorFormalTypes[ai];
+		} else if (!hasCtor && innerType !== null && innerType.typeChildren !== null && ai < innerType.typeChildren.length) {
 			argExpected = innerType.typeChildren[ai];
 		}
 		checkExpr(ctx, d.newArguments[ai], argExpected);
@@ -2202,31 +2273,33 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			}
 		}
 	}
-	// Backwards type inference: derive bindings from expectedType as HINTS for arg checking.
-	// Stored in a separate `paramHints` array rather than substituted into `calleeType`, so
-	// the arg-mismatch check at line ~1831 still sees GenericParam and correctly skips —
-	// otherwise a concrete-arg call nested in an incompatible outer context
-	// (e.g. `console.log(max(3, 7))`: max's T backward-binds to string → 3:int32 false-errors)
-	// would false-positive here instead of surfacing the real error at the outer call
-	// (int32 return not assignable to console.log's string param).
+	// Pre-arg binding derivation. Three sources accumulate into _argBindings,
+	// in priority order (explicit beats inferred):
+	//   1. Explicit type args (`f<int32>(...)`) — applied pre-loop.
+	//   2. Backward inference from caller's expectedType — applied pre-loop.
+	//   3. Forward inference from each concrete arg's type — applied DURING
+	//      the loop below. After arg[i] checks, unify its formal with the
+	//      actual arg type to extract new bindings; subsequent args see those
+	//      bindings via on-demand formal substitution.
 	//
-	// The hint still flows to args that NEED context to type-check:
-	//   Result.ok({...}) with expected Result<ParsedResponse, HttpError>
-	//     → paramHints[0] = ParsedResponse → object literal types as ParsedResponse
+	// Bindings drive each arg's expectedType via on-demand instantiateGeneric.
+	// Kept SEPARATE from calleeType so the existing arg-mismatch check at
+	// line ~1831 still sees GenericParam and correctly skips — a concrete-arg
+	// call nested in an incompatible outer context (e.g. `console.log(max(3, 7))`
+	// where max's T backward-binds to string) would otherwise false-positive
+	// here instead of surfacing the real error at the outer call.
 	//
-	// Forward inference from actual arg types (line ~1871) then drives instantiation,
-	// and inferGenericReturn (line ~1910) combines arg+expected bindings for the return type.
-	let paramHints: Type[] = null as unknown as Type[];
-	if (!needsOverloadScoring && calleeType !== null && calleeType.kind === TypeKind.Function
-		&& expectedType !== null && calleeType.typeReturn !== null
-		&& hasGenericParams(calleeType)) {
-		const backBindings = createUnifyBindings();
-		unifyType(calleeType.typeReturn, expectedType, backBindings);
-		if (backBindings.names.length > 0) {
-			const hinted = instantiateGeneric(calleeType, backBindings.names, backBindings.types);
-			paramHints = hinted.typeChildren;
-		}
-	}
+	// MS 3-pass spirit: bidirectional checking with eager concrete substitution
+	// at the call-expression boundary. No re-check, no inference vars, no
+	// backtracking. Sources 1+2 via deriveCallBindings helper (shared with
+	// resolveOverloadCall); Source 3 inline below.
+	const _isGenericCall = !needsOverloadScoring
+		&& calleeType !== null
+		&& calleeType.kind === TypeKind.Function
+		&& hasGenericParams(calleeType);
+	const _argBindings = _isGenericCall
+		? deriveCallBindings(ctx, node, node.resolvedSym, calleeType, expectedType)
+		: createUnifyBindings();
 	// Overloaded direct calls — delegate arg checking to resolveOverloadCall
 	// which re-checks per candidate with speculative rollback (Phase 5).
 	// Affine-Promise consumption also happens inside, during the commit step.
@@ -2234,15 +2307,51 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		return resolveOverloadCall(ctx, overloadSym, node, expectedType);
 	}
 	// Non-overload path: check args once with callee-derived expected types.
+	// For generic callees, derive paramExpected by substituting current
+	// bindings into the formal type — bindings accumulate left-to-right as
+	// concrete args feed forward inference (Source 3).
 	const argTypes: Type[] = [];
 	for (let ai = 0; ai < d.arguments.length; ai += 1) {
 		let paramExpected: Type | null = null;
-		if (paramHints !== null && ai < paramHints.length) {
-			paramExpected = paramHints[ai];
-		} else if (calleeType !== null && calleeType.kind === TypeKind.Function
+		const _formal: Type | null = (calleeType !== null
+			&& calleeType.kind === TypeKind.Function
 			&& calleeType.typeChildren !== null
-			&& ai < calleeType.typeChildren.length) {
-			paramExpected = calleeType.typeChildren[ai];
+			&& ai < calleeType.typeChildren.length)
+			? calleeType.typeChildren[ai]
+			: null as unknown as Type;
+		if (_formal !== null) {
+			if (_isGenericCall && _argBindings.names.length > 0) {
+				paramExpected = instantiateGeneric(_formal, _argBindings.names, _argBindings.types);
+			} else {
+				paramExpected = _formal;
+			}
+			// Limitation case (Phase D): if paramExpected still contains
+			// GenericParam after substitution (no binding source covered it)
+			// AND the arg is a closure literal, substitute remaining
+			// GenericParam with Unknown. Prevents closure params from
+			// inheriting `T` as their declared type — a silent corruption
+			// that downstream lifting carries into codegen.
+			//
+			// 3-pass spirit: this is a LOCAL fallback, not a re-check. The
+			// closure body still infers types from its own body if possible;
+			// we just stop propagating GenericParam as expectedType. If T
+			// truly cannot be inferred, the closure's params resolve to
+			// Unknown — a benign "I don't know" that downstream tolerates.
+			if (_isGenericCall && hasGenericParams(paramExpected)
+				&& (d.arguments[ai].kind === NodeKind.ArrowFunction
+					|| d.arguments[ai].kind === NodeKind.FunctionExpr)
+				&& node.resolvedSym !== null
+				&& node.resolvedSym.declNode !== null
+				&& node.resolvedSym.declNode.kind === NodeKind.FunctionDecl) {
+				const declParams = extractGenericNames(getGenericDeclFlags(node.resolvedSym.declNode));
+				for (const declParam of declParams) {
+					let alreadyBound = false;
+					for (const bn of _argBindings.names) { if (bn === declParam) { alreadyBound = true; break; } }
+					if (!alreadyBound) {
+						paramExpected = substituteType(paramExpected, declParam, unknownType());
+					}
+				}
+			}
 		}
 		checkExpr(ctx, d.arguments[ai], paramExpected);
 		let argType = d.arguments[ai].nodeType;
@@ -2257,6 +2366,14 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			}
 		}
 		argTypes.push(argType);
+		// Source 3: forward inference. Single-walk — subsequent args see
+		// the updated bindings, prior args are never re-checked.
+		if (_isGenericCall && _formal !== null && argType !== null
+			&& hasGenericParams(_formal) && !hasGenericParams(argType)) {
+			const fwd = createUnifyBindings();
+			unifyType(_formal, argType, fwd);
+			mergeUnifyBindings(_argBindings, fwd);
+		}
 		// PARALOCK Phase 1: passing an affine-Promise identifier as a function argument
 		// counts as consumption. For overloaded calls this happens inside the
 		// overload resolver's commit step instead (see resolveOverloadCall).
@@ -3055,7 +3172,20 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 		return getReturnType(sym.symbolType);
 	}
 
-	const winnerType = candidates[bestIdx];
+	let winnerType = candidates[bestIdx];
+
+	// Phase C parity: if the winner is generic, apply Sources 1+2 (explicit
+	// type args + backward inference) BEFORE rechecking context-sensitive
+	// args, so closure params don't inherit GenericParam from the
+	// un-substituted formal type. Reuses the shared deriveCallBindings
+	// helper used by checkCallExpr's non-overload path.
+	if (winnerType.kind === TypeKind.Function && hasGenericParams(winnerType)) {
+		const winnerSym = candSyms[bestIdx];
+		const bindings = deriveCallBindings(ctx, callNode, winnerSym, winnerType, expectedType);
+		if (bindings.names.length > 0) {
+			winnerType = instantiateGeneric(winnerType, bindings.names, bindings.types);
+		}
+	}
 
 	// Pass 2: check context-sensitive args for the first time, using the
 	// winner's param types. Object literals get stamped with the specific
