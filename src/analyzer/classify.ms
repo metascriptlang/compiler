@@ -76,18 +76,21 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	if (elem.kind === TypeKind.Array) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
-	// Named struct elements — use hasAsgnFlag to decide if per-type hooks are needed.
-	// Reference parity: fillBody checks tfHasAsgn regardless of type kind (Struct or GenericInstance).
-	// GenericInstance whose base (typeExtra) is a Struct with fields also qualifies.
+	// Named struct/union elements — use hasAsgnFlag to decide if per-type hooks
+	// are needed. Reference parity: fillBody checks tfHasAsgn regardless of
+	// kind (Struct/Union/GenericInstance). GenericInstance whose base
+	// (typeExtra) is a Struct with fields also qualifies.
 	let structElem = elem;
 	if (elem.kind === TypeKind.GenericInstance && elem.typeExtra !== null && elem.typeExtra.kind === TypeKind.Struct) {
 		structElem = elem.typeExtra;
 	}
-	if ((structElem.kind === TypeKind.Struct) && structElem.typeName !== "") {
+	const isManaged = (structElem.kind === TypeKind.Struct || structElem.kind === TypeKind.Union)
+		&& structElem.typeName !== "";
+	if (isManaged) {
 		if (hasAsgnFlag(structElem)) {
-			// Use mangled name for GenericInstance elements so array hook names match
-			// destructorLifting's emitted per-element hooks (unwrapGenericInstance) and
-			// codegen's struct name (types.ms:582-588).
+			// Mangled name for GenericInstance so array hook names match
+			// destructorLifting's emitted per-element hooks (unwrapGenericInstance)
+			// and codegen's struct name (types.ms:582-588).
 			let elemName = "";
 			if (elem.kind === TypeKind.GenericInstance) {
 				elemName = mangleMonoName(elem.typeName, elem.typeChildren);
@@ -107,7 +110,27 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		}
 		return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
 	}
-	// Default: ref array for unknown element types (conservative safe fallback)
+	// Closure element (function type) — msClosureArray stores msClosure structs
+	// INLINE (16B stride), NOT as void* pointers. Routing to msArrayRefDestroy
+	// would misread struct data as void* → misalignment crash on cleanup
+	// (BUG #3). Use the dedicated runtime helper.
+	if (elem.kind === TypeKind.Function) {
+		return makeRcInfo(RcKind.Named, "", "msArrayClosureDestroy", "msArrayClosureCopy", "msArrayClosureWasMoved", "msArrayClosureSink", true);
+	}
+	// Distinct nominal wrapper — share underlying type's representation
+	// (codegen emits underlying T as the storage). Recurse with the wrapped
+	// type so we pick the correct helper for the actual layout. E.g.,
+	// `distinct int32` → primitive path → msArrayDestroy (4B stride correct).
+	if (elem.kind === TypeKind.Distinct && elem.typeReturn !== null) {
+		const unwrapped = createArray(elem.typeReturn);
+		return classifyArray(unwrapped, ctx);
+	}
+	// Catch-all assumes void*-stride layout. Correct ONLY when the element
+	// is pointer-indirected (which the Ref/Ptr branch above already covers).
+	// Any TypeKind reaching this fallthrough with non-pointer layout is the
+	// BUG #3 family — msArrayRefDestroy will misread struct data. Future
+	// TypeKind additions in element position must add an explicit case
+	// above (verify with a runtime cleanup probe before falling through).
 	return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
 }
 

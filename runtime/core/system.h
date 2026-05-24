@@ -57,6 +57,30 @@ typedef struct {
 } msClosure;
 #endif
 
+/* Closure array: msClosure structs stored INLINE (16B stride). Single
+ * typed helper works for ALL closure types — closure layout is uniform
+ * (per-env-type cleanup is virtual-dispatched via env's typeInfo, not
+ * per-closure-type variation). */
+#ifndef MS_CLOSURE_ARRAY_DEFINED
+#define MS_CLOSURE_ARRAY_DEFINED
+typedef struct {
+	int64_t cap;
+	msClosure data[];
+} msClosurePayload;
+
+typedef struct {
+	int64_t len;
+	msClosurePayload* p;
+} msClosureArray;
+
+#define MS_EMPTY_CLOSURE_ARRAY ((msClosureArray){0, NULL})
+
+void msClosureArrayDestroy(msClosureArray* arr);
+void msClosureArrayPush(msClosureArray* arr, msClosure value);
+void msClosureArrayCopy(msClosureArray* dest, const msClosureArray* src);
+void msClosureArrayWasMoved(msClosureArray* arr);
+#endif
+
 /* Async future runtime (msFuture, msFutureCreate/Complete/etc.) */
 #include "runtime/promise/future.h"
 
@@ -219,6 +243,14 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msArrayUint8Destroy(arr)       msUint8ArrayDestroy(&(arr))
 #define msArrayUint8WasMoved(arr)      msArrayWasMoved(arr)
 #define msArrayUint8Sink(d, s)         do { msArrayDestroy(d); (d) = (s); } while(0)
+
+/* Closure array: per-element destroy decrefs env, leaves fn (untracked
+ * function pointer) alone. Single helper for ALL closure types — closure
+ * value layout is uniform. */
+#define msArrayClosureDestroy(arr)     msClosureArrayDestroy(&(arr))
+#define msArrayClosureCopy(d, s)       msClosureArrayCopy(&(d), &(s))
+#define msArrayClosureSink(d, s)       do { msClosureArrayDestroy(&(d)); (d) = (s); } while(0)
+#define msArrayClosureWasMoved(arr)    msArrayWasMoved(arr)
 
 /* --- Ref/Ptr lifecycle (generic heap objects) --- */
 #define msIncref(p)           msIncRef(p)

@@ -947,6 +947,9 @@ function genArrayType(g: CGen, t: Type): string {
 	if (elemType === "msString") { typeCacheSet(g.typeCache, key, "msStringArray"); return "msStringArray"; }
 	if (elemType === "MS_BOOL") { typeCacheSet(g.typeCache, key, "msNumberArray"); return "msNumberArray"; }
 	if (elemType === "uint8_t") { typeCacheSet(g.typeCache, key, "msUint8Array"); return "msUint8Array"; }
+	// Closure layout is uniform — single runtime msClosureArray works for all
+	// closure types. Skip per-module typedef (would duplicate runtime decl).
+	if (elemType === "msClosure") { typeCacheSet(g.typeCache, key, "msClosureArray"); return "msClosureArray"; }
 
 	// Pointer element types (classes, refs, void*) → msRefArray (void* indirection is correct)
 	// Class types: symbol table returns Ref<Struct>, resolvedElem.kind === Ref → isPointerType catches it.
@@ -985,6 +988,7 @@ export function getArrayTypeName(elemType: string): string {
 	if (elemType === "double") return "msNumberArray";
 	if (elemType === "msString") return "msStringArray";
 	if (elemType === "uint8_t") return "msUint8Array";
+	if (elemType === "msClosure") return "msClosureArray";
 	return mangle(elemType) + "Array";
 }
 
@@ -995,6 +999,7 @@ export function getArrayContentType(arrTypeName: string): string {
 	if (arrTypeName === "msStringArray") return "msStringPayload";
 	if (arrTypeName === "msRefArray") return "msRefPayload";
 	if (arrTypeName === "msUint8Array") return "msUint8Payload";
+	if (arrTypeName === "msClosureArray") return "msClosurePayload";
 	return arrTypeName + "__Content";
 }
 

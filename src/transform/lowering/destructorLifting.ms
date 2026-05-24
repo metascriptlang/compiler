@@ -21,7 +21,7 @@
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 //   TypeInfo   TypeName_typeInfo                  — msTypeInfo for ORC runtime
 
-import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, instantiateGenericBody, peelToStruct } from "../../checker/types";
@@ -391,6 +391,23 @@ function genArrayLoop(hook: string, elemType: Type, xf: Node, yf: Node, lctx: Li
 	buf.items.push(makeWhile(cond, makeBlock(bodyBuf.items, loc), loc));
 }
 
+// Register a sequence's element type for hook generation. String elements
+// share the runtime msStringArray helper; named Struct/Union elements get
+// per-T lifted hooks; everything else (Ref/Ptr/unknown) falls back to the
+// generic msRefArray family. Shared by `arrayOp` (call-site element use)
+// and `scanTypeForArrays` (post-pass scan).
+function registerSeqElement(elem: Type, lctx: LiftCtx): void {
+	if (elem.kind === TypeKind.String) {
+		nameSetAdd(lctx.neededSeqHooks, "msStringArray");
+	} else if ((elem.kind === TypeKind.Struct || elem.kind === TypeKind.Union) && elem.typeName !== "") {
+		const seqName = elem.typeName + "Array";
+		nameSetAdd(lctx.neededSeqHooks, seqName);
+		lctx.seqElemTypes.push({ name: seqName, elemType: elem });
+	} else {
+		nameSetAdd(lctx.neededSeqHooks, "msRefArray");
+	}
+}
+
 // --- Standard sequence/array hook generator (reference parity: reference sequence op) ---
 // Primitive elements: runtime macros (no per-element cleanup).
 // Non-primitive elements: inline loops via genArrayLoop (reference loop pattern).
@@ -405,15 +422,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 		if (unwrapped.mangledName !== "") elemResolved = unwrapped.body;
 	}
 	if (needsElemLoop && elemResolved !== null) {
-		if (elemResolved.kind === TypeKind.String) {
-			nameSetAdd(lctx.neededSeqHooks, "msStringArray");
-		} else if (elemResolved.kind === TypeKind.Struct && elemResolved.typeName !== "") {
-			const seqName = elemResolved.typeName + "Array";
-			nameSetAdd(lctx.neededSeqHooks, seqName);
-			lctx.seqElemTypes.push({ name: seqName, elemType: elemResolved });
-		} else {
-			nameSetAdd(lctx.neededSeqHooks, "msRefArray");
-		}
+		registerSeqElement(elemResolved, lctx);
 	}
 	match (hook) {
 		"destroy" => {
@@ -1491,15 +1500,7 @@ function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: NameSet): void {
 	if (t.kind === TypeKind.Array) {
 		const elem = t.typeReturn;
 		if (elem !== null && !isPrimitiveKind(elem.kind)) {
-			if (elem.kind === TypeKind.String) {
-				nameSetAdd(lctx.neededSeqHooks, "msStringArray");
-			} else if (elem.kind === TypeKind.Struct && elem.typeName !== "") {
-				const seqName = elem.typeName + "Array";
-				nameSetAdd(lctx.neededSeqHooks, seqName);
-				lctx.seqElemTypes.push({ name: seqName, elemType: elem });
-			} else {
-				nameSetAdd(lctx.neededSeqHooks, "msRefArray");
-			}
+			registerSeqElement(elem, lctx);
 		}
 		return;
 	}
@@ -1535,25 +1536,66 @@ function scanStmtForArrayTypes(stmt: Node, lctx: LiftCtx): void {
 }
 
 // Recurse into blocks to find local variable declarations with array types.
-// Intentional divergence from reference (which is demand-driven).
-// Our architecture requires pre-registration of array hooks before codegen.
+// Intentional divergence from reference (which is demand-driven). Our
+// architecture requires pre-registration of array hooks before codegen.
+//
+// Walks into control-flow constructs (while/if/for/try) — their bodies are
+// BlockStmt but the OUTER statement isn't, so a flat BlockStmt-only check
+// misses them. A loop-local `const xs: Foo[] = []` would otherwise skip
+// hook registration → undefined ArrayDestroy at link.
 function scanBlockForArrayTypes(block: Node, lctx: LiftCtx): void {
 	if (block === null || block.kind !== NodeKind.BlockStmt) return;
 	const bd = block.data as BlockStmtData;
 	for (const s of bd.statements) {
-		if (s === null) continue;
-		const visited: NameSet = createNameSet();
-		if (s.kind === NodeKind.VariableDecl) {
-			if (s.nodeType !== null) scanTypeForArrays(s.nodeType, lctx, visited);
-		} else if (s.kind === NodeKind.FunctionDecl) {
-			scanStmtForArrayTypes(s, lctx);
-		} else if (s.kind === NodeKind.BlockStmt) {
-			scanBlockForArrayTypes(s, lctx);
-		}
-		// After transforms, if/while/try bodies are BlockStmt nodes.
-		// We handle those via the BlockStmt branch above. Variable declarations
-		// inside conditionals are always wrapped in blocks by lowering passes.
+		scanCtrlFlowForArrayTypes(s, lctx);
 	}
+}
+
+function scanCtrlFlowForArrayTypes(s: Node, lctx: LiftCtx): void {
+	if (s === null) return;
+	const visited: NameSet = createNameSet();
+	match (s.kind) {
+		NodeKind.VariableDecl => {
+			if (s.nodeType !== null) scanTypeForArrays(s.nodeType, lctx, visited);
+		},
+		NodeKind.FunctionDecl => { scanStmtForArrayTypes(s, lctx); },
+		NodeKind.BlockStmt => { scanBlockForArrayTypes(s, lctx); },
+		NodeKind.WhileStmt => {
+			const wd = s.data as WhileStmtData;
+			scanBlockForArrayTypes(wd.whileBody, lctx);
+		},
+		NodeKind.DoWhileStmt => {
+			const dd = s.data as DoWhileStmtData;
+			scanBlockForArrayTypes(dd.doBody, lctx);
+		},
+		NodeKind.IfStmt => {
+			const id = s.data as IfStmtData;
+			scanBlockForArrayTypes(id.consequent, lctx);
+			if (id.alternate !== null) scanCtrlFlowForArrayTypes(id.alternate, lctx);
+		},
+		NodeKind.ForStmt => {
+			const fd = s.data as ForStmtData;
+			scanBlockForArrayTypes(fd.forBody, lctx);
+		},
+		NodeKind.ForOfStmt => {
+			const fo = s.data as ForOfStmtData;
+			scanBlockForArrayTypes(fo.forOfBody, lctx);
+		},
+		NodeKind.TryCatchStmt => {
+			const td = s.data as TryCatchStmtData;
+			scanBlockForArrayTypes(td.tryBody, lctx);
+			if (td.catchBody !== null) scanBlockForArrayTypes(td.catchBody, lctx);
+			if (td.finallyBody !== null) scanBlockForArrayTypes(td.finallyBody, lctx);
+		},
+		NodeKind.SwitchStmt => {
+			const sd = s.data as SwitchStmtData;
+			for (const c of sd.switchCases) {
+				const cd = c.data as SwitchCaseData;
+				for (const cs of cd.caseStmts) scanCtrlFlowForArrayTypes(cs, lctx);
+			}
+		},
+		_ => {},
+	};
 }
 
 // ===== Anonymous Struct Type Scanning =====

@@ -677,3 +677,60 @@ void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
 	}
 	arr->len -= deleteCount;
 }
+
+/* ===== Closure Array =====
+ * Per-element destroy: decref env (function pointer is untracked). The env's
+ * own typeInfo handles deeper field cleanup via msDecref's virtual dispatch.
+ * Layout: msClosure structs stored inline (16B stride), NOT void* indirection. */
+
+void msClosureArrayDestroy(msClosureArray* arr) {
+	if (arr->p != NULL) {
+		for (int64_t i = 0; i < arr->len; i++) {
+			if (arr->p->data[i].env != NULL) {
+				msDecref(arr->p->data[i].env);
+			}
+		}
+		free(arr->p);
+		arr->p = NULL;
+	}
+	arr->len = 0;
+}
+
+void msClosureArrayPush(msClosureArray* arr, msClosure value) {
+	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+		arr->p = (msClosurePayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(msClosure));
+	}
+	/* Sink semantics: caller already incref'd env if needed; we take ownership. */
+	arr->p->data[arr->len] = value;
+	arr->len++;
+}
+
+void msClosureArrayCopy(msClosureArray* dest, const msClosureArray* src) {
+	/* Self-assignment safety: snapshot src FIRST, build new payload from
+	 * snapshot, THEN destroy dest. Matches msArrayStringCopy / msArrayRefCopy
+	 * pattern (system.h). If we destroyed dest first and dest === src, the
+	 * snapshot would read freed memory. */
+	const int64_t len = src->len;
+	const int64_t cap = src->p != NULL ? src->p->cap : 0;
+	msClosurePayload* newp = NULL;
+	if (src->p != NULL) {
+		const size_t sz = sizeof(msClosurePayload) + (size_t)cap * sizeof(msClosure);
+		newp = (msClosurePayload*)calloc(1, sz);
+		newp->cap = cap;
+		for (int64_t i = 0; i < len; i++) {
+			newp->data[i] = src->p->data[i];
+			/* Incref env — both dest and src now hold a reference. */
+			if (newp->data[i].env != NULL) {
+				msIncRef(newp->data[i].env);
+			}
+		}
+	}
+	msClosureArrayDestroy(dest);
+	dest->len = len;
+	dest->p = newp;
+}
+
+void msClosureArrayWasMoved(msClosureArray* arr) {
+	arr->len = 0;
+	arr->p = NULL;
+}

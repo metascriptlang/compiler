@@ -299,6 +299,10 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msArrayUint8Destroy(arr)       ((void)0)
 #define msArrayUint8WasMoved(arr)      msArrayWasMoved(arr)
 #define msArrayUint8Sink(d, s)         do { (d) = (s); } while(0)
+#define msArrayClosureDestroy(arr)     ((void)0)
+#define msArrayClosureCopy(d, s)       do { (d) = (s); } while(0)
+#define msArrayClosureSink(d, s)       do { (d) = (s); } while(0)
+#define msArrayClosureWasMoved(arr)    msArrayWasMoved(arr)
 
 #define msIncref(p)           ((void)0)
 #define msDecref(p)           ((void)0)
