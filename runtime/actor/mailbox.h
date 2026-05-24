@@ -69,8 +69,11 @@ typedef struct msMsgPool {
 #endif
 #endif
 
-/* Thread-local: one pool per size class per thread (zero-init = all NULL/0) */
-static MS_THREAD_LOCAL msMsgPool msMsgPools[MS_MSG_POOL_CLASSES];
+/* Per-thread pool, one per size class. Extern (definition in actor.c) so all
+ * TUs share the same TLS slot — `static` here would give each TU its own
+ * pool, and cross-TU msMsgAlloc/msMsgFree on the same thread would touch
+ * different freelists. */
+extern MS_THREAD_LOCAL msMsgPool msMsgPools[MS_MSG_POOL_CLASSES];
 
 static inline void msMsgPoolGrow(msMsgPool* pool, int msgSize) {
     /* Allocate slab as raw bytes — messages are msgSize apart */
@@ -166,10 +169,23 @@ static inline bool msMsgGetBool(msMessage* m, int idx) {
 }
 
 /* msString packing: msString = {int64_t len, msStrPayload* p} = 16 bytes = 2 slots.
- * Pack as two void* slots. Cast m to msMessage* for void* compatibility. */
+ *
+ * Heap strings: deep-copy on send so the msg owns its payload independently
+ * of the caller's local (which DRC frees at scope exit — bitwise alias would
+ * dangle). Literals (MS_STRLIT_FLAG) share pointer with static program data.
+ *
+ * Known gap: msMsgFree without dispatch (dead-letter, mailbox drain on actor
+ * destroy) leaks ref-typed slots — same for arrays/ptrs. Needs per-actor-
+ * method trace fn (Pony parity, not yet implemented). */
 #define msMsgSetString(m, idx, s) do { \
-    ((void**)((msMessage*)(m))->data)[(idx)]     = (void*)(intptr_t)(s).len; \
-    ((void**)((msMessage*)(m))->data)[(idx) + 1] = (void*)(s).p; \
+    msString __mscp; \
+    if ((s).p == NULL || msIsLiteral(s)) { \
+        __mscp = (s); \
+    } else { \
+        __mscp = msStringNew((s).p->data, (s).len); \
+    } \
+    ((void**)((msMessage*)(m))->data)[(idx)]     = (void*)(intptr_t)(__mscp).len; \
+    ((void**)((msMessage*)(m))->data)[(idx) + 1] = (void*)(__mscp).p; \
 } while(0)
 
 #define msMsgGetString(m, idx) \

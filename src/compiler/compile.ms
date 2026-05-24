@@ -769,6 +769,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorKqueue.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorEpoll.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorPoll.c";
+		rtFiles = rtFiles + "\n" + "runtime/actor/actor.c";
 		if (opts.targetOs === "windows") {
 			rtFiles = rtFiles + "\n" + "runtime/fs/windows.c";
 		} else {

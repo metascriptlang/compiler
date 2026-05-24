@@ -21,8 +21,9 @@ import { makeSymbol } from "../../checker/symbol";
 import {
 	syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
+	isValueLayoutType,
 } from "../util";
-import { voidType, unknownType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType } from "../../checker/types";
+import { voidType, unknownType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType } from "../../checker/types";
 
 // msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
 const MS_MSG_MAX_ARGS = 7;
@@ -35,6 +36,9 @@ const VOID_PTR: Type = createPtr(createPrimitive(TypeKind.Void));
 // lumping int*/bool into "double" corrupts values via IEEE bit-pattern.
 function typeMsgKind(t: Type): string {
 	if (t === null) return "ptr";
+	// Value-layout BEFORE the kind match so Struct/Tuple/value-GI route to
+	// the typed-struct path, not the ptr fallthrough.
+	if (isValueLayoutType(t)) return "struct";
 	return match (t.kind) {
 		TypeKind.String => "string",
 		TypeKind.Array => "array",
@@ -64,6 +68,8 @@ function msgSetterName(mk: string): string {
 		"int64"  => "msMsgSetInt64",
 		"bool"   => "msMsgSetBool",
 		"string" | "array" => "msMsgSetString",
+		// "struct" falls through: C codegen pointer-introduces struct params,
+		// `move` at the checker transfers ownership (COPY rule §7.6).
 		_ => "msMsgSetPtr",
 	};
 }
@@ -75,7 +81,7 @@ function msgGetterName(mk: string): string {
 		"int64"  => "msMsgGetInt64",
 		"bool"   => "msMsgGetBool",
 		"string" | "array" => "msMsgGetString",
-		_ => "msMsgGetPtr",
+		_ => "msMsgGetPtr",  // symmetric with msgSetterName
 	};
 }
 
@@ -86,7 +92,7 @@ function msgCompleteName(mk: string): string {
 		"int64"  => "msMsgCompleteInt64",
 		"bool"   => "msMsgCompleteBool",
 		"string" => "msMsgCompleteString",
-		"array" => "msMsgCompletePtr",
+		"array" | "struct" => "msMsgCompletePtr",  // both box-on-complete (see dispatch body)
 		_ => "msMsgCompletePtr",
 	};
 }
@@ -127,7 +133,9 @@ function totalSlotCount(params: string[], paramTypes: Type[]): number {
 	return total;
 }
 
-// Pack method args into message data slots (shared by send and call proxies)
+// Pack method args into message data slots (shared by send and call proxies).
+// Value-layout PARAMs need no explicit box: C codegen pointer-introduces
+// struct params, and the checker requires `move` for non-pure args.
 function packArgsIntoMsg(stmts: Node[], msgSym: Symbol, params: string[], paramTypes: Type[], loc: SourceLocation): void {
 	let slot = 0;
 	for (let ai = 1; ai < params.length; ai = ai + 1) {
@@ -166,15 +174,16 @@ function buildSendProxy(kind: number, params: string[], paramTypes: Type[], ctx:
 function buildCallProxy(kind: number, params: string[], paramTypes: Type[], retType: Type, ctx: TransformContext, loc: SourceLocation): Node {
 	const futSym = freshTempSym(ctx, "afut", voidType());
 	const msgSym = freshTempSym(ctx, "amsg", voidType());
-	// Allocate reply future with correct size: struct-like types (including string)
-	// need typed-sized allocation so msFutureChain_<T> can write sizeof(T) bytes.
-	const isLargeValue = retType !== null && (retType.kind === TypeKind.Struct
-		|| retType.kind === TypeKind.GenericInstance || retType.kind === TypeKind.Tuple
-		|| retType.kind === TypeKind.String);
+	// Only String needs typed-sized future (msMsgCompleteString writes the
+	// 16-byte payload inline). Struct/Tuple/value-GI returns are heap-boxed
+	// in the dispatch body, so they fit the generic 8-byte msFutureCreate.
+	const isStringReturn = retType !== null && retType.kind === TypeKind.String;
 	let futCreate: Node;
-	if (isLargeValue) {
+	if (isStringReturn) {
 		futCreate = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
-		futCreate.nodeType = retType;
+		// nodeType MUST be Promise<T> (not raw T) so codegen's intercept can
+		// extract T via awaitedType — mirrors asyncBridge.makeRetFutAlloc.
+		futCreate.nodeType = createPromise(retType);
 	} else {
 		futCreate = makeCall(makeIdent("msFutureCreate", loc), [], loc);
 		futCreate.nodeType = voidType();
@@ -241,11 +250,10 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 				makeIdent("_dmsg", loc),
 				makeNumber(dSlot, loc),
 			], loc);
-			if (mk === "array" && ai < mParamTypes.length && mParamTypes[ai] !== null) {
-				// msMsgGetString returns msString compound literal. Reinterpret as the
-				// actual array type (identical binary layout: {int64_t len, T* p}).
-				// Cursor flag → codegen emits *((TargetType*)&(expr)) which is a safe
-				// bitcast for compound literals (have address in C99).
+			if (mk === "array") {
+				// msString and TArray share binary layout {int64_t len, T* p}.
+				// Cursor flag emits *((TArray*)&(expr)) — safe bitcast on C99
+				// compound literals.
 				const conv = createNode(NodeKind.HiddenStdConv, {
 					convExpr: getCall,
 					convType: mParamTypes[ai],
@@ -253,9 +261,8 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 				conv.nodeType = mParamTypes[ai];
 				conv.flags = conv.flags | NodeFlag.Cursor;
 				handlerArgs.push(conv);
-			} else if (mk === "ptr") {
-				// msMsgGetPtr returns void*. _impl takes pointer (ccgIntroducedPtr).
-				// void* → T* is implicit in C. Set nodeType so codegen temps use void*.
+			} else if (mk === "ptr" || mk === "struct") {
+				// _impl takes T* (ccgIntroducedPtr); void*→T* implicit in C.
 				getCall.nodeType = VOID_PTR;
 				handlerArgs.push(getCall);
 			} else {
@@ -301,9 +308,12 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 			const completeFn = msgCompleteName(retMk);
 			const resultDecl = makeVarDecl("_result", handlerCall, DeclKind.Const, loc);
 			const futAccessCall = makeCall(makeIdent("msMsgReplyFuture", loc), [makeIdent("_dmsg", loc)], loc);
-			if (retMk === "array" && retType !== null) {
+			if ((retMk === "array" || retMk === "struct") && retType !== null) {
+				// Heap-box: msSinkBoxStruct → msMsgCompletePtr → await side's
+				// msUnboxStruct unboxes. Reply future stays a uniform 8-byte slot.
+				// boxCall.nodeType = void* per PARALOCK I13 (asyncBridge canonical).
 				const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [makeIdent("_result", loc)], loc);
-				boxCall.nodeType = retType;
+				boxCall.nodeType = VOID_PTR;
 				const boxDecl = makeVarDecl("_boxed", boxCall, DeclKind.Const, loc);
 				boxDecl.nodeType = VOID_PTR;
 				const completeCall = makeCall(makeIdent(completeFn, loc), [futAccessCall, makeIdent("_boxed", loc)], loc);
@@ -454,7 +464,17 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 				? buildSendProxy(msgKind, md.methodParams, methodParamTypes, ctx, loc)
 				: buildCallProxy(msgKind, md.methodParams, methodParamTypes, methodRetType, ctx, loc);
 			const proxyParamTypes = m.nodeType !== null ? m.nodeType.typeChildren : [];
-			const proxyRetType = isVoid ? voidType() : unknownType();
+			// Proxy returns the reply Promise<T>, not T directly. The user-visible
+			// type at the call site MUST be Promise<T> so:
+			//   1. await can unwrap correctly (looks for awaitable)
+			//   2. C codegen does NOT apply NRVO at the call site (Promise<T> is
+			//      a pointer to msFuture_<T>, fits in void*). Previously this was
+			//      unknownType() which caused the C compiler to emit out-param
+			//      calling convention for value-layout T (Result/struct/tuple),
+			//      but the proxy's actual C signature returns void* — argument
+			//      count mismatch at the call site.
+			const proxyRetType = isVoid ? voidType()
+				: methodRetType !== null ? createPromise(methodRetType) : unknownType();
 			const proxyFnType = createFunction(proxyParamTypes, md.methodParams, proxyRetType);
 			const proxyNode = createNode(NodeKind.FunctionDecl, {
 				fnName: name + "_" + md.methodName,
@@ -469,6 +489,17 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 			}, syntheticToken(loc));
 			proxyNode.resolvedSym = m.resolvedSym;
 			proxyNode.nodeType = proxyFnType;
+			// Sync sym to proxy signature so call sites see Promise<T> (no
+			// NRVO out-param). Without this, codegen emits a NRVO call against
+			// the proxy's actual void* return — argument-count mismatch at C
+			// compile for any value-layout T.
+			//
+			// CAUTION — only sym.symbolType mutation in transform/analyzer.
+			// If a later pass needs the ORIGINAL `T getR()` shape, capture it
+			// BEFORE this point — sym now refers to the proxy.
+			if (m.resolvedSym !== null) {
+				m.resolvedSym.symbolType = proxyFnType;
+			}
 			proxyNode.typeExprs = m.typeExprs;
 			proxyNode.paramLocations = m.paramLocations;
 			if (decorators.length > 0) {

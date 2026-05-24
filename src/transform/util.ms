@@ -16,10 +16,30 @@ export function syntheticToken(loc: SourceLocation): Token {
 // Lives here — not in builtinLower or promiseLower — because three sibling modules
 // (builtinLower, promiseLower, asyncBridge) all need it; keeping it in any one of
 // them creates a circular import with the others.
+//
+// Related but distinct: see `isValueLayoutType` below — narrower predicate
+// used by actor msg-kind dispatch.
 export function isStructLikeType(t: Type | null): boolean {
 	if (t === null) return false;
 	return t.kind === TypeKind.Struct || t.kind === TypeKind.GenericInstance
 		|| t.kind === TypeKind.Tuple || t.kind === TypeKind.String;
+}
+
+// Value-layout types — passed by-value or via NRVO out-param, NOT as void*.
+// Actor msg-kind dispatch routes these through the box/unbox path.
+//
+// Distinct from `isStructLikeType`: excludes String (dedicated msg kind) and
+// inspects GI body so Promise<T> / Array<T> (ref-shaped bodies) don't get
+// boxed at the actor boundary — merging the two predicates re-introduces
+// Bug B Item 2.
+export function isValueLayoutType(t: Type | null): boolean {
+	if (t === null) return false;
+	if (t.kind === TypeKind.Tuple || t.kind === TypeKind.Struct) return true;
+	if (t.kind === TypeKind.GenericInstance && t.typeReturn !== null) {
+		const body = t.typeReturn;
+		if (body.kind === TypeKind.Union || body.kind === TypeKind.Tuple || body.kind === TypeKind.Struct) return true;
+	}
+	return false;
 }
 
 // Primitive unbox helper name for a value-bearing void* (result of msWaitFor /

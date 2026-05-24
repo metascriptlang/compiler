@@ -60,7 +60,10 @@ int msSelectorGetFd(msSelector* sel);
 
 #include "runtime/promise/future.h"  /* MS_THREAD_LOCAL */
 
-static MS_THREAD_LOCAL msReadyEvent _msEvtBuf[64];
+/* Per-thread poll result buffer. Extern (definition in actor.c) so writer
+ * (msSelectorWait) and readers (msSelectorEventFd/Flags) called across TUs
+ * on the same thread see the same buffer. */
+extern MS_THREAD_LOCAL msReadyEvent _msEvtBuf[64];
 
 static inline int64_t msSelectorOpen(void) {
 	return (int64_t)(intptr_t)msSelectorCreate();

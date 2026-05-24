@@ -104,7 +104,10 @@ typedef struct msActor {
 #endif
 #endif
 
-static MS_THREAD_LOCAL msActor* msCurrentActor = NULL;
+/* Shared TLS / globals — defined in runtime/actor/actor.c. Extern (not
+ * static) so all .ms→.c TUs see the same instance — see actor.c header. */
+extern MS_THREAD_LOCAL msActor* msCurrentActor;
+extern MS_THREAD_LOCAL int msMySchedulerID;
 
 /* ===== Flag Helpers ===== */
 
@@ -210,8 +213,8 @@ typedef struct msSchedActors {
                                    * Required for O(schedulers) wakes instead of O(actors) at 1M+. */
 } msSchedActors;
 
-static msSchedActors msSchedulers[MS_MAX_SCHEDULERS];
-static int msSchedulerCount = 0;
+extern msSchedActors msSchedulers[MS_MAX_SCHEDULERS];
+extern int msSchedulerCount;
 
 /* Push actor onto scheduler's run queue (any thread, lock-free). O(1). */
 static inline void msSchedRunPush(msSchedActors* sched, msActor* a) {
@@ -237,7 +240,7 @@ static inline msActor* msSchedRunPop(msSchedActors* sched) {
 }
 
 /* Global counter: number of actors with idle timeouts. Scan skipped when 0. */
-static _Atomic(int) msActorsWithTimeout = 0;
+extern _Atomic(int) msActorsWithTimeout;
 
 /* Forward declarations for wake routing */
 extern void msActorWakeEventLoop(void);  /* dispatch.c */
@@ -300,10 +303,10 @@ static inline void msActorSuspend(msActor* a, void* implFut, void* replyFut) {
 /* Name registry data (forward declaration — functions defined after monitors section) */
 #define MS_NAME_REGISTRY_INIT_CAP 256
 typedef struct { msString name; msActor* actor; } msNameEntry;
-static msNameEntry* msNameRegistry = NULL;
-static int msNameRegistryCap = 0;
-static int msNameRegistryCount = 0;
-static pthread_mutex_t msNameRegistryLock = PTHREAD_MUTEX_INITIALIZER;
+extern msNameEntry* msNameRegistry;
+extern int msNameRegistryCap;
+extern int msNameRegistryCount;
+extern pthread_mutex_t msNameRegistryLock;
 
 /* Lazy init: allocate on first use, zero-cost if name registry is never used */
 static inline void msNameRegistryEnsure(void) {
@@ -757,7 +760,7 @@ static inline void msActorSetIdleTimeout(int64_t pid, double ms) {
 /* ===== Monitors (unidirectional DOWN messages, Erlang parity) ===== */
 
 /* Global monotonic monitor reference counter (Erlang: make_ref()) */
-static _Atomic(int64_t) msNextMonitorRef = 1;
+extern _Atomic(int64_t) msNextMonitorRef;
 
 /* Monitor a target actor. Returns a unique monitor reference (Erlang: erlang:monitor/2).
  * When target dies, watcher receives DOWN message with this ref + target pid + reason. */
@@ -933,10 +936,7 @@ static inline void msActorUnregisterByPtr(msActor* a) {
  * Work stealing: idle workers pop from other schedulers' run queues — O(schedulers).
  */
 
-static _Atomic(int) msNextActorRR = 0;    /* round-robin assignment counter */
-
-/* Thread-local: which scheduler am I? (-1 = unassigned) */
-static MS_THREAD_LOCAL int msMySchedulerID = -1;
+extern _Atomic(int) msNextActorRR;        /* round-robin assignment counter */
 
 /* Forward declarations */
 extern void msSetActorPollHook(bool (*hook)(void));  /* dispatch.c */
@@ -968,20 +968,32 @@ static inline void msSetSchedulerID(int id) {
 
 static inline void msActorRegister(msActor* a) {
     if (msSchedulerCount == 0) {
-        /* First actor: initialize scheduler infrastructure */
+        /* Hooks MUST be set before msPoolGet(): pool workers spawn inside
+         * msPoolInit and read msPoolSchedIdSetterFn at startup. Hook-after-pool
+         * races leave worker TLS at -1 → msActorPollLocal early-returns →
+         * only main thread polls actors. */
         msEnsureWakePipe();  /* wake pipe must exist before any actor send */
+        msMySchedulerID = 0;  /* main thread = scheduler 0 */
+        msSetActorPollHook(msActorPollLocal);
+        msPoolSetActorHooks(msActorPollLocal, msSetSchedulerID);
         msThreadPool* p = msPoolGet();
         msSchedulerCount = (p != NULL ? p->workerCount : 0) + 1;
         if (msSchedulerCount > MS_MAX_SCHEDULERS) msSchedulerCount = MS_MAX_SCHEDULERS;
-        msMySchedulerID = 0;  /* main thread = scheduler 0 */
-        msSetActorPollHook(msActorPollLocal);
-        /* Register hooks so pool workers can poll actors + set scheduler ID */
-        msPoolSetActorHooks(msActorPollLocal, msSetSchedulerID);
         /* Create async cycle detector actor on scheduler 0 */
         msCDInit();
     }
-    /* Round-robin assign to schedulers */
-    int id = atomic_fetch_add(&msNextActorRR, 1) % msSchedulerCount;
+    /* Assignment: parent's sched → creator-thread's sched → RR fallback.
+     * Pony-parity locality. Cross-thread IO completions (#88/#89) aren't wired
+     * yet, so an actor accepted on thread A but running on B silently hangs
+     * on recvAsync — pinning to creator avoids that until IO wake is plumbed. */
+    int id;
+    if (msCurrentActor != NULL) {
+        id = msCurrentActor->schedulerID;
+    } else if (msMySchedulerID >= 0 && msMySchedulerID < msSchedulerCount) {
+        id = msMySchedulerID;
+    } else {
+        id = atomic_fetch_add(&msNextActorRR, 1) % msSchedulerCount;
+    }
     a->schedulerID = id;
     msSchedActors* sched = &msSchedulers[id];
     int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
@@ -1193,7 +1205,7 @@ static inline void msCDDispatch(void* state, void* msg) {
 }
 
 /* The global CD actor — created during scheduler init */
-static msActor* msCycleDetectorActor = NULL;
+extern msActor* msCycleDetectorActor;
 
 static inline void msCDInit(void) {
     if (msCycleDetectorActor != NULL) return;
