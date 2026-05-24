@@ -179,9 +179,16 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
 		},
 		TypeKind.GenericInstance => {
-			// Awaitables (`Promise<T>`, plain or affine) are exempt from DRC — their lifecycle
-			// is managed by the await transform (create → wait → explicit destroy).
-			if (isAwaitable(t)) return noRcInfo();
+			// Awaitables (`Promise<T>`, plain or affine) are Ref-shaped heap allocs
+			// via msAlloc — track like any other Ref. Destroy via msFutureDrcDestroy
+			// which decrefs + calls msFutureDestroyInner on last owner (frees
+			// callback list + valueDestructor if set + the future struct).
+			//
+			// Previous "exempt from DRC, await transform handles cleanup" comment
+			// was incorrect — no explicit destroy was ever emitted, leading to
+			// per-iteration leaks in async loops (every `await f` allocated a new
+			// future, old one overwritten with no decref).
+			if (isAwaitable(t)) return makeRcInfo(RcKind.Ref, "", "msFutureDrcDestroy", "msIncref", "msPtrWasMoved", "", false);
 			// Result is a boolean-discriminated match-type Union post-migration —
 			// flow through the standard mangled hook generation below.
 			// Monomorphized struct instance: build hook names via `mangleMonoName` so they match

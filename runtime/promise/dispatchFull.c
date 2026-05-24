@@ -593,13 +593,21 @@ void msAsyncCb(void* raw) {
 	msAsyncCbEnv* e = (msAsyncCbEnv*)raw;
 
 	/* Call stepper — returns next msFutureBase* to wait on, or NULL when done.
-	 * Stepper returns msFutureBase* (any typed future cast to base). */
+	 * Stepper returns msFutureBase* (any typed future cast to base).
+	 *
+	 * DRC convention: stepper increfs the returned future before returning
+	 * (caller takes ownership of the +1 ref). msAsyncCb decrefs after using
+	 * the pointer to register the callback — the stepper's env field still
+	 * holds the future's permanent ref, keeping it alive while suspended. */
 	msFutureBase* next = e->stepper.env != NULL
 		? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)
 		: ((msFutureBase*(*)(void))e->stepper.fn)();
 
-	/* Eager resume: loop while yielded future is already resolved */
+	/* Eager resume: loop while yielded future is already resolved.
+	 * Each stepper return brings a +1 ref; decref the previous yield
+	 * before overwriting `next` to avoid leaking one future per eager step. */
 	while (next != NULL && atomic_load_explicit(&next->finished, memory_order_acquire)) {
+		msFutureDrcDestroy(next);
 		next = e->stepper.env != NULL
 			? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)
 			: ((msFutureBase*(*)(void))e->stepper.fn)();
@@ -614,8 +622,10 @@ void msAsyncCb(void* raw) {
 		return;
 	}
 
-	/* Not resolved — register ourselves as callback on the yielded future */
+	/* Not resolved — register ourselves as callback on the yielded future,
+	 * then drop our +1 ref (env field keeps the future alive while suspended). */
 	msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = raw });
+	msFutureDrcDestroy(next);
 }
 
 void msAsyncStart(void* retFut, msClosure stepper) {
