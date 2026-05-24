@@ -25,6 +25,7 @@ import {
 	ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
 	SpliceManyData,
+	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "./node";
 
 type ChildVisitor = (child: Node) => void;
@@ -426,6 +427,27 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 				di += 1;
 			}
 		},
+		NodeKind.JSXElement => {
+			const d = node.data as JSXElementData;
+			for (const a of d.jsxAttrs) { cb(a); }
+			for (const c of d.jsxChildren) { cb(c); }
+		},
+		NodeKind.JSXFragment => {
+			const d = node.data as JSXFragmentData;
+			for (const c of d.jsxFragChildren) { cb(c); }
+		},
+		NodeKind.JSXExpressionContainer => {
+			const d = node.data as JSXExpressionContainerData;
+			cb(d.jsxExpr);
+		},
+		NodeKind.JSXAttribute => {
+			const d = node.data as JSXAttributeData;
+			cb(d.jsxAttrValue);
+		},
+		NodeKind.JSXSpreadAttribute => {
+			const d = node.data as JSXSpreadAttributeData;
+			cb(d.jsxSpreadArg);
+		},
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
 		// adding a new NodeKind forces an exhaustiveness error here, preventing
 		// the silent-gap class of bugs that bit replaceTypeVars.
@@ -434,6 +456,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			| NodeKind.Identifier | NodeKind.TypeAnnotation | NodeKind.SizeofExpr
 			| NodeKind.BreakStmt | NodeKind.ContinueStmt | NodeKind.UnreachableStmt
 			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl | NodeKind.EnumDecl
-			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ExternDecl => {},
+			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ExternDecl
+			| NodeKind.JSXText => {},
 	};
 }

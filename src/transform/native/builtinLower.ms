@@ -63,26 +63,27 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	if (cd.callee.resolvedSym !== null && cd.callee.resolvedSym.builtinKind !== "") {
 		return lowerBuiltinCall(node, cd.callee.resolvedSym.builtinKind, ctx);
 	}
-	// C-only: universal .toString() resolution
+	// Universal .toString() resolution — both backends.
 	// Every type has a compiler-provided default. User extensions take priority.
-	if (!ctx.jsBackend) {
-		if (cd.callee.kind === NodeKind.MemberExpr) {
-			const me2 = cd.callee.data as MemberExprData;
-			if (me2.property === "toString") {
-				if (me2.object.nodeType !== null) {
-					return lowerToString(node, me2.object, me2.object.nodeType, loc, ctx);
-				}
-				// Fallback: NumberLiteral/BooleanLiteral may not have nodeType stamped by checker
-				if (me2.object.kind === NodeKind.NumberLiteral) {
-					const call = makeCall(makeIdent("msNumberToString", loc), [me2.object], loc);
-					call.nodeType = stringType();
-					return call;
-				}
-				if (me2.object.kind === NodeKind.BooleanLiteral) {
-					const call = makeCall(makeIdent("msBoolToString", loc), [me2.object], loc);
-					call.nodeType = stringType();
-					return call;
-				}
+	// JS runtime exports msNumberToStringRadix/msBoolToString in std/core/string
+	// (index.jms) that return MS-string byte arrays, matching C backend convention
+	// so downstream msStringConcat works uniformly.
+	if (cd.callee.kind === NodeKind.MemberExpr) {
+		const me2 = cd.callee.data as MemberExprData;
+		if (me2.property === "toString") {
+			if (me2.object.nodeType !== null) {
+				return lowerToString(node, me2.object, me2.object.nodeType, loc, ctx);
+			}
+			// Fallback: NumberLiteral/BooleanLiteral may not have nodeType stamped by checker
+			if (me2.object.kind === NodeKind.NumberLiteral) {
+				const call = makeCall(makeIdent("msNumberToString", loc), [me2.object], loc);
+				call.nodeType = stringType();
+				return call;
+			}
+			if (me2.object.kind === NodeKind.BooleanLiteral) {
+				const call = makeCall(makeIdent("msBoolToString", loc), [me2.object], loc);
+				call.nodeType = stringType();
+				return call;
 			}
 		}
 	}

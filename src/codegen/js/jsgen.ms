@@ -25,6 +25,7 @@ import {
 } from "./statements";
 import {
 	emitFunctionDecl, emitEnumDecl, emitClassDecl,
+	emitMethodDecl, emitConstructorDecl,
 	emitImportDecl, emitExportDecl, emitDecoratedDecl,
 } from "./declarations";
 
@@ -104,6 +105,9 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 		NodeKind.FunctionDecl => { emitFunctionDecl(gen, node); },
 		NodeKind.EnumDecl => { emitEnumDecl(gen, node); },
 		NodeKind.ClassDecl => { emitClassDecl(gen, node); },
+		NodeKind.MethodDecl => { emitMethodDecl(gen, node); },
+		NodeKind.ConstructorDecl => { emitConstructorDecl(gen, node); },
+		NodeKind.PropertyDecl => {},
 		NodeKind.ImportDecl => { emitImportDecl(gen, node); },
 		NodeKind.ExportDecl => { emitExportDecl(gen, node); },
 		NodeKind.DecoratedDecl => { emitDecoratedDecl(gen, node); },

@@ -22,6 +22,7 @@ import {
 	ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
 	SpliceManyData,
+	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../ast/node";
 import { TransformContext } from "./context";
 
@@ -445,6 +446,30 @@ export function mapChildren(node: Node, f: Visitor): void {
 				di += 1;
 			}
 		},
+		NodeKind.JSXElement => {
+			const d = node.data as JSXElementData;
+			let i = 0;
+			while (i < d.jsxAttrs.length) { d.jsxAttrs[i] = f(d.jsxAttrs[i]); i += 1; }
+			let j = 0;
+			while (j < d.jsxChildren.length) { d.jsxChildren[j] = f(d.jsxChildren[j]); j += 1; }
+		},
+		NodeKind.JSXFragment => {
+			const d = node.data as JSXFragmentData;
+			let i = 0;
+			while (i < d.jsxFragChildren.length) { d.jsxFragChildren[i] = f(d.jsxFragChildren[i]); i += 1; }
+		},
+		NodeKind.JSXExpressionContainer => {
+			const d = node.data as JSXExpressionContainerData;
+			d.jsxExpr = f(d.jsxExpr);
+		},
+		NodeKind.JSXAttribute => {
+			const d = node.data as JSXAttributeData;
+			d.jsxAttrValue = f(d.jsxAttrValue);
+		},
+		NodeKind.JSXSpreadAttribute => {
+			const d = node.data as JSXSpreadAttributeData;
+			d.jsxSpreadArg = f(d.jsxSpreadArg);
+		},
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
 		// adding a new NodeKind forces an exhaustiveness error here — keeping
 		// this walker in sync with the AST by construction.
@@ -453,7 +478,8 @@ export function mapChildren(node: Node, f: Visitor): void {
 			| NodeKind.Identifier | NodeKind.TypeAnnotation | NodeKind.SizeofExpr
 			| NodeKind.BreakStmt | NodeKind.ContinueStmt | NodeKind.UnreachableStmt
 			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl | NodeKind.EnumDecl
-			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ExternDecl => {},
+			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ExternDecl
+			| NodeKind.JSXText => {},
 	};
 }
 

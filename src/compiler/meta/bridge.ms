@@ -58,6 +58,8 @@ import {
 	TypeObjectData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeGenericData, TypeFunctionData,
 	// SERIALIZE A2 — macro multi-decl emission
 	SpliceManyData,
+	// JSX (compile-time only — needs round-trip through macro VM)
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
 // V3 — peel Union-backed generics (Result<T,E>, Option<T>) so codec macros see
@@ -989,6 +991,36 @@ export function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: Rais
 			setStrs(objHeap, arrHeap, handle, "typExprParamNames", d.typExprParamNames);
 		},
 
+		// === JSX (compile-time only — serialized for macro VM round-trip) ===
+		NodeKind.JSXElement => {
+			const d = node.data as JSXElementData;
+			setStr(objHeap, handle, "jsxTag", d.jsxTag);
+			setNodes(objHeap, arrHeap, handle, "jsxAttrs", d.jsxAttrs);
+			setNodes(objHeap, arrHeap, handle, "jsxChildren", d.jsxChildren);
+			setBool(objHeap, handle, "jsxSelfClosing", d.jsxSelfClosing);
+		},
+		NodeKind.JSXFragment => {
+			const d = node.data as JSXFragmentData;
+			setNodes(objHeap, arrHeap, handle, "jsxFragChildren", d.jsxFragChildren);
+		},
+		NodeKind.JSXText => {
+			const d = node.data as JSXTextData;
+			setStr(objHeap, handle, "jsxText", d.jsxText);
+		},
+		NodeKind.JSXExpressionContainer => {
+			const d = node.data as JSXExpressionContainerData;
+			setNode(objHeap, arrHeap, handle, "jsxExpr", d.jsxExpr);
+		},
+		NodeKind.JSXAttribute => {
+			const d = node.data as JSXAttributeData;
+			setStr(objHeap, handle, "jsxAttrName", d.jsxAttrName);
+			setNode(objHeap, arrHeap, handle, "jsxAttrValue", d.jsxAttrValue);
+		},
+		NodeKind.JSXSpreadAttribute => {
+			const d = node.data as JSXSpreadAttributeData;
+			setNode(objHeap, arrHeap, handle, "jsxSpreadArg", d.jsxSpreadArg);
+		},
+
 		// Any unrecognized kind: kind/line/column only
 		_ => {},
 	};
@@ -1654,6 +1686,36 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.TypeIntersection => {
 			const typExprMembers = readNodes(objHeap, arrHeap, h, "typExprMembers", loc);
 			return createNodeAt(NodeKind.TypeIntersection, { typExprMembers }, loc);
+		},
+
+		// === JSX (compile-time only — reverse of nodeToValue JSX cases) ===
+		NodeKind.JSXElement => {
+			const jsxTag = readStr(objHeap, h, "jsxTag");
+			const jsxAttrs = readNodes(objHeap, arrHeap, h, "jsxAttrs", loc);
+			const jsxChildren = readNodes(objHeap, arrHeap, h, "jsxChildren", loc);
+			const jsxSelfClosing = readBool(objHeap, h, "jsxSelfClosing");
+			return createNodeAt(NodeKind.JSXElement, { jsxTag, jsxAttrs, jsxChildren, jsxSelfClosing }, loc);
+		},
+		NodeKind.JSXFragment => {
+			const jsxFragChildren = readNodes(objHeap, arrHeap, h, "jsxFragChildren", loc);
+			return createNodeAt(NodeKind.JSXFragment, { jsxFragChildren }, loc);
+		},
+		NodeKind.JSXText => {
+			const jsxText = readStr(objHeap, h, "jsxText");
+			return createNodeAt(NodeKind.JSXText, { jsxText }, loc);
+		},
+		NodeKind.JSXExpressionContainer => {
+			const jsxExpr = readNode(objHeap, arrHeap, h, "jsxExpr", loc);
+			return createNodeAt(NodeKind.JSXExpressionContainer, { jsxExpr }, loc);
+		},
+		NodeKind.JSXAttribute => {
+			const jsxAttrName = readStr(objHeap, h, "jsxAttrName");
+			const jsxAttrValue = readNode(objHeap, arrHeap, h, "jsxAttrValue", loc);
+			return createNodeAt(NodeKind.JSXAttribute, { jsxAttrName, jsxAttrValue }, loc);
+		},
+		NodeKind.JSXSpreadAttribute => {
+			const jsxSpreadArg = readNode(objHeap, arrHeap, h, "jsxSpreadArg", loc);
+			return createNodeAt(NodeKind.JSXSpreadAttribute, { jsxSpreadArg }, loc);
 		},
 
 		// Unknown kind — return a NullLiteral as safe fallback

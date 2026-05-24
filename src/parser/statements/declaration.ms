@@ -1479,6 +1479,21 @@ export function parseMacroInvocation(state: ParserState): NodeResult {
 // ===== Extern Declaration =====
 // syntax: 'extern' ('function' | 'class' | 'const' | 'var' | 'type' | 'enum' | 'interface' | 'macro') ID ...
 
+// Parse optional `from "native"` clause after an extern declaration head.
+// Returns the native name (e.g. JS global, C symbol) or "" if absent.
+// Cursor lands after the consumed string literal (caller still does its own
+// terminator handling: semicolon, body, etc.).
+function parseOptionalFromClause(state: ParserState): string {
+	if (isAtEnd(state) || current(state).kind !== TokenKind.From) return "";
+	advance(state); // consume 'from'
+	if (!isAtEnd(state) && current(state).kind === TokenKind.String) {
+		const name = current(state).value;
+		advance(state);
+		return name;
+	}
+	return "";
+}
+
 export function parseExternDecl(state: ParserState): NodeResult {
 	const externToken = current(state);
 	advance(state); // consume 'extern'
@@ -1533,19 +1548,12 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		const externRetTypeExpr = getLastTypeExpr();
 
 		// Parse optional 'from "c_name"' clause or body/semicolon
-		let nativeName = "";
 		let fnBody: Node = createNode(NodeKind.BlockStmt, { statements: [] as Node[] }, externToken);
-		if (!isAtEnd(state) && current(state).kind === TokenKind.From) {
-			advance(state); // consume 'from'
-			if (!isAtEnd(state) && current(state).kind === TokenKind.String) {
-				nativeName = current(state).value;
-				advance(state);
-			}
+		let nativeName = parseOptionalFromClause(state);
+		if (nativeName !== "" || (isAtEnd(state) || current(state).kind !== TokenKind.LBrace)) {
 			consumeSemicolon(state);
-		} else if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
-			fnBody = try callBlockParser(state);
 		} else {
-			consumeSemicolon(state);
+			fnBody = try callBlockParser(state);
 		}
 
 		// Static extensions strip the synthetic typeof param (not a runtime param)
@@ -1665,12 +1673,16 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			classNode.flags = classNode.flags | NodeFlag.ExternC;
 			return Result.ok(classNode);
 		} else {
-			// extern class FILE; (no body) — opaque type, keep as ExternDecl
+			// extern class FILE; (no body) — opaque type, keep as ExternDecl.
+			// Supports 'from "native"' clause to alias the JS global
+			// (e.g. `extern class performance from "performance"` binds
+			// the JS `performance` global).
+			const externNativeName = parseOptionalFromClause(state);
 			consumeSemicolon(state);
 			return Result.ok(createNode(NodeKind.ExternDecl, {
 				externKind,
 				externName: nameToken.value,
-				nativeName: "",
+				nativeName: externNativeName,
 				externType: "",
 			}, externToken));
 		}
@@ -1687,13 +1699,8 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	}
 
 	// Parse optional 'from "c_name"' clause or body/semicolon
-	let externNativeName = "";
-	if (!isAtEnd(state) && current(state).kind === TokenKind.From) {
-		advance(state); // consume 'from'
-		if (!isAtEnd(state) && current(state).kind === TokenKind.String) {
-			externNativeName = current(state).value;
-			advance(state);
-		}
+	const externNativeName = parseOptionalFromClause(state);
+	if (externNativeName !== "") {
 		consumeSemicolon(state);
 	} else if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
 		skipBalanced(state, TokenKind.LBrace, TokenKind.RBrace);

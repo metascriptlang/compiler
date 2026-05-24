@@ -230,6 +230,11 @@ export enum NodeKind {
 	// collapses to first operand at type-checking time; downstream sees
 	// the erased type. See docs/LANG.md §5.3.
 	TypeIntersection,
+	// JSX (appended at end to preserve enum discriminant ordering). All 6 kinds
+	// are compile-time only — erased by a consuming macro before codegen.
+	// See docs/LANG-JSX.md for spec, docs/JSX-ROADMAP.md for phased plan.
+	JSXElement, JSXFragment, JSXText,
+	JSXExpressionContainer, JSXAttribute, JSXSpreadAttribute,
 }
 
 // ===== Declaration Kind Enum =====
@@ -379,6 +384,13 @@ export type NodeData =
 	| { actorName: string, actorBody: Node[], nameLocation: SourceLocation } // ActorDecl
 	// SERIALIZE A2 — macro multi-decl emission
 	| { spliceNodes: Node[] }                                      // SpliceMany
+	// JSX (appended at end to preserve union discriminant ordering)
+	| { jsxTag: string, jsxAttrs: Node[], jsxChildren: Node[], jsxSelfClosing: boolean } // JSXElement
+	| { jsxFragChildren: Node[] }                                  // JSXFragment
+	| { jsxText: string }                                          // JSXText
+	| { jsxExpr: Node }                                            // JSXExpressionContainer
+	| { jsxAttrName: string, jsxAttrValue: Node }                  // JSXAttribute
+	| { jsxSpreadArg: Node }                                       // JSXSpreadAttribute
 
 // ===== Flow Graph =====
 //
@@ -591,6 +603,14 @@ export type TypeFunctionData = { typExprParams: Node[], typExprReturn: Node, typ
 // + index signature in the same type) is rejected by the parser. See docs and plan for details.
 export type TypeObjectData = { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node, typExprFieldDecorators: Node[][], typExprTypeName: string };
 
+// JSX (compile-time only — erased by consuming macro before codegen)
+export type JSXElementData = { jsxTag: string, jsxAttrs: Node[], jsxChildren: Node[], jsxSelfClosing: boolean };
+export type JSXFragmentData = { jsxFragChildren: Node[] };
+export type JSXTextData = { jsxText: string };
+export type JSXExpressionContainerData = { jsxExpr: Node };
+export type JSXAttributeData = { jsxAttrName: string, jsxAttrValue: Node };
+export type JSXSpreadAttributeData = { jsxSpreadArg: Node };
+
 // ===== Constructors =====
 
 export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
@@ -717,6 +737,13 @@ export function createNodeAt(kind: NodeKind.TypeObject, data: TypeObjectData, lo
 export function createNodeAt(kind: NodeKind.Program, data: ProgramData, loc: SourceLocation): Node;
 // SpliceMany — A2 macro multi-decl emission
 export function createNodeAt(kind: NodeKind.SpliceMany, data: SpliceManyData, loc: SourceLocation): Node;
+// JSX (compile-time only — erased by consuming macro before codegen)
+export function createNodeAt(kind: NodeKind.JSXElement, data: JSXElementData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.JSXFragment, data: JSXFragmentData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.JSXText, data: JSXTextData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.JSXExpressionContainer, data: JSXExpressionContainerData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.JSXAttribute, data: JSXAttributeData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.JSXSpreadAttribute, data: JSXSpreadAttributeData, loc: SourceLocation): Node;
 
 // Implementation — widest signature, accepts any NodeKind and the NodeData union.
 // This is the body; all overload signatures above delegate here via the checker's

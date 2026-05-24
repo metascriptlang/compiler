@@ -30,6 +30,7 @@ import {
 	QuoteExprData, ComptimeBlockData,
 	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
 	SpliceManyData,
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 
@@ -466,6 +467,31 @@ export function transAmHashNode(node: Node): number {
 			const d = node.data as TypeObjectData;
 			h = hStrings(h, d.typExprFieldNames); h = hNodes(h, d.typExprFieldTypes);
 			h = hN(h, d.typExprIndexKey); h = hN(h, d.typExprIndexValue);
+		},
+		// JSX (compile-time only — but hashed for Trans-Am cache consistency)
+		NodeKind.JSXElement => {
+			const d = node.data as JSXElementData;
+			h = hS(h, d.jsxTag); h = hNodes(h, d.jsxAttrs); h = hNodes(h, d.jsxChildren); h = hB(h, d.jsxSelfClosing);
+		},
+		NodeKind.JSXFragment => {
+			const d = node.data as JSXFragmentData;
+			h = hNodes(h, d.jsxFragChildren);
+		},
+		NodeKind.JSXText => {
+			const d = node.data as JSXTextData;
+			h = hS(h, d.jsxText);
+		},
+		NodeKind.JSXExpressionContainer => {
+			const d = node.data as JSXExpressionContainerData;
+			h = hN(h, d.jsxExpr);
+		},
+		NodeKind.JSXAttribute => {
+			const d = node.data as JSXAttributeData;
+			h = hS(h, d.jsxAttrName); h = hN(h, d.jsxAttrValue);
+		},
+		NodeKind.JSXSpreadAttribute => {
+			const d = node.data as JSXSpreadAttributeData;
+			h = hN(h, d.jsxSpreadArg);
 		},
 	};
 

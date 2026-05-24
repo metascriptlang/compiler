@@ -41,6 +41,8 @@ import {
 	TypeObjectData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeGenericData, TypeFunctionData,
 	// SERIALIZE A2 — macro multi-decl emission
 	SpliceManyData,
+	// JSX (compile-time only — addKindFields cases for quote {<...>})
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
 	SymbolKind,
 } from "../../ast/node";
@@ -456,6 +458,41 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrArrayField(keys, values, "typExprParamNames", d.typExprParamNames, loc);
 		return;
 	}
+	// JSX (compile-time only — emitted by quote {<...>} bodies)
+	if (k === NodeKind.JSXElement) {
+		const d = node.data as JSXElementData;
+		addStrField(keys, values, "jsxTag", d.jsxTag, loc);
+		addNodeArrayField(keys, values, "jsxAttrs", d.jsxAttrs, loc);
+		addNodeArrayField(keys, values, "jsxChildren", d.jsxChildren, loc);
+		addBoolField(keys, values, "jsxSelfClosing", d.jsxSelfClosing, loc);
+		return;
+	}
+	if (k === NodeKind.JSXFragment) {
+		const d = node.data as JSXFragmentData;
+		addNodeArrayField(keys, values, "jsxFragChildren", d.jsxFragChildren, loc);
+		return;
+	}
+	if (k === NodeKind.JSXText) {
+		const d = node.data as JSXTextData;
+		addStrField(keys, values, "jsxText", d.jsxText, loc);
+		return;
+	}
+	if (k === NodeKind.JSXExpressionContainer) {
+		const d = node.data as JSXExpressionContainerData;
+		addNodeField(keys, values, "jsxExpr", d.jsxExpr, loc);
+		return;
+	}
+	if (k === NodeKind.JSXAttribute) {
+		const d = node.data as JSXAttributeData;
+		addStrField(keys, values, "jsxAttrName", d.jsxAttrName, loc);
+		addNodeField(keys, values, "jsxAttrValue", d.jsxAttrValue, loc);
+		return;
+	}
+	if (k === NodeKind.JSXSpreadAttribute) {
+		const d = node.data as JSXSpreadAttributeData;
+		addNodeField(keys, values, "jsxSpreadArg", d.jsxSpreadArg, loc);
+		return;
+	}
 
 	// Other NodeKinds: kind/line/column only. Extend here as macro authors
 	// need more NodeKinds in quote bodies.
@@ -734,6 +771,13 @@ function nodeKindOrdinal(name: string): number {
 		"TypeObject" => NodeKind.TypeObject as number,
 		// SERIALIZE A2 — multi-decl emission
 		"SpliceMany" => NodeKind.SpliceMany as number,
+		// JSX (compile-time only — for NodeKind.JSXElement rewriting in macro bodies)
+		"JSXElement" => NodeKind.JSXElement as number,
+		"JSXFragment" => NodeKind.JSXFragment as number,
+		"JSXText" => NodeKind.JSXText as number,
+		"JSXExpressionContainer" => NodeKind.JSXExpressionContainer as number,
+		"JSXAttribute" => NodeKind.JSXAttribute as number,
+		"JSXSpreadAttribute" => NodeKind.JSXSpreadAttribute as number,
 		// Self-hosting / hidden conversions (rare but technically constructable)
 		"SizeofExpr" => NodeKind.SizeofExpr as number,
 		"HiddenDeref" => NodeKind.HiddenDeref as number,

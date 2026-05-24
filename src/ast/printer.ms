@@ -18,6 +18,7 @@ import { Node, NodeKind, DeclKind,
 	TestDeclData, AssertStmtData,
 	HiddenStdConvData,
 	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "./node";
 
 // ===== Indentation Helper =====
@@ -666,6 +667,43 @@ export function printNode(node: Node, level: number): void {
 				console.log(`${indent(level + 1)}[indexValue]:`);
 				printNode(data.typExprIndexValue, level + 2);
 			}
+		},
+		NodeKind.JSXElement => {
+			const data = node.data as JSXElementData;
+			const closing = data.jsxSelfClosing ? " (self-closing)" : "";
+			console.log(`${pad}JSXElement: <${data.jsxTag}>${closing}`);
+			if (data.jsxAttrs.length > 0) {
+				console.log(`${indent(level + 1)}[attrs] (${data.jsxAttrs.length.toString()}):`);
+				for (const a of data.jsxAttrs) { printNode(a, level + 2); }
+			}
+			if (data.jsxChildren.length > 0) {
+				console.log(`${indent(level + 1)}[children] (${data.jsxChildren.length.toString()}):`);
+				for (const c of data.jsxChildren) { printNode(c, level + 2); }
+			}
+		},
+		NodeKind.JSXFragment => {
+			const data = node.data as JSXFragmentData;
+			console.log(`${pad}JSXFragment: (${data.jsxFragChildren.length.toString()} children)`);
+			for (const c of data.jsxFragChildren) { printNode(c, level + 1); }
+		},
+		NodeKind.JSXText => {
+			const data = node.data as JSXTextData;
+			console.log(`${pad}JSXText: ${data.jsxText}`);
+		},
+		NodeKind.JSXExpressionContainer => {
+			const data = node.data as JSXExpressionContainerData;
+			console.log(`${pad}JSXExpressionContainer:`);
+			printNode(data.jsxExpr, level + 1);
+		},
+		NodeKind.JSXAttribute => {
+			const data = node.data as JSXAttributeData;
+			console.log(`${pad}JSXAttribute: ${data.jsxAttrName}=`);
+			printNode(data.jsxAttrValue, level + 1);
+		},
+		NodeKind.JSXSpreadAttribute => {
+			const data = node.data as JSXSpreadAttributeData;
+			console.log(`${pad}JSXSpreadAttribute:`);
+			printNode(data.jsxSpreadArg, level + 1);
 		},
 	}
 }
