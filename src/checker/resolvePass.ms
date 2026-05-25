@@ -16,6 +16,21 @@ import { getDeclName } from "./collectPass";
 import { isAssignable as isAssignableCheck } from "./compat";
 import { monoTypeKey } from "../monomorphize/registry";
 
+// stripRestParamPrefix — in-place strip of the legacy "..." prefix from the
+// last entry of an AST param-name array. Mirrors what createFunction does for
+// Function.typeNames so downstream consumers (codegen, scope binding, LSP) see
+// clean names. Returns true if the function has a rest param, so callers can
+// adjust minArity in one branch.
+function stripRestParamPrefix(params: string[]): boolean {
+	const last = params.length - 1;
+	if (last < 0) return false;
+	if (params[last].length > 3 && params[last].slice(0, 3) === "...") {
+		params[last] = params[last].slice(3, params[last].length);
+		return true;
+	}
+	return false;
+}
+
 // ===== A. Resolve Annotation Strings =====
 
 // Tier 3: find a keyword string at top level (not inside brackets/parens/braces/angles).
@@ -1055,10 +1070,10 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 			if (def !== null) defCount = defCount + 1;
 		}
 	}
-	// Rest param is optional (accepts 0+ args) — reduces min arity
-	const hasRestParam = d.params.length > 0
-		&& d.params[d.params.length - 1].length > 3
-		&& d.params[d.params.length - 1].slice(0, 3) === "...";
+	// Rest-ness is the type-level Varargs marker that createFunction installed.
+	// AST params still carry the legacy "..." prefix from the parser; strip it
+	// in-place so downstream consumers (codegen, suggest, LSP) see clean names.
+	const hasRestParam = stripRestParamPrefix(d.params);
 	if (defCount > 0 || hasRestParam) {
 		const restReduction = hasRestParam ? 1 : 0;
 		setMinArity(fnType, d.params.length - defCount - restReduction);
@@ -1472,6 +1487,7 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 	const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx, member.location.line, member.location.column);
 	resolveTypeExprs(member.typeExprs, ctx);
 	member.nodeType = createFunction(paramTypes, cd.ctorParams, voidType());
+	stripRestParamPrefix(cd.ctorParams);
 	if (cd.ctorDefaults !== null && cd.ctorDefaults.length > 0) {
 		sym.defaultParams = cd.ctorDefaults;
 	}
@@ -1538,6 +1554,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 				closeScope(ctx.table);
 			}
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
+			stripRestParamPrefix(md.methodParams);
 			// Use resolvedSym set by collectClassMethod — avoids overload ambiguity with lookupSymbol
 			// DecoratedDecl wraps MethodDecl — resolvedSym is on the inner node
 			const methodSym = member.resolvedSym !== null ? member.resolvedSym : d.classBody[mi].resolvedSym;
@@ -1741,6 +1758,7 @@ function resolveActor(ctx: CheckerContext, node: Node): void {
 				closeScope(ctx.table);
 			}
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
+			stripRestParamPrefix(md.methodParams);
 			const methodSym = member.resolvedSym !== null ? member.resolvedSym : d.actorBody[mi].resolvedSym;
 			if (methodSym !== null && methodSym.symbolType !== null && methodSym.symbolType.typeName !== "") {
 				fnType.typeName = methodSym.symbolType.typeName;

@@ -58,6 +58,7 @@ function anonFieldKey(t: Type | null): string {
 		TypeKind.Function => "fn",
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
 		TypeKind.Unknown => "unknown",
+		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0]) : "unknown",
 		_ => {
 			const simple = getSimpleTypeDesc(t);
 			if (simple !== "") return simple;
@@ -267,6 +268,7 @@ export function typeKey(t: Type | null): string {
 			}
 			return key;
 		},
+		TypeKind.Varargs => t.typeChildren.length > 0 ? typeKey(t.typeChildren[0]) : "unknown",
 		_ => "unknown",
 	};
 }
@@ -557,6 +559,11 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 	// number` compiles to `double`).
 	if (t.kind === TypeKind.Distinct) {
 		return getTypeDesc(g, t.typeReturn);
+	}
+	// Reference parity: tyVarargs is a transparent marker for rest params. The C
+	// param descriptor is the wrapped array type — the marker carries no ABI.
+	if (t.kind === TypeKind.Varargs && t.typeChildren.length > 0) {
+		return getTypeDesc(g, t.typeChildren[0]);
 	}
 	// Check simple types first (no caching needed)
 	const simple = getSimpleTypeDesc(t);

@@ -1242,10 +1242,14 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		let paramType = unknownType();
 		if (sym !== null && sym.symbolType.kind === TypeKind.Function && i < sym.symbolType.typeChildren.length) {
 			paramType = sym.symbolType.typeChildren[i];
+			// Rest param: inside the body the symbol is the packed array, not the
+			// Varargs wrapper — so `parts.length`, `parts[i]`, extension lookups work.
+			if (paramType !== null && paramType.kind === TypeKind.Varargs
+				&& paramType.typeChildren.length > 0) {
+				paramType = paramType.typeChildren[0];
+			}
 		}
-		// Strip "..." prefix from rest params (parser stores "...name", checker uses "name")
-		const paramName = param.length > 3 && param.startsWith("...") ? param.slice(3, param.length) : param;
-		const paramSym = makeSymbol(paramName, SymbolKind.Parameter, paramType, false);
+		const paramSym = makeSymbol(param, SymbolKind.Parameter, paramType, false);
 		// Set declaration location for go-to-definition
 		if (paramLocs !== null && i < paramLocs.length && paramLocs[i] !== null) {
 			paramSym.location = paramLocs[i];
@@ -1256,12 +1260,12 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		}
 		defineSymbol(ctx.table, paramSym);
 		// Ref parity: params are implicitly initialized
-		markInitialized(ctx.initTracker, paramName);
+		markInitialized(ctx.initTracker, param);
 		// Record param DEF for LSP (standard parity: semIdentDef → suggestSym)
 		if (paramLocs !== null && i < paramLocs.length && paramLocs[i] !== null) {
 			sgRecordSym(ctx, paramLocs[i].line, paramLocs[i].column,
-				paramLocs[i].column + paramName.length,
-				paramSym, paramType, SymbolKind.Parameter, paramName, "", true);
+				paramLocs[i].column + param.length,
+				paramSym, paramType, SymbolKind.Parameter, param, "", true);
 		}
 		i += 1;
 	}

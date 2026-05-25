@@ -1,50 +1,36 @@
 // Rest parameter lowering (reference parity: varargs call-site array packing)
 //
-// 1. FunctionDecl: strip "..." prefix from rest param name ("...args" → "args")
-// 2. CallExpr: pack excess args into ArrayLiteral for rest param
+// Rest-ness is encoded type-level by createFunction (TypeKind.Varargs wraps the
+// last param's array type). This pass packs excess call-site args into an
+// ArrayLiteral when the callee's last param is Varargs.
 //
 // Example:
 //   function f(a: string, ...rest: string[]) {}
 //   f("hello", "a", "b", "c");
 // Lowered to:
-//   function f(a: string, rest: string[]) {}
 //   f("hello", ["a", "b", "c"]);
 
 import {
 	Node, NodeKind, NodeData, Type, TypeKind,
-	FunctionDeclData, MethodDeclData, CallExprData,
+	CallExprData, IdentifierData,
 	createNode,
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
+import { lookupSymbol } from "../../checker/symbol";
+
+// Holds the active ctx for the current walk. Closure over `ctx` would be
+// cleaner but walkNode's visitor signature is fixed to (node) => node.
+let activeCtx: TransformContext | null = null;
 
 export function lowerRestParams(program: Node, ctx: TransformContext): Node {
+	activeCtx = ctx;
 	walkNode(program, lowerRest);
+	activeCtx = null;
 	return program;
 }
 
-function isRestParam(name: string): boolean {
-	return name.length > 3 && name.slice(0, 3) === "...";
-}
-
-function stripRestPrefix(name: string): string {
-	if (isRestParam(name)) return name.slice(3, name.length);
-	return name;
-}
-
-// Strip "..." from all rest params in a param list (shared by FunctionDecl + MethodDecl)
-function stripRestFromParams(params: string[]): void {
-	let i = 0;
-	while (i < params.length) {
-		if (isRestParam(params[i])) {
-			params[i] = stripRestPrefix(params[i]);
-		}
-		i = i + 1;
-	}
-}
-
-// Build an ArrayLiteral node from a list of element nodes
 function makeArrayLit(elements: Node[], restType: Type, line: number): Node {
 	const arr = createNode(NodeKind.ArrayLiteral,
 		{ elements } as unknown as NodeData,
@@ -54,34 +40,45 @@ function makeArrayLit(elements: Node[], restType: Type, line: number): Node {
 }
 
 function lowerRest(node: Node): Node {
-	// P9: DRY — shared helper for FunctionDecl and MethodDecl
-	match (node.kind) {
-		NodeKind.FunctionDecl => {
-			const fd = node.data as FunctionDeclData;
-			if (fd.params !== null) stripRestFromParams(fd.params);
-		},
-		NodeKind.MethodDecl => {
-			const md = node.data as MethodDeclData;
-			if (md.methodParams !== null) stripRestFromParams(md.methodParams);
-		},
-		_ => {},
-	};
-
 	if (node.kind !== NodeKind.CallExpr) return node;
 
 	const d = node.data as CallExprData;
 	const callee = d.callee;
-	if (callee === null || callee.resolvedSym === null) return node;
-	const sym = callee.resolvedSym;
+	if (callee === null) return node;
+	let sym = callee.resolvedSym;
+	// Synthetic calls inserted by earlier transforms (stringConcatFlatten,
+	// nativeLower) emit bare Identifier callees with no resolvedSym. Look the
+	// name up in the global symbol table so varargs packing still applies.
+	if (sym === null && callee.kind === NodeKind.Identifier
+		&& activeCtx !== null && activeCtx.checkerCtx !== null) {
+		const id = callee.data as IdentifierData;
+		const found = lookupSymbol(activeCtx.checkerCtx.table, id.name);
+		if (found !== null) {
+			sym = found;
+			callee.resolvedSym = found;
+		}
+	}
+	if (sym === null) return node;
 	if (sym.symbolType === null || sym.symbolType.kind !== TypeKind.Function) return node;
 
-	const typeNames = sym.symbolType.typeNames;
-	if (typeNames.length === 0) return node;
-	if (!isRestParam(typeNames[typeNames.length - 1])) return node;
+	const typeChildren = sym.symbolType.typeChildren;
+	if (typeChildren.length === 0) return node;
+	const lastType = typeChildren[typeChildren.length - 1];
+	if (lastType === null || lastType.kind !== TypeKind.Varargs) return node;
 
-	const restIdx = typeNames.length - 1;
-	const restType = restIdx < sym.symbolType.typeChildren.length
-		? sym.symbolType.typeChildren[restIdx]
+	// Method calls keep `this` as typeChildren[0] but the call-site arguments
+	// don't include the receiver (it lives in callee.MemberExpr.object). Skip
+	// that slot when computing rest position so d.arguments-relative indexing
+	// stays aligned. Static extension calls (`Math.floor(x)`) and free function
+	// calls keep their natural alignment.
+	const typeNames = sym.symbolType.typeNames;
+	const hasThisSlot = typeNames.length > 0 && typeNames[0] === "this"
+		&& callee.kind === NodeKind.MemberExpr;
+	const restIdx = (typeChildren.length - 1) - (hasThisSlot ? 1 : 0);
+
+	// Peel Varargs → user's array type (e.g. string[]) for the ArrayLiteral.
+	const restType = lastType.typeChildren.length > 0
+		? lastType.typeChildren[0]
 		: null as unknown as Type;
 
 	// No excess args — insert empty array for the rest param

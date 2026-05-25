@@ -169,6 +169,28 @@ export function createArray(element: Type): Type {
 	};
 }
 
+// Reference parity (tyVarargs): wraps a rest parameter's user-written array
+// type. Used only on Function.typeChildren[last] when the corresponding param
+// is rest. Transparent to most type code via unwrapVarargs / isVarargs.
+export function createVarargs(arrayType: Type): Type {
+	return {
+		kind: TypeKind.Varargs, typeName: "", typeNames: [], typeChildren: [arrayType],
+		typeReturn: null, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
+		callConv: CallingConvention.CcDefault, attachedOps: [],
+	};
+}
+
+export function isVarargs(t: Type): boolean {
+	return t !== null && t.kind === TypeKind.Varargs;
+}
+
+export function unwrapVarargs(t: Type): Type {
+	if (t !== null && t.kind === TypeKind.Varargs && t.typeChildren.length > 0) {
+		return t.typeChildren[0];
+	}
+	return t;
+}
+
 export function createSizedArray(element: Type | null, size: number): Type {
 	const t = emptyType();
 	t.kind = TypeKind.SizedArray;
@@ -185,8 +207,27 @@ export function createSpan(element: Type): Type {
 }
 
 export function createFunction(paramTypes: Type[], paramNames: string[], returnType: Type | null): Type {
+	// Clone caller's arrays — Function type owns its typeNames/typeChildren and
+	// must not share mutable references with FunctionDeclData.params. Without
+	// this, FunctionDecl traversal that strips a "..." prefix would silently
+	// leak into every Symbol whose Function type was built from those params.
+	const ownNames: string[] = [];
+	for (let i = 0; i < paramNames.length; i += 1) ownNames.push(paramNames[i]);
+	const ownTypes: Type[] = [];
+	for (let i = 0; i < paramTypes.length; i += 1) ownTypes.push(paramTypes[i]);
+	// Reference parity (tyVarargs): if the last param name carries the legacy
+	// "..." prefix, strip it and wrap its type slot with TypeKind.Varargs. From
+	// here on, rest-ness is encoded type-level (typeChildren[last].kind), not
+	// as a name prefix — callers walk through unwrapVarargs / isVarargs.
+	const last = ownNames.length - 1;
+	if (last >= 0 && ownNames[last].length > 3 && ownNames[last].slice(0, 3) === "...") {
+		ownNames[last] = ownNames[last].slice(3, ownNames[last].length);
+		if (last < ownTypes.length && ownTypes[last].kind !== TypeKind.Varargs) {
+			ownTypes[last] = createVarargs(ownTypes[last]);
+		}
+	}
 	return {
-		kind: TypeKind.Function, typeName: "", typeNames: paramNames, typeChildren: paramTypes,
+		kind: TypeKind.Function, typeName: "", typeNames: ownNames, typeChildren: ownTypes,
 		typeReturn: returnType, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
 		callConv: CallingConvention.CcDefault, attachedOps: [],
 	};
@@ -1514,6 +1555,9 @@ export function substituteType(t: Type | null, paramName: string, concrete: Type
 			TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.SizedArray => createSizedArray(substituteType(t.typeReturn, paramName, concrete), t.typeFlags - TypeFlag.Substituting),
 			TypeKind.Span => createSpan(substituteType(t.typeReturn, paramName, concrete)),
+			TypeKind.Varargs => t.typeChildren.length > 0
+				? createVarargs(substituteType(t.typeChildren[0], paramName, concrete))
+				: t,
 			TypeKind.Function => {
 				const fn = copyTypeForSubst(t);
 				substituteChildrenInPlace(fn, paramName, concrete);
@@ -2058,6 +2102,9 @@ export function typeNameOf(t: Type | null): string {
 // use typeNameOf directly — the empty return is intentional there.
 export function typeDisplayName(t: Type | null): string {
 	if (t === null) return "<null>";
+	if (t.kind === TypeKind.Varargs && t.typeChildren.length > 0) {
+		return "..." + typeDisplayName(t.typeChildren[0]);
+	}
 	const name = typeNameOf(t);
 	if (name !== "") return name;
 	return match (t.kind) {

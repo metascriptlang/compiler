@@ -181,33 +181,33 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | 
 	if (node === null) return;
 	if ((node.flags & NodeFlag.Sem) !== 0 && node.nodeType !== null) return;
 	if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { node.nodeType = unknownType(); return; }
-	node.nodeType = checkExprInner(ctx, node, expectedType);
+	checkExprInner(ctx, node, expectedType);
 	node.flags = node.flags | NodeFlag.Sem;
 }
 
 // Internal: compute type for node. All match arms and sub-functions return Type.
-function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
+function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const result = match (node.kind) {
 		NodeKind.NumberLiteral => {
 			if (expectedType !== null && isIntegerType(expectedType)) {
 				if (literalFitsInType(node, expectedType)) {
-					return expectedType;
+					node.nodeType = expectedType; return;
 				} else if (isNodeIntLit(node)) {
 					// Reference parity: standard reference's type change diagnostic emits compile-time error for out-of-range literals
 					const v = (node.data as NumberLiteralData).value;
 					addError(ctx, "cannot convert " + v + " to " + typeDisplayName(expectedType), node.location.line, node.location.column);
-					return expectedType;
+					node.nodeType = expectedType; return;
 				} else {
-					return float64Type();
+					node.nodeType = float64Type(); return;
 				}
 			} else if (expectedType !== null && (expectedType.kind === TypeKind.Float64 || expectedType.kind === TypeKind.Float32)) {
-				return expectedType;
+				node.nodeType = expectedType; return;
 			} else if (expectedType !== null && expectedType.kind === TypeKind.Number) {
-				return numberType();
+				node.nodeType = numberType(); return;
 			} else {
 				// Default inference: integer literals → int32, float literals → float64
-				if (isNodeIntLit(node)) return int32Type();
-				return float64Type();
+				if (isNodeIntLit(node)) { node.nodeType = int32Type(); return; }
+				node.nodeType = float64Type(); return;
 			}
 		},
 		NodeKind.BigIntLiteral => createPrimitive(TypeKind.Int64),
@@ -216,12 +216,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (expectedType !== null) {
 				const sd = node.data as StringLiteralData;
 				if (expectedType.kind === TypeKind.StringLiteral && expectedType.typeName === sd.value) {
-					return expectedType;
+					node.nodeType = expectedType; return;
 				}
 				if (expectedType.kind === TypeKind.Union) {
 					for (const child of expectedType.typeChildren) {
 						if (child !== null && child.kind === TypeKind.StringLiteral && child.typeName === sd.value) {
-							return child;
+							node.nodeType = child; return;
 						}
 					}
 					// All members are StringLiteral but value not found → type error
@@ -231,11 +231,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					}
 					if (allStrLit && expectedType.typeChildren.length > 0) {
 						addError(ctx, `Type '"${sd.value}"' is not assignable to type '${typeDisplayName(expectedType)}'`, node.location.line, node.location.column);
-						return stringType();
+						node.nodeType = stringType(); return;
 					}
 				}
 			}
-			return stringType();
+			node.nodeType = stringType(); return;
 		},
 		NodeKind.BooleanLiteral => {
 			// TypeScript parity: boolean literals get BooleanLiteral type when expectedType demands it.
@@ -244,18 +244,18 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				const bd = node.data as BooleanLiteralData;
 				if (expectedType.kind === TypeKind.BooleanLiteral
 					&& booleanLiteralValue(expectedType) === bd.boolValue) {
-					return expectedType;
+					node.nodeType = expectedType; return;
 				}
 				if (expectedType.kind === TypeKind.Union) {
 					for (const child of expectedType.typeChildren) {
 						if (child !== null && child.kind === TypeKind.BooleanLiteral
 							&& booleanLiteralValue(child) === bd.boolValue) {
-							return child;
+							node.nodeType = child; return;
 						}
 					}
 				}
 			}
-			return booleanType();
+			node.nodeType = booleanType(); return;
 		},
 		NodeKind.NullLiteral => nullType(),
 		NodeKind.RegexLiteral | NodeKind.QuoteExpr => unknownType(),
@@ -273,7 +273,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			node.resolvedSym = null as unknown as Symbol;
 			node.flags = 0;
 			checkExpr(ctx, node, expectedType);
-			return node.nodeType;
+			node.nodeType = node.nodeType; return;
 		},
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
@@ -281,12 +281,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// classType.typeExtra chain. Special-cased BEFORE lookupSymbol because
 			// `super` is never a regular declared symbol.
 			if (d.name === "super") {
-				return resolveSuper(ctx, node);
+				node.nodeType = resolveSuper(ctx, node); return;
 			}
 			const sym = lookupSymbol(ctx.table, d.name);
 			if (sym === null) {
 					addError(ctx, `Undefined variable '${d.name}'`, node.location.line, node.location.column);
-				return errorType();
+				node.nodeType = errorType(); return;
 			}
 			// Demand-driven: ensure the symbol's signature is resolved before using its type
 			ensureShaped(sym, ctx);
@@ -320,9 +320,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// synthesis instead of widening to x's declared type.
 			if (ctx.initTracker.leftPartOfAsgn > 0) {
 				node.nodeType = sym.symbolType;
-				return sym.symbolType;
+				node.nodeType = sym.symbolType; return;
 			}
-			return getFlowTypeOfReference(node, sym.symbolType);
+			node.nodeType = getFlowTypeOfReference(node, sym.symbolType); return;
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
@@ -510,13 +510,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 								addError(ctx,
 									`compound assignment '${d.operator}' is not supported on dynamic field '${md.property}'; rewrite as 'expr.${md.property} = expr.${md.property} ${lhsRead} value'`,
 									node.location.line, node.location.column);
-								return unknownType();
+								node.nodeType = unknownType(); return;
 							}
 							const keyLit = createNodeAt(NodeKind.StringLiteral, { value: md.property }, node.location);
 							const wargs: Node[] = [];
 							wargs.push(keyLit);
 							wargs.push(d.right);
-							return rewriteAsMethodCall(ctx, node, md.object, "setDynamicField", wargs);
+							node.nodeType = rewriteAsMethodCall(ctx, node, md.object, "setDynamicField", wargs); return;
 						}
 					}
 				}
@@ -536,14 +536,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (setObjType !== null && setObjType.kind === TypeKind.CString) {
 					addError(ctx, "cstring doesn't support `[]=` operator — convert to string first",
 						node.location.line, node.location.column);
-					return errorType();
+					node.nodeType = errorType(); return;
 				}
 				if (setObjType !== null && setObjType.kind === TypeKind.GenericInstance
 					&& isIndexableMapType(setObjType)) {
 					const wargs: Node[] = [];
 					wargs.push(ad.index);
 					wargs.push(d.right);
-					return rewriteAsMethodCall(ctx, node, ad.array, "set", wargs);
+					node.nodeType = rewriteAsMethodCall(ctx, node, ad.array, "set", wargs); return;
 				}
 			}
 			// Ref parity: initVar on assignment LHS
@@ -595,7 +595,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					effRight = stringType();
 				}
 			}
-			return inferBinaryOp(d.operator, effLeft, effRight);
+			node.nodeType = inferBinaryOp(d.operator, effLeft, effRight); return;
 		},
 		NodeKind.UnaryExpr => {
 			const d = node.data as UnaryExprData;
@@ -613,7 +613,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					addError(ctx, "bitwise NOT '~' requires integer type, got '" + name + "'", node.location.line, node.location.column);
 				}
 			}
-			return inferUnaryOp(d.unaryOp, operandType);
+			node.nodeType = inferUnaryOp(d.unaryOp, operandType); return;
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
@@ -629,8 +629,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					}
 				}
 			}
-			if (d.updateArg.nodeType !== null && isNumeric(d.updateArg.nodeType)) return d.updateArg.nodeType;
-			return int32Type();
+			if (d.updateArg.nodeType !== null && isNumeric(d.updateArg.nodeType)) { node.nodeType = d.updateArg.nodeType; return; }
+			node.nodeType = int32Type(); return;
 		},
 		NodeKind.CallExpr => checkCallExpr(ctx, node, expectedType),
 		NodeKind.MemberExpr => checkMemberExpr(ctx, node, expectedType),
@@ -641,7 +641,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (d.array === null) {
 				addError(ctx, "internal: ArrayAccess with null array sub-expression", node.location.line, node.location.column);
 				node.nodeType = unknownType();
-				return unknownType();
+				node.nodeType = unknownType(); return;
 			}
 			checkExpr(ctx, d.array, null);
 			const arrType = d.array.nodeType;
@@ -652,7 +652,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (arrType === null) {
 				addError(ctx, "internal: array type unresolved in ArrayAccess (child kind=" + d.array.kind + ")", node.location.line, node.location.column);
 				node.nodeType = unknownType();
-				return unknownType();
+				node.nodeType = unknownType(); return;
 			}
 			// HashMap<K,V> subscript: mutate `m[k]` into the method-call form `m.get(k)`
 			// so the existing extension resolution (checkMemberExpr → checkCallExpr)
@@ -689,7 +689,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				};
 				node.flags = node.flags & ~NodeFlag.Sem;
 				node.nodeType = null;
-				return checkCallExpr(ctx, node, null);
+				node.nodeType = checkCallExpr(ctx, node, null); return;
 			}
 			const idxType = d.index.nodeType;
 			// Implicit number → int64 cast for array index (C requires integer subscript)
@@ -714,7 +714,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				accessType = getElementType(arrType);
 			}
 			node.nodeType = accessType;
-			return accessType;
+			node.nodeType = accessType; return;
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
@@ -812,7 +812,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				// 5. Re-check as a call. Generic inference on mapFromPairs<K,V>
 				// binds K and V from the typed array arguments, and the #29 fix
 				// ensures the internal m.set(...) calls get monomorphized.
-				return checkCallExpr(ctx, node, objExpected);
+				node.nodeType = checkCallExpr(ctx, node, objExpected); return;
 			}
 			// Unwrap GenericInstance (e.g., Result<T, E>) to inner Struct or Union.
 			// Walk through typeReturn (eagerly instantiated body) or typeExtra
@@ -939,12 +939,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						ki = ki + 1;
 					}
 				}
-				return node.nodeType;
+				node.nodeType = node.nodeType; return;
 			} else if (objExpected !== null && objExpected.kind === TypeKind.Union
 				&& isDiscriminatedUnion(objExpected)) {
 				// Discriminated union construction validation
 				// Pass original expectedType so Ref wrapper is preserved for codegen heap-alloc
-				return checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
+				node.nodeType = checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType); return;
 			} else if (objExpected !== null && objExpected.kind === TypeKind.Union) {
 				// Non-discriminated union: resolve variant, propagate field types.
 				// Reference parity: sem resolves fields then calls fitNode(field.typ, value)
@@ -1033,7 +1033,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (varIdx >= 0) {
 					node.flags = node.flags | (((varIdx + 1) as int32) << 16);
 				}
-				return objExpected;
+				node.nodeType = objExpected; return;
 			} else {
 				// No expected type — synthesize anonymous struct from literal fields
 				const fieldNames: string[] = [];
@@ -1049,7 +1049,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				const anonName = anonStructName(fieldNames, fieldTypes);
 				const anonType = createStruct(anonName, fieldNames, fieldTypes, false);
 				node.nodeType = anonType;
-				return anonType;
+				node.nodeType = anonType; return;
 			}
 		},
 		NodeKind.ArrayLiteral => {
@@ -1064,9 +1064,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				: null;
 			if (d.elements.length === 0) {
 				if (arrExpected !== null && (arrExpected.kind === TypeKind.SizedArray || arrExpected.kind === TypeKind.Array)) {
-					return arrExpected;
+					node.nodeType = arrExpected; return;
 				} else {
-					return createArray(unknownType());
+					node.nodeType = createArray(unknownType()); return;
 				}
 			} else {
 				for (let i = 0; i < d.elements.length; i += 1) {
@@ -1129,11 +1129,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					if (d.elements.length > expectedLen) {
 						addError(ctx, `Fixed-size array expects at most ${expectedLen} element(s), got ${d.elements.length}`, node.location.line, node.location.column);
 					}
-					return arrExpected;
+					node.nodeType = arrExpected; return;
 				} else if (arrExpected !== null && arrExpected.kind === TypeKind.Array && !hasGenericParams(arrExpected)) {
-					return arrExpected;
+					node.nodeType = arrExpected; return;
 				} else {
-					return createArray(elemType);
+					node.nodeType = createArray(elemType); return;
 				}
 			}
 		},
@@ -1148,7 +1148,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				d.ternaryConsequent = fitNode(ctx, d.ternaryConsequent, expectedType, d.ternaryConsequent.nodeType);
 				d.ternaryAlternate = fitNode(ctx, d.ternaryAlternate, expectedType, d.ternaryAlternate.nodeType);
 			}
-			return d.ternaryConsequent.nodeType;
+			node.nodeType = d.ternaryConsequent.nodeType; return;
 		},
 		NodeKind.TypeAssertion => {
 			let d = node.data as TypeAssertionData;
@@ -1181,7 +1181,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.data = { nullPlaceholder: true };
 				node.nodeType = targetType;
 				node.flags = node.flags | NodeFlag.Sem;
-				return targetType;
+				node.nodeType = targetType; return;
 			}
 			// String↔CString needs runtime conversion at the FFI boundary, not erasure.
 			else if (srcType !== null
@@ -1192,7 +1192,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.data = { convExpr: d.asExpr, convType: targetType };
 				node.nodeType = targetType;
 				node.flags = node.flags | NodeFlag.Sem;
-				return targetType;
+				node.nodeType = targetType; return;
 			}
 			// Reference parity: when narrowing a Union, resolve to the actual variant type.
 			else if (srcType !== null && srcType.kind === TypeKind.Union
@@ -1206,12 +1206,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			} else {
 				node.nodeType = targetType;
 			}
-			return node.nodeType;
+			node.nodeType = node.nodeType; return;
 		},
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
 			checkExpr(ctx, d.spreadArg, null);
-			return unknownType();
+			node.nodeType = unknownType(); return;
 		},
 		NodeKind.NewExpr => checkNewExpr(ctx, node, expectedType),
 		NodeKind.TryExpr => checkTryExpr(ctx, node),
@@ -1238,14 +1238,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						markConsumed(idSym);
 					}
 				}
-				return node.nodeType;
+				node.nodeType = node.nodeType; return;
 			}
-			return unknownType();
+			node.nodeType = unknownType(); return;
 		},
 		NodeKind.YieldExpr => {
 			const d = node.data as YieldExprData;
 			checkExpr(ctx, d.yieldArg, null);
-			return unknownType();
+			node.nodeType = unknownType(); return;
 		},
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
@@ -1268,12 +1268,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					markConsumed(idSym);
 				}
 			}
-			return d.moveArg.nodeType;
+			node.nodeType = d.moveArg.nodeType; return;
 		},
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
 			checkExpr(ctx, d.outArg, null);
-			return unknownType();
+			node.nodeType = unknownType(); return;
 		},
 		NodeKind.SizeofExpr => {
 			const d = node.data as SizeofExprData;
@@ -1282,16 +1282,16 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const size = sizeOfType(resolved);
 			node.kind = NodeKind.NumberLiteral;
 			node.data = { value: size } as unknown as NodeData;
-			return int32Type();
+			node.nodeType = int32Type(); return;
 		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
 			const d = node.data as HiddenDerefData;
-			checkExpr(ctx, d.expr, null); return d.expr.nodeType;
+			checkExpr(ctx, d.expr, null); node.nodeType = d.expr.nodeType; return;
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			const d = node.data as HiddenStdConvData;
 			checkExpr(ctx, d.convExpr, null);
-			return d.convType;
+			node.nodeType = d.convType; return;
 		},
 		NodeKind.MacroInvocation => {
 			// Implementation parity: pragma/macro args are type-checked
@@ -1324,9 +1324,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (ctx.macroExpansionDepth >= 16) {
 					addError(ctx, "macro expansion depth limit (16) exceeded for '" + md.macroName + "' — possible recursive macro",
 						node.location.line, node.location.column);
-					return unknownType();
+					node.nodeType = unknownType(); return;
 				}
-				if (anyArgIsParametric(md.macroArgs)) return unknownType();
+				if (anyArgIsParametric(md.macroArgs)) { node.nodeType = unknownType(); return; }
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
 				const expanded = callExpandMacroInvocation(node, ctx, 0);
 				// When a user macro emits a sentinel error (or VM fails),
@@ -1338,7 +1338,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (expanded.kind === NodeKind.MacroInvocation) {
 					ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 					node.nodeType = unknownType();
-					return unknownType();
+					node.nodeType = unknownType(); return;
 				}
 				node.kind = expanded.kind;
 				node.data = expanded.data;
@@ -1348,13 +1348,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.flags = 0;
 				checkExpr(ctx, node, expectedType);
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
-				return node.nodeType;
+				node.nodeType = node.nodeType; return;
 			}
-			return voidType();
+			node.nodeType = voidType(); return;
 		},
 		_ => unknownType(),
 	};
-	return result;
+	node.nodeType = result;
 }
 
 // True iff any arg's nodeType still carries a GenericParam — the marker
@@ -2438,13 +2438,15 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			const me = d.callee.data as MemberExprData;
 			fillDefaultArgsForNode(ctx, node, me.property, calleeType.typeChildren.length, extDefaultOffset);
 		}
-		// Arity gates — the generic gates below are unreachable when this
-		// branch returns early.
+		// Arity gates — Varargs-aware (reference parity: tyVarargs allows 0+ trailing args).
+		const extLastCT = calleeType.typeChildren.length > 0
+			? calleeType.typeChildren[calleeType.typeChildren.length - 1] : null;
+		const extHasRest = extLastCT !== null && extLastCT.kind === TypeKind.Varargs;
 		const extMinAr = getMinArity(calleeType);
 		if (d.arguments.length < extMinAr) {
 			const me = d.callee.data as MemberExprData;
 			addError(ctx, `Too few arguments to '${me.property}': expected at least ${extMinAr}, got ${d.arguments.length}`, node.location.line, node.location.column);
-		} else if (d.arguments.length > calleeType.typeChildren.length) {
+		} else if (!extHasRest && d.arguments.length > calleeType.typeChildren.length) {
 			const me = d.callee.data as MemberExprData;
 			addError(ctx, `Too many arguments to '${me.property}': expected at most ${calleeType.typeChildren.length}, got ${d.arguments.length}`, node.location.line, node.location.column);
 		}
@@ -2513,9 +2515,12 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 	// @builtin("Echo"): accept any number of args of any type (reference echo parity)
 	const isEchoBuiltin = node.resolvedSym !== null && node.resolvedSym.builtinKind === "Echo";
 	if (calleeType.kind === TypeKind.Function && !isEchoBuiltin) {
-		// Rest param detection: last typeNames entry starts with "..." (reference parity: tyVarargs)
-		const lastPN = calleeType.typeNames.length > 0 ? calleeType.typeNames[calleeType.typeNames.length - 1] : "";
-		const hasRest = lastPN.length > 3 && lastPN.slice(0, 3) === "...";
+		// Rest param detection: last typeChildren entry is wrapped in TypeKind.Varargs
+		// (reference parity: tyVarargs). createFunction installs the wrapper from
+		// the legacy "..." name-prefix; the marker is the single source of truth.
+		const lastCT = calleeType.typeChildren.length > 0
+			? calleeType.typeChildren[calleeType.typeChildren.length - 1] : null;
+		const hasRest = lastCT !== null && lastCT.kind === TypeKind.Varargs;
 		// Fill default arguments if too few args provided
 		const minAr = getMinArity(calleeType);
 		// Rest param is optional (accepts 0+ args), so effective min excludes it
@@ -2536,9 +2541,11 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		for (let pi = 0; pi < argTypes.length; pi += 1) {
 			let paramType: Type = null as unknown as Type;
 			if (hasRest && pi >= restParamIdx) {
-				// Args at or beyond rest param position: check against element type
-				const restType = calleeType.typeChildren[restParamIdx];
-				paramType = restType.typeReturn !== null ? restType.typeReturn : restType;
+				// Peel Varargs → array → element. Varargs wraps the user-written
+				// array type (e.g. Varargs(Array(string))), so the element comes
+				// from the array's typeReturn slot.
+				const arrType = lastCT.typeChildren.length > 0 ? lastCT.typeChildren[0] : lastCT;
+				paramType = arrType.typeReturn !== null ? arrType.typeReturn : arrType;
 			} else if (pi < calleeType.typeChildren.length) {
 				paramType = calleeType.typeChildren[pi];
 			} else {
@@ -2623,15 +2630,29 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			if (explicitBindings.names.length > 0) {
 				const boundFnType = instantiateGeneric(calleeType, explicitBindings.names, explicitBindings.types);
 				if (boundFnType !== null && boundFnType.kind === TypeKind.Function) {
-					for (let pi = 0; pi < argTypes.length && pi < boundFnType.typeChildren.length; pi += 1) {
+					// Reference parity (tyVarargs): trailing args check against the
+					// element type of the rest param, not the Varargs wrapper itself.
+					const bLastIdx = boundFnType.typeChildren.length - 1;
+					const bLast = bLastIdx >= 0 ? boundFnType.typeChildren[bLastIdx] : null;
+					const bHasRest = bLast !== null && bLast.kind === TypeKind.Varargs;
+					const bRestElem = bHasRest && bLast.typeChildren.length > 0 && bLast.typeChildren[0].typeReturn !== null
+						? bLast.typeChildren[0].typeReturn : null;
+					for (let pi = 0; pi < argTypes.length; pi += 1) {
 						const argT = argTypes[pi];
-						const paramT = boundFnType.typeChildren[pi];
+						let paramT: Type = null as unknown as Type;
+						if (bHasRest && pi >= bLastIdx) {
+							paramT = bRestElem;
+						} else if (pi < boundFnType.typeChildren.length) {
+							paramT = boundFnType.typeChildren[pi];
+						} else {
+							continue;
+						}
 						if (argT === null || paramT === null) continue;
 						if (argT.kind === TypeKind.Unknown || argT.kind === TypeKind.Error) continue;
 						if (paramT.kind === TypeKind.GenericParam || paramT.kind === TypeKind.Unknown) continue;
 						if (!isAssignable(argT, paramT)) {
 							const calleeName = getCalleeName(d.callee);
-							addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argT) + ", expected " + typeDisplayName(paramT), d.arguments[pi].location.line, d.arguments[pi].location.column);
+							addError(ctx, `Argument type mismatch in '${calleeName}' arg ${pi}: got ${typeDisplayName(argT)}, expected ${typeDisplayName(paramT)}`, d.arguments[pi].location.line, d.arguments[pi].location.column);
 						}
 					}
 				}

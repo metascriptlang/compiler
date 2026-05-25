@@ -26,6 +26,16 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// that legitimately have no type yet (e.g. unresolved generics).
 	if (source === null || target === null) return true;
 
+	// Reference parity: tyVarargs is transparent — peel to inner array type
+	// before comparing. Callers may legitimately pass either the wrapped or
+	// unwrapped form depending on whether they walked through Function.typeChildren.
+	if (source.kind === TypeKind.Varargs && source.typeChildren.length > 0) {
+		source = source.typeChildren[0];
+	}
+	if (target.kind === TypeKind.Varargs && target.typeChildren.length > 0) {
+		target = target.typeChildren[0];
+	}
+
 	// Never is the bottom type — assignable TO everything. After exhaustive
 	// narrowing (all union variants handled), the residual type is never.
 	// `return x` where `x: never` must be valid regardless of the return type.

@@ -31,6 +31,12 @@ export enum TypeKind {
 	// (e.g. `type Result<T, E> = { ok: true, value: T } | { ok: false, error: E }`).
 	// Codegen lowers to MS_BOOL with the literal value.
 	BooleanLiteral,
+	// Reference parity (tyVarargs): marker wrapping a rest parameter's array type
+	// (e.g. `...args: string[]` → Varargs(Array(string))). Source of truth for
+	// rest detection — replaces the legacy "..." name-prefix encoding. The
+	// wrapper is transparent: typeChildren[0] holds the user-written array type,
+	// codegen + isAssignable peel it via unwrapVarargs.
+	Varargs,
 }
 
 // ===== Calling Convention =====
