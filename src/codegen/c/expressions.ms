@@ -594,7 +594,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	// Leaf nodes — push result directly, no Emit needed
 	if (kind === NodeKind.NumberLiteral) {
 		const d = node.data as NumberLiteralData;
-		ctx.results.push(formatCNumber(d.value));
+		ctx.results.push(formatCNumber(d.value, node.nodeType));
 		return;
 	}
 	if (kind === NodeKind.StringLiteral) {
@@ -1898,7 +1898,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					p.labels += 1;
 					const refTmp = `_ref${p.labels}_`;
 					emitProcLocalsLine(p, `${unionWrapName}* ${refTmp};`);
-					emitStmtsLine(p, `${refTmp} = (${unionWrapName}*)msAlloc(sizeof(${unionWrapName}));`);
+					ensureTypeInfoDef(g, unionWrapName);
+					emitStmtsLine(p, `${refTmp} = (${unionWrapName}*)msAllocTyped(sizeof(${unionWrapName}), &${unionWrapName}TypeInfo);`);
 					emitStmtsLine(p, `${refTmp}->_tag = ${unionWrapIdx};`);
 					emitStmtsLine(p, `${refTmp}->v${unionWrapIdx} = ${tmpName};`);
 					ctx.results.push(refTmp);

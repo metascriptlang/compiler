@@ -25,6 +25,7 @@ import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, instantiateGenericBody, peelToStruct } from "../../checker/types";
+import { anonTypeName, isAnonTypeName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
 import { walkNode } from "../walker";
@@ -565,13 +566,19 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (elem !== null) arrayOp(hook, elem, xf, yf, lctx, buf, loc);
 		},
 		TypeKind.Struct => {
-			if (fieldType.typeName !== "") {
+			// Anon structs from `{...}` type annotations have empty typeName (created
+			// via createStruct("", ...) in resolvePass). Codegen emits them as
+			// `msAnon_<hash>`; mirror that here so the hook name matches.
+			const resolvedName = (fieldType.typeName !== "" && !isAnonTypeName(fieldType.typeName))
+				? fieldType.typeName
+				: (fieldType.typeNames.length > 0 ? anonTypeName(fieldType) : "");
+			if (resolvedName !== "") {
 				// Reference parity: trace only emits for cyclic field types (defaultOp is no-op for trace)
 				if (hook !== "trace" || isCyclicType(fieldType, lctx, visited)) {
 					// Field-recursion is a CONSUMER path — skip TypeInfo emission.
-					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, false, lctx, loc);
-					if (namedTypeHasHooks(fieldType.typeName, lctx)) {
-						namedObjOp(hook, fieldType.typeName, xf, yf, buf, loc);
+					ensureHooks(resolvedName, fieldType, null as unknown as Type, false, lctx, loc);
+					if (namedTypeHasHooks(resolvedName, lctx)) {
+						namedObjOp(hook, resolvedName, xf, yf, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
 					}
@@ -1112,7 +1119,9 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 	}
 
 	const shouldEmitHooks = !hooksOwned;
-	const shouldEmitTypeInfo = emitTypeInfo && isClassOrInterface && !isTypeInfoGloballyOwned(typeName);
+	// Union covers `Ref<Union>` wrapped via TypeAlias (e.g. JsonValue) — see fixedbugs/bug037.
+	const isHeapAllocated = isClassOrInterface || objType.kind === TypeKind.Union;
+	const shouldEmitTypeInfo = emitTypeInfo && isHeapAllocated && !isTypeInfoGloballyOwned(typeName);
 
 	// No RC fields → minimal TypeInfo only (for class/interface) and skip hooks.
 	// Exception (Nim parity, `produceSym` in liftdestructors.nim:1180): plain

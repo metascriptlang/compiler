@@ -50,3 +50,4 @@ import "./bug033";
 import "./bug034";
 import "./bug035";
 import "./bug036";
+import "./bug037";

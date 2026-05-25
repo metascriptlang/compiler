@@ -159,8 +159,14 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 		paramList = cRetType + "* __result";
 		if (d.params.length > 0) paramList = paramList + ", ";
 	}
-	// DRC lifecycle hooks have fixed ABI — skip struct-aware promotion
-	const isDrcHookFn = isDrcLifecycleName(name);
+	// DRC lifecycle hooks have fixed ABI — skip struct-aware promotion.
+	// Detection: (1) name pattern (TypeNameDestroy etc.) for user-named types;
+	// (2) GeneratedOp flag for compiler-synthesized hooks whose name clashes
+	// with the `ms*` runtime prefix exclusion in isDrcLifecycleName (e.g.
+	// anonymous structs emitted as `msAnon_<hash>Destroy`). markGeneratedOp
+	// only flags real lifecycle hooks, so the suffix re-check is unnecessary.
+	const isDrcHookFn = isDrcLifecycleName(name)
+		|| (sym !== null && hasFlag(sym, SymbolFlag.GeneratedOp));
 	const protoMutBits: int32 = sym !== null ? sym.mutatedParams : 0;
 	for (let i = 0; i < d.params.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
@@ -386,7 +392,7 @@ function genClassDecl(g: CGen, node: Node): void {
 						match (pd.propInitializer.kind) {
 							NodeKind.NumberLiteral => {
 								const nv = (pd.propInitializer.data as NumberLiteralData).value;
-								addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumber(nv)};`);
+								addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumber(nv, member.nodeType)};`);
 							},
 							NodeKind.StringLiteral => {
 								const sv = (pd.propInitializer.data as StringLiteralData).value;
@@ -681,7 +687,7 @@ function genGlobalVar(g: CGen, node: Node): void {
 		const init = d.initializer;
 		if (init.kind === NodeKind.NumberLiteral) {
 			const nd = init.data as NumberLiteralData;
-			const litStr = formatCNumber(nd.value);
+			const litStr = formatCNumber(nd.value, node.nodeType);
 			// Integer types: cast to suppress -Wimplicit-int-float-conversion.
 			const castedLit = (node.nodeType !== null && isIntegerType(node.nodeType))
 				? `(${cType})${litStr}`
