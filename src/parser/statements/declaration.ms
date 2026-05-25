@@ -1479,10 +1479,7 @@ export function parseMacroInvocation(state: ParserState): NodeResult {
 // ===== Extern Declaration =====
 // syntax: 'extern' ('function' | 'class' | 'const' | 'var' | 'type' | 'enum' | 'interface' | 'macro') ID ...
 
-// Parse optional `from "native"` clause after an extern declaration head.
-// Returns the native name (e.g. JS global, C symbol) or "" if absent.
-// Cursor lands after the consumed string literal (caller still does its own
-// terminator handling: semicolon, body, etc.).
+// Returns native name or "". Caller handles its own terminator after the call.
 function parseOptionalFromClause(state: ParserState): string {
 	if (isAtEnd(state) || current(state).kind !== TokenKind.From) return "";
 	advance(state); // consume 'from'
@@ -1673,10 +1670,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			classNode.flags = classNode.flags | NodeFlag.ExternC;
 			return Result.ok(classNode);
 		} else {
-			// extern class FILE; (no body) — opaque type, keep as ExternDecl.
-			// Supports 'from "native"' clause to alias the JS global
-			// (e.g. `extern class performance from "performance"` binds
-			// the JS `performance` global).
+			// extern class FILE; — opaque type with optional `from "native"`.
 			const externNativeName = parseOptionalFromClause(state);
 			consumeSemicolon(state);
 			return Result.ok(createNode(NodeKind.ExternDecl, {

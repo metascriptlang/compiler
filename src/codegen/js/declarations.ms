@@ -143,8 +143,6 @@ function skipThisParams(params: string[]): string[] {
 
 export function emitMethodDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as MethodDeclData;
-	// Skip extern / @builtin methods — implementation comes from the runtime
-	// (or inlined by builtinLower at call sites). Same pattern as emitFunctionDecl.
 	if (isExternFlag(d.methodFlags)) return;
 	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
 	emitIndent(gen);

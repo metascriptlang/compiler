@@ -9,7 +9,7 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, MatchStmtData, MatchCaseData, HiddenStdConvData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { isSinkType, createPrimitive } from "../checker/types";
 import { lookupSymbol, lookupLocal, hasFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
@@ -949,6 +949,13 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 		},
 		// Field/element access → always copy (borrow from shared object)
 		NodeKind.MemberExpr | NodeKind.ArrayAccess | NodeKind.HiddenDeref => {
+			return genCopy(stmt, dest, destName, destSym, rhs, rcInfo, flags, dctx, loc);
+		},
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
+			const hd = rhs.data as HiddenStdConvData;
+			if (isFreshExpr(hd.convExpr.kind)) {
+				return genSink(stmt, dest, destName, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
+			}
 			return genCopy(stmt, dest, destName, destSym, rhs, rcInfo, flags, dctx, loc);
 		},
 		// Conditional → split branches (Reference: handleNestedTempl)

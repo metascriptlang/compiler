@@ -68,13 +68,20 @@ function rewriteAccess(node: Node): Node {
 function rewriteCStringConv(node: Node): Node {
 	const d = node.data as HiddenStdConvData;
 	if (d.convType === null) return node;
-	if (d.convType.kind !== TypeKind.CString) return node;
-	// Only rewrite string → cstring (not cstring → cstring identity)
-	if (d.convExpr.nodeType !== null && d.convExpr.nodeType.kind === TypeKind.CString) return node;
+	const src = d.convExpr.nodeType;
 	const loc = node.location;
-	const result = makeCall(makeIdent("msStringToCString", loc), [d.convExpr], loc);
-	result.nodeType = d.convType;
-	return result;
+	if (d.convType.kind === TypeKind.CString) {
+		if (src !== null && src.kind === TypeKind.CString) return node;
+		const result = makeCall(makeIdent("msStringToCString", loc), [d.convExpr], loc);
+		result.nodeType = d.convType;
+		return result;
+	}
+	if (d.convType.kind === TypeKind.String && src !== null && src.kind === TypeKind.CString) {
+		const result = makeCall(makeIdent("msStringFromCStr", loc), [d.convExpr], loc);
+		result.nodeType = d.convType;
+		return result;
+	}
+	return node;
 }
 
 // ===== Array/String Index Access =====

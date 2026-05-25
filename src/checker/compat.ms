@@ -158,6 +158,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	if (source.kind === TypeKind.String && target.kind === TypeKind.CString) {
 		return true;
 	}
+	if (source.kind === TypeKind.CString && target.kind === TypeKind.String) {
+		return true;
+	}
 
 	// StringLiteral → String (subtype: "north" assignable to string)
 	if (source.kind === TypeKind.StringLiteral && target.kind === TypeKind.String) {
@@ -231,6 +234,7 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	}
 	// String/StringLiteral → CString requires msStringToCString extraction
 	if ((source.kind === TypeKind.String || source.kind === TypeKind.StringLiteral) && target.kind === TypeKind.CString) return true;
+	if (source.kind === TypeKind.CString && target.kind === TypeKind.String) return true;
 	// Borrow promotion: T → Borrow<T> (take address)
 	if (target.kind === TypeKind.Borrow && target.typeReturn !== null) {
 		if (source.kind !== TypeKind.Borrow) return true;

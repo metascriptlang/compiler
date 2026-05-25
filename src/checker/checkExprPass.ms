@@ -578,6 +578,16 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					effRight = createPrimitive(TypeKind.Int32);
 				}
 			}
+			if (d.operator === "+" && effLeft !== null && effRight !== null) {
+				if (effLeft.kind === TypeKind.CString && isStringLike(effRight)) {
+					d.left = wrapInConv(d.left, stringType());
+					effLeft = stringType();
+				}
+				if (effRight.kind === TypeKind.CString && isStringLike(effLeft)) {
+					d.right = wrapInConv(d.right, stringType());
+					effRight = stringType();
+				}
+			}
 			return inferBinaryOp(d.operator, effLeft, effRight);
 		},
 		NodeKind.UnaryExpr => {
@@ -1052,10 +1062,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					return createArray(unknownType());
 				}
 			} else {
-				checkExpr(ctx, d.elements[0], elemExpected);
+				for (let i = 0; i < d.elements.length; i += 1) {
+					checkExpr(ctx, d.elements[i], elemExpected);
+					if (elemExpected !== null) {
+						d.elements[i] = fitNode(ctx, d.elements[i], elemExpected, d.elements[i].nodeType);
+					}
+				}
 				let elemType = d.elements[0].nodeType;
-				let i = 1;
-				while (i < d.elements.length) { checkExpr(ctx, d.elements[i], elemExpected); i += 1; }
 				// PARALOCK: an array literal with affine-Promise identifier elements
 				// consumes those handles — the array is the new owner (typically
 				// passed to Promise.all or similar homogeneous consumer). The individual
@@ -1123,9 +1136,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const d = node.data as ConditionalExprData;
 			checkExpr(ctx, d.ternaryCondition, null);
 			checkExpr(ctx, d.ternaryConsequent, expectedType);
-			const consequentType = d.ternaryConsequent.nodeType;
 			checkExpr(ctx, d.ternaryAlternate, expectedType);
-			return consequentType;
+			if (expectedType !== null) {
+				d.ternaryConsequent = fitNode(ctx, d.ternaryConsequent, expectedType, d.ternaryConsequent.nodeType);
+				d.ternaryAlternate = fitNode(ctx, d.ternaryAlternate, expectedType, d.ternaryAlternate.nodeType);
+			}
+			return d.ternaryConsequent.nodeType;
 		},
 		NodeKind.TypeAssertion => {
 			let d = node.data as TypeAssertionData;
@@ -1720,6 +1736,15 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		return synthMaybeWrap(expr, formal, exprType);
 	}
 	if (formal.kind === exprType.kind) return expr;
+	if ((exprType.kind === TypeKind.CString && formal.kind === TypeKind.String)
+		|| ((exprType.kind === TypeKind.String || exprType.kind === TypeKind.StringLiteral)
+			&& formal.kind === TypeKind.CString)) {
+		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
+		const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal }, convTok);
+		convNode.nodeType = formal;
+		convNode.flags = convNode.flags | NodeFlag.Sem;
+		return convNode;
+	}
 	// Narrowing integer conversion: wrap in HiddenStdConv
 	if (isNarrowingIntConv(exprType, formal)) {
 		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
@@ -1820,7 +1845,8 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[],
 		// Type-check with expected param type so empty containers get correct type
 		const expectedType = paramTypes !== null && argIdx < paramTypes.length ? paramTypes[argIdx] : null;
 		checkExpr(ctx, cloned, expectedType);
-		args.push(cloned);
+		const fitted = expectedType !== null ? fitNode(ctx, cloned, expectedType, cloned.nodeType) : cloned;
+		args.push(fitted);
 		argIdx = argIdx + 1;
 	}
 }

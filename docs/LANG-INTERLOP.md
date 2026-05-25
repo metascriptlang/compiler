@@ -82,7 +82,7 @@ export { msBuffer } from "./buffer.h";
 |--------|----------------|
 | `int`, `int32_t` | `number` (int32) |
 | `double`, `float` | `number` (float64) |
-| `char*`, `const char*` | `string` |
+| `char*`, `const char*` | `string` *(intent)* / `cstring` *(current)* |
 | `bool`, `_Bool` | `boolean` |
 | `void` | `void` |
 | `T*` | `Ptr<T>` |
@@ -90,6 +90,27 @@ export { msBuffer } from "./buffer.h";
 | `enum E { A, B }` | `enum E { A, B }` |
 | `typedef X Y` | `type Y = X` |
 | `#define FOO 42` | `const FOO: number = 42` |
+
+Both directions are implicit. The compiler inserts `msStringToCString` at
+`string → cstring` boundaries (zero-copy `.data` extraction) and
+`msStringFromCStr` at `cstring → string` boundaries (alloc + copy).
+
+Triggered at var-init, return, assignment, call-arg, object-literal field,
+array-literal element, ternary branch, and string-concat operand. C functions
+declared as returning `const char*` (manual extern or cimport-extracted) can
+be assigned to `string`-typed variables without a wrapper:
+
+```ms
+extern function getenv(name: cstring): cstring;
+const home: string = getenv("HOME");
+```
+
+> Runtime wrappers in `std/` (`os.h`, `process.h`, `crypto/hash.c`) that already
+> call `msStringFromCStr` inside C bodies and return `msString` continue to
+> work — refactoring them to expose `cstring` returns is optional. Owning
+> cstring returns (e.g. malloc'd by callee) still need a manual C wrapper that
+> calls `free` after `msStringFromCStr` copies — the auto-coerce path assumes
+> the cstring source is non-owning (static literal, thread-local buffer, etc.).
 
 ### Example: Buffer Module
 

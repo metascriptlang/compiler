@@ -63,11 +63,6 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	if (cd.callee.resolvedSym !== null && cd.callee.resolvedSym.builtinKind !== "") {
 		return lowerBuiltinCall(node, cd.callee.resolvedSym.builtinKind, ctx);
 	}
-	// Universal .toString() resolution — both backends.
-	// Every type has a compiler-provided default. User extensions take priority.
-	// JS runtime exports msNumberToStringRadix/msBoolToString in std/core/string
-	// (index.jms) that return MS-string byte arrays, matching C backend convention
-	// so downstream msStringConcat works uniformly.
 	if (cd.callee.kind === NodeKind.MemberExpr) {
 		const me2 = cd.callee.data as MemberExprData;
 		if (me2.property === "toString") {
