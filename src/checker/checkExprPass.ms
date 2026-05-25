@@ -531,6 +531,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (setObjType !== null && setObjType.kind === TypeKind.Ref && setObjType.typeReturn !== null) {
 					setObjType = setObjType.typeReturn;
 				}
+				// cstring is an immutable FFI bridge — caller must materialise a
+				// `string` before mutating bytes. Nim parity (jsgen.nim:1285).
+				if (setObjType !== null && setObjType.kind === TypeKind.CString) {
+					addError(ctx, "cstring doesn't support `[]=` operator — convert to string first",
+						node.location.line, node.location.column);
+					return errorType();
+				}
 				if (setObjType !== null && setObjType.kind === TypeKind.GenericInstance
 					&& isIndexableMapType(setObjType)) {
 					const wargs: Node[] = [];
@@ -1172,6 +1179,17 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& d.asExpr !== null && d.asExpr.kind === NodeKind.NullLiteral) {
 				node.kind = NodeKind.NullLiteral;
 				node.data = { nullPlaceholder: true };
+				node.nodeType = targetType;
+				node.flags = node.flags | NodeFlag.Sem;
+				return targetType;
+			}
+			// String↔CString needs runtime conversion at the FFI boundary, not erasure.
+			else if (srcType !== null
+				&& ((targetType.kind === TypeKind.CString
+						&& (srcType.kind === TypeKind.String || srcType.kind === TypeKind.StringLiteral))
+					|| (targetType.kind === TypeKind.String && srcType.kind === TypeKind.CString))) {
+				node.kind = NodeKind.HiddenStdConv;
+				node.data = { convExpr: d.asExpr, convType: targetType };
 				node.nodeType = targetType;
 				node.flags = node.flags | NodeFlag.Sem;
 				return targetType;

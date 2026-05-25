@@ -57,6 +57,7 @@ import { lowerLambda } from "./lowering/lambdaLifting";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerMethodToFunction } from "./lowering/methodToFunction";
 import { lowerBuiltins } from "./native/builtinLower";
+import { lowerCStringConv } from "./native/cstringConvLower";
 import { lowerSubscript } from "./lowering/subscriptLower";
 import { lowerOperators } from "./lowering/operatorLower";
 import { lowerStringOps } from "./native/stringOpLower";
@@ -110,6 +111,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerMethodToFunction(result, ctx); }
 	if (!jsBackend) { result = lowerLambda(result, ctx); }
 	result = lowerBuiltins(result, ctx);
+	result = lowerCStringConv(result, ctx);
 	result = lowerOperators(result, ctx);
 	result = lowerStringOps(result, ctx);
 	result = lowerSubscript(result, ctx);

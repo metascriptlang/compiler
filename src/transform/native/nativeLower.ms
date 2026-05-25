@@ -12,7 +12,7 @@
 //
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
-import { Node, NodeKind, ArrayAccessData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, HiddenStdConvData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, ArrayAccessData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
 import { isNumeric, unwrapRefNullUnion } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -59,28 +59,6 @@ function rewriteAccess(node: Node): Node {
 	if (node.kind === NodeKind.ArrayAccess) return rewriteArrayAccess(node);
 	if (node.kind === NodeKind.MemberExpr) return rewriteMemberExpr(node);
 	if (node.kind === NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
-	if (node.kind === NodeKind.HiddenStdConv) return rewriteCStringConv(node);
-	return node;
-}
-
-// ===== CString Conversion =====
-
-function rewriteCStringConv(node: Node): Node {
-	const d = node.data as HiddenStdConvData;
-	if (d.convType === null) return node;
-	const src = d.convExpr.nodeType;
-	const loc = node.location;
-	if (d.convType.kind === TypeKind.CString) {
-		if (src !== null && src.kind === TypeKind.CString) return node;
-		const result = makeCall(makeIdent("msStringToCString", loc), [d.convExpr], loc);
-		result.nodeType = d.convType;
-		return result;
-	}
-	if (d.convType.kind === TypeKind.String && src !== null && src.kind === TypeKind.CString) {
-		const result = makeCall(makeIdent("msStringFromCStr", loc), [d.convExpr], loc);
-		result.nodeType = d.convType;
-		return result;
-	}
 	return node;
 }
 
