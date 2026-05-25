@@ -47,3 +47,28 @@ test "E2E C: comparison operators" {
 	assert c.value.contains(">=");
 	assert c.value.contains("<=");
 }
+
+// bug038 — integer-valued float literals must emit with `.0` suffix so C
+// uses float division (IEEE 754) not integer division (UB → trap).
+test "E2E C: float literal 0.0 emits with decimal point" {
+	const src = "function f(): number { const x: number = 0.0; return x; }";
+	const c = compileToC(src);
+	assert c.ok;
+	assert c.value.contains("0.0");
+}
+
+test "E2E C: 0.0 / 0.0 emits as float division not integer" {
+	const src = "function f(): number { const x: number = 0.0 / 0.0; return x; }";
+	const c = compileToC(src);
+	assert c.ok;
+	assert c.value.contains("0.0 / 0.0");
+	assert !c.value.contains("(0 / 0)");
+}
+
+test "E2E C: 1.0 / 0.0 emits as float division" {
+	const src = "function f(): number { const x: number = 1.0 / 0.0; return x; }";
+	const c = compileToC(src);
+	assert c.ok;
+	assert c.value.contains("1.0 / 0.0");
+	assert !c.value.contains("(1 / 0)");
+}

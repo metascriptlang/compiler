@@ -3,7 +3,7 @@
 // Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
-import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isStructType } from "../../checker/types";
 import {
 	CGen, CProc,
@@ -11,6 +11,7 @@ import {
 	readProcStmts, emitLineDir, getTemp, fillLocalName,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
+import { formatCNumber } from "./literals";
 import { ensureCrossModuleProto } from "./forward";
 import { safeName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
@@ -694,7 +695,12 @@ function genSwitchStmt(g: CGen, p: CProc, node: Node): void {
 			emitStmtsLine(p, "default:");
 		} else {
 			for (const test of cd.caseTests) {
-				const testSnippet = genExpr(g, p, test);
+				// C requires integer constant expressions for case labels. Force integer
+				// emit for NumberLiteral tests regardless of stamped nodeType — checker
+				// is inconsistent (e.g. hex literals like 0xE may carry Number type).
+				const testSnippet = test.kind === NodeKind.NumberLiteral
+					? formatCNumber((test.data as NumberLiteralData).value, null)
+					: genExpr(g, p, test);
 				emitStmtsLine(p, `case ${testSnippet}:`);
 			}
 		}

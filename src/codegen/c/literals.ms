@@ -4,6 +4,7 @@
 // number formatting for C output.
 
 import { Builder, addLine, createBuilder, extract, StringPool, createStringPool, internString } from "./context";
+import { Type, TypeKind } from "../../ast/node";
 
 
 // ===== C String Escaping =====
@@ -64,15 +65,21 @@ export function cStringLiteral(s: string): string {
 
 // ===== Number Formatting =====
 
-// Format a number for C output
-export function formatCNumber(value: number): string {
-	// Check for integer values — emit without decimal point
-	if (value === 0.0) return "0";
-	// Check for negative zero
-	if (value === 0.0 && (1.0 / value) < 0.0) return "-0.0";
+// Format a number for C output.
+// When `type` is a float type (Number/Float32/Float64), integer-valued literals get a
+// `.0` suffix so C picks the float overload of operators. Without this, `0.0 / 0.0` in
+// MS would emit as `(0 / 0)` and trap as integer divide-by-zero instead of producing
+// IEEE 754 NaN.
+export function formatCNumber(value: number, type: Type | null = null): string {
+	const isFloat = type !== null
+		&& (type.kind === TypeKind.Number || type.kind === TypeKind.Float32 || type.kind === TypeKind.Float64);
 
-	// Check if it's an integer value (no fractional part)
-	// Use truncation check: if truncating doesn't change the value, it's integer
+	// Negative zero — must check before the regular zero branch (1.0 / -0.0 is -Infinity).
+	if (value === 0.0 && (1.0 / value) < 0.0) return isFloat ? "-0.0" : "-0";
+	if (value === 0.0) return isFloat ? "0.0" : "0";
+
+	// Integer-valued? Truncation check stays bounded to int32 range; larger magnitudes
+	// fall through to the precision-preserving double formatter.
 	let isInt = false;
 	if (value > -2147483648.0 && value < 2147483647.0) {
 		const truncated = value - (value % 1.0);
@@ -82,15 +89,10 @@ export function formatCNumber(value: number): string {
 	}
 
 	if (isInt) {
-		// Emit as integer
-		if (value < 0.0) {
-			const absVal = 0.0 - value;
-			return "-" + absVal;
-		}
-		return "" + value;
+		const intStr = value < 0.0 ? "-" + (0.0 - value) : "" + value;
+		return isFloat ? intStr + ".0" : intStr;
 	}
 
-	// Emit as double with suffix to prevent precision loss
 	return "" + value;
 }
 
@@ -175,6 +177,43 @@ test "zero" { assert formatCNumber(0.0) === "0"; }
 test "positive integer" { assert formatCNumber(42.0) === "42"; }
 
 test "negative integer" { assert formatCNumber(-7.0) === "-7"; }
+
+test "zero in float context emits 0.0" {
+	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	assert formatCNumber(0.0, t) === "0.0";
+}
+
+test "positive integer in float context emits .0 suffix" {
+	const t: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	assert formatCNumber(1.0, t) === "1.0";
+	assert formatCNumber(42.0, t) === "42.0";
+}
+
+test "negative integer in float context emits .0 suffix" {
+	const t: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	assert formatCNumber(-1.0, t) === "-1.0";
+}
+
+test "fractional value unchanged by float context" {
+	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	assert formatCNumber(0.5, t) === "0.5";
+}
+
+test "negative zero in float context emits -0.0" {
+	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	const negZero: number = -1.0 * 0.0;
+	assert formatCNumber(negZero, t) === "-0.0";
+}
+
+test "negative zero with null type emits -0" {
+	const negZero: number = -1.0 * 0.0;
+	assert formatCNumber(negZero) === "-0";
+}
+
+test "integer type still emits plain integer" {
+	const t: Type = { kind: TypeKind.Int32, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	assert formatCNumber(42.0, t) === "42";
+}
 
 test "int32 suffix" { assert formatCInt32(42) === "42"; }
 
