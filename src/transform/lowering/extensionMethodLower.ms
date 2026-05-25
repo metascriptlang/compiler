@@ -17,7 +17,7 @@ import { createTransformContext, createTransformContextWithChecker } from "../co
 
 // ===== Visitor =====
 
-function lowerExtNode(node: Node): Node {
+function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	if (node.kind !== NodeKind.CallExpr) return node;
 	// NF_ExtCall set by checker — no registry lookup needed
 	if ((node.flags & NodeFlag.ExtCall) === 0) return node;
@@ -28,6 +28,14 @@ function lowerExtNode(node: Node): Node {
 	const member = call.callee.data as MemberExprData;
 	const loc = node.location;
 	const sym = node.resolvedSym;
+	// JS backend keeps class instance methods as native member calls.
+	// Static extensions (Math.floor) and true extension methods still get rewritten.
+	if (ctx.jsBackend
+		&& (node.flags & NodeFlag.ExtStatic) === 0
+		&& sym !== null && sym.declNode !== null
+		&& sym.declNode.kind === NodeKind.MethodDecl) {
+		return node;
+	}
 	// Use mangled name from resolved sym (e.g. Greeter_greet), fall back to property name
 	const callName = (sym !== null && sym.name !== "") ? sym.name : member.property;
 
@@ -56,7 +64,7 @@ function lowerExtNode(node: Node): Node {
 // ===== Entry Point =====
 
 export function lowerExtensionMethod(program: Node, ctx: TransformContext): Node {
-	return walkNode(program, lowerExtNode);
+	return walkNode(program, (n: Node): Node => lowerExtNode(n, ctx));
 }
 
 // ===== Test Helpers =====
