@@ -21,25 +21,33 @@ import { makeSymbol } from "../../checker/symbol";
 import {
 	syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
-	isValueLayoutType,
+	isValueLayoutType, makeHiddenAddr,
 } from "../util";
-import { voidType, unknownType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType } from "../../checker/types";
+import { voidType, unknownType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType, instantiateGenericBody, typeDisplayName } from "../../checker/types";
+import { getGenericDecl } from "../../parser/context";
 
 // msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
 const MS_MSG_MAX_ARGS = 7;
 // void* type for HiddenStdConv casts in actor message packing/completion.
 const VOID_PTR: Type = createPtr(createPrimitive(TypeKind.Void));
 
-// Single Type→kind classifier shared by params (set/get) and return
-// (complete/chain). 1 slot = 8 bytes; string/array use 2 slots.
-// Receive side (msFutureReadInt32/Int64/Bool) requires typed encoding —
-// lumping int*/bool into "double" corrupts values via IEEE bit-pattern.
+// Built-in GIs (Result/Promise/Iterator) have typeReturn=null after
+// createGenericInstance — populate body so isValueLayoutType sees the Union.
+function ensureGIBody(t: Type | null): void {
+	if (t === null) return;
+	if (t.kind !== TypeKind.GenericInstance) return;
+	if (t.typeReturn !== null) return;
+	if (t.typeName === "") return;
+	const params = getGenericDecl(t.typeName);
+	if (params !== "") instantiateGenericBody(t, params);
+}
+
 function typeMsgKind(t: Type): string {
 	if (t === null) return "ptr";
-	// Value-layout BEFORE the kind match so Struct/Tuple/value-GI route to
-	// the typed-struct path, not the ptr fallthrough.
+	ensureGIBody(t);
 	if (isValueLayoutType(t)) return "struct";
-	return match (t.kind) {
+	if (t.kind === TypeKind.Distinct) return typeMsgKind(t.typeReturn);
+	const result = match (t.kind) {
 		TypeKind.String => "string",
 		TypeKind.Array => "array",
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "double",
@@ -48,8 +56,12 @@ function typeMsgKind(t: Type): string {
 			| TypeKind.Enum => "int32",
 		TypeKind.Int64 | TypeKind.Uint64 => "int64",
 		TypeKind.Boolean => "bool",
-		_ => "ptr",
+		TypeKind.Function | TypeKind.Span | TypeKind.Union => "struct",
+		TypeKind.Ref | TypeKind.Ptr | TypeKind.CString => "ptr",
+		_ => "",
 	};
+	if (result === "") throw "actor: unsupported TypeKind " + typeDisplayName(t);
+	return result;
 }
 
 function paramMsgKind(paramTypes: Type[], idx: number): string {
@@ -57,19 +69,14 @@ function paramMsgKind(paramTypes: Type[], idx: number): string {
 	return typeMsgKind(paramTypes[idx]);
 }
 
-// Name tables — one per direction of the wire. Each kind picks the typed
-// runtime helper. Params share slot layout; return path needs typed Complete
-// so receive-side msFutureReadT casts read the right field.
-
+// "array"/"struct" not listed — packArgsIntoMsg heap-boxes them upstream.
 function msgSetterName(mk: string): string {
 	return match (mk) {
 		"double" => "msMsgSetDouble",
 		"int32"  => "msMsgSetInt32",
 		"int64"  => "msMsgSetInt64",
 		"bool"   => "msMsgSetBool",
-		"string" | "array" => "msMsgSetString",
-		// "struct" falls through: C codegen pointer-introduces struct params,
-		// `move` at the checker transfers ownership (COPY rule §7.6).
+		"string" => "msMsgSetString",
 		_ => "msMsgSetPtr",
 	};
 }
@@ -80,8 +87,8 @@ function msgGetterName(mk: string): string {
 		"int32"  => "msMsgGetInt32",
 		"int64"  => "msMsgGetInt64",
 		"bool"   => "msMsgGetBool",
-		"string" | "array" => "msMsgGetString",
-		_ => "msMsgGetPtr",  // symmetric with msgSetterName
+		"string" => "msMsgGetString",
+		_ => "msMsgGetPtr",
 	};
 }
 
@@ -92,7 +99,7 @@ function msgCompleteName(mk: string): string {
 		"int64"  => "msMsgCompleteInt64",
 		"bool"   => "msMsgCompleteBool",
 		"string" => "msMsgCompleteString",
-		"array" | "struct" => "msMsgCompletePtr",  // both box-on-complete (see dispatch body)
+		"array" | "struct" => "msMsgCompletePtr",
 		_ => "msMsgCompletePtr",
 	};
 }
@@ -109,21 +116,33 @@ function futureChainFn(mk: string): string {
 	};
 }
 
-// Async _impl returns msFuture_<T>* — chain its value into the reply future.
-// retType is Function whose typeReturn = Promise<T>; peel and classify T.
 function futureChainFnForReturn(retType: Type): string {
 	if (retType === null) return "msFutureChain";
 	const inner = retType.typeReturn !== null ? retType.typeReturn : retType;
 	return futureChainFn(typeMsgKind(inner));
 }
 
-// Slot width: strings and arrays use 2 slots (16 bytes), everything else 1 slot (8 bytes).
+// "string" = 2 slots (16B inlined); "array"/"struct" = 1 slot (heap-boxed).
 function paramSlotWidth(paramTypes: Type[], idx: number): number {
 	const mk = paramMsgKind(paramTypes, idx);
-	return mk === "string" || mk === "array" ? 2 : 1;
+	return mk === "string" ? 2 : 1;
 }
 
-// ===== Build proxy body for a void method (send semantics) =====
+// Force T* on actor proxy/impl for value-layout params so msSinkBoxStruct's
+// memset reaches caller's local (not just proxy's copy) — prevents double-free.
+function markValueLayoutParamsAsMutated(sym: Symbol, paramTypes: Type[]): void {
+	if (sym === null) return;
+	let bits: int32 = sym.mutatedParams;
+	const limit: number = paramTypes.length < 32 ? paramTypes.length : 32;
+	for (let i = 0; i < limit; i = i + 1) {
+		const t = paramTypes[i];
+		if (t === null) continue;
+		if (typeMsgKind(t) === "struct") {
+			bits = (bits | (1 << (i as int32))) as int32;
+		}
+	}
+	sym.mutatedParams = bits;
+}
 
 function totalSlotCount(params: string[], paramTypes: Type[]): number {
 	let total = 0;
@@ -133,17 +152,28 @@ function totalSlotCount(params: string[], paramTypes: Type[]): number {
 	return total;
 }
 
-// Pack method args into message data slots (shared by send and call proxies).
-// Value-layout PARAMs need no explicit box: C codegen pointer-introduces
-// struct params, and the checker requires `move` for non-pure args.
+// Value-layout PARAMs ("struct"/"array") heap-boxed via msSinkBoxStruct → msMsgSetPtr.
 function packArgsIntoMsg(stmts: Node[], msgSym: Symbol, params: string[], paramTypes: Type[], loc: SourceLocation): void {
 	let slot = 0;
 	for (let ai = 1; ai < params.length; ai = ai + 1) {
-		const setter = msgSetterName(paramMsgKind(paramTypes, ai));
+		const mk = paramMsgKind(paramTypes, ai);
+		let valueArg: Node;
+		let setter: string;
+		if (mk === "array" || mk === "struct") {
+			const paramIdent = makeIdent(params[ai], loc);
+			paramIdent.nodeType = paramTypes[ai];
+			const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [paramIdent], loc);
+			boxCall.nodeType = VOID_PTR;
+			valueArg = boxCall;
+			setter = "msMsgSetPtr";
+		} else {
+			valueArg = makeIdent(params[ai], loc);
+			setter = msgSetterName(mk);
+		}
 		stmts.push(makeExprStmt(makeCall(makeIdent(setter, loc), [
 			makeIdentResolved(msgSym, loc),
 			makeNumber(slot, loc),
-			makeIdent(params[ai], loc),
+			valueArg,
 		], loc), loc));
 		slot = slot + paramSlotWidth(paramTypes, ai);
 	}
@@ -211,9 +241,24 @@ function buildCallProxy(kind: number, params: string[], paramTypes: Type[], retT
 	return makeBlock(stmts, loc);
 }
 
-// ===== Build dispatch function body =====
+// Resolved ident needed so ensureCrossModuleProto reads implSym.mutatedParams
+// for correct forward-decl signatures (T* vs T for value-layout params).
+function findImplSym(result: Node[], implName: string): Symbol {
+	for (const n of result) {
+		let inner = n;
+		if (n.kind === NodeKind.DecoratedDecl) {
+			const dd = n.data as DecoratedDeclData;
+			if (dd.decoratedNode !== null) inner = dd.decoratedNode;
+		}
+		if (inner.kind === NodeKind.FunctionDecl && inner.resolvedSym !== null
+				&& inner.resolvedSym.nativeName === implName) {
+			return inner.resolvedSym;
+		}
+	}
+	return null as unknown as Symbol;
+}
 
-function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocation): Node {
+function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocation, result: Node[]): Node {
 	const stmts: Node[] = [];
 	// Cast void* this to actor's Ref type via HiddenStdConv (no C cast emitted — just type annotation).
 	// This tells codegen the argument is already a pointer, preventing &() struct promotion.
@@ -245,32 +290,40 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 		let dSlot = 0;
 		for (let ai = 1; ai < md.methodParams.length; ai = ai + 1) {
 			const mk = paramMsgKind(mParamTypes, ai);
-			const getter = msgGetterName(mk);
-			const getCall = makeCall(makeIdent(getter, loc), [
-				makeIdent("_dmsg", loc),
-				makeNumber(dSlot, loc),
-			], loc);
-			if (mk === "array") {
-				// msString and TArray share binary layout {int64_t len, T* p}.
-				// Cursor flag emits *((TArray*)&(expr)) — safe bitcast on C99
-				// compound literals.
-				const conv = createNode(NodeKind.HiddenStdConv, {
-					convExpr: getCall,
-					convType: mParamTypes[ai],
-				}, syntheticToken(loc));
-				conv.nodeType = mParamTypes[ai];
-				conv.flags = conv.flags | NodeFlag.Cursor;
-				handlerArgs.push(conv);
-			} else if (mk === "ptr" || mk === "struct") {
-				// _impl takes T* (ccgIntroducedPtr); void*→T* implicit in C.
-				getCall.nodeType = VOID_PTR;
-				handlerArgs.push(getCall);
+			if (mk === "array" || mk === "struct") {
+				// "struct" needs explicit HiddenAddr (ccgIntroducedPtr=false for small structs);
+				// "array" gets & via shimCallArg (ccgIntroducedPtr=true unconditionally).
+				const getPtrCall = makeCall(makeIdent("msMsgGetPtr", loc), [
+					makeIdent("_dmsg", loc),
+					makeNumber(dSlot, loc),
+				], loc);
+				const unboxCall = makeCall(makeIdent("msUnboxStruct", loc), [getPtrCall], loc);
+				unboxCall.nodeType = mParamTypes[ai];
+				if (mk === "struct") {
+					handlerArgs.push(makeHiddenAddr(unboxCall, loc));
+				} else {
+					handlerArgs.push(unboxCall);
+				}
 			} else {
+				const getter = msgGetterName(mk);
+				const getCall = makeCall(makeIdent(getter, loc), [
+					makeIdent("_dmsg", loc),
+					makeNumber(dSlot, loc),
+				], loc);
+				if (mk === "ptr") {
+					getCall.nodeType = VOID_PTR;
+				}
 				handlerArgs.push(getCall);
 			}
 			dSlot = dSlot + paramSlotWidth(mParamTypes, ai);
 		}
-		const handlerCall = makeCall(makeIdent(actorName + "_" + md.methodName + "_impl", loc), handlerArgs, loc);
+		const implName = actorName + "_" + md.methodName + "_impl";
+		const implSym = findImplSym(result, implName);
+		// Callee resolved (forward-decl correctness) but CallExpr.resolvedSym=null
+		// to avoid emitNativeCall path which skips ccgIntroducedPtr promotion.
+		const implIdent = implSym !== null ? makeIdentResolved(implSym, loc) : makeIdent(implName, loc);
+		const handlerCall = makeCall(implIdent, handlerArgs, loc);
+		handlerCall.resolvedSym = null as unknown as Symbol;
 		let body: Node;
 		const isSuspending = md.methodFlags === "async_actor";
 		if (isSuspending) {
@@ -454,6 +507,7 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 				implSym.nativeName = implNativeName;
 				implSym.state = SymbolState.Checked;
 				implNode.resolvedSym = implSym;
+				if (m.nodeType !== null) markValueLayoutParamsAsMutated(implSym, m.nodeType.typeChildren);
 				result.push(implNode);
 			}
 
@@ -499,6 +553,7 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 			// BEFORE this point — sym now refers to the proxy.
 			if (m.resolvedSym !== null) {
 				m.resolvedSym.symbolType = proxyFnType;
+				markValueLayoutParamsAsMutated(m.resolvedSym, proxyParamTypes);
 			}
 			proxyNode.typeExprs = m.typeExprs;
 			proxyNode.paramLocations = m.paramLocations;
@@ -550,9 +605,9 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 
 // ===== Emit dispatch function =====
 
-function emitActorDispatch(d: ActorDeclData, name: string, methods: Node[], loc: SourceLocation): Node {
+function emitActorDispatch(d: ActorDeclData, name: string, methods: Node[], loc: SourceLocation, result: Node[]): Node {
 	const dispatchNativeName = name + "_dispatch";
-	const dispatchBody = buildDispatchBody(methods, name, loc);
+	const dispatchBody = buildDispatchBody(methods, name, loc, result);
 	const fnNode = createNode(NodeKind.FunctionDecl, {
 		fnName: dispatchNativeName,
 		params: ["this", "_dmsg"],
@@ -706,7 +761,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 	}
 
 	if (methods.length > 0) {
-		const dispatchNode = emitActorDispatch(d, name, methods, loc);
+		const dispatchNode = emitActorDispatch(d, name, methods, loc, result);
 		result.push(dispatchNode);
 		dispatchSyms.push(dispatchNode.resolvedSym);
 		dispatchNames.push(name);

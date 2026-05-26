@@ -355,19 +355,16 @@ export function ccgIntroducedPtr(t: Type): boolean {
 	};
 }
 
-// ===== Struct-aware param promotion =====
-// Combines ccgIntroducedPtr with mutatedParams analysis for struct params.
-// Struct params: mutated → T* (propagates), not mutated + big → const T*, not mutated + small → value.
-// Non-struct params: same as ccgIntroducedPtr (no mutation-based promotion).
+// Mutation forces T* for Struct, Function (msClosure 16B), and small Tuple.
+// Actor lowering sets mutation bits via markValueLayoutParamsAsMutated.
 export function shouldIndirectParam(paramType: Type, isMutated: boolean): boolean {
 	if (paramType === null) return false;
 	const inner = skipModifier(paramType);
-	// Struct-specific: mutation analysis controls promotion
 	if (inner !== null && isStructType(inner)) {
-		if (isMutated) return true;                    // mutated struct → T* (propagates)
-		return getTypeSize(inner) > PTR_THRESHOLD;     // not mutated → big = const T*, small = value
+		if (isMutated) return true;
+		return getTypeSize(inner) > PTR_THRESHOLD;
 	}
-	// Non-struct types: always use ccgIntroducedPtr (mutation doesn't change ABI)
+	if (isMutated && inner !== null && (inner.kind === TypeKind.Function || inner.kind === TypeKind.Tuple)) return true;
 	return ccgIntroducedPtr(paramType);
 }
 
