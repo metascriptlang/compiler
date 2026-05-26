@@ -626,8 +626,6 @@ function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Typ
 							[makeTypedIdent("$retFut", promiseType, loc), rd.argument], loc);
 					}
 					newStmts.push(makeExprStmt(completeCall, loc));
-					newStmts.push(makeExprStmt(
-						makeCall(makeIdent("msIncRef", loc), [makeTypedIdent("$retFut", promiseType, loc)], loc), loc));
 					newStmts.push(makeReturn(makeTypedIdent("$retFut", promiseType, loc), loc));
 				} else {
 					rewriteReturns(stmt, promiseType, fnReturnInner);
@@ -680,10 +678,10 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 		newStmts.push(stmt);
 	}
 
-	// If no explicit return at end, add implicit void completion.
-	// msIncRef($retFut) before return: DRC scope cleanup will decref $retFut,
-	// but the caller receives the reference. The extra incref ensures the future
-	// survives past the function scope. (DRC doesn't yet track return-value escaping.)
+	// If no explicit return at end, add implicit void completion. No incref on
+	// $retFut — DRC's caller-side `ensureDestructionIfNeeded` (inject.ms) emits
+	// msFutureDrcDestroy, balancing the rc=0 sole-owner allocation. Nim parity:
+	// asyncmacro.nim:301-314.
 	if (rewrittenStmts.length === 0 || rewrittenStmts[rewrittenStmts.length - 1].kind !== NodeKind.ReturnStmt) {
 		const completeCall = makeCall(
 			makeIdent("msFutureCompleteVoid", loc),
@@ -691,8 +689,6 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 			loc,
 		);
 		newStmts.push(makeExprStmt(completeCall, loc));
-		newStmts.push(makeExprStmt(
-			makeCall(makeIdent("msIncRef", loc), [makeTypedIdent("$retFut", retFutType, loc)], loc), loc));
 		newStmts.push(makeReturn(makeTypedIdent("$retFut", retFutType, loc), loc));
 	}
 
