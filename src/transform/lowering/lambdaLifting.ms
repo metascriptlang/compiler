@@ -1475,13 +1475,10 @@ function restoreSharedEnv(state: LiftState, snap: SharedEnvSnapshot): void {
 // per-closure env setup: bumps the closure counter so this closure's shared
 // env gets a unique name, calls `setupSharedEnv` in walkLiftBody's preWalk
 // when detection found nested-capture refs, then restores currentFnName /
-// currentParams. Returns the new body root (only ArrowFunction's
-// body-is-closure shortcut may replace the body wholesale).
+// currentParams.
 //
-// `lifter` is the per-kind closure constructor (liftArrow vs liftFuncExpr);
-// `allowBodyClosureShortcut` is true only for ArrowFunction (FunctionExpr
-// bodies are always BlockStmt). `nodeKindBody` is the original body — the
-// returned body is what callers should reattach to the AST node.
+// `lifter` is the per-kind closure constructor (liftArrow vs liftFuncExpr).
+// `body` is guaranteed BlockStmt via `normalizeArrowBodies`.
 function liftCapturingClosureBody(
 	state: LiftState,
 	node: Node,
@@ -1493,9 +1490,8 @@ function liftCapturingClosureBody(
 	suffix: string,
 	savedActiveRewrites: PendingEnvRewrite[],
 	savedShared: SharedEnvSnapshot,
-	allowBodyClosureShortcut: boolean,
 	lifter: (n: Node, captures: NameSet, state: LiftState) => Node,
-): { result: Node, replacedBody: Node } {
+): Node {
 	for (const p of params) { defineVar(state.ss, p); }
 	// Each capturing closure is its own env-owner (Nim parity). Locals
 	// declared inside its body MUST live in this closure's per-call env, not
@@ -1516,23 +1512,13 @@ function liftCapturingClosureBody(
 		preRegisterVarTypes(body, state);
 	}
 	const loc = node.location;
-	let replacedBody: Node = null as unknown as Node;
-	if (allowBodyClosureShortcut && body !== null
-		&& (body.kind === NodeKind.ArrowFunction
-			|| body.kind === NodeKind.FunctionExpr)) {
-		// Expression-bodied arrow returning another closure — no statements
-		// to host an env decl, fall back to old behavior (lift inner only).
-		replacedBody = walkOrLift(body, state);
-	} else {
-		walkLiftBody(body, state, () => {
-			if (ownCaptures.items.length > 0) {
-				setupSharedEnv(state, ownCaptures, ownCapturedIdents, loc);
-			}
-		});
-	}
-	const effectiveBody = (replacedBody !== null as unknown as Node) ? replacedBody : body;
+	walkLiftBody(body, state, () => {
+		if (ownCaptures.items.length > 0) {
+			setupSharedEnv(state, ownCaptures, ownCapturedIdents, loc);
+		}
+	});
 	state.capturedIdents = [];
-	const captures = detectCaptures(effectiveBody, state.ss, state.capturedIdents);
+	const captures = detectCaptures(body, state.ss, state.capturedIdents);
 	popFuncBoundary(state.ss);
 	state.activeEnvRewrites = savedActiveRewrites;
 	restoreSharedEnv(state, savedShared);
@@ -1545,14 +1531,11 @@ function liftCapturingClosureBody(
 	// `captures` is empty post-walk — fall back to ownCaptures to keep the
 	// closure-pair carrying its outer env, which the body now needs to copy
 	// ancestor captures from at entry.
-	let result: Node;
 	if (captures.items.length > 0 || ownCaptures.items.length > 0) {
 		computeLastUseCapturesForState(captures, state);
-		result = lifter(node, captures, state);
-	} else {
-		result = liftNonCapturing(effectiveBody, params, paramTypes, flags, returnType, state, loc, node.nodeType);
+		return lifter(node, captures, state);
 	}
-	return { result, replacedBody };
+	return liftNonCapturing(body, params, paramTypes, flags, returnType, state, loc, node.nodeType);
 }
 
 // Try to lift a closure. Returns the original node if no captures, or a closure pair if lifted.
@@ -1565,13 +1548,10 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 
 	if (node.kind === NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
-		const r = liftCapturingClosureBody(state, node, d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, "arrow", savedActiveRewrites, savedShared, true, liftArrow);
-		if (r.replacedBody !== null as unknown as Node) d.arrowBody = r.replacedBody;
-		return r.result;
+		return liftCapturingClosureBody(state, node, d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, "arrow", savedActiveRewrites, savedShared, liftArrow);
 	} else if (node.kind === NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
-		const r = liftCapturingClosureBody(state, node, d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, "fexpr", savedActiveRewrites, savedShared, false, liftFuncExpr);
-		return r.result;
+		return liftCapturingClosureBody(state, node, d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, "fexpr", savedActiveRewrites, savedShared, liftFuncExpr);
 	} else {
 		popFuncBoundary(state.ss);
 		state.activeEnvRewrites = savedActiveRewrites;
@@ -1582,8 +1562,27 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 
 // ===== Main Entry Point =====
 
+// Wrap every `ArrowFn(body=Arrow|FuncExpr)` into block-bodied form so
+// lifting always sees a BlockStmt. Without this, capturing curried arrows
+// hit a special case that bypassed env setup (fixedbugs/bug039).
+function normalizeArrowBodies(node: Node): Node {
+	if (node === null) return null as unknown as Node;
+	if (node.kind === NodeKind.ArrowFunction) {
+		const d = node.data as ArrowFunctionData;
+		if (d.arrowBody !== null
+			&& (d.arrowBody.kind === NodeKind.ArrowFunction
+				|| d.arrowBody.kind === NodeKind.FunctionExpr)) {
+			const loc = d.arrowBody.location;
+			d.arrowBody = makeBlock([makeReturn(d.arrowBody, loc)], loc);
+		}
+	}
+	mapChildren(node, normalizeArrowBodies);
+	return node;
+}
+
 export function lowerLambda(program: Node, ctx: TransformContext): Node {
 	const state = createLiftState();
+	normalizeArrowBodies(program);
 	// Pass 1: collect per-fn capture info upfront (Nim parity).
 	state.detection = detectPass(program);
 	// Pass 2: rewrite + lift closures, consuming Pass 1 results.
