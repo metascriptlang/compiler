@@ -440,10 +440,8 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode): FlowType {
 
 // Shared-flow cache lookup: linear scan by FlowNode identity — per-query N is typically < 20.
 function lookupSharedFlow(state: FlowState, flow: FlowNode): FlowType {
-	let i = 0;
-	while (i < state.sharedFlows.length) {
-		if (state.sharedFlows[i].flow === flow) return state.sharedFlows[i].ft;
-		i = i + 1;
+	for (const entry of state.sharedFlows) {
+		if (entry.flow === flow) return entry.ft;
 	}
 	return null as unknown as FlowType;
 }
@@ -451,13 +449,11 @@ function lookupSharedFlow(state: FlowState, flow: FlowNode): FlowType {
 function cacheSharedFlow(state: FlowState, flow: FlowNode, ft: FlowType): void {
 	// Overwrite any existing entry for this flow (the result may improve
 	// after back-edge fixed-point analysis completes).
-	let i = 0;
-	while (i < state.sharedFlows.length) {
-		if (state.sharedFlows[i].flow === flow) {
-			state.sharedFlows[i].ft = ft;
+	for (const entry of state.sharedFlows) {
+		if (entry.flow === flow) {
+			entry.ft = ft;
 			return;
 		}
-		i = i + 1;
 	}
 	state.sharedFlows.push({ flow: flow, ft: ft });
 }

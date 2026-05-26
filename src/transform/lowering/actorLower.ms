@@ -42,7 +42,7 @@ function ensureGIBody(t: Type | null): void {
 	if (params !== "") instantiateGenericBody(t, params);
 }
 
-function typeMsgKind(t: Type): string {
+function typeMsgKind(t: Type | null): string {
 	if (t === null) return "ptr";
 	ensureGIBody(t);
 	if (isValueLayoutType(t)) return "struct";

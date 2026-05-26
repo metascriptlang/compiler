@@ -8,20 +8,6 @@ import { join, dirname } from "std/fs/path";
 import { CliOptions } from "./options";
 import { resolveRuntimeDir } from "../utils/path";
 
-// -- ccache detection --
-
-let hasCcache = false;
-let ccacheChecked = false;
-
-function getCcachePrefix(): string {
-	if (!ccacheChecked) {
-		ccacheChecked = true;
-		hasCcache = cmdExists("ccache");
-	}
-	if (hasCcache) return "ccache ";
-	return "";
-}
-
 // -- Runtime resolution --
 
 function resolveRuntime(): string {
@@ -402,7 +388,7 @@ function buildCompileCommand(cFile: string, outBinary: string, extraFlags: strin
 	const baseCompiler = getCompilerName(ccOption, ccBinary);
 	const compiler = isCpp ? toCppCompiler(baseCompiler) : baseCompiler;
 	const stdFlag = isCpp ? "-std=c++17" : "-std=c11";
-	let cmd = `${getCcachePrefix()}${compiler} ${stdFlag}${modeFlags(mode)}`;
+	let cmd = `${compiler} ${stdFlag}${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {
@@ -430,7 +416,7 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 	const baseCompiler = getCompilerName(ccOption, ccBinary);
 	const compiler = isCpp ? toCppCompiler(baseCompiler) : baseCompiler;
 	const stdFlag = isCpp ? "-std=c++17" : "-std=c11";
-	let cmd = `${getCcachePrefix()}${compiler} ${stdFlag}${modeFlags(mode)}`;
+	let cmd = `${compiler} ${stdFlag}${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {

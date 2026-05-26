@@ -1976,6 +1976,18 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 		return elemRc.needsCleanup && elemRc.rcKind === RcKind.Ref;
 	}
 
+	// Unhandled return-expression NodeKind with Ref type silently misses incref —
+	// callee scope frees pointer before caller's field-assign incref runs. Extend
+	// this function when new return shapes (CastExpr, TernaryExpr) need handling.
+	if (expr.nodeType !== null) {
+		const rc = classifyType(expr.nodeType, dctx.ctx);
+		if (rc.needsCleanup && rc.rcKind === RcKind.Ref) {
+			dctx.ctx.checkerCtx.errors.push({
+				message: "needsReturnIncref: unhandled NodeKind=" + (expr.kind as number) + " for Ref-typed return — extend inject.ms",
+				line: expr.location.line, column: expr.location.column, fatal: false,
+			});
+		}
+	}
 	return false;
 }
 
