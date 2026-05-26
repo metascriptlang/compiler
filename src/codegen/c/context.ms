@@ -54,28 +54,30 @@ export enum CStorageLoc {
 	Static,
 }
 
-// ===== Builder — string accumulator (standard reference parity) =====
+// ===== Builder — string accumulator =====
+// Chunks-and-join: parts[] avoids O(N²) of repeated b.buf = b.buf + s.
+// Each append O(1); single O(total) join at extract().
 
 export class Builder {
-	buf: string;
+	parts: string[];
 	indent: number;
 }
 
 export function createBuilder(): Builder {
-	return { buf: "", indent: 0 };
+	return { parts: [], indent: 0 };
 }
 
 export function add(b: Builder, s: string): void {
-	b.buf = b.buf + s;
+	b.parts.push(s);
 }
 
 export function addNewline(b: Builder): void {
-	b.buf = b.buf + "\n";
+	b.parts.push("\n");
 }
 
 export function addIndent(b: Builder): void {
 	for (let i = 0; i < b.indent; i += 1) {
-		b.buf = b.buf + "  ";
+		b.parts.push("  ");
 	}
 }
 
@@ -86,7 +88,7 @@ export function addLine(b: Builder, s: string): void {
 }
 
 export function extract(b: Builder): string {
-	return b.buf;
+	return b.parts.join("");
 }
 
 // ===== CLoc — expression result carrier (Standard reference parity) =====
@@ -298,23 +300,23 @@ export function procBlock(p: CProc): CBlock {
 // Emit to current block's stmts
 export function emitStmts(p: CProc, s: string): void {
 	const idx = p.blocks.length - 1;
-	p.blocks[idx].stmts.buf = p.blocks[idx].stmts.buf + s;
+	p.blocks[idx].stmts.parts.push(s);
 }
 
 // Emit line to current block's stmts (with indent + newline)
 export function emitStmtsLine(p: CProc, s: string): void {
 	const idx = p.blocks.length - 1;
-	let indent = "";
 	for (let i = 0; i < p.blocks[idx].stmts.indent; i += 1) {
-		indent = indent + "  ";
+		p.blocks[idx].stmts.parts.push("  ");
 	}
-	p.blocks[idx].stmts.buf = `${p.blocks[idx].stmts.buf}${indent}${s}\n`;
+	p.blocks[idx].stmts.parts.push(s);
+	p.blocks[idx].stmts.parts.push("\n");
 }
 
 // Emit newline to current block's stmts
 export function emitStmtsNl(p: CProc): void {
 	const idx = p.blocks.length - 1;
-	p.blocks[idx].stmts.buf = p.blocks[idx].stmts.buf + "\n";
+	p.blocks[idx].stmts.parts.push("\n");
 }
 
 // Get/set indent level of current block's stmts
@@ -328,32 +330,33 @@ export function setStmtsIndent(p: CProc, indent: number): void {
 
 // Emit to proc-level (block[0]) locals
 export function emitProcLocals(p: CProc, s: string): void {
-	p.blocks[0].locals.buf = p.blocks[0].locals.buf + s;
+	p.blocks[0].locals.parts.push(s);
 }
 
 export function emitProcLocalsLine(p: CProc, s: string): void {
-	p.blocks[0].locals.buf = `${p.blocks[0].locals.buf}${s}\n`;
+	p.blocks[0].locals.parts.push(s);
+	p.blocks[0].locals.parts.push("\n");
 }
 
 // Read current block's stmts content
 export function readStmts(p: CProc): string {
-	return p.blocks[p.blocks.length - 1].stmts.buf;
+	return p.blocks[p.blocks.length - 1].stmts.parts.join("");
 }
 
 // Read proc-level stmts content (block[0])
 export function readProcStmts(p: CProc): string {
-	return p.blocks[0].stmts.buf;
+	return p.blocks[0].stmts.parts.join("");
 }
 
 // Read proc-level locals content (block[0])
 export function readProcLocals(p: CProc): string {
-	return p.blocks[0].locals.buf;
+	return p.blocks[0].locals.parts.join("");
 }
 
 // Clear proc buffers after flushing — used for shared initProc across top-level stmts
 export function clearProcBuffers(p: CProc): void {
-	p.blocks[0].locals.buf = "";
-	p.blocks[0].stmts.buf = "";
+	p.blocks[0].locals.parts = [];
+	p.blocks[0].stmts.parts = [];
 }
 
 // Legacy accessors — DEPRECATED, return copies (only for read)
@@ -392,15 +395,15 @@ export function pushBlock(p: CProc, isLoop: boolean): void {
 
 export function popBlock(p: CProc): CBlock {
 	const idx = p.blocks.length - 1;
-	const blockLocals = p.blocks[idx].locals.buf;
-	const blockInit = p.blocks[idx].init.buf;
-	const blockStmts = p.blocks[idx].stmts.buf;
-	const isLoop = p.blocks[idx].isLoop;
+	const block = p.blocks[idx];
 	p.blocks.pop();
-	if (isLoop) p.withinLoop -= 1;
-	// Merge block's sections into parent's stmts
+	if (block.isLoop) p.withinLoop -= 1;
+	// Merge block's sections into parent's stmts — splice arrays (no joining)
 	const parentIdx = p.blocks.length - 1;
-	p.blocks[parentIdx].stmts.buf = `${p.blocks[parentIdx].stmts.buf}${blockLocals}${blockInit}${blockStmts}`;
+	const parentParts = p.blocks[parentIdx].stmts.parts;
+	for (const s of block.locals.parts) parentParts.push(s);
+	for (const s of block.init.parts) parentParts.push(s);
+	for (const s of block.stmts.parts) parentParts.push(s);
 	// Return a placeholder (callers rarely use the return value)
 	return p.blocks[parentIdx];
 }

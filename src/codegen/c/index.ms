@@ -108,8 +108,8 @@ function genModuleInitFns(g: CGen): void {
 	const initContent = extract(sec(g, CSection.ModuleInit));
 
 	// Clear sections (re-emitted into Procs)
-	sec(g, CSection.DatInit).buf = "";
-	sec(g, CSection.ModuleInit).buf = "";
+	sec(g, CSection.DatInit).parts = [];
+	sec(g, CSection.ModuleInit).parts = [];
 
 	const hdrs = sec(g, CSection.ProcHeaders);
 	const procs = sec(g, CSection.Procs);
