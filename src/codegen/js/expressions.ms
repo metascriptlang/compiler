@@ -191,8 +191,69 @@ export function emitUpdateExpr(gen: JSGenerator, node: Node): void {
 
 // ===== Call Expression =====
 
+// Native-binding pattern substitution — reference parity: jsgen.nim importjs.
+// A symbol's `nativeName` is a JS template with placeholders:
+//   #   consume next arg          @   splat remaining args         $1  symbol name
+// Used by extern functions in .jms preludes (e.g.
+// `extern function set<K,V>(this m, k, v) from "#.set(#, #)"`) to bind MS
+// extension calls to native JS dispatch without wrapper functions or mangling.
+function hasNativePattern(s: string): boolean {
+	for (let i = 0; i < s.length; i += 1) {
+		const c = s.charAt(i);
+		if (c === "#" || c === "@") return true;
+		if (c === "$" && i + 1 < s.length && s.charAt(i + 1) === "1") return true;
+	}
+	return false;
+}
+
+function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symName: string): void {
+	let argIdx = 0;
+	let i = 0;
+	while (i < pattern.length) {
+		const ch = pattern.charAt(i);
+		if (ch === "#") {
+			if (argIdx < args.length) {
+				emitNode(gen, args[argIdx]);
+				argIdx = argIdx + 1;
+			}
+			i = i + 1;
+		} else if (ch === "@") {
+			let first = true;
+			while (argIdx < args.length) {
+				if (!first) emit(gen, ", ");
+				emitNode(gen, args[argIdx]);
+				argIdx = argIdx + 1;
+				first = false;
+			}
+			i = i + 1;
+		} else if (ch === "$" && i + 1 < pattern.length && pattern.charAt(i + 1) === "1") {
+			emit(gen, symName);
+			i = i + 2;
+		} else {
+			emit(gen, ch);
+			i = i + 1;
+		}
+	}
+}
+
 export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as CallExprData;
+
+	// Native pattern dispatch — runs before name-based emit so the callee's
+	// mangled / Identifier name is replaced by the JS template. For MemberExpr
+	// callees (extern class methods where extensionMethodLower skipped), the
+	// receiver is prepended to match the post-lower arg shape used by free
+	// extension functions.
+	const sym = d.callee.resolvedSym;
+	if (sym !== null && sym.nativeName !== "" && hasNativePattern(sym.nativeName)) {
+		let patternArgs = d.arguments;
+		if (d.callee.kind === NodeKind.MemberExpr) {
+			patternArgs = [(d.callee.data as MemberExprData).object];
+			for (const a of d.arguments) patternArgs.push(a);
+		}
+		emitNativePattern(gen, sym.nativeName, patternArgs, sym.name);
+		return;
+	}
 
 	// msPrintln / console.log → toJSStr conversion (byte arrays → native JS strings)
 	const isMsPrintln = d.callee.kind === NodeKind.Identifier && (d.callee.data as IdentifierData).name === "msPrintln";

@@ -1,24 +1,31 @@
-// MetaScript Structure Prelude — JavaScript Backend
-// Native JS Set and Map — same API as our C implementation.
-// No custom hash table needed; JS engines provide optimized built-in versions.
+// MetaScript Map / Set — JavaScript backend.
+//
+// Bound to native JS Map / Set (reference parity: Nim's importjs). The
+// `extern class` form suppresses codegen so `new Map<K,V>()` reaches the
+// global Map constructor untouched. Method dispatch goes through
+// emitCallExpr's pattern substitutor — the `#` / `@` / `$1` placeholders in
+// `from "..."` strings are documented in src/codegen/js/expressions.ms.
+//
+// MS name === JS name is the convention here. A `from "JsName"` clause on
+// extern class would be required to bind to a differently-named global.
 
-export class Set<T> {
+extern class Set<T> {
 	size: number;
 }
 
-export extern function add<T>(this s: Set<T>, value: T): void;
-export extern function has<T>(this s: Set<T>, value: T): boolean;
-export extern function delete<T>(this s: Set<T>, value: T): boolean;
-export extern function clear<T>(this s: Set<T>): void;
+export extern function add<T>(this s: Set<T>, value: T): void from "#.add(#)";
+export extern function has<T>(this s: Set<T>, value: T): boolean from "#.has(#)";
+export extern function delete<T>(this s: Set<T>, value: T): boolean from "#.delete(#)";
+export extern function clear<T>(this s: Set<T>): void from "#.clear()";
 
-export class Map<K, V> {
+extern class Map<K, V> {
 	size: number;
 }
 
-export extern function set<K, V>(this m: Map<K, V>, key: K, value: V): void;
-export extern function get<K, V>(this m: Map<K, V>, key: K): V;
-export extern function has<K, V>(this m: Map<K, V>, key: K): boolean;
-export extern function delete<K, V>(this m: Map<K, V>, key: K): boolean;
-export extern function clear<K, V>(this m: Map<K, V>): void;
-export extern function keys<K, V>(this m: Map<K, V>): K[];
-export extern function values<K, V>(this m: Map<K, V>): V[];
+export extern function set<K, V>(this m: Map<K, V>, key: K, value: V): void from "#.set(#, #)";
+export extern function get<K, V>(this m: Map<K, V>, key: K): V from "#.get(#)";
+export extern function has<K, V>(this m: Map<K, V>, key: K): boolean from "#.has(#)";
+export extern function delete<K, V>(this m: Map<K, V>, key: K): boolean from "#.delete(#)";
+export extern function clear<K, V>(this m: Map<K, V>): void from "#.clear()";
+export extern function keys<K, V>(this m: Map<K, V>): K[] from "Array.from(#.keys())";
+export extern function values<K, V>(this m: Map<K, V>): V[] from "Array.from(#.values())";

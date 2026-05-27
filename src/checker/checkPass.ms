@@ -1650,42 +1650,41 @@ function defineBuiltinConstants(ctx: CheckerContext): void {
 
 // ===== Unified Prelude Loading (reference parity: single pipeline) =====
 
-// Load a single prelude module into a context. Shared by all paths.
-// backendExt: ".cms" for C (default), ".jms" for JS.
-// Resolution order: backend extension first, then .ms fallback. Same rule as module resolver.
+// Resolution mirrors src/module/resolver.ms: backend-specific extension FIRST
+// so per-target preludes (e.g., struct.jms for JS) win over the generic .ms.
 function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string, backendExt: string): void {
 	const base = stdPath.length > 0 ? stdPath + "/" + specifier.slice(4, specifier.length) : specifier;
-	// Try direct .ms first (e.g., std/core/struct.ms)
-	let src = try readFile(base + ".ms") catch "";
-	let resolvedPath = base + ".ms";
-	// Backend extension (e.g., index.jms for JS, index.cms for C, index.wms for WASM)
+	let src = try readFile(base + backendExt) catch "";
+	let resolvedPath = base + backendExt;
+	if (src.length === 0) {
+		src = try readFile(base + ".ms") catch "";
+		resolvedPath = base + ".ms";
+	}
 	if (src.length === 0) {
 		src = try readFile(base + "/index" + backendExt) catch "";
 		resolvedPath = base + "/index" + backendExt;
 	}
-	// WASM fallback to .cms (WASM is still C backend, .wms overrides .cms)
+	// WASM fallback to .cms (WASM is still C backend, .wms overrides .cms).
 	if (src.length === 0 && backendExt === ".wms") {
 		src = try readFile(base + "/index.cms") catch "";
 		resolvedPath = base + "/index.cms";
 	}
-	// Fallback to .ms
 	if (src.length === 0) {
 		src = try readFile(base + "/index.ms") catch "";
 		resolvedPath = base + "/index.ms";
 	}
 	if (src.length > 0) {
-		// Inline .h imports (e.g., import from "runtime/fs.h") before parsing
 		const fsProvider = createFileSystemProvider();
 		src = inlineHeaderImports(src, resolvedPath, fsProvider);
 		const pr = parseSource(src);
 		if (pr.ok) {
-			// Set modulePath BEFORE sub-module loading so path resolution is consistent
+			// modulePath must be set BEFORE sub-module loading so relative
+			// imports inside this prelude resolve against the right directory.
 			const savedPath = ctx.modulePath;
 			ctx.modulePath = resolvedPath;
-
-			// Load sub-modules first (dependency-first, recursive compilation)
-			// Register sub-module exports in ExportRegistry so index.cms re-exports resolve
-			loadPreludeSubModules(ctx, pr.value, resolvedPath, stdPath);
+			// Dep-first: sub-modules compile first so their exports are in
+			// ExportRegistry when this module's re-exports run.
+			loadPreludeSubModules(ctx, pr.value, resolvedPath, stdPath, backendExt);
 			runThreePasses(ctx, pr.value);
 			ctx.modulePath = savedPath;
 			collectDirectives(ctx, pr.value);
@@ -1718,7 +1717,7 @@ function stripModuleExtension(path: string): string {
 // relative (`./sub`, `../sub`) and absolute std paths (`std/serialize/json/decode`).
 // Returns ("", "") if the file isn't readable. Centralized so both relative
 // re-exports and absolute direct imports share the same resolution rules.
-function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: string): { path: string, source: string } {
+function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: string, backendExt: string): { path: string, source: string } {
 	let basePath = "";
 	if (specifier.length >= 2 && specifier.charAt(0) === ".") {
 		// Relative: resolve against the index file's directory
@@ -1734,7 +1733,8 @@ function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: s
 		return { path: "", source: "" };
 	}
 
-	for (const ext of [".ms", ".cms", "/index.ms", "/index.cms"]) {
+	// Backend-specific first so per-target prelude wins over generic .ms / .cms.
+	for (const ext of [backendExt, ".ms", ".cms", "/index" + backendExt, "/index.ms", "/index.cms"]) {
 		const path = basePath + ext;
 		const src = try readFile(path) catch "";
 		if (src.length > 0) return { path, source: src };
@@ -1759,7 +1759,7 @@ function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: s
 //
 // Cycle/dedup: skips if subResolved is already in ExportRegistry (compiled
 // earlier) — preludes form a DAG, not a tree.
-function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: string, stdPath: string): void {
+function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: string, stdPath: string, backendExt: string): void {
 	if (program.kind !== NodeKind.Program) return;
 	const pd = program.data as ProgramData;
 	const dir = getModuleDir(indexPath);
@@ -1781,7 +1781,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		if (importDeclNode === null) continue;
 
 		const id = importDeclNode.data as ImportDeclData;
-		const resolved = resolvePreludeSubSource(id.importSource, dir, stdPath);
+		const resolved = resolvePreludeSubSource(id.importSource, dir, stdPath, backendExt);
 		const subResolved = resolved.path;
 		let subSrc = resolved.source;
 		if (subSrc.length === 0) continue;
@@ -1798,7 +1798,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		// before running its 3 passes. Ensures e.g. std/serialize/json/decode's import
 		// of std/meta is loaded before std/serialize/json/decode is checked, so its
 		// macro body has the type-meta symbols resolved.
-		loadPreludeSubModules(ctx, subPr.value, subResolved, stdPath);
+		loadPreludeSubModules(ctx, subPr.value, subResolved, stdPath, backendExt);
 
 		// Compile sub-module in a temporary context (separate scope, shared cache)
 		const subCtx = createContextWithCache(ctx.table.identCache);
