@@ -3,7 +3,7 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, TypeKind, Type } from "../../ast/node";
 import { hasGenericParams, isIntegerType } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import {
@@ -552,7 +552,7 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 
 	// Emit _new wrapper: alloc + call _init + return this.
 	addLine(procs, newProto + " {");
-	ensureTypeInfoDef(g, className);
+	ensureTypeInfoDef(g, className, null as unknown as Type);
 	const typeInfoArg = (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) ? "NULL" : `&${className}TypeInfo`;
 	addLine(procs, `  ${className}* this = (${className}*)msAllocTyped(sizeof(${className}), ${typeInfoArg});`);
 	let initArgList = "this";

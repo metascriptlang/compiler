@@ -12,7 +12,7 @@
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { isSinkType, createPrimitive } from "../checker/types";
-import { lookupSymbol, lookupLocal, hasFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
+import { lookupSymbol, lookupLocal, hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { NameSet, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
@@ -263,6 +263,11 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 
 	const loc = srcExpr.location;
 	const tmpSym = freshTempSym(dctx.ctx, "borrow", srcExpr.nodeType);
+	// Mark this temp as a sink-arg single-use synthetic. isLastReadSafe shortcuts to
+	// `true` so moveOrCopy chooses genSink (blit transfer); without the flag, CFG
+	// returns false (it was built before this temp existed) → genCopy double-Copy
+	// leaks the temp's heap data (passCopyToSink intentionally skips scope cleanup).
+	setFlag(tmpSym, SymbolFlag.SinkTemp);
 	const tmpName = tmpSym.name;
 
 	if (isBinaryCopy(rcInfo)) {
@@ -1322,6 +1327,15 @@ function isVarFromOuterLoopScope(varName: string, dctx: DrcContext): boolean {
 
 function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dctx: DrcContext): boolean {
 	if (sym === null) return false;
+	// passCopyToSink synthesizes single-use sink-arg temps and marks them SinkTemp.
+	// CFG can't see these (added to preStmts after CFG build) so it returns false
+	// (not last read) → moveOrCopy falls to genCopy → double Copy → the synthesized
+	// temp's heap data leaks (passCopyToSink intentionally skips scope cleanup since
+	// the sink consumer takes ownership). The flag short-circuits to true so
+	// moveOrCopy chooses genSink (blit transfer, no second Copy).
+	// Reproduction: any `const e = container[i]` where container element is a Named
+	// struct with heap fields, in a generic function — see Map.set/orderedMapRawGet.
+	if (hasFlag(sym, SymbolFlag.SinkTemp)) return true;
 	// Reference parity (sfGlobal): module-level variables live for the entire program.
 	// wasMoved would zero them for all callers. Never move globals.
 	if (hasFlag(sym, SymbolFlag.Global)) return false;
@@ -2093,8 +2107,16 @@ function markReturnedVarsMoved(node: Node, dctx: DrcContext): void {
 			markReturnedVarsMoved(bd.left, dctx);
 			markReturnedVarsMoved(bd.right, dctx);
 		},
-		NodeKind.MemberExpr => {
-			markReturnedVarsMoved((node.data as MemberExprData).object, dctx);
+		NodeKind.MemberExpr | NodeKind.ArrayAccess => {
+			// `return obj.field` / `return arr[i]` extracts a value from the container
+			// — it does NOT transfer ownership of the container. The container must be
+			// destroyed at scope-exit (its destroyFn handles the field/element cleanup)
+			// and the extracted value gets the standard incref-for-return treatment.
+			// Walking the object/array here was a pre-existing bug: it marked the
+			// container moved → scope-exit emitted wasMoved instead of destroy →
+			// container memory + all its RC-tracked fields leaked. Visible in any
+			// `return localObj.refField`, `return localArr[i]`, and async fn bodies
+			// where the lowered `return env.$retFut` triggered the same path.
 		},
 		NodeKind.CallExpr => {
 			// Only walk callee — args are handled by processCall's per-arg sink/borrow

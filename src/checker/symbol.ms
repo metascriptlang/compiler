@@ -39,6 +39,7 @@ export enum SymbolFlag {
 	Consumed = 1048576, // PARALOCK Phase 1: affine-Promise binding (spawn-origin) has been awaited (affine consumption)
 	OverloadSig = 2097152, // Tier 1: body-less overload signature — typecheck-only, codegen skips emission
 	OverloadValidated = 4194304, // Tier 1: overload set already validated (return-type compatibility check)
+	SinkTemp = 8388608, // DRC sink-arg temp synthesized by passCopyToSink — always single-use by construction, always last-read
 }
 
 // Flag helpers

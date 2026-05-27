@@ -4,7 +4,8 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct, hasDestructor, getAttachedOp } from "../../checker/types";
+import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, SymbolKind } from "../../ast/node";
@@ -511,7 +512,17 @@ export function ensureTypeInfo(g: CGen, className: string): void {
 // Reference parity (genTypeInfoV2): ownership-based deduplication.
 // The owning module (has InterfaceDecl/ClassDecl → in declaredThings) emits the definition.
 // Consuming modules emit extern. Compiler-generated types ($Env_*) are always local.
-export function ensureTypeInfoDef(g: CGen, className: string): void {
+//
+// Optional `objType` parameter wires the destroyFn field from the type's AttachedOps.
+// destructorLifting calls setAttachedOp(type, AttachedDestructor, "<typeName>Destroy")
+// when it generates the Destroy hook. When the caller has the Type available, pass
+// it here so the TypeInfo gets `.destroyFn = (msDestroyProc)<mangled-destroy>;`. For
+// types where destructorLifting ALSO emits a full TypeInfo (e.g. user-declared
+// classes/interfaces with explicit InterfaceDecl), both paths assign the same value
+// → harmless duplicate. For compiler-generated types ($Env_*) where destructorLifting
+// only emits hooks (consumer path), this is the ONLY assignment, and missing it
+// causes the env's Promise / Ref / managed fields to leak (async fn pattern).
+export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | null): void {
 	// TypeInfo is DRC metadata — unused under --gc=manual (write-only in manual.h).
 	if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) return;
 	const defKey = "typeInfoDef:" + className;
@@ -538,6 +549,12 @@ export function ensureTypeInfoDef(g: CGen, className: string): void {
 		addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${className}TypeInfo;`);
 	}
 	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.name = "${className}";`);
+	if (objType !== null && hasDestructor(objType)) {
+		const destroyMs = getAttachedOp(objType, AttachedOp.AttachedDestructor);
+		if (destroyMs.length > 0) {
+			addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.destroyFn = (msDestroyProc)${mangle(destroyMs)};`);
+		}
+	}
 }
 
 // ===== Full Type Description =====

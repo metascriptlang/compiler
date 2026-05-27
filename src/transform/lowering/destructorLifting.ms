@@ -602,6 +602,21 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.GenericInstance => {
+			// Promise<T> is exempt from generated Promise__T_destroy hooks (codegen
+			// emits msFuture_<T> directly, not via per-type hook). But Promise FIELDS
+			// inside other types (e.g. async fn envs $Env_X_shared with $retFut/$yf0)
+			// MUST emit msFutureDrcDestroy at the container's destroy hook — otherwise
+			// futures held by the env leak when the env's destroyFn runs. Combined
+			// with the markReturnedVarsMoved MemberExpr fix and the msAsyncCb NULL
+			// decref, this completes the async fn cleanup chain.
+			if (isAwaitable(fieldType)) {
+				match (hook) {
+					"destroy" => { genCall("msFutureDrcDestroy", hook, xf, yf, buf, loc); },
+					"copy" | "sink" => { defaultOp(hook, xf, yf, buf, loc); },
+					_ => {},
+				};
+				return;
+			}
 			const unwrapped = unwrapGenericInstance(fieldType);
 			if (unwrapped.mangledName !== "") {
 				if (hook !== "trace" || isCyclicType(unwrapped.body, lctx, visited)) {

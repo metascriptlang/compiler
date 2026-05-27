@@ -614,10 +614,19 @@ void msAsyncCb(void* raw) {
 	}
 
 	if (next == NULL) {
-		/* Stepper finished — retFut already completed by stepper.
-		 * Do NOT msDecref the stepper env here — the future's value may still
-		 * reference memory inside the env. DRC handles env cleanup when the
-		 * outer scope's stepper variable goes out of scope naturally. */
+		/* Stepper completed — drop the env reference taken in msAsyncStart.
+		 * The eager path of msAsyncStart runs msAsyncCb synchronously: env count
+		 * is still elevated by the runtime's msIncRef at this point, and the
+		 * caller's scope-exit msClosureDestroy + msDecref(env) bring it back to
+		 * 0 → destroyFn fires.
+		 *
+		 * The suspended path is more subtle: msClosureDestroy + msDecref(env)
+		 * have already run at the original call's scope-exit by the time the
+		 * callback fires here. Env memory is held alive only by the runtime's
+		 * +1 (this decref here). After this msDecref, msDecRefIsLast sees rc=0
+		 * → destroyFn fires → memory freed. The raw msAsyncCbEnv* pointer that
+		 * carried env through the callback chain is then released via free(e). */
+		if (e->stepper.env != NULL) msDecref(e->stepper.env);
 		free(e);
 		return;
 	}

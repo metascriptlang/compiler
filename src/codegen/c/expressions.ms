@@ -928,7 +928,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			} else {
 				cName = genExpr(g, p, d.newCallee);
 			}
-			ensureTypeInfoDef(g, cName);
+			ensureTypeInfoDef(g, cName, null as unknown as Type);
 			// Inline allocation + delegate to `<Class>_init(this, args)`. The ctor
 			// body lives at module top-level as `<Class>_init` (lifted by
 			// `methodToFunction` transform) — no `<Class>_new` wrapper exists any
@@ -976,7 +976,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Ref && node.nodeType.typeReturn !== null) {
 			const innerType = node.nodeType.typeReturn;
 			const cType = getTypeDesc(g, innerType);
-			ensureTypeInfoDef(g, cType);
+			ensureTypeInfoDef(g, cType, innerType);
 			if (d.newArguments.length === 0) {
 				// Check if any instance fields have initializers
 				if (hasInstanceFieldDefaults(node.nodeType)) {
@@ -1856,9 +1856,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					// field (Nim nimNewObjUninit parity). The NullLiteral-skip logic below
 					// relies on the field already being zero, so we must also require that
 					// no property in this literal is a bare NullLiteral.
-					ensureTypeInfoDef(g, cType);
-					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
 					const innerStruct = (node.nodeType !== null && node.nodeType.kind === TypeKind.Ref) ? node.nodeType.typeReturn : node.nodeType;
+					ensureTypeInfoDef(g, cType, innerStruct);
+					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
 					const fieldNames = (innerStruct !== null && innerStruct.typeNames !== null) ? innerStruct.typeNames : null as unknown as string[];
 					// Bare-NullLiteral keys are skipped by the assignment loop below and
 					// rely on the field being pre-zeroed; that's incompatible with Uninit.
@@ -1898,7 +1898,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					p.labels += 1;
 					const refTmp = `_ref${p.labels}_`;
 					emitProcLocalsLine(p, `${unionWrapName}* ${refTmp};`);
-					ensureTypeInfoDef(g, unionWrapName);
+					ensureTypeInfoDef(g, unionWrapName, null as unknown as Type);
 					emitStmtsLine(p, `${refTmp} = (${unionWrapName}*)msAllocTyped(sizeof(${unionWrapName}), &${unionWrapName}TypeInfo);`);
 					emitStmtsLine(p, `${refTmp}->_tag = ${unionWrapIdx};`);
 					emitStmtsLine(p, `${refTmp}->v${unionWrapIdx} = ${tmpName};`);
