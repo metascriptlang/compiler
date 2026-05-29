@@ -54,6 +54,7 @@ import { lowerSpawnGroup } from "./lowering/spawnGroupLower";
 import { lowerAwait } from "./lowering/awaitLower";
 import { lowerVarHoist } from "./lowering/varHoist";
 import { lowerLambda } from "./lowering/lambdaLifting";
+import { lowerCallHoist } from "./lowering/callHoist";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerMethodToFunction } from "./lowering/methodToFunction";
 import { lowerBuiltins } from "./native/builtinLower";
@@ -110,6 +111,9 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// already match what we want at the source level).
 	if (!jsBackend) { result = lowerMethodToFunction(result, ctx); }
 	if (!jsBackend) { result = lowerLambda(result, ctx); }
+	// Hoist fresh RC-returning calls out of non-RC bindings so the analyzer cleans
+	// them (fixes `const has = provide(path).ok` leaking the Result). C/DRC only.
+	if (!jsBackend) { result = lowerCallHoist(result, ctx); }
 	result = lowerBuiltins(result, ctx);
 	result = lowerCStringConv(result, ctx);
 	result = lowerOperators(result, ctx);
