@@ -549,6 +549,9 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			const d = node.data as MethodDeclData;
 			const methodSym = node.resolvedSym;
 			const sym = methodSym !== null ? methodSym : makeSymbol(d.methodName, SymbolKind.Method, unknownType(), false);
+				if (d.methodFlags === "async" || d.methodFlags === "async_generator" || (d.methodFlags !== "" && d.methodFlags.indexOf("async") >= 0)) {
+					setFlag(sym, SymbolFlag.Async);
+				}
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
 			// Skip body check for extern (no body) and generic methods (body re-checked
 			// per instantiation, like top-level generic fns at checkFunctionDecl:358).

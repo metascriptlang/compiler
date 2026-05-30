@@ -13,7 +13,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	IdentifierData, VariableDeclData, FunctionDeclData, IfStmtData,
 	WhileStmtData, ForOfStmtData, ForStmtData, BlockStmtData,
 	DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData,
-	ExprStmtData, ReturnStmtData,
+	ExprStmtData, ReturnStmtData, TestDeclData,
 	Symbol, SymbolKind, SymbolState, createNode } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { containsExprKind, replaceInExpr } from "../walker";
@@ -216,7 +216,7 @@ function buildCallProxy(kind: number, params: string[], paramTypes: Type[], retT
 		futCreate.nodeType = createPromise(retType);
 	} else {
 		futCreate = makeCall(makeIdent("msFutureCreate", loc), [], loc);
-		futCreate.nodeType = voidType();
+		futCreate.nodeType = createPromise(retType);
 	}
 	const futDecl = makeVarDecl(futSym.name, futCreate, DeclKind.Const, loc);
 	futDecl.resolvedSym = futSym;
@@ -1054,6 +1054,10 @@ function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], di
 		NodeKind.SwitchCase => {
 			const sc = node.data as SwitchCaseData;
 			sc.caseStmts = wireActorInStmts(sc.caseStmts, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		},
+		NodeKind.TestDecl => {
+			const td = node.data as TestDeclData;
+			wireActorInNode(td.testBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 		},
 		_ => {},
 	};

@@ -2291,10 +2291,12 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 					// Actor: flag for Sendable checking + Promise<T> wrapping for non-void returns
 					// Check both direct Actor symbols (e.g. Worker.staticMethod) and
 					// variables holding actor instances (e.g. w.method where w: Ref<Worker>)
+					const receiverSym = winner.receiverTypeName !== "" ? lookupSymbol(ctx.table, winner.receiverTypeName) : null;
 					const isActorReceiver = !isStaticAccess && (
 						(me.object.resolvedSym !== null && me.object.resolvedSym.symbolKind === SymbolKind.Actor)
 						|| (objType !== null && objType.kind === TypeKind.Ref && objType.sym !== null && objType.sym.symbolKind === SymbolKind.Actor)
 						|| (objType !== null && objType.sym !== null && objType.sym.symbolKind === SymbolKind.Actor)
+						|| (receiverSym !== null && receiverSym.symbolKind === SymbolKind.Actor)
 					);
 					if (isActorReceiver) {
 						isActorMethodCall = true;
