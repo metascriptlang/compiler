@@ -1,13 +1,11 @@
-// OPEN BUG (xfail) — array literal of RC (string) elements leaks per iteration.
+// FIXED — array literal of RC (string) elements no longer leaks.
 //
-// Surfaced by the native tier itself: `const parts: string[] = [a, b, c]` built
-// inside a hot loop grows RSS unbounded (~32 MB / 1M iters), so the array
-// literal and/or its string elements are not destroyed at scope exit. Distinct
-// from leak-call-in-cond (that's a non-RC binding skipping cleanup); this is an
-// RC-typed local (`parts`) whose array-literal initializer isn't fully cleaned.
-//
-// Kept as an xfail regression anchor: when the array-literal RC cleanup is
-// fixed, drop the xfail and this becomes a permanent guard.
+// Root cause was in runtime/core/array.c: msStringArrayFromArr deep-copied each
+// element, allocating a redundant second buffer and orphaning the analyzer's
+// already-owned element. The analyzer copies aliased occurrences and moves
+// last-read ones upstream, then assumes FromArr MOVES them in; the deep-copy
+// broke that contract. Fix: FromArr now moves (takes the handle as-is), like
+// msGenericArrayPush (ref arrays) and Nim's sink. Permanent regression guard.
 
 function main(): void {
 	let acc = 0;

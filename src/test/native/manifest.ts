@@ -101,7 +101,7 @@ export const CASES: NativeCase[] = [
 		name: "array-literal-strings",
 		file: "arrayLiteralStrings.ms",
 		maxRssMb: 40,
-		xfail: ["drc", "orc"],
-		note: "OPEN BUG (found by this tier on first run): array literal of string elements built in a hot loop grows RSS unbounded — the array-literal RC elements aren't cleaned at scope exit. Drop the xfail when fixed.",
+		expectStdout: "array-literal-strings acc=",
+		note: "FIXED in runtime/core/array.c: msStringArrayFromArr deep-copied each element, allocating a redundant 2nd buffer and orphaning the analyzer's already-owned element (the analyzer copies aliased + moves last-read upstream, then assumes FromArr moves). Changed FromArr to MOVE (take the handle as-is), mirroring msGenericArrayPush (ref arrays) and Nim's sink. Permanent regression guard — was 177MB leaking, now flat.",
 	},
 ];

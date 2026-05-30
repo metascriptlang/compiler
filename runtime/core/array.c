@@ -297,14 +297,12 @@ msStringArray msStringArrayFromArr(const msString* src, int64_t count) {
 	if (count <= 0) return MS_EMPTY_STRING_ARRAY;
 	msStringArray arr = msStringArrayNew(count);
 	for (int64_t i = 0; i < count; i++) {
-		msString s = src[i];
-		/* Deep-copy non-literal strings so each element is independently owned.
-		   Prevents double-free when the same string is passed multiple times. */
-		if (s.p != NULL && !msIsLiteral(s)) {
-			arr.p->data[i] = msStringNew(s.p->data, s.len);
-		} else {
-			arr.p->data[i] = s;
-		}
+		/* Move: each element arrives already independently owned — the analyzer
+		   copies aliased occurrences (`[s, s]` → incref the non-last-read one) and
+		   moves last-read ones, so taking the handle as-is is correct. Deep-copying
+		   here would allocate a redundant second buffer and orphan the analyzer's
+		   owned element → leak. Mirrors msGenericArrayPush (ref/object arrays). */
+		arr.p->data[i] = src[i];
 	}
 	arr.len = count;
 	return arr;
