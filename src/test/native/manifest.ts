@@ -84,6 +84,20 @@ export const CASES: NativeCase[] = [
 		note: "FIXED by callHoist (b3 audit): a fresh RC call in an `else if` condition (`else if (provide(i).ok)`) leaked — an else-if is the `.alternate` of its parent IfStmt, never a statement-list entry, so expandStmt never reached its condition. Fix wraps a fresh-cond else-if in a block so the walker descends and lowers it (cascading down the chain). Permanent regression guard — was 277MB leaking, now flat.",
 	},
 	{
+		name: "leak-ternary-cond",
+		file: "leakTernaryCond.ms",
+		maxRssMb: 40,
+		expectStdout: "leak-ternary-cond hits=",
+		note: "FIXED by callHoist lowerTernary: a fresh RC call in a ternary BRANCH (`c ? provide(i).ok : false`) is evaluated only when that branch runs, so it can't be hoisted eagerly. Lowered to a result temp + if/else (each branch its own scope). Permanent regression guard — was 277MB leaking, now flat.",
+	},
+	{
+		name: "leak-vardecl-sc",
+		file: "leakVardeclSc.ms",
+		maxRssMb: 40,
+		expectStdout: "leak-vardecl-sc hits=",
+		note: "FIXED by callHoist: a fresh RC call in a short-circuit operand of a VARDECL initializer (`const x = a && provide(i).ok`) leaked — the vardecl path used to skip conditional-eval initializers. Fix routes vardecl/assign initializers through lowerBoolCond (same flag/nested-if as if-cond). Permanent regression guard — was 277MB leaking, now flat.",
+	},
+	{
 		name: "array-literal-strings",
 		file: "arrayLiteralStrings.ms",
 		maxRssMb: 40,
