@@ -1,6 +1,6 @@
-// Call Hoist — Stage 1: hoist a fresh RC-returning call out of a non-RC binding
-// initializer into its own preceding statement, so the analyzer's normal
-// scope-exit cleanup destroys it.
+// Call Hoist — hoist a fresh RC-returning call out of a non-RC-consuming
+// position into its own statement, so the analyzer's normal scope-exit cleanup
+// destroys it.
 //
 // Problem: `const has = provide(path).ok` where provide returns a heap
 // Result<string,string> but `has` is a bool. The analyzer's processVarDecl
@@ -27,16 +27,32 @@
 // (NOT walkNode, NOT makeBlock) so the hoisted temp lands as a flat peer
 // sibling in the parent scope.
 //
-// Stage-1 scope is intentionally narrow — only VariableDecl initializers.
-// Conditions (`if (f().ok)`, `while (f().ok)`) and short-circuit operands are
-// deferred: they need per-iteration / per-branch control-flow rewrites, not a
-// plain hoist.
+// Positions covered (each evaluated once, unconditionally, when control
+// reaches the statement → a preceding hoist is correct):
+//   - VariableDecl initializer:  const has = f().ok        (b1)
+//   - assignment RHS:            has = f().ok              (b1)
+//   - if-condition:              if (f().ok) { ... }       (b2)
+// Plus the LOOP condition, which re-evaluates every iteration so a *preceding*
+// hoist is wrong — lowered to a top-of-body hoist + break instead (b3a):
+//   while (f().ok) { BODY }
+//     →  while (true) { const $t = f(); if (!($t.ok)) break; BODY }
+//
+// Short-circuit operands in an if / while condition (`if (a && f().ok)`) are
+// handled too (b3b): f() there runs only sometimes, so instead of an eager hoist
+// the condition is lowered to a flag + nested-if that preserves short-circuit
+// (what Nim does for `and`/`or`) — see lowerShortCircuit. A fresh call inside a
+// ternary branch is still left untouched (a flag rewrite can't express it), and
+// short-circuit in a VariableDecl/assignment initializer is left to the analyzer.
 
-import { Node, NodeKind, DeclKind, VariableDeclData, BinaryExprData, ExprStmtData, IfStmtData, Type, TypeKind } from "../../ast/node";
-import { isResult, isAwaitable, unknownType } from "../../checker/types";
+import { Node, NodeKind, DeclKind, VariableDeclData, BinaryExprData, ExprStmtData, IfStmtData, WhileStmtData, Type, TypeKind } from "../../ast/node";
+import { isResult, isAwaitable, unknownType, booleanType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, replaceInExpr } from "../walker";
-import { makeVarDecl, makeIdentResolved } from "../util";
+import { makeVarDecl, makeIdentResolved, makeIf, makeBlock, makeBreak, makeUnary, makeBool, makeBinary, makeAssign, makeExprStmt, extractBodyStmts } from "../util";
+
+// A boolean condition lowered to: run `pre` statements (unconditionally, in order),
+// then test `expr` (a pure boolean with no fresh RC call left in a conditional spot).
+interface CondLower { pre: Node[]; expr: Node; }
 
 // Owned-heap types whose fresh-call result needs scope-exit cleanup. Mirrors the
 // owned set in analyzer/classify.ms classifyType WITHOUT importing it — transform
@@ -103,58 +119,172 @@ function hoistFreshRcCalls(expr: Node, hoisted: Node[], ctx: TransformContext): 
 	});
 }
 
-function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
-	// VariableDecl init: `const x = f().field` (x non-RC) → hoist f() before the decl.
-	if (stmt.kind === NodeKind.VariableDecl) {
-		const d = stmt.data as VariableDeclData;
-		if (d.initializer === null) return [stmt];
-		// If the binding's OWN type needs cleanup, the analyzer already SINKs it
-		// correctly — hoisting would only add a redundant move. Skip.
-		if (isRcReturning(stmt.nodeType)) return [stmt];
-		// A fresh call inside a short-circuit operand / ternary branch is only sometimes
-		// evaluated; hoisting it to a preceding statement runs it eagerly and breaks the
-		// guard. Skip such inits (deferred to nested-if lowering).
-		if (containsConditionalEval(d.initializer)) return [stmt];
-		const hoisted: Node[] = [];
-		d.initializer = hoistFreshRcCalls(d.initializer, hoisted, ctx);
-		if (hoisted.length === 0) return [stmt];
-		hoisted.push(stmt);
-		return hoisted;
+// Hoist a once-evaluated expression's fresh RC calls into preceding statements.
+function plainHoist(expr: Node, ctx: TransformContext): CondLower {
+	const pre: Node[] = [];
+	const rewritten = hoistFreshRcCalls(expr, pre, ctx);
+	return { pre, expr: rewritten };
+}
+
+// True if the expression tree contains a fresh RC-returning Call/New anywhere.
+function containsFreshRcCall(expr: Node): boolean {
+	let found = false;
+	replaceInExpr(expr, (node: Node): Node => {
+		if ((node.kind === NodeKind.CallExpr || node.kind === NodeKind.NewExpr) && isRcReturning(node.nodeType)) {
+			found = true;
+		}
+		return node;
+	});
+	return found;
+}
+
+// True if an `else if` chain (the alternate of an IfStmt) holds a fresh RC call in
+// any of its conditions. An `else if` is the `.alternate` of its parent IfStmt, not
+// a statement-list entry, so expandStmt never reaches it directly — this drives the
+// block-wrap in the IfStmt branch that brings it under the walker.
+function altChainHasFreshCond(node: Node): boolean {
+	if (node === null || node.kind !== NodeKind.IfStmt) return false;
+	const d = node.data as IfStmtData;
+	if (containsFreshRcCall(d.condition)) return true;
+	return altChainHasFreshCond(d.alternate);
+}
+
+// Lower a boolean condition that contains a fresh RC call in a SHORT-CIRCUIT
+// operand (`a && f().ok`, `a || f().ok`) into preceding statements + a pure flag,
+// preserving short-circuit evaluation. This is what Nim does (it lowers `and`/`or`
+// to nested-if so injectdestructors sees the conditional fresh value); MetaScript
+// has no nkStmtListExpr, so the flag + if is emitted as real statements.
+//
+//   a && f().ok   →   let $flag = false; if (a) { const $t = f(); $flag = $t.ok; }   test $flag
+//   a || f().ok   →   let $flag = true;  if (!(a)) { const $t = f(); $flag = $t.ok; } test $flag
+//
+// The fresh `$t` lives in the inner if-block, so the analyzer destroys it at that
+// block's scope exit only when the call actually ran — leak-free AND short-circuit
+// correct. Returns null (caller leaves the statement untouched) if a fresh call
+// sits inside a ternary branch, which a flag rewrite can't express safely.
+function lowerShortCircuit(cond: Node, ctx: TransformContext): CondLower | null {
+	if (cond.kind === NodeKind.BinaryExpr) {
+		const bd = cond.data as BinaryExprData;
+		if (bd.operator === "&&" || bd.operator === "||") {
+			const left = lowerShortCircuit(bd.left, ctx);
+			if (left === null) return null;
+			const loc = cond.location;
+			// RHS has no fresh call → keep it inline; C's `&&`/`||` short-circuits it.
+			if (!containsFreshRcCall(bd.right)) {
+				return { pre: left.pre, expr: makeBinary(left.expr, bd.operator, bd.right, loc) };
+			}
+			// RHS has a fresh call → evaluate it only on the branch that reaches it.
+			const right = lowerShortCircuit(bd.right, ctx);
+			if (right === null) return null;
+			const isAnd = bd.operator === "&&";
+			const flagSym = freshTempSym(ctx, "sc", booleanType());
+			const pre: Node[] = [];
+			for (const s of left.pre) { pre.push(s); }
+			const flagDecl = makeVarDecl(flagSym.name, makeBool(!isAnd, loc), DeclKind.Let, loc);
+			flagDecl.resolvedSym = flagSym;
+			flagDecl.nodeType = booleanType();
+			pre.push(flagDecl);
+			const inner: Node[] = [];
+			for (const s of right.pre) { inner.push(s); }
+			const flagLhs = makeIdentResolved(flagSym, loc);
+			flagLhs.nodeType = booleanType();
+			inner.push(makeExprStmt(makeAssign(flagLhs, right.expr, loc), loc));
+			const guard = isAnd ? left.expr : makeUnary("!", left.expr, loc);
+			pre.push(makeIf(guard, makeBlock(inner, loc), null as unknown as Node, loc));
+			const flagRef = makeIdentResolved(flagSym, loc);
+			flagRef.nodeType = booleanType();
+			return { pre, expr: flagRef };
+		}
 	}
-	// Assignment RHS: `x = f().field` (x a plain non-RC variable) → hoist f() before the
-	// assignment. Same shape as the vardecl case; the analyzer then SINKs the temp.
-	// RC-typed LHS, member/index LHS (obj.field=/arr[i]=) are left to the analyzer's
-	// own reassignment path — only the plain non-RC identifier LHS is hoisted here.
-	if (stmt.kind === NodeKind.ExprStmt) {
-		const ed = stmt.data as ExprStmtData;
-		if (ed.expr === null || ed.expr.kind !== NodeKind.BinaryExpr) return [stmt];
-		const bd = ed.expr.data as BinaryExprData;
-		if (bd.operator !== "=") return [stmt];
-		if (bd.left.kind !== NodeKind.Identifier) return [stmt];
-		if (isRcReturning(bd.left.nodeType)) return [stmt];
-		if (containsConditionalEval(bd.right)) return [stmt];
-		const hoisted: Node[] = [];
-		bd.right = hoistFreshRcCalls(bd.right, hoisted, ctx);
-		if (hoisted.length === 0) return [stmt];
-		hoisted.push(stmt);
-		return hoisted;
+	// Leaf (no top-level short-circuit). If it still holds a conditional-eval position
+	// (a ternary with a fresh call), a plain hoist would evaluate eagerly — bail.
+	if (containsConditionalEval(cond)) return null;
+	return plainHoist(cond, ctx);
+}
+
+// Lower a boolean condition for a once-or-per-iteration test position (if / while).
+// Returns null when there is nothing to do (no fresh RC call) or the condition can't
+// be safely lowered (fresh call inside a ternary branch).
+function lowerBoolCond(cond: Node, ctx: TransformContext): CondLower | null {
+	if (!containsFreshRcCall(cond)) return null;
+	// No conditional-eval → every fresh call runs unconditionally → plain preceding hoist.
+	if (!containsConditionalEval(cond)) return plainHoist(cond, ctx);
+	// Short-circuit operand carries the fresh call → flag/nested-if lowering.
+	return lowerShortCircuit(cond, ctx);
+}
+
+// `const x = f().ok` — once-evaluated initializer of a non-RC binding. Hoist f() before
+// the decl; the analyzer then SINKs the temp. Skip when the binding's own type is RC (the
+// analyzer already SINKs it) or the initializer is short-circuit/ternary (eager-eval hazard).
+function expandVarDecl(stmt: Node, ctx: TransformContext): Node[] {
+	const d = stmt.data as VariableDeclData;
+	if (d.initializer === null || isRcReturning(stmt.nodeType) || containsConditionalEval(d.initializer)) return [stmt];
+	const h = plainHoist(d.initializer, ctx);
+	if (h.pre.length === 0) return [stmt];
+	d.initializer = h.expr;
+	h.pre.push(stmt);
+	return h.pre;
+}
+
+// `x = f().ok` — only a plain non-RC identifier LHS is hoisted; RC-typed and member/index
+// LHS (`obj.f =`, `arr[i] =`) are left to the analyzer's own reassignment path.
+function expandAssign(stmt: Node, ctx: TransformContext): Node[] {
+	const ed = stmt.data as ExprStmtData;
+	if (ed.expr === null || ed.expr.kind !== NodeKind.BinaryExpr) return [stmt];
+	const bd = ed.expr.data as BinaryExprData;
+	if (bd.operator !== "=" || bd.left.kind !== NodeKind.Identifier || isRcReturning(bd.left.nodeType)) return [stmt];
+	if (containsConditionalEval(bd.right)) return [stmt];
+	const h = plainHoist(bd.right, ctx);
+	if (h.pre.length === 0) return [stmt];
+	bd.right = h.expr;
+	h.pre.push(stmt);
+	return h.pre;
+}
+
+// `if (COND)` is evaluated once when control reaches it → fresh RC calls hoist before it
+// (plain hoist for `if (f().ok)`, flag/nested-if for short-circuit `if (a && f().ok)`).
+function expandIf(stmt: Node, ctx: TransformContext): Node[] {
+	const ifd = stmt.data as IfStmtData;
+	// `else if (f().ok)` is the `.alternate`, never a statement-list entry, so expandStmt
+	// can't reach its condition. Wrap a fresh-cond else-if in a block so the walker
+	// descends and lowers the now-listed inner if; deeper else-ifs cascade the same way.
+	if (ifd.alternate !== null && ifd.alternate.kind === NodeKind.IfStmt && altChainHasFreshCond(ifd.alternate)) {
+		ifd.alternate = makeBlock([ifd.alternate], ifd.alternate.location);
 	}
-	// if-condition: `if (f().field)` → hoist f() before the if. The condition is
-	// evaluated once, unconditionally, when control reaches the statement, so a
-	// preceding hoist is correct and the temp is destroyed at scope exit. A
-	// short-circuit/ternary condition is skipped (deferred to nested-if lowering).
-	// `else if` chains aren't statement-list entries, so they pass through here
-	// un-hoisted (no eager-eval hazard) — handled later.
-	if (stmt.kind === NodeKind.IfStmt) {
-		const ifd = stmt.data as IfStmtData;
-		if (containsConditionalEval(ifd.condition)) return [stmt];
-		const hoisted: Node[] = [];
-		ifd.condition = hoistFreshRcCalls(ifd.condition, hoisted, ctx);
-		if (hoisted.length === 0) return [stmt];
-		hoisted.push(stmt);
-		return hoisted;
-	}
+	const lowered = lowerBoolCond(ifd.condition, ctx);
+	if (lowered === null) return [stmt];
+	ifd.condition = lowered.expr;
+	lowered.pre.push(stmt);
+	return lowered.pre;
+}
+
+// `while (COND)` re-evaluates COND every iteration, so a *preceding* hoist is wrong.
+// Lower the condition into the top of a `while (true)` body + a break:
+//   while (f().ok) { BODY }      → while (true) { const $t = f(); if (!($t.ok)) break; BODY }
+//   while (a && f().ok) { BODY } → while (true) { <flag eval>; if (!$flag) break; BODY }
+// `continue` in BODY jumps to the while(true) top and re-runs the condition eval, so
+// per-iteration semantics hold and the fresh temp is destroyed at each iteration's exit.
+function expandWhile(stmt: Node, ctx: TransformContext): Node[] {
+	const wd = stmt.data as WhileStmtData;
+	const lowered = lowerBoolCond(wd.whileCondition, ctx);
+	if (lowered === null) return [stmt];
+	const loc = stmt.location;
+	const body = lowered.pre;
+	body.push(makeIf(makeUnary("!", lowered.expr, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
+	for (const s of extractBodyStmts(wd.whileBody)) { body.push(s); }
+	wd.whileCondition = makeBool(true, loc);
+	wd.whileBody = makeBlock(body, loc);
 	return [stmt];
+}
+
+function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
+	return match (stmt.kind) {
+		NodeKind.VariableDecl => expandVarDecl(stmt, ctx),
+		NodeKind.ExprStmt => expandAssign(stmt, ctx),
+		NodeKind.IfStmt => expandIf(stmt, ctx),
+		NodeKind.WhileStmt => expandWhile(stmt, ctx),
+		_ => [stmt],
+	};
 }
 
 export function lowerCallHoist(program: Node, ctx: TransformContext): Node {

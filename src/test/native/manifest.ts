@@ -63,6 +63,27 @@ export const CASES: NativeCase[] = [
 		note: "FIXED by the Phase-3 call-hoist pass (transform/lowering/callHoist.ms): a fresh Result-returning call used only for a non-RC read (`const has = provide(p).ok`) is hoisted to `const $t = provide(p); const has = $t.ok` so the analyzer destroys $t at scope exit. Permanent regression guard — was 278MB leaking, now flat.",
 	},
 	{
+		name: "leak-loop-cond",
+		file: "leakLoopCond.ms",
+		maxRssMb: 40,
+		expectStdout: "leak-loop-cond i=",
+		note: "FIXED by callHoist b3a: a fresh RC call in a LOOP condition (`while (provide(i).ok)`) re-evaluates every iteration, so a preceding hoist would be wrong. Lowered to `while (true) { const $t = provide(i); if (!($t.ok)) break; BODY }` so the per-iteration Result is destroyed at each iteration's scope exit. Permanent regression guard — was 339MB leaking, now flat.",
+	},
+	{
+		name: "leak-short-circuit",
+		file: "leakShortCircuit.ms",
+		maxRssMb: 40,
+		expectStdout: "leak-short-circuit hits=",
+		note: "FIXED by callHoist b3b: a fresh RC call in a SHORT-CIRCUIT operand (`if (a && provide(i).ok)`) runs only when `a` holds, so it can't be hoisted eagerly. Lowered to a flag + nested-if (what Nim does for `and`/`or`) so the fresh Result is captured + destroyed only on the branch that reaches it. Permanent regression guard — was 339MB leaking, now flat.",
+	},
+	{
+		name: "leak-elseif-cond",
+		file: "leakElseIfCond.ms",
+		maxRssMb: 40,
+		expectStdout: "leak-elseif-cond hits=",
+		note: "FIXED by callHoist (b3 audit): a fresh RC call in an `else if` condition (`else if (provide(i).ok)`) leaked — an else-if is the `.alternate` of its parent IfStmt, never a statement-list entry, so expandStmt never reached its condition. Fix wraps a fresh-cond else-if in a block so the walker descends and lowers it (cascading down the chain). Permanent regression guard — was 277MB leaking, now flat.",
+	},
+	{
 		name: "array-literal-strings",
 		file: "arrayLiteralStrings.ms",
 		maxRssMb: 40,

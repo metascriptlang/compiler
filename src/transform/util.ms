@@ -207,6 +207,10 @@ export function makeContinue(loc: SourceLocation): Node {
 	return createNode(NodeKind.ContinueStmt, { continueLabel: "" }, syntheticToken(loc));
 }
 
+export function makeBreak(loc: SourceLocation): Node {
+	return createNode(NodeKind.BreakStmt, { breakLabel: "" }, syntheticToken(loc));
+}
+
 // ===== Expression Builders =====
 
 export function makeBinary(leftNode: Node, op: string, rightNode: Node, loc: SourceLocation): Node {
