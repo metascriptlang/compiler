@@ -8,7 +8,7 @@ import { isStructType } from "../../checker/types";
 import {
 	CGen, CProc,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
-	readProcStmts, emitLineDir, getTemp, fillLocalName,
+	readProcStmts, emitLineDir, getTemp, fillLocalName, pushBlock, popBlock,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
 import { formatCNumber } from "./literals";
@@ -453,6 +453,14 @@ function genWhileStmt(g: CGen, p: CProc, node: Node): void {
 	// Ensures NRVO calls in conditions are re-evaluated each iteration.
 	emitStmts(p, "while (1) {\n");
 	const oldIndent = getStmtsIndent(p);
+
+	// Reference parity: push an isLoop block so break/continue inside the body
+	// can find the loop boundary and run pending finally cleanup before jumping.
+	// Without it, genBreak/genContinue find no loop block and emit a bare
+	// break/continue that skips finally — leaking DRC temps and violating the
+	// try/finally contract. nestedFinallyDepth is snapshot here so the delta is
+	// relative to finallys *enclosing* the loop, not those opened inside the body.
+	pushBlock(p, true);
 	setStmtsIndent(p, oldIndent + 1);
 
 	// Reference parity: skip condition check for while(true) literals
@@ -469,7 +477,7 @@ function genWhileStmt(g: CGen, p: CProc, node: Node): void {
 		genStmt(g, p, d.whileBody);
 	}
 
-	setStmtsIndent(p, oldIndent);
+	popBlock(p);
 	emitStmtsLine(p, "}");
 }
 
@@ -483,6 +491,10 @@ function genDoWhileStmt(g: CGen, p: CProc, node: Node): void {
 	// Emit: do { body; cond-eval; } while(cond);
 	emitStmts(p, "do {\n");
 	const oldIndent = getStmtsIndent(p);
+
+	// Same as genWhileStmt: push an isLoop block so break/continue inside the body
+	// run pending finally cleanup before jumping (see genWhileStmt for rationale).
+	pushBlock(p, true);
 	setStmtsIndent(p, oldIndent + 1);
 
 	if (d.doBody.kind === NodeKind.BlockStmt) {
@@ -493,7 +505,7 @@ function genDoWhileStmt(g: CGen, p: CProc, node: Node): void {
 	}
 
 	const condSnippet = genExpr(g, p, d.doCondition);
-	setStmtsIndent(p, oldIndent);
+	popBlock(p);
 	emitStmtsLine(p, `} while ${wrapCond(condSnippet)};`);
 }
 

@@ -9,9 +9,9 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { isSinkType, createPrimitive } from "../checker/types";
+import { isSinkType, createPrimitive, isAwaitable } from "../checker/types";
 import { lookupSymbol, lookupLocal, hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { NameSet, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
@@ -142,8 +142,56 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		NodeKind.NewExpr => processNew(node, dctx, mode),
 		NodeKind.MoveExpr => processMove(node, dctx, mode),
 		NodeKind.ConditionalExpr => processConditional(node, dctx, mode),
+		// Transparent deref/addr wrappers (inserted for heap-Ref field access etc.).
+		// processNode is a hand-written dispatch — without these the walk STOPS at the
+		// wrapper and never reaches a fresh RC call inside it (e.g. `provide().field`
+		// lowers the object to `HiddenDeref(provide())`), so ensureDestruction never
+		// captures it → leak. Recurse through, same mode (mirrors the generic walker
+		// and Nim's p() over nkHiddenDeref/nkHiddenAddr).
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => processHiddenWrapper(node, dctx, mode),
+		// `x as T` is transparent for ownership — a fresh RC call inside it still produces an
+		// owned value that needs capture. Without recursing, `(provide() as Box).field` stops
+		// the walk at the assertion → leak. The union-variant narrowing case (`node.data as
+		// Variant`) is caught as a cursor in processVarDecl before this, and its asExpr is a
+		// borrow (not fresh) so recursing is a no-op there.
+		NodeKind.TypeAssertion => processAssertionWrapper(node, dctx, mode),
+		// Zero-copy / implicit conversions (`HiddenStdConv`/`HiddenSubConv`) are transparent
+		// for ownership too — Nim's p() recurses nkHiddenStdConv/nkHiddenSubConv/nkConv
+		// (injectdestructors.nim:1028). A fresh RC call under a conv still produces an owned
+		// value; the conv's NodeFlag.Cursor only marks the RESULT as a borrow, not the inner call.
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => processConvWrapper(node, dctx, mode),
 		_ => node,
 	};
+}
+
+function processHiddenWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
+	const hd = node.data as HiddenDerefData;
+	hd.expr = processNode(hd.expr, dctx, mode);
+	return node;
+}
+
+function processAssertionWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
+	const ta = node.data as TypeAssertionData;
+	ta.asExpr = processNode(ta.asExpr, dctx, mode);
+	return node;
+}
+
+function processConvWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
+	const cv = node.data as HiddenStdConvData;
+	cv.convExpr = processNode(cv.convExpr, dctx, mode);
+	return node;
+}
+
+// Walk a non-RC binding/condition expression so a fresh RC inner call gets ensureDestruction,
+// but with skipAwaitableCapture set so awaited (stepper-owned) futures are NOT captured here —
+// PARALOCK. Save/restore the flag (not hard-false) so a future nested walk can't clear an
+// outer one's flag. Used by the non-RC vardecl / assignment / if-condition positions.
+function processNonRcRead(expr: Node, dctx: DrcContext): Node {
+	const saved = dctx.skipAwaitableCapture;
+	dctx.skipAwaitableCapture = true;
+	const rewritten = processNode(expr, dctx, DrcMode.Normal);
+	dctx.skipAwaitableCapture = saved;
+	return rewritten;
 }
 
 // Reference parity (ensureDestruction): when a fresh expression (call, constructor) produces an
@@ -159,6 +207,11 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 	if (k !== NodeKind.CallExpr && k !== NodeKind.ObjectLiteral && k !== NodeKind.ArrayLiteral && k !== NodeKind.NewExpr) return node;
 	const exprType = node.nodeType;
 	if (exprType === null) return node;
+	// Inside a non-RC binding/condition walk (skipAwaitableCapture), never capture a future:
+	// the await/spawn lowering's stepper owns awaited futures, so scope-exit destroy here
+	// double-frees (PARALOCK). A genuine discarded fire-and-forget future is captured by the
+	// ordinary discarded-call path, where this flag is false.
+	if (dctx.skipAwaitableCapture && isAwaitable(exprType)) return node;
 	const rcInfo = classifyType(exprType, dctx.ctx);
 	if (!rcInfo.needsCleanup) return node;
 	// Capture in temp, register for scope-exit destroy
@@ -1761,7 +1814,17 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 		return stmt;
 	}
 
-	if (!rcInfo.needsCleanup) return stmt;
+	if (!rcInfo.needsCleanup) {
+		// Binding needs no cleanup, but the initializer may hold a fresh RC inner call
+		// (`const n: number = lenOf(makeMsg())`, `const b = provide().field`). Walk it so
+		// ensureDestructionIfNeeded captures that temp for scope-exit destroy (awaitables
+		// skipped via skipAwaitableCapture; wrappers recursed in processNode). Retires
+		// callHoist's expandVarDecl plain-hoist for this position.
+		if (d.initializer !== null) {
+			d.initializer = processNonRcRead(d.initializer, dctx);
+		}
+		return stmt;
+	}
 
 	// Register for scope cleanup
 	registerVar(dctx, d.declName, rcInfo, isCursor, varSym);
@@ -1883,7 +1946,13 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		if (vi === null) return stmt;
 		rcInfo = vi.rcInfo;
 	}
-	if (!rcInfo.needsCleanup) return stmt;
+	if (!rcInfo.needsCleanup) {
+		// Non-RC identifier LHS (`x = f().ok`, `x = provide().field`): the RHS may hold a
+		// fresh RC inner call → capture it (awaitables skipped; wrappers recursed). Retires
+		// callHoist's expandAssign plain-hoist for this position.
+		bd.right = processNonRcRead(bd.right, dctx);
+		return stmt;
+	}
 
 	// Phase D: first-write optimization — skip destroy on first assignment to uninitialized var
 	const isFirstWrite = vi !== null && !vi.isInitialized;
@@ -2192,6 +2261,11 @@ function processFuncExpr(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 
 function processIf(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as IfStmtData;
+	// Walk the once-evaluated condition so a fresh RC call in it is captured (temp flushes into
+	// preStmts before the if). Short-circuit conditions are pre-lowered to a plain flag by
+	// callHoist and fresh-cond else-ifs are block-wrapped there, so this only sees a once-eval
+	// condition. Retires callHoist's expandIf plain-hoist for this position.
+	d.condition = processNonRcRead(d.condition, dctx);
 	d.consequent = processBlockBody(d.consequent, dctx, false, false, loc);
 	if (d.alternate !== null) {
 		if (d.alternate.kind === NodeKind.IfStmt) {

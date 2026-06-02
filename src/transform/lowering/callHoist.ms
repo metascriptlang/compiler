@@ -261,6 +261,9 @@ function lowerBoolCond(cond: Node, ctx: TransformContext): CondLower | null {
 function expandVarDecl(stmt: Node, ctx: TransformContext): Node[] {
 	const d = stmt.data as VariableDeclData;
 	if (d.initializer === null || isRcReturning(stmt.nodeType)) return [stmt];
+	// Plain once-eval fresh calls are captured by the analyzer (processVarDecl Normal-walk +
+	// processNode wrapper recursion). callHoist only keeps the conditional-eval cases.
+	if (!containsConditionalEval(d.initializer)) return [stmt];
 	const lowered = lowerBoolCond(d.initializer, ctx);
 	if (lowered === null) return [stmt];
 	d.initializer = lowered.expr;
@@ -275,6 +278,9 @@ function expandAssign(stmt: Node, ctx: TransformContext): Node[] {
 	if (ed.expr === null || ed.expr.kind !== NodeKind.BinaryExpr) return [stmt];
 	const bd = ed.expr.data as BinaryExprData;
 	if (bd.operator !== "=" || bd.left.kind !== NodeKind.Identifier || isRcReturning(bd.left.nodeType)) return [stmt];
+	// Plain once-eval fresh calls in the RHS are captured by the analyzer. callHoist only keeps
+	// the conditional-eval cases.
+	if (!containsConditionalEval(bd.right)) return [stmt];
 	const lowered = lowerBoolCond(bd.right, ctx);
 	if (lowered === null) return [stmt];
 	bd.right = lowered.expr;
@@ -292,6 +298,10 @@ function expandIf(stmt: Node, ctx: TransformContext): Node[] {
 	if (ifd.alternate !== null && ifd.alternate.kind === NodeKind.IfStmt && altChainHasFreshCond(ifd.alternate)) {
 		ifd.alternate = makeBlock([ifd.alternate], ifd.alternate.location);
 	}
+	// Plain once-eval conditions are captured by the analyzer (processIf walks the condition).
+	// callHoist only keeps the conditional-eval (short-circuit) main condition; the wrap above
+	// still routes a short-circuit else-if through the walker while a plain one falls to the analyzer.
+	if (!containsConditionalEval(ifd.condition)) return [stmt];
 	const lowered = lowerBoolCond(ifd.condition, ctx);
 	if (lowered === null) return [stmt];
 	ifd.condition = lowered.expr;

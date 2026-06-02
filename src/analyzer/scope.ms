@@ -65,6 +65,11 @@ export interface DrcContext {
 	cfgCache: CfgCache;             // CFG cache per variable — Phase C
 	currentFuncBody: Node;          // current function body for CFG building — Phase C
 	currentFuncName: string;        // current function name — for DRC hook detection
+	skipAwaitableCapture: boolean;  // set ONLY while walking a non-RC binding/cond initializer:
+	                                // ensureDestruction must not capture a future there (the
+	                                // await/spawn lowering's stepper owns it — PARALOCK). The
+	                                // existing discarded-call path leaves this false so a genuine
+	                                // fire-and-forget future IS still captured + destroyed.
 }
 
 // ===== Constructors =====
@@ -81,6 +86,7 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		cfgCache: createCfgCache(),
 		currentFuncBody: null as unknown as Node,
 		currentFuncName: "",
+		skipAwaitableCapture: false,
 	};
 }
 

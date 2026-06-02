@@ -104,4 +104,33 @@ export const CASES: NativeCase[] = [
 		expectStdout: "array-literal-strings acc=",
 		note: "FIXED in runtime/core/array.c: msStringArrayFromArr deep-copied each element, allocating a redundant 2nd buffer and orphaning the analyzer's already-owned element (the analyzer copies aliased + moves last-read upstream, then assumes FromArr moves). Changed FromArr to MOVE (take the handle as-is), mirroring msGenericArrayPush (ref arrays) and Nim's sink. Permanent regression guard — was 177MB leaking, now flat.",
 	},
+	{
+		name: "leak-callarg-object",
+		file: "leakCallArgObject.ms",
+		maxRssMb: 40,
+		expectStdout: "leak-callarg-object acc=",
+		xfail: ["drc", "orc"],
+		note: "OPEN BUG — and the transform-hoist approach to fixing it is UNSOUND on real code (negative result, 2026-06-01). A fresh interface object literal passed inline as a call argument, stored by the callee, leaks (value stuck at rc=1). Hoisting it to `const $t = {...}` (TypeKind.Ref — interfaces are heap) fixes THIS minimal probe but CRASHES real escape-heavy code (Photon WS broadcast: over-free/SIGSEGV) — the hoisted temp's scope-exit destroy races with a live alias the analyzer can't track once the value flows through actor messages / a broadcast subscriber list / async resume (callHoist runs post-actor/await lowering, inside the state-machine where the temp's scope ≠ the value's true lifetime). Excluding Ref makes it crash-safe but then it doesn't hoist (no fix). So the leak needs an ANALYZER-level fix (Phase 4 ownership of the fresh call argument), NOT a Phase-3 hoist. Was 387MB @ 2M. See docs/NIM-REF.md §3.",
+	},
+	{
+		name: "leak-ref-member-read",
+		file: "leakRefMemberRead.ms",
+		maxRssMb: 40,
+		expectStdout: "leak-ref-member-read done",
+		note: "FIXED by the analyzer HiddenDeref capture fix (inject.ms processNode HiddenDeref|HiddenAddr recursion). A fresh interface (heap Ref) returned and only a non-RC field read, with the call otherwise discarded, leaks ~555MB pre-fix: the member object lowers to HiddenDeref(call), and processNode's hand-written dispatch had no wrapper case (`_ => node`) so the walk stopped before the fresh call → ensureDestruction never captured it. A bare member-access ExprStmt is NOT covered by callHoist (not an assignment/vardecl/if/while), so ONLY the analyzer fix makes it flat. The Result-shaped leak-call-in-cond guard missed this class (Result uses sret, not a HiddenDeref pointer). Permanent regression guard — was 555MB leaking, now flat.",
+	},
+	{
+		name: "leak-discarded-future",
+		file: "leakDiscardedFuture.ms",
+		maxRssMb: 40,
+		expectStdout: "leak-discarded-future done",
+		note: "Guards the FLAG-SCOPE of the analyzer's awaitable skip (inject.ms skipAwaitableCapture). A discarded fire-and-forget async future is owned by the caller and must be captured+destroyed by the ordinary discarded-call path; the awaitable skip is scoped to non-RC binding/condition walks ONLY, so it must NOT suppress this. If the skip regresses to global (skip every future in ensureDestructionIfNeeded), each discarded future leaks ~188B/iter (was 94MB at 500k during the global-guard misstep, now flat). Complements paralock-nested, which guards the opposite side (awaited stepper futures must NOT be re-captured).",
+	},
+	{
+		name: "leak-async-await-loop",
+		file: "leakAsyncAwaitLoop.ms",
+		maxRssMb: 40,
+		expectStdout: "leak-async-await-loop r=",
+		note: "FIXED in C codegen (genWhileStmt/genDoWhileStmt): loops never called pushBlock(p, true), so genBreak/genContinue found no isLoop block and emitted a bare break/continue that SKIPPED pending finally — leaking every DRC temp whose cleanup lived in a finally between the jump and the loop boundary, AND violating the try/finally contract (finally didn't run on break/continue). Root cause of the Photon WS broadcast leak: the async stepper's fast-path `if (finished) continue` skipped the per-iteration temp decref. Was the general bug; manifested here as ~32 B/iter (2M → 64MB), now flat ~2MB. Restores Nim parity (ccgstmts startBlockWith + isLoop=true). Permanent regression guard.",
+	},
 ];
