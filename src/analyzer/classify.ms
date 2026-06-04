@@ -214,7 +214,14 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			// Reference parity: cursor fields skip all RC operations.
 			return noRcInfo();
 		},
-		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", false),
+		// Closures own a heap env when they capture. needsCleanup=true so a fresh closure value in a
+		// Normal (non-consumed) position is captured + destroyed (msClosureDestroy decrefs the env).
+		// Two co-requisites make this safe: (1) lambdaLifting sets the closure-pair's nodeType (else
+		// the analyzer bails on null), and processObjectLiteral keeps NF_CLOSURE pairs isRefConstr so
+		// the env field stays a COPY (the pair owns a counted ref → destroy is balanced, not a
+		// double-free with the env-var lifecycle); (2) msClosureDestroy is null-env-safe (core/system.h)
+		// so bare-fn closures (env=NULL) no-op, and bare-fn-ref identifiers are skipped in processIdentifier.
+		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", true),
 		TypeKind.Struct => classifyObject(t, ctx),
 		TypeKind.TypeReference => noRcInfo(),
 		TypeKind.Distinct => { if (t.typeReturn !== null) { return classifyType(t.typeReturn, ctx); } else { return noRcInfo(); } },

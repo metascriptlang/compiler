@@ -678,7 +678,12 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	if (useShared) {
 		// Shared env: env initialized at function entry, all-refs rewrite already active.
 		// No pendingEnvRewrites needed — setupSharedEnv activated the rewrite.
-		return makeClosurePairOnly(liftedName, envVarName, envStructType, loc);
+		const sharedPair = makeClosurePairOnly(liftedName, envVarName, envStructType, loc);
+		// Load-bearing for DRC: the analyzer classifies a fresh closure value (→ RcKind.Closure) by
+		// nodeType; without it ensureDestructionIfNeeded bails on null and the closure-pair temporary
+		// passed as a non-sink call argument is never destroyed → its captured env leaks.
+		sharedPair.nodeType = originalNodeType;
+		return sharedPair;
 	} else {
 		// Per-closure env: each closure gets its own env declaration + init.
 		// If we're here BECAUSE of a loop escape (snapshot mode), outer function
@@ -698,6 +703,9 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 			envVarDecl: envPair.envInitStmt,
 			snapshotOnly,
 		});
+		// Load-bearing for DRC (see the shared-env branch): nodeType lets the analyzer classify +
+		// destroy the fresh closure-pair temporary so its captured env doesn't leak as a call arg.
+		envPair.closurePair.nodeType = originalNodeType;
 		return envPair.closurePair;
 	}
 }

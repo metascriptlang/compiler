@@ -5,10 +5,13 @@
 // bare function references safe). Heap closures with a captured env therefore never got
 // msClosureDestroy → 247MB @ 2M.
 //
-// FIXED: classify.ms Function → needsCleanup=true. msClosureDestroy is null-env-safe
-// (core/system.h: `if (env != NULL) msDecref(env)`), so bare-fn closures (env=NULL) no-op while
-// env-bearing closures decref their env. The closure thunk is an ObjectLiteral, so the consolidated
-// processNode capture handles it like any other fresh-owned producer. Now flat ~2MB, no over-free.
+// FIXED (3-part, traced by emit-C): (1) lambdaLifting sets the lifted closure-pair's nodeType so the
+// analyzer can classify it (it was null → ensureDestructionIfNeeded bailed); (2) classify.ms Function
+// → needsCleanup=true so the pair is captured + msClosureDestroy'd; (3) processObjectLiteral keeps
+// NF_CLOSURE pairs isRefConstr so the env field stays a COPY (incref) — else nodeType=Function flips
+// it to a borrow and the destroy double-frees the env against the env-var's own lifecycle. Balanced:
+// env-var owns + each closure-holder increfs/decrefs. msClosureDestroy is null-env-safe so bare-fn
+// closures (env=NULL) no-op. Now flat ~2MB, no over-free (paralock + self-host green).
 
 interface Box { f: () => number; }
 
