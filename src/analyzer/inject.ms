@@ -131,7 +131,7 @@ function collectFinallyVars(body: Node): NameSet {
 function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	if (node === null) return node;
 
-	return match (node.kind) {
+	const result = match (node.kind) {
 		NodeKind.Identifier => processIdentifier(node, dctx, mode),
 		NodeKind.CallExpr => processCall(node, dctx, mode),
 		NodeKind.BinaryExpr => processBinary(node, dctx, mode),
@@ -162,6 +162,15 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => processConvWrapper(node, dctx, mode),
 		_ => node,
 	};
+	// ONE place (Reference parity: Nim's p() calls ensureDestruction from the central processor in
+	// normal mode — injectdestructors:889/939). A fresh owned producer — CallExpr / ObjectLiteral /
+	// ArrayLiteral / NewExpr, filtered inside ensureDestructionIfNeeded — reached in a Normal
+	// (non-consumed) position is captured for scope-exit destroy, uniformly for every position the
+	// walk reaches. Consumed/SinkArg positions (binding RHS, sink param, ref-constructor field,
+	// return) own the value upstream → mode != Normal → skipped. Each producer's processor stays
+	// dumb (process children, return the node); the capture decision lives here, not scattered.
+	if (mode === DrcMode.Normal) return ensureDestructionIfNeeded(result, dctx);
+	return result;
 }
 
 function processHiddenWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
@@ -287,14 +296,8 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			}
 		}
 	}
-	// Reference parity (injectdestructors:935-939): ensureDestruction on the call's
-	// RETURN value in Normal mode — NOT on individual arguments. Each nested call arg
-	// gets its own ensureDestruction via recursive processNode→processCall.
-	// Applying ensureDestruction on args causes double-free when callee stores the arg
-	// (callee increfs for field, scope cleanup decrefs temp → rc=0 → freed).
-	if (mode === DrcMode.Normal) {
-		return ensureDestructionIfNeeded(node, dctx);
-	}
+	// ensureDestruction on the call's return value is consolidated in processNode (Normal mode) —
+	// NOT applied to individual arguments (each nested call arg gets its own via the recursive walk).
 	return node;
 }
 
@@ -428,17 +431,25 @@ function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node
 		const fieldMode = isPtrField(node.nodeType, i) ? DrcMode.Normal : fieldDefault;
 		od.properties[i] = processNode(od.properties[i], dctx, fieldMode);
 	}
+	// The fresh-owned capture (Normal mode → ensureDestruction) is consolidated in processNode.
 	return node;
 }
 
 function processArrayLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node {
-	// Reference parity (array literal): mode==Normal → elements in Normal; else → SinkArg.
-	// Same logic as processObjectLiteral mode sensitivity.
+	// MS arrays are reference types (heap, ref-counted): a fresh array literal OWNS its elements, so
+	// they always sink in (SinkArg) — and in a Normal (non-consumed) position the literal is itself an
+	// owned heap value that no binding/sink path will reach (e.g. passed as a non-sink call argument
+	// the callee stores), so capture it for scope-exit destroy. This mirrors processObjectLiteral's
+	// isRefConstr handling (Reference parity injectdestructors:889, adapted — MS [] is heap-owned,
+	// unlike Nim's value-type bracket). Elements MUST be SinkArg whenever the shell is captured: the
+	// shell's destroy decrefs them, so a borrowed element would over-free. Consumed/SinkArg positions
+	// (binding RHS, sink param, field, return) already owned the shell upstream → skip the capture.
 	const ad = node.data as ArrayLiteralData;
-	const elemMode = (mode === DrcMode.Normal) ? DrcMode.Normal : DrcMode.SinkArg;
 	for (let i = 0; i < ad.elements.length; i += 1) {
-		ad.elements[i] = processNode(ad.elements[i], dctx, elemMode);
+		ad.elements[i] = processNode(ad.elements[i], dctx, DrcMode.SinkArg);
 	}
+	// Elements always sink (MS arrays own them); the fresh-owned shell capture (Normal mode →
+	// ensureDestruction) is consolidated in processNode.
 	return node;
 }
 
@@ -447,6 +458,8 @@ function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	for (let i = 0; i < nd.newArguments.length; i += 1) {
 		nd.newArguments[i] = processNode(nd.newArguments[i], dctx, DrcMode.Consumed);
 	}
+	// `new T(...)` produces a fresh owned heap object; the fresh-owned capture (Normal mode →
+	// ensureDestruction) is consolidated in processNode.
 	return node;
 }
 

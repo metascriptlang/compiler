@@ -1,14 +1,17 @@
-// FIXED by callHoist's unified mode-walker (transform/lowering/callHoist.ms): a fresh
+// FIXED by the analyzer (inject.ms processObjectLiteral self-capture in Normal mode): a fresh
 // object literal passed INLINE as a call argument, where the callee stores it into a field,
 // leaked — the value ended stuck at rc=1 (callee increfs a fresh rc=0 value; the caller never
 // owned/destroyed it). This was the real Photon WS broadcast leak (~960 B/msg; processFrame →
 // decisionDeliver({kind, data, closeCode})).
 //
-// Root cause was that callHoist enumerated per-statement-kind sub-positions and never reached
-// call arguments (nor recognised interface-typed object literals — TypeKind.Struct + HasAsgn).
-// The mode-walker hoists any fresh OWNED value in a non-consuming position (here: a borrow-param
-// call argument) to `const $t = {...}`, which the analyzer then destroys at scope exit — exactly
-// what binding to a const by hand did. Mirrors Nim's p(n, mode) + ensureDestruction.
+// Root cause: processObjectLiteral processed the literal's FIELDS but never called
+// ensureDestructionIfNeeded on the literal ITSELF, so a fresh ref/struct object constructor in a
+// Normal (non-consumed) position was never captured for scope-exit destroy. The Phase-3 callHoist
+// hoist could NOT fix it (enumerates per-statement-kind sub-positions, never reaches call args,
+// and crashed escape-heavy code). The fix is Phase-4 ownership: processObjectLiteral now mirrors
+// Nim's p()+ensureDestruction (injectdestructors.nim:889) — a fresh owned literal in Normal mode
+// is captured to a temp destroyed at scope exit. Consumed/SinkArg positions (binding RHS, sink
+// param, ref-constructor field, return) skip it, so no double-free. See docs/NIM-REF.md §3.
 //
 // Permanent regression guard: was 387MB @ 2M iters, now flat ~2MB.
 
