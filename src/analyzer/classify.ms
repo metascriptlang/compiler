@@ -87,7 +87,13 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	const isManaged = (structElem.kind === TypeKind.Struct || structElem.kind === TypeKind.Union)
 		&& structElem.typeName !== "";
 	if (isManaged) {
-		if (hasAsgnFlag(structElem)) {
+		// GenericInstance: typeExtra (base, e.g. Entry<K,V>) inherits abstract-param flags so
+		// HasAsgn is absent; the real HasAsgn lives on typeReturn (the instantiated body, fields
+		// substituted to concrete). Check both — mirrors the GenericInstance arm in classifyType.
+		// Without this, arrays of a mono'd generic struct (Entry__string[]) misclassify as non-RC
+		// → no per-element destroy → leak on field-reassign/scope-exit.
+		const bodyAsgn = elem.kind === TypeKind.GenericInstance && elem.typeReturn !== null && hasAsgnFlag(elem.typeReturn);
+		if (hasAsgnFlag(structElem) || bodyAsgn) {
 			// Mangled name for GenericInstance so array hook names match
 			// destructorLifting's emitted per-element hooks (unwrapGenericInstance)
 			// and codegen's struct name (types.ms:582-588).

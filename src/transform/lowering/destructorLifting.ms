@@ -25,7 +25,7 @@ import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, instantiateGenericBody, peelToStruct } from "../../checker/types";
-import { anonTypeName, isAnonTypeName } from "../../codegen/c/types";
+import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
 import { walkNode } from "../walker";
@@ -52,6 +52,7 @@ let _globalTypeInfoOwners: NameSet = createNameSet();
 export function setGlobalHookOwners(owners: NameSet): void {
 	_globalHookOwners = owners;
 	_globalTypeInfoOwners = createNameSet();
+	resetGenDestroyHooks();
 }
 
 function isGloballyOwned(typeName: string): boolean {
@@ -1174,6 +1175,10 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 		generateHook("sink",     typeName, objType, classType, lctx, loc);
 		generateHook("wasMoved", typeName, objType, classType, lctx, loc);
 		setAttachedOp(objType, AttachedOp.AttachedDestructor, typeName + "Destroy");
+		// Record in the codegen global registry (Nim graph.attachedOps analog): for mono'd generic
+		// instances, setAttachedOp lands on this throwaway objType and never reaches the type codegen
+		// resolves, so codegen's ensureTypeInfoDef reads this by-name registry to wire .destroyFn.
+		recordGenDestroyHook(typeName);
 		setAttachedOp(objType, AttachedOp.AttachedAsgn,       typeName + "Copy");
 		setAttachedOp(objType, AttachedOp.AttachedSink,       typeName + "Sink");
 		setAttachedOp(objType, AttachedOp.AttachedWasMoved,   typeName + "WasMoved");

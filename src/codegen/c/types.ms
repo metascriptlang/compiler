@@ -11,10 +11,23 @@ import { monoTypeKey } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, SymbolKind } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
+import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, createNameSet } from "./context";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { mangle, mangleFieldName, safeName } from "./names";
 import { useHeader } from "./context";
+
+// ===== Generated destroy-hook registry (Nim graph.attachedOps[attachedDestructor] analog) =====
+// destructorLifting sets AttachedDestructor on a per-Type-object instance (a throwaway built by
+// unwrapGenericInstance for mono types), so the op never reaches the canonical type codegen reads.
+// Nim instead keeps attached ops in a GLOBAL table keyed by type identity. Mirror that: record the
+// mangled type name whenever a real destroy hook is generated, and let `ensureTypeInfoDef` consult
+// it by name to wire `.destroyFn` for monomorphized instances (whose objType carries no op).
+// Lives here (codegen) so destructorLifting — which already imports this module — can populate it
+// without an import cycle. Reset per build via `setGlobalHookOwners` to avoid cross-test bleed.
+let _genDestroyHooks: NameSet = createNameSet();
+export function recordGenDestroyHook(typeName: string): void { nameSetAdd(_genDestroyHooks, typeName); }
+export function genHasDestroyHook(typeName: string): boolean { return nameSetHas(_genDestroyHooks, typeName); }
+export function resetGenDestroyHooks(): void { _genDestroyHooks = createNameSet(); }
 
 // ===== Type Resolution =====
 // All types are fully resolved PType objects by codegen time.
@@ -549,11 +562,23 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 		addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${className}TypeInfo;`);
 	}
 	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.name = "${className}";`);
+	let destroyHook = "";
 	if (objType !== null && hasDestructor(objType)) {
-		const destroyMs = getAttachedOp(objType, AttachedOp.AttachedDestructor);
-		if (destroyMs.length > 0) {
-			addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.destroyFn = (msDestroyProc)${mangle(destroyMs)};`);
-		}
+		destroyHook = mangle(getAttachedOp(objType, AttachedOp.AttachedDestructor));
+	} else if (isGeneric && genHasDestroyHook(className)) {
+		// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
+		// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
+		// objType resolved here. Consult the global destroy-hook registry by mangled name — the MS
+		// analog of Nim's identity-keyed graph.attachedOps[attachedDestructor] — and wire by
+		// convention. This is an alloc site (msAllocTyped needs sizeof), so the struct is declared;
+		// the typed proto matches the real hook signature (redundant-decl-safe) and resolves
+		// cross-module to the owner module's global hook.
+		destroyHook = mangle(className + "Destroy");
+		ensureForwardDecl(g, className);
+		addLine(sec(g, CSection.ForwardDecls), `void ${destroyHook}(${className}* self);`);
+	}
+	if (destroyHook.length > 0) {
+		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.destroyFn = (msDestroyProc)${destroyHook};`);
 	}
 }
 

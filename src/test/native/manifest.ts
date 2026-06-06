@@ -160,4 +160,18 @@ export const CASES: NativeCase[] = [
 		expectStdout: "leak-async-await-loop r=",
 		note: "FIXED in C codegen (genWhileStmt/genDoWhileStmt): loops never called pushBlock(p, true), so genBreak/genContinue found no isLoop block and emitted a bare break/continue that SKIPPED pending finally — leaking every DRC temp whose cleanup lived in a finally between the jump and the loop boundary, AND violating the try/finally contract (finally didn't run on break/continue). Root cause of the Photon WS broadcast leak: the async stepper's fast-path `if (finished) continue` skipped the per-iteration temp decref. Was the general bug; manifested here as ~32 B/iter (2M → 64MB), now flat ~2MB. Restores Nim parity (ccgstmts startBlockWith + isLoop=true). Permanent regression guard.",
 	},
+	{
+		name: "leak-map-drop",
+		file: "leakMapDrop.ms",
+		maxRssMb: 40,
+		expectStdout: "leak-map-drop acc=",
+		note: "FIXED by destructorLifting shouldEmitTypeInfo for mono'd heap classes: a Map<K,V> dropped at scope exit did not free its entries — the mono Map__string_string never ran emitFullTypeInfo (only processDecl does, and a mono has no declaration) so TypeInfo.destroyFn stayed NULL and msDecref skipped the recursive entry free. The mono gate excludes `$`-prefixed synthetic env structs (forcing their TypeInfo in a consumer module breaks the self-host binary compile — they aren't forward-declared there). Nim parity: liftdestructors wires the destructor slot per-instantiation. Was 477MB @ 50k×50 fill+drop, now flat ~2MB drc+orc. Caught NOTHING in test-ms/probes; only the full self-host binary build exposed the cross-module compile cascade — this guard pairs with that build as the gate.",
+	},
+	{
+		name: "leak-hashmap-enlarge",
+		file: "leakHashMapEnlarge.ms",
+		maxRssMb: 40,
+		expectStdout: "leak-hashmap-enlarge acc=",
+		note: "FIXED by classifyArray reading the instantiated body's hasAsgn + mono-TypeInfo wiring. hashMapEnlarge swaps the slot array (const old = m.data; m.data = newData; migrate), orphaning the old HashMapEntry__K_V[]. classifyArray decided RC from the abstract base (Entry<K,V>, K/V unbound → hasAsgn false) not the instantiated body (Entry__string → true), so the array of a mono'd generic struct misclassified non-RC → no per-element destroy on field-reassign; AND the mono HashMap__K_V TypeInfo.destroyFn was NULL (see leak-map-drop) so dropping never recursed. Nim parity: tfHasAsgn set per-instantiation. Was 574MB @ 50k×50 fill(+enlarge)+drop, now flat ~2MB drc+orc.",
+	},
 ];
