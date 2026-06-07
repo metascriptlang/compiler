@@ -52,8 +52,7 @@ export const CASES: NativeCase[] = [
 		file: "actorHeapStr.ms",
 		maxRssMb: 30,
 		expectStdout: "PASS:actor-heapstr",
-		xfail: ["drc", "orc"],
-		note: "OPEN BUG (found by this tier, pre-existing at HEAD): a HEAP-concatenated string set on an actor field reads back corrupted via CALL (a literal round-trips). The std/http multi-WS broadcast string path. CORRECTNESS bug — exits 0, no leak/crash — so it is caught by expectStdout, the reason this tier now asserts output. Drop xfail when actor heap-string transfer is fixed.",
+		note: "FIXED (analyzer inject.ms: msMsgComplete* added to the sink-position list). A heap string returned from an actor CALL read back corrupted: the dispatch builds `const _result = getter(); msMsgComplete<T>(replyFut, _result);` and msMsgComplete* ESCAPES the value into the reply future (read later cross-thread by the awaiter). The analyzer hardcoded only msFutureCompleteT as a sink position, so the actor-reply completion value arg was treated as a non-consuming borrow: it passed _result raw AND destroyed _result at dispatch scope-exit → the future pointed at a freed buffer → UAF (emit-C: `msMsgCompleteString(fut, _result); ... msStringDecref(_result);`). Marking msMsgComplete*'s value arg (index 1) DrcMode.Consumed — the exact mechanism msFutureCompleteT already uses — makes the analyzer give the future its OWN owned value (copied into an escaping sink temp for the finally-protected local) and keep _result for its own cleanup (emit-C: `msStringCopy(&borrow, _result); msMsgCompleteString(fut, borrow); ... msStringDecref(_result);`). Same boundary-by-copy convention as actor args (msMsgSetString/msStringNew) and struct returns (msSinkBoxStruct memcpy+memset). Pony shares val cross-actor via ORCA refcount; MS copies sole-owner data across instead. Root proven by A/B emit-C probe: without the fix → raw pass + decref → `FAIL tag=[garbage]`; with the fix → copy-to-sink + decref → PASS.",
 	},
 	{
 		name: "leak-call-in-cond",

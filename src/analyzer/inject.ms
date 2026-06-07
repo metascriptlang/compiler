@@ -284,10 +284,10 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// double-frees the strings the future has just taken ownership of (observed on
 	// cross-module async struct returns; same-module worked only by accident because
 	// struct literals lower away the CallExpr wrapping before DRC sees it).
-	let isFutureCompleteSink = false;
+	let isCompleteSink = false;
 	if (cd.callee.kind === NodeKind.Identifier) {
 		const calleeName = (cd.callee.data as IdentifierData).name;
-		if (calleeName === "msFutureCompleteT") isFutureCompleteSink = true;
+		if (calleeName === "msFutureCompleteT" || calleeName.startsWith("msMsgComplete")) isCompleteSink = true;
 	}
 
 	for (let i = 0; i < cd.arguments.length; i += 1) {
@@ -297,8 +297,8 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		}
 		// Push value arg (index 1, after receiver) is sink
 		if (isArrayPush && i === 1) argMode = DrcMode.Consumed;
-		// msFutureCompleteT value arg (index 1, after the future) is sink
-		if (isFutureCompleteSink && i === 1) argMode = DrcMode.Consumed;
+		// future/actor-reply completion value arg (index 1, after the future) is sink
+		if (isCompleteSink && i === 1) argMode = DrcMode.Consumed;
 		cd.arguments[i] = processNode(cd.arguments[i], dctx, argMode);
 
 		// Reference parity (passCopyToSink): when a borrow expression (ArrayAccess/MemberExpr)
