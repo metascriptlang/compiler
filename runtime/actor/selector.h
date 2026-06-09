@@ -50,6 +50,14 @@ int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEve
  * another selector (chained-poll pattern, httpbeast-style). */
 int msSelectorGetFd(msSelector* sel);
 
+/* Wake a thread blocked in msSelectorPoll on this selector, from another thread.
+ * Edge-triggered + self-clearing (kqueue EVFILT_USER / epoll eventfd) — one trigger
+ * wakes one poll and needs no drain, unlike a watch-only pipe fd which stays
+ * readable and busy-loops. Used to deliver a cross-thread actor send to a scheduler
+ * parked in its I/O selector rather than the pool condvar. No-op on backends without
+ * a user-event primitive (caller still has the DRIVER_POLL fallback). */
+void msSelectorWake(msSelector* sel);
+
 /* ===== MetaScript Bridge =====
  * Thin wrappers that cast int64 handles ↔ msSelector* pointers.
  * MetaScript has no raw pointer type, so selector handles are passed as int64.

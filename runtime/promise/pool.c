@@ -13,6 +13,7 @@
  */
 #include "runtime/core/system.h"  /* pulls in thread.h + msDecref + msCurrException */
 #include "runtime/promise/pool.h"
+#include "runtime/io/engine.h"  /* msIoEngine, msIoEngineWake — Amendment B targeted wake */
 #include <stdlib.h>
 #include <stdatomic.h>
 
@@ -181,6 +182,27 @@ static void* msPoolWorkerLoop(void* arg) {
 #endif
 }
 
+/* ===== Per-scheduler targeted wake registry (PARALOCK Amendment B / I16) ===== */
+/* A serve loop parks in its I/O engine poll, not the pool condvar, so a cross-thread
+ * actor send must also break that scheduler's engine poll. The serve thread publishes
+ * its engine here (via msIoEngineAddWakeFd); msPoolWakeWorker routes the wake through
+ * msIoEngineWake — backend-specific, so it works on every poll mechanism.
+ * Atomic: published on the serve thread, read on the sender thread. */
+#define MS_SCHED_WAKE_MAX 64  /* = MS_MAX_SCHEDULERS (runtime/actor/actor.h) */
+static _Atomic(msIoEngine*) gSchedWakeEngine[MS_SCHED_WAKE_MAX];
+
+void msSchedWakeRegister(int sid, msIoEngine* e) {
+	if (sid >= 0 && sid < MS_SCHED_WAKE_MAX)
+		atomic_store_explicit(&gSchedWakeEngine[sid], e, memory_order_release);
+}
+
+void msSchedWakeUnregisterEngine(msIoEngine* e) {
+	for (int i = 0; i < MS_SCHED_WAKE_MAX; i++) {
+		if (atomic_load_explicit(&gSchedWakeEngine[i], memory_order_acquire) == e)
+			atomic_store_explicit(&gSchedWakeEngine[i], NULL, memory_order_release);
+	}
+}
+
 /* Wake a specific worker by scheduler ID (targeted: actors signal only their owner) */
 void msPoolWakeWorker(int schedulerID) {
 	msThreadPool* pool = msPoolGet();
@@ -192,6 +214,14 @@ void msPoolWakeWorker(int schedulerID) {
 	MS_LOCK(pool);
 	MS_SIGNAL(pool->workerConds[idx]);
 	MS_UNLOCK(pool);
+	/* Amendment B: a serve-loop worker parks in its I/O engine poll, where the condvar
+	 * above is invisible — also break this scheduler's registered engine poll. Targeted
+	 * (only this sid), self-clearing, no herd. NULL when the scheduler isn't running
+	 * a serve loop (pure pool worker → condvar above already woke it). */
+	if (schedulerID >= 0 && schedulerID < MS_SCHED_WAKE_MAX) {
+		msIoEngine* e = atomic_load_explicit(&gSchedWakeEngine[schedulerID], memory_order_acquire);
+		if (e != NULL) msIoEngineWake(e);
+	}
 }
 
 /* Wake all pool workers (shutdown, fallback) */

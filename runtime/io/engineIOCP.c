@@ -138,6 +138,7 @@ msIoEngine* msIoEngineCreate(void) {
 
 void msIoEngineDestroy(msIoEngine* e) {
 	if (e == NULL) return;
+	msSchedWakeUnregisterEngine(e);  /* Amendment B: drop targeted-wake reg before freeing */
 	CloseHandle(e->iocp);
 	msIoRequest* r = e->freeList;
 	while (r != NULL) {
@@ -311,9 +312,21 @@ void msIoEngineCancelFd(msIoEngine* e, int fd) {
 	(void)e; (void)fd;
 }
 
-/* No-op: IOCP has no shared selector fd; chained-poll not applicable. */
 void msIoEngineAddWakeFd(msIoEngine* e, int fd) {
-	(void)e; (void)fd;
+	(void)fd;  /* external-fd chained-poll is PR-2's concern; the actor wake uses PostQueued below */
+	if (e == NULL) return;
+	/* Amendment B / I16: register this engine as its scheduler's targeted cross-thread actor-wake
+	 * target — mirrors the readiness + io_uring backends' msSchedWakeRegister. */
+	extern MS_THREAD_LOCAL int msMySchedulerID;  /* actor.c */
+	msSchedWakeRegister(msMySchedulerID, e);
+}
+
+/* IOCP arm of the engine wake (Amendment B / I16): post a NULL-overlapped completion to break a
+ * thread parked in GetQueuedCompletionStatusEx. The poll loop already skips NULL-overlapped
+ * entries (no req to dispatch), so the wake just returns the poll without side effects. No
+ * pre-arm needed — fire-and-forget, unlike io_uring's re-armed POLL_ADD. */
+void msIoEngineWake(msIoEngine* e) {
+	if (e != NULL) PostQueuedCompletionStatus(e->iocp, 0, 0, NULL);
 }
 
 int msIoEnginePoll(msIoEngine* e, int timeoutMs) {

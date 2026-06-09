@@ -10,7 +10,9 @@
 #include "runtime/actor/selector.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <unistd.h>
 #include <errno.h>
 
@@ -20,6 +22,7 @@ struct msSelector {
 	int epfd;
 	void** userData;    /* fd-indexed userdata array */
 	int userDataCap;
+	int wakeFd;         /* eventfd for msSelectorWake (cross-thread targeted wake) */
 };
 
 static void growUserData(msSelector* sel, int fd) {
@@ -38,11 +41,28 @@ msSelector* msSelectorCreate(void) {
 	sel->epfd = epfd;
 	sel->userDataCap = EPOLL_INIT_CAP;
 	sel->userData = (void**)calloc(EPOLL_INIT_CAP, sizeof(void*));
+	/* Cross-thread wake (msSelectorWake): a self-resetting eventfd watched by this
+	 * epoll. One write wakes one epoll_wait; the poll drains + skips it. */
+	sel->wakeFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+	if (sel->wakeFd >= 0) {
+		struct epoll_event ev;
+		ev.events = EPOLLIN;
+		ev.data.fd = sel->wakeFd;
+		epoll_ctl(epfd, EPOLL_CTL_ADD, sel->wakeFd, &ev);
+	}
 	return sel;
+}
+
+void msSelectorWake(msSelector* sel) {
+	if (sel == NULL || sel->wakeFd < 0) return;
+	uint64_t one = 1;
+	ssize_t n = write(sel->wakeFd, &one, sizeof(one));
+	(void)n;
 }
 
 void msSelectorDestroy(msSelector* sel) {
 	if (sel == NULL) return;
+	if (sel->wakeFd >= 0) close(sel->wakeFd);
 	close(sel->epfd);
 	free(sel->userData);
 	free(sel);
@@ -94,21 +114,31 @@ int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEve
 
 	if (nready < 0) return -1;
 
+	int n = 0;
 	for (int i = 0; i < nready; i++) {
 		int fd = events[i].data.fd;
-		out[i].fd = fd;
-		out[i].userdata = (fd >= 0 && fd < sel->userDataCap) ? sel->userData[fd] : NULL;
-		out[i].events = 0;
+		/* msSelectorWake trigger: drain the eventfd + skip — it served only to return
+		 * this poll (the caller re-checks actors via msRunOnce). */
+		if (fd == sel->wakeFd) {
+			uint64_t buf;
+			ssize_t r = read(sel->wakeFd, &buf, sizeof(buf));
+			(void)r;
+			continue;
+		}
+		out[n].fd = fd;
+		out[n].userdata = (fd >= 0 && fd < sel->userDataCap) ? sel->userData[fd] : NULL;
+		out[n].events = 0;
 
 		if (events[i].events & EPOLLIN)
-			out[i].events |= MS_EVENT_READ;
+			out[n].events |= MS_EVENT_READ;
 		if (events[i].events & EPOLLOUT)
-			out[i].events |= MS_EVENT_WRITE;
+			out[n].events |= MS_EVENT_WRITE;
 		if (events[i].events & (EPOLLERR | EPOLLHUP))
-			out[i].events |= MS_EVENT_ERROR;
+			out[n].events |= MS_EVENT_ERROR;
+		n++;
 	}
 
-	return nready;
+	return n;
 }
 
 #endif /* __linux__ */

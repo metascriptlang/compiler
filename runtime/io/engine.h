@@ -95,6 +95,27 @@ static inline void msIoEngineAddWakeFd_ms(int32_t fd) {
 	if (eng != NULL) msIoEngineAddWakeFd(eng, fd);
 }
 
+/* ===== Targeted Cross-Thread Scheduler Wake (PARALOCK Amendment B / I16) =====
+ *
+ * A serve loop parks in msIoEnginePoll (backend-specific: kqueue/epoll/io_uring/
+ * IOCP), where the pool condvar is invisible. To deliver a cross-thread actor send
+ * to such a scheduler, the wake must break that backend's blocking poll — so it is
+ * an ENGINE method, implemented per-backend:
+ *   readiness → EVFILT_USER (kqueue) / eventfd (epoll) on the selector
+ *   io_uring  → eventfd + a re-armed POLL_ADD (a ring-less write() breaks io_uring_enter)
+ *   IOCP      → PostQueuedCompletionStatus (NULL-overlapped, skipped by the poll)
+ * The poll() fallback (no user-event primitive) is a no-op — the DRIVER_POLL busy-poll
+ * still delivers there, just at coarser latency. */
+void msIoEngineWake(msIoEngine* e);
+
+/* Per-scheduler registry (defined in pool.c). A serve thread publishes its engine
+ * as scheduler `sid`'s wake target via msIoEngineAddWakeFd; msPoolWakeWorker routes
+ * a cross-thread send through msIoEngineWake so it reaches a scheduler parked in its
+ * engine poll, not just the pool condvar. msSchedWakeUnregisterEngine clears any slot
+ * pointing at `e` before it is destroyed. */
+void msSchedWakeRegister(int sid, msIoEngine* e);
+void msSchedWakeUnregisterEngine(msIoEngine* e);
+
 /* ===== MetaScript Bridge Wrappers ===== */
 
 static inline void* msIoAccept_ms(int32_t listenFd) {

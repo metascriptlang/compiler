@@ -17,12 +17,29 @@ struct msSelector {
 	int kqfd;
 };
 
+/* Reserved EVFILT_USER ident for msSelectorWake. EVFILT_USER lives in a filter
+ * namespace separate from EVFILT_READ/WRITE, so this never collides with a real
+ * fd registration regardless of value. */
+#define MS_SELECTOR_WAKE_IDENT ((uintptr_t)0xACC0DE)
+
 msSelector* msSelectorCreate(void) {
 	int kqfd = kqueue();
 	if (kqfd < 0) return NULL;
 	msSelector* sel = (msSelector*)malloc(sizeof(msSelector));
 	sel->kqfd = kqfd;
+	/* Self-clearing cross-thread wake (EV_CLEAR auto-resets after each delivery,
+	 * so msSelectorWake needs no drain — see msSelectorPoll which skips it). */
+	struct kevent wake;
+	EV_SET(&wake, MS_SELECTOR_WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+	kevent(kqfd, &wake, 1, NULL, 0, NULL);
 	return sel;
+}
+
+void msSelectorWake(msSelector* sel) {
+	if (sel == NULL) return;
+	struct kevent ev;
+	EV_SET(&ev, MS_SELECTOR_WAKE_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+	kevent(sel->kqfd, &ev, 1, NULL, 0, NULL);
 }
 
 void msSelectorDestroy(msSelector* sel) {
@@ -123,20 +140,27 @@ int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEve
 
 	if (nready < 0) return -1;
 
+	int n = 0;
 	for (int i = 0; i < nready; i++) {
-		out[i].fd = (int)kevents[i].ident;
-		out[i].userdata = kevents[i].udata;
-		out[i].events = 0;
+		/* msSelectorWake trigger: it has already done its job (woke this poll).
+		 * Don't surface it as a ready fd event — the caller re-checks actors via
+		 * msRunOnce after the poll returns. EV_CLEAR self-resets it. */
+		if (kevents[i].filter == EVFILT_USER) continue;
+
+		out[n].fd = (int)kevents[i].ident;
+		out[n].userdata = kevents[i].udata;
+		out[n].events = 0;
 
 		if (kevents[i].filter == EVFILT_READ)
-			out[i].events |= MS_EVENT_READ;
+			out[n].events |= MS_EVENT_READ;
 		if (kevents[i].filter == EVFILT_WRITE)
-			out[i].events |= MS_EVENT_WRITE;
+			out[n].events |= MS_EVENT_WRITE;
 		if (kevents[i].flags & EV_EOF || kevents[i].flags & EV_ERROR)
-			out[i].events |= MS_EVENT_ERROR;
+			out[n].events |= MS_EVENT_ERROR;
+		n++;
 	}
 
-	return nready;
+	return n;
 }
 
 #endif /* __APPLE__ || __FreeBSD__ || __OpenBSD__ || __NetBSD__ */

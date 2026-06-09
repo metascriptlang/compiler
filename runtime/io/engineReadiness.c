@@ -80,6 +80,7 @@ msIoEngine* msIoEngineCreate(void) {
 
 void msIoEngineDestroy(msIoEngine* e) {
 	if (e == NULL) return;
+	msSchedWakeUnregisterEngine(e);  /* Amendment B: drop targeted-wake reg before freeing */
 	msSelectorDestroy(e->selector);
 	/* Free pool */
 	msIoRequest* r = e->freeList;
@@ -157,6 +158,16 @@ void* msIoSend(msIoEngine* e, int fd, const char* data, int32_t len) {
 void msIoEngineAddWakeFd(msIoEngine* e, int fd) {
 	if (e == NULL || fd < 0) return;
 	msSelectorRegister(e->selector, fd, MS_EVENT_READ, NULL);
+	/* Amendment B: this serve thread's engine is also its scheduler's targeted
+	 * cross-thread actor wake target (this runs once per serve thread, as it wires up). */
+	extern MS_THREAD_LOCAL int msMySchedulerID;  /* actor.c */
+	msSchedWakeRegister(msMySchedulerID, e);
+}
+
+/* Readiness arm of the engine wake (Amendment B / I16): break a thread parked in
+ * msIoEnginePoll → msSelectorPoll via the selector's EVFILT_USER/eventfd channel. */
+void msIoEngineWake(msIoEngine* e) {
+	if (e != NULL) msSelectorWake(e->selector);
 }
 
 void* msIoSendString(msIoEngine* e, int fd, msString data) {

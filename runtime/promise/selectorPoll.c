@@ -101,6 +101,14 @@ int msSelectorGetFd(msSelector* sel) {
 	return -1;
 }
 
+/* No-op on the poll() fallback (POSIX without kqueue/epoll, Windows WSAPoll): a
+ * cross-thread actor send to a scheduler parked here is delivered by the DRIVER_POLL_MS
+ * periodic poll (pre-Amendment-B behavior), not an immediate wake. A self-pipe wake
+ * (matching the eventfd/EVFILT_USER backends) is a follow-up for this rare fallback. */
+void msSelectorWake(msSelector* sel) {
+	(void)sel;
+}
+
 int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEvents) {
 	if (sel->len == 0) {
 		/* No fds to poll — just sleep for timeout */

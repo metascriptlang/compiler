@@ -19,6 +19,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/eventfd.h>
+#include <poll.h>
 #include <errno.h>
 #include <stdatomic.h>
 
@@ -36,6 +38,11 @@ static int io_uring_enter(int fd, unsigned to_submit, unsigned min_complete, uns
 
 #define URING_ENTRIES 256
 #define ENGINE_INIT_POOL 64
+
+/* Sentinel user_data for the wake-eventfd POLL_ADD (Amendment B / I16). The low bit is set, so
+ * it can never equal a real msIoRequest* (calloc'd → ≥16-byte aligned), letting msIoEnginePoll
+ * distinguish + re-arm the wake instead of dispatching it as a completion. */
+#define MS_URING_WAKE_UD ((uint64_t)0xACC0DE17EFD1ULL)
 
 struct msUring {
 	int fd;
@@ -127,6 +134,7 @@ struct msIoEngine {
 	struct msUring ring;
 	msIoRequest* freeList;
 	int freeCount;
+	int wakeFd;   /* eventfd for targeted cross-thread actor wake (Amendment B / I16); -1 = none */
 };
 
 /* ===== Request Pool ===== */
@@ -148,6 +156,20 @@ static void freeRequest(msIoEngine* e, msIoRequest* r) {
 	e->freeCount++;
 }
 
+/* Arm a oneshot POLL_ADD on the wake eventfd so a write() to it from any thread breaks this
+ * engine's io_uring_enter (Amendment B / I16). Re-armed by msIoEnginePoll after each wake. */
+static void uringArmWake(msIoEngine* e) {
+	if (e->wakeFd < 0) return;
+	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
+	if (sqe == NULL) return;
+	sqe->opcode = IORING_OP_POLL_ADD;
+	sqe->fd = e->wakeFd;
+	sqe->poll_events = POLLIN;
+	sqe->user_data = MS_URING_WAKE_UD;
+	uringSubmitSqe(&e->ring);
+	uringSubmit(&e->ring);
+}
+
 /* ===== Create / Destroy ===== */
 
 msIoEngine* msIoEngineCreate(void) {
@@ -156,6 +178,7 @@ msIoEngine* msIoEngineCreate(void) {
 		free(e);
 		return NULL;
 	}
+	e->wakeFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);  /* armed only on serve engines, in AddWakeFd */
 	for (int i = 0; i < ENGINE_INIT_POOL; i++) {
 		msIoRequest* r = (msIoRequest*)calloc(1, sizeof(msIoRequest));
 		r->next = e->freeList;
@@ -167,6 +190,8 @@ msIoEngine* msIoEngineCreate(void) {
 
 void msIoEngineDestroy(msIoEngine* e) {
 	if (e == NULL) return;
+	msSchedWakeUnregisterEngine(e);  /* Amendment B: drop targeted-wake reg before freeing */
+	if (e->wakeFd >= 0) close(e->wakeFd);
 	close(e->ring.fd);
 	msIoRequest* r = e->freeList;
 	while (r != NULL) {
@@ -290,9 +315,26 @@ void msIoEngineCancelFd(msIoEngine* e, int fd) {
 	(void)e; (void)fd;
 }
 
-/* No-op: io_uring needs IORING_OP_POLL_ADD instead of selector registration. */
 void msIoEngineAddWakeFd(msIoEngine* e, int fd) {
-	(void)e; (void)fd;
+	(void)fd;  /* external-fd chained-poll is PR-2's concern; the actor wake uses the eventfd below */
+	if (e == NULL) return;
+	/* Amendment B / I16: register this engine as its scheduler's targeted cross-thread actor-wake
+	 * target, and arm the wake eventfd so msIoEngineWake can break io_uring_enter. Runs once per
+	 * serve thread as it wires up — mirrors the readiness backend's msSchedWakeRegister. */
+	extern MS_THREAD_LOCAL int msMySchedulerID;  /* actor.c */
+	msSchedWakeRegister(msMySchedulerID, e);
+	uringArmWake(e);
+}
+
+/* io_uring arm of the engine wake (Amendment B / I16): any thread write()s the eventfd; the
+ * pre-armed POLL_ADD completes, breaking this engine's io_uring_enter. eventfd (not MSG_RING)
+ * because the waker need not own a ring — verified on Linux 6.8: a ring-less write() wakes a
+ * blocked io_uring_enter in ~one scheduling quantum. Mirrors msSelectorWake on readiness. */
+void msIoEngineWake(msIoEngine* e) {
+	if (e == NULL || e->wakeFd < 0) return;
+	uint64_t one = 1;
+	ssize_t w = write(e->wakeFd, &one, sizeof(one));
+	(void)w;
 }
 
 int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
@@ -314,6 +356,19 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 	int count = 0;
 	while (cqHead != cqTail) {
 		struct io_uring_cqe* cqe = &ring->cqes[cqHead & *ring->cqMask];
+
+		if (cqe->user_data == MS_URING_WAKE_UD) {
+			/* Targeted cross-thread wake fired (Amendment B / I16): drain the eventfd counter
+			 * so the re-armed POLL_ADD won't fire immediately, then re-arm (POLL_ADD is oneshot).
+			 * Not a user completion — it served only to break io_uring_enter; the serve loop
+			 * drains actor mailboxes after poll returns. Skip without counting. */
+			uint64_t drain;
+			ssize_t dr = read(e->wakeFd, &drain, sizeof(drain)); (void)dr;
+			cqHead++;
+			uringArmWake(e);
+			continue;
+		}
+
 		msIoRequest* req = (msIoRequest*)(uintptr_t)cqe->user_data;
 		int32_t res = cqe->res;
 
