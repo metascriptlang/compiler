@@ -2061,6 +2061,18 @@ test "class method scope" { assert checkOk("class Foo { bar(x) { return x; } }")
 
 test "try-catch param" { assert checkOk("try { const x = 1; } catch (e) { const y = e; }"); }
 
+test "owning self-ref field warns (not errors)" {
+	const ctx = checkSource("interface Chain { value: number; next: Chain; }");
+	assert errorCount(ctx) === 0;
+	assert ctx.errors.length > 0;
+}
+
+test "Ptr self-ref field does not warn" {
+	const ctx = checkSource("interface Chain2 { value: number; next: Ptr<Chain2>; }");
+	assert errorCount(ctx) === 0;
+	assert ctx.errors.length === 0;
+}
+
 test "arrow function" { assert checkOk("const f = (x) => x;"); }
 
 test "number type" {

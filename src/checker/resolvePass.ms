@@ -1135,6 +1135,10 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 }
 
+function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: string, line: number, col: number): void {
+	addWarning(ctx, "owning self-referential field '" + fieldName + "' in '" + typeName + "': destroy recurses per node — a long chain overflows the stack; for non-owning links use Ptr<" + typeName + "> with an arena/array owner (docs/NIM-REF.md §4)", line, col);
+}
+
 function resolveInterface(ctx: CheckerContext, node: Node): void {
 	const d = node.data as InterfaceDeclData;
 	const sym = lookupSymbol(ctx.table, d.interfaceName);
@@ -1221,16 +1225,33 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
-	// reference parity: self-referential value fields → auto-promote to Ref<T>
-	// C cannot embed struct T by value inside itself (infinite size).
-	// Standard reference requires explicit pointer types and errors otherwise. We auto-promote with a warning.
+	// reference parity (Nim "illegal recursion in type"): hard error. The field is
+	// still repaired to Ref<T> so later passes (LSP keeps checking after errors)
+	// never walk an infinite-size type.
 	// NOTE: only checks own fields (inherited fields can't reference child by name — they were resolved in parent's scope).
 	for (let fi = 0; fi < mergedTypes.length; fi += 1) {
 		const ft = mergedTypes[fi];
 		if (ft !== null && isStructType(ft) && ft.typeName === d.interfaceName) {
 			mergedTypes[fi] = createRef(ft);
 			const fieldName = fi < mergedNames.length ? mergedNames[fi] : "?";
-			addError(ctx, "warning: self-referential field '" + fieldName + "' in '" + d.interfaceName + "' auto-promoted to Ref<" + d.interfaceName + ">", node.location.line, 0);
+			addError(ctx, "self-referential value field '" + fieldName + "' in '" + d.interfaceName + "' — a struct cannot contain itself by value (infinite size); use an interface/class (reference type), Ptr<" + d.interfaceName + ">, or an index into an owning array", node.location.line, 0);
+		}
+	}
+
+	// Trees (arrays-of-self) are depth-bounded — only a direct self-ref link recurses
+	// destroy by chain length, so only those are flagged.
+	for (let wi = 0; wi < d.interfaceFields.length; wi += 1) {
+		if (wi >= fieldTypes.length) break;
+		const wft = fieldTypes[wi];
+		if (wft !== null && wft.kind === TypeKind.Ref && wft.typeReturn !== null
+			&& wft.typeReturn.typeName === d.interfaceName) {
+			let wLine = node.location.line;
+			let wCol = node.location.column;
+			if (node.paramLocations !== null && wi < node.paramLocations.length) {
+				wLine = node.paramLocations[wi].line;
+				wCol = node.paramLocations[wi].column;
+			}
+			warnOwningSelfRef(ctx, d.interfaceFields[wi], d.interfaceName, wLine, wCol);
 		}
 	}
 
@@ -1590,6 +1611,11 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 					resolveTypeExpr(member.typeExpr, ctx);
 					member.nodeType = propType;
 					memberTypes.push(propType);
+					// Same owning self-ref hazard as interface fields (resolveInterface).
+					if (propType.kind === TypeKind.Ref && propType.typeReturn !== null
+						&& propType.typeReturn.typeName === d.className) {
+						warnOwningSelfRef(ctx, pd.propName, d.className, member.location.line, member.location.column);
+					}
 				} else {
 					memberTypes.push(unknownType());
 				}
