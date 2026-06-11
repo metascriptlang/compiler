@@ -12,6 +12,10 @@ import { readFile } from "std/fs";
 export interface PreprocessResult {
 	head: CToken;
 	diagnostics: Diagnostic[];
+	// Owns every token created during preprocessing (macro-expansion copies,
+	// synthesized EOFs). Tokenize's arena owns the input tokens; both must stay
+	// in scope while any token from the result chain is used.
+	arena: CToken[];
 }
 
 // ===== Data Structures =====
@@ -57,13 +61,14 @@ interface PPContext {
 	diags: Diagnostic[];
 	file: string;
 	counter: number;          // for __COUNTER__
+	arena: CToken[];          // owns all tokens this preprocess session creates
 }
 
 // ===== Token Utilities =====
 
-function copyToken(tok: CToken): CToken {
-	return {
-		kind: tok.kind, next: null as unknown as CToken,
+function copyToken(ctx: PPContext, tok: CToken): CToken {
+	const c: CToken = {
+		kind: tok.kind, next: null as unknown as Ptr<CToken>,
 		intVal: tok.intVal, floatVal: tok.floatVal, litKind: tok.litKind,
 		stringVal: tok.stringVal, file: tok.file, line: tok.line, col: tok.col,
 		byteOffset: tok.byteOffset, byteLength: tok.byteLength,
@@ -71,12 +76,15 @@ function copyToken(tok: CToken): CToken {
 		hideset: tok.hideset.slice(0, tok.hideset.length),
 		origin: tok.origin,
 	};
+	ctx.arena.push(c);
+	return c;
 }
 
-function newEof(tok: CToken): CToken {
+function newEof(ctx: PPContext, tok: CToken): CToken {
 	const eof = makeEofToken(tok.file);
 	eof.line = tok.line;
 	eof.col = tok.col;
+	ctx.arena.push(eof);
 	return eof;
 }
 
@@ -97,27 +105,27 @@ function skipLine(tok: CToken): CToken {
 }
 
 // Copy tokens until newline, terminate with EOF.
-function copyLine(tok: CToken): CToken[] {
+function copyLine(ctx: PPContext, tok: CToken): CToken[] {
 	const head = makeEofToken(tok.file);
 	let cur = head;
 	// If tok is already at beginning of next line, body is empty
 	if (tok.atBol || tok.kind === CTokenKind.Eof) {
-		cur.next = newEof(tok);
+		cur.next = newEof(ctx, tok);
 		return [head.next, tok];
 	}
 	while (tok.kind !== CTokenKind.Eof && !tok.next.atBol) {
-		const c = copyToken(tok);
+		const c = copyToken(ctx, tok);
 		cur.next = c;
 		cur = c;
 		tok = tok.next;
 	}
 	// Include the last token on the line
 	if (tok.kind !== CTokenKind.Eof) {
-		const c = copyToken(tok);
+		const c = copyToken(ctx, tok);
 		cur.next = c;
 		cur = c;
 	}
-	cur.next = newEof(tok);
+	cur.next = newEof(ctx, tok);
 	return [head.next, tok.next]; // [copied line head, rest of stream]
 }
 
@@ -219,7 +227,7 @@ function readMacroDefinition(tok: CToken, ctx: PPContext): CToken {
 		}
 		if (tok.stringVal === ")") tok = tok.next;
 
-		const bodyParts = copyLine(tok);
+		const bodyParts = copyLine(ctx, tok);
 		const body = bodyParts[0];
 		const rest = bodyParts[1];
 
@@ -230,7 +238,7 @@ function readMacroDefinition(tok: CToken, ctx: PPContext): CToken {
 	}
 
 	// Object-like macro
-	const bodyParts = copyLine(tok);
+	const bodyParts = copyLine(ctx, tok);
 	addMacro(ctx, name, true, bodyParts[0]);
 	return bodyParts[1];
 }
@@ -243,13 +251,20 @@ function stringize(tok: CToken): string {
 	while (tok.kind !== CTokenKind.Eof) {
 		if (!first && tok.hasSpace) result = result + " ";
 		const s = tok.stringVal;
+		// Run-copied for multi-byte UTF-8 safety on the Bun host: plain bytes
+		// flush as spans, breaking only at the ASCII bytes that need escaping.
+		let runStart = 0;
 		let i = 0;
 		while (i < s.byteLength) {
 			const ch = s.byteAt(i);
-			if (ch === "\"".code || ch === "\\".code) result = result + "\\";
-			result = result + s.byteSlice(i, i + 1);
+			if (ch === "\"".code || ch === "\\".code) {
+				if (runStart < i) result = result + s.byteSlice(runStart, i);
+				result = result + "\\" + s.byteSlice(i, i + 1);
+				runStart = i + 1;
+			}
 			i = i + 1;
 		}
+		if (runStart < s.byteLength) result = result + s.byteSlice(runStart, s.byteLength);
 		first = false;
 		tok = tok.next;
 	}
@@ -261,6 +276,9 @@ function stringize(tok: CToken): string {
 function paste(lhs: CToken, rhs: CToken, ctx: PPContext): CToken {
 	const combined = lhs.stringVal + rhs.stringVal;
 	const r = tokenizeFile(combined, lhs.file);
+	// The pasted token splices into the outer stream — its arena must outlive
+	// this call, so fold it into the session arena.
+	for (const at of r.arena) ctx.arena.push(at);
 	if (r.head.kind === CTokenKind.Eof || r.head.next.kind !== CTokenKind.Eof) {
 		ctx.diags.push(makeDiag(DiagSeverity.Error, lhs.file, lhs.line, lhs.col,
 			`pasting "${lhs.stringVal}" and "${rhs.stringVal}" does not give a valid token`));
@@ -279,7 +297,7 @@ function findArg(args: MacroArg[], name: string): MacroArg {
 
 // ===== Read Macro Arguments =====
 
-function readMacroArgOne(tok: CToken, readRest: boolean): CToken[] {
+function readMacroArgOne(ctx: PPContext, tok: CToken, readRest: boolean): CToken[] {
 	const head = makeEofToken(tok.file);
 	let cur = head;
 	let depth = 0;
@@ -289,16 +307,16 @@ function readMacroArgOne(tok: CToken, readRest: boolean): CToken[] {
 		if (depth === 0 && !readRest && tok.stringVal === ",") break;
 		if (tok.stringVal === "(") depth = depth + 1;
 		if (tok.stringVal === ")") depth = depth - 1;
-		const c = copyToken(tok);
+		const c = copyToken(ctx, tok);
 		cur.next = c;
 		cur = c;
 		tok = tok.next;
 	}
-	cur.next = newEof(tok);
+	cur.next = newEof(ctx, tok);
 	return [head.next, tok]; // [arg tokens, rest]
 }
 
-function readMacroArgs(tok: CToken, mac: Macro): MacroArg[][] {
+function readMacroArgs(ctx: PPContext, tok: CToken, mac: Macro): MacroArg[][] {
 	// Returns [args, rest-token] encoded as array
 	const args: MacroArg[] = [];
 	tok = tok.next; // skip (
@@ -306,7 +324,7 @@ function readMacroArgs(tok: CToken, mac: Macro): MacroArg[][] {
 	let pi = 0;
 	if (tok.stringVal !== ")") {
 		while (pi < mac.params.length) {
-			const r = readMacroArgOne(tok, false);
+			const r = readMacroArgOne(ctx, tok, false);
 			args.push({ name: mac.params[pi].name, isVaArgs: false, tok: r[0] });
 			tok = r[1];
 			pi = pi + 1;
@@ -315,7 +333,7 @@ function readMacroArgs(tok: CToken, mac: Macro): MacroArg[][] {
 		}
 		// Variadic: read remaining as __VA_ARGS__
 		if (mac.vaArgsName !== "") {
-			const r = readMacroArgOne(tok, true);
+			const r = readMacroArgOne(ctx, tok, true);
 			args.push({ name: mac.vaArgsName, isVaArgs: true, tok: r[0] });
 			tok = r[1];
 		}
@@ -336,7 +354,7 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 			const arg = findArg(args, body.next.stringVal);
 			if (arg !== null) {
 				const str = stringize(arg.tok);
-				const stok = copyToken(body);
+				const stok = copyToken(ctx, body);
 				stok.kind = CTokenKind.Str;
 				stok.stringVal = str;
 				cur.next = stok;
@@ -362,7 +380,7 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 					// Append rest of arg
 					let rest = rhsArg.tok.next;
 					while (rest.kind !== CTokenKind.Eof) {
-						const c = copyToken(rest);
+						const c = copyToken(ctx, rest);
 						cur.next = c;
 						cur = c;
 						rest = rest.next;
@@ -394,7 +412,7 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 				if (arg.tok.kind !== CTokenKind.Eof) {
 					let t = arg.tok;
 					while (t.kind !== CTokenKind.Eof) {
-						const c = copyToken(t);
+						const c = copyToken(ctx, t);
 						cur.next = c;
 						cur = c;
 						t = t.next;
@@ -416,7 +434,7 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 				continue;
 			}
 			while (t.kind !== CTokenKind.Eof) {
-				const c = copyToken(t);
+				const c = copyToken(ctx, t);
 				c.hasSpace = (cur === head) ? body.hasSpace : c.hasSpace;
 				cur.next = c;
 				cur = c;
@@ -427,13 +445,13 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 		}
 
 		// Regular token — copy
-		const c = copyToken(body);
+		const c = copyToken(ctx, body);
 		cur.next = c;
 		cur = c;
 		body = body.next;
 	}
 
-	cur.next = newEof(head);
+	cur.next = newEof(ctx, head);
 	return head.next;
 }
 
@@ -458,7 +476,7 @@ function expandMacro(tok: CToken, ctx: PPContext): CToken[] {
 	// Object-like macro
 	if (mac.isObjlike) {
 		const hs = hidesetUnion(tok.hideset, macNameArr);
-		const body = copyTokenList(mac.body);
+		const body = copyTokenList(ctx, mac.body);
 		addHideset(body, mac.name);
 		// Set hideset on each token
 		let t = body;
@@ -479,7 +497,7 @@ function expandMacro(tok: CToken, ctx: PPContext): CToken[] {
 	// Function-like macro — needs ( after name
 	if (tok.next.stringVal !== "(") return [null as unknown as CToken, tok];
 
-	const argsResult = readMacroArgs(tok.next, mac);
+	const argsResult = readMacroArgs(ctx, tok.next, mac);
 	const args = argsResult[0] as unknown as MacroArg[];
 
 	// Re-walk from tok to find the closing ) (simpler than decoding readMacroArgs' rest)
@@ -512,24 +530,24 @@ function expandMacro(tok: CToken, ctx: PPContext): CToken[] {
 	return [expanded, null as unknown as CToken];
 }
 
-function copyTokenList(head: CToken): CToken {
+function copyTokenList(ctx: PPContext, head: CToken): CToken {
 	const sentinel = makeEofToken("");
 	let cur = sentinel;
 	let t = head;
 	while (t.kind !== CTokenKind.Eof) {
-		const c = copyToken(t);
+		const c = copyToken(ctx, t);
 		cur.next = c;
 		cur = c;
 		t = t.next;
 	}
-	cur.next = newEof(head);
+	cur.next = newEof(ctx, head);
 	return sentinel.next;
 }
 
 // ===== Built-in Macro Handlers =====
 
 function handleBuiltinMacro(tok: CToken, mac: Macro, ctx: PPContext): CToken {
-	const result = copyToken(tok);
+	const result = copyToken(ctx, tok);
 	match (mac.handler) {
 		"__FILE__" => {
 			result.kind = CTokenKind.Str;
@@ -551,7 +569,7 @@ function handleBuiltinMacro(tok: CToken, mac: Macro, ctx: PPContext): CToken {
 		},
 		_ => {},
 	};
-	result.next = newEof(tok);
+	result.next = newEof(ctx, tok);
 	return result;
 }
 
@@ -767,7 +785,7 @@ function evalPrimary(es: EvalState, ctx: PPContext): int32 {
 // Evaluate #if expression: preprocess tokens, handle defined(), eval.
 function evalConstExpr(tok: CToken, ctx: PPContext): number {
 	// Copy line and preprocess it
-	const parts = copyLine(tok);
+	const parts = copyLine(ctx, tok);
 	let line = parts[0];
 
 	// Handle defined(X) and defined X
@@ -792,16 +810,17 @@ function evalConstExpr(tok: CToken, ctx: PPContext): number {
 			numTok.kind = CTokenKind.Num;
 			numTok.intVal = val as int64;
 			numTok.stringVal = val.toString();
+			ctx.arena.push(numTok);
 			cur.next = numTok;
 			cur = numTok;
 			continue;
 		}
-		const c = copyToken(t);
+		const c = copyToken(ctx, t);
 		cur.next = c;
 		cur = c;
 		t = t.next;
 	}
-	cur.next = newEof(tok);
+	cur.next = newEof(ctx, tok);
 
 	// Expand macros in the expression
 	let expanded = processed.next;
@@ -834,12 +853,12 @@ function preprocessTokens(tok: CToken, ctx: PPContext): CToken {
 			tok = r[0];
 			continue;
 		}
-		const c = copyToken(tok);
+		const c = copyToken(ctx, tok);
 		cur.next = c;
 		cur = c;
 		tok = tok.next;
 	}
-	cur.next = newEof(tok);
+	cur.next = newEof(ctx, tok);
 	return head.next;
 }
 
@@ -920,6 +939,9 @@ function includeFile(filename: string, tok: CToken, ctx: PPContext): CToken {
 
 	const source = try readFile(resolved) catch "";
 	const tokenized = tokenizeFile(source, resolved);
+	// Included tokens splice into the outer stream — fold the nested arena into
+	// the session arena so they outlive this call.
+	for (const at of tokenized.arena) ctx.arena.push(at);
 	for (const d of tokenized.diagnostics) ctx.diags.push(d);
 
 	// Detect include guard before preprocessing
@@ -953,7 +975,7 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 
 		// Non-directive: pass through
 		if (!tok.atBol || tok.stringVal !== "#") {
-			const c = copyToken(tok);
+			const c = copyToken(ctx, tok);
 			cur.next = c;
 			cur = c;
 			tok = tok.next;
@@ -1117,7 +1139,7 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 		tok = skipLine(dir.next);
 	}
 
-	cur.next = newEof(tok);
+	cur.next = newEof(ctx, tok);
 	return head.next;
 }
 
@@ -1125,11 +1147,11 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 
 function initMacros(ctx: PPContext): void {
 	// Dynamic built-in macros
-	const fileMac = addMacro(ctx, "__FILE__", true, newEof(makeEofToken("")));
+	const fileMac = addMacro(ctx, "__FILE__", true, newEof(ctx, makeEofToken("")));
 	fileMac.handler = "__FILE__";
-	const lineMac = addMacro(ctx, "__LINE__", true, newEof(makeEofToken("")));
+	const lineMac = addMacro(ctx, "__LINE__", true, newEof(ctx, makeEofToken("")));
 	lineMac.handler = "__LINE__";
-	const counterMac = addMacro(ctx, "__COUNTER__", true, newEof(makeEofToken("")));
+	const counterMac = addMacro(ctx, "__COUNTER__", true, newEof(ctx, makeEofToken("")));
 	counterMac.handler = "__COUNTER__";
 
 	// Predefined macros from target
@@ -1138,7 +1160,7 @@ function initMacros(ctx: PPContext): void {
 		const valTok = makeEofToken("");
 		valTok.kind = CTokenKind.PPNum;
 		valTok.stringVal = def.value;
-		valTok.next = newEof(makeEofToken(""));
+		valTok.next = newEof(ctx, makeEofToken(""));
 		addMacro(ctx, def.name, true, valTok);
 	}
 }
@@ -1160,6 +1182,7 @@ export function preprocess(
 		diags: [],
 		file: head.file,
 		counter: 0,
+		arena: [],
 	};
 
 	initMacros(ctx);
@@ -1173,7 +1196,7 @@ export function preprocess(
 
 	convertPPTokens(result, ctx.diags);
 
-	return { head: result, diagnostics: ctx.diags };
+	return { head: result, diagnostics: ctx.diags, arena: ctx.arena };
 }
 
 // ===== Tests =====

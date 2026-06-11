@@ -10,6 +10,10 @@ import { decodeUtf8, isIdent1, isIdent2, fromHex, stripBom, canonicalizeNewline,
 export interface TokenizeResult {
 	head: CToken;
 	diagnostics: Diagnostic[];
+	// Owns every token created during tokenization — `next` links are non-owning
+	// Ptr, so the stream is only alive while this array is. Keep the result in
+	// scope for as long as any token from it is used.
+	arena: CToken[];
 }
 
 // ===== Scan State =====
@@ -23,6 +27,7 @@ interface ScanState {
 	atBol: boolean;
 	hasSpace: boolean;
 	diags: Diagnostic[];
+	arena: CToken[];
 }
 
 // ===== Byte-level helpers =====
@@ -83,7 +88,7 @@ function isPunct(ch: number): boolean {
 function newToken(s: ScanState, kind: CTokenKind, start: number, startLine: number, startCol: number): CToken {
 	const tok: CToken = {
 		kind,
-		next: null as unknown as CToken,
+		next: null as unknown as Ptr<CToken>,
 		intVal: 0 as int64,
 		floatVal: 0.0,
 		litKind: LitKind.None,
@@ -96,8 +101,9 @@ function newToken(s: ScanState, kind: CTokenKind, start: number, startLine: numb
 		atBol: s.atBol,
 		hasSpace: s.hasSpace,
 		hideset: [],
-		origin: null as unknown as CToken,
+		origin: null as unknown as Ptr<CToken>,
 	};
+	s.arena.push(tok);
 	s.atBol = false;
 	s.hasSpace = false;
 	return tok;
@@ -485,10 +491,11 @@ function prepareSource(source: string): string {
 function tokenize(source: string, file: string): TokenizeResult {
 	const s: ScanState = {
 		source, pos: 0, line: 1, col: 1, file,
-		atBol: true, hasSpace: false, diags: [],
+		atBol: true, hasSpace: false, diags: [], arena: [],
 	};
 
 	const head = makeEofToken(file);
+	s.arena.push(head);
 	let cur = head;
 	const len = source.byteLength;
 
@@ -613,7 +620,7 @@ function tokenize(source: string, file: string): TokenizeResult {
 	eof.atBol = s.atBol;
 	cur.next = eof;
 
-	return { head: head.next, diagnostics: s.diags };
+	return { head: head.next, diagnostics: s.diags, arena: s.arena };
 }
 
 // ===== Public entry point =====
