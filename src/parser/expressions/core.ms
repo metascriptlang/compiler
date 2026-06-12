@@ -276,7 +276,10 @@ function parsePrimary(state: ParserState): ExprResult {
 
 	// Bare-ident arrow: x => body  (ES6 single-untyped-param shorthand)
 	// Detected before plain Ident handler — must run first or `x` is consumed as identifier.
-	if (token.kind === TokenKind.Ident && peek(state, 1).kind === TokenKind.Arrow) {
+	// Suppressed inside match-case `when` guards (state.noBareArrow): there a
+	// trailing `=>` belongs to the match arm, so `2 when flag => 200` must parse
+	// the guard as `flag`, not as the arrow function `flag => 200`.
+	if (token.kind === TokenKind.Ident && peek(state, 1).kind === TokenKind.Arrow && state.noBareArrow === 0) {
 		return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "");
 	}
 
@@ -441,8 +444,9 @@ function parsePrimary(state: ParserState): ExprResult {
 			}
 			return parseFuncExprBody(state, token, feFlags);
 		}
-		// async bare-ident arrow: async x => ...
-		if (isIdentLike(peek(state, 1)) && peek(state, 2).kind === TokenKind.Arrow) {
+		// async bare-ident arrow: async x => ... (same noBareArrow restriction
+		// as the plain bare-ident arrow above — match-guard `=>` ownership)
+		if (isIdentLike(peek(state, 1)) && peek(state, 2).kind === TokenKind.Arrow && state.noBareArrow === 0) {
 			advance(state); // consume 'async'
 			return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "async");
 		}

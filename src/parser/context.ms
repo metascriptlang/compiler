@@ -20,10 +20,14 @@ export class ParserState {
 	panicMode: boolean;
 	pendingComments: Token[]; // Added for comment preservation
 	pendingTypeArg: string; // Captured <T> type arg waiting to be consumed by next CallExpr
+	// Restricted production (like JS's NoIn): >0 while parsing a match-case
+	// `when` guard, where a bare `ident =>` must NOT start an arrow function —
+	// that `=>` belongs to the match arm. Parenthesized arrows still parse.
+	noBareArrow: number;
 }
 
 export function createState(tokens: Token[]): ParserState {
-	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "" };
+	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0 };
 }
 
 // Stamp a node's end position from the last consumed token (position - 1).

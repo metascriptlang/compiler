@@ -75,11 +75,16 @@ function parseMatchCase(
 	// Parse patterns: pattern1 | pattern2 | ...
 	const patterns = try parseMatchPatterns(state);
 
-	// Parse optional 'when' guard: pattern when condition => body
+	// Parse optional 'when' guard: pattern when condition => body.
+	// Restricted production: bare `ident =>` arrows are suppressed inside the
+	// guard so its trailing `=>` stays with the match arm (see core.ms nud).
 	let guard: Node | null = null;
 	if (current(state).kind === TokenKind.When) {
 		advance(state);
-		guard = try exprParser(state, 0);
+		state.noBareArrow = state.noBareArrow + 1;
+		const guardResult = exprParser(state, 0);
+		state.noBareArrow = state.noBareArrow - 1;
+		guard = try guardResult;
 	}
 
 	// Expect =>
