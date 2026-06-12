@@ -131,32 +131,30 @@ function escapeString(s: string): string {
 	let result = "\"";
 	let i = 0;
 	const len = s.byteLength;
+	// Walk byte-by-byte; every escape-relevant byte is ASCII. Plain content
+	// (including multi-byte UTF-8) is copied in RUNS — a single-byte slice
+	// inside a multi-byte sequence is not representable on the Bun host, and
+	// runs only break at ASCII escape bytes so slices stay on char boundaries.
+	let runStart = 0;
 	while (i < len) {
-		// Walk byte-by-byte to stay aligned with byteLength. ASCII bytes match
-		// JSON control chars; UTF-8 multibyte continuation bytes (0x80-0xBF)
-		// and lead bytes (0xC0+) fall through to the default branch and are
-		// emitted verbatim — preserving UTF-8 content end-to-end.
 		const ch = s.byteAt(i);
-		match (ch) {
-			"\"".code => { result += "\\\""; },
-			"\\".code => { result += "\\\\"; },
-			"\n".code => { result += "\\n"; },
-			"\r".code => { result += "\\r"; },
-			"\t".code => { result += "\\t"; },
-			8 => { result += "\\b"; },
-			12 => { result += "\\f"; },
-			_ => {
-				if (ch < 32) {
-					result += "\\u00" + hexDigit((ch >> 4) & 15) + hexDigit(ch & 15);
-				} else {
-					// Emit raw byte; ASCII renders as itself, UTF-8 multibyte
-					// rebuilds verbatim across iterations.
-					result += s.byteSlice(i, i + 1);
-				}
-			},
-		};
+		if (ch === "\"".code || ch === "\\".code || ch < 32) {
+			if (runStart < i) result += s.byteSlice(runStart, i);
+			result += match (ch) {
+				"\"".code => "\\\"",
+				"\\".code => "\\\\",
+				"\n".code => "\\n",
+				"\r".code => "\\r",
+				"\t".code => "\\t",
+				8 => "\\b",
+				12 => "\\f",
+				_ => "\\u00" + hexDigit((ch >> 4) & 15) + hexDigit(ch & 15),
+			};
+			runStart = i + 1;
+		}
 		i = i + 1;
 	}
+	if (runStart < len) result += s.byteSlice(runStart, len);
 	return result + "\"";
 }
 

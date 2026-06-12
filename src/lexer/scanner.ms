@@ -109,7 +109,20 @@ function scanEscape(s: LexerState): string {
 		"'".code => "'",
 		"`".code => "`",
 		"$".code => "$",
-		_ => s.source.byteSlice(s.pos - 1, s.pos),
+		_ => {
+			// Unknown escape: pass the escaped character through verbatim. A
+			// multi-byte UTF-8 char must be consumed whole — slicing just the
+			// lead byte leaves continuation bytes behind and a lone lead byte
+			// is not representable on the Bun host.
+			if (esc < 0x80) return s.source.byteSlice(s.pos - 1, s.pos);
+			let tail = 1;
+			if (esc >= 0xF0) { tail = 3; }
+			else if (esc >= 0xE0) { tail = 2; }
+			const start = s.pos - 1;
+			let k = 0;
+			while (k < tail && s.pos < s.source.byteLength) { advanceChar(s); k += 1; }
+			return s.source.byteSlice(start, s.pos);
+		},
 	};
 }
 
@@ -120,9 +133,15 @@ export function scanString(s: LexerState, quote: number): void {
 	advanceChar(s); // skip opening quote
 	const rawStart = s.pos; // capture raw source start (after opening quote)
 
+	// Plain bytes are copied in RUNS, not one byte at a time: a single-byte
+	// byteSlice inside a multi-byte UTF-8 sequence is not representable as a
+	// string on the Bun host (lone bytes decode to U+FFFD). Runs only break at
+	// ASCII bytes (quote/backslash), so every slice stays on character bounds.
+	let runStart = s.pos;
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if (ch === quote) {
+			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
 			const rawEnd = s.pos; // before closing quote
 			advanceChar(s);
 			const tok = addToken(s, TokenKind.String, val, startLine, startCol);
@@ -131,9 +150,10 @@ export function scanString(s: LexerState, quote: number): void {
 			return;
 		}
 		if (ch === "\\".code) {
+			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
 			val += scanEscape(s);
+			runStart = s.pos;
 		} else {
-			val += s.source.byteSlice(s.pos, s.pos + 1);
 			advanceChar(s);
 		}
 	}
@@ -173,12 +193,7 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 		if (!hasInterpolation && !hasNewline && tempPos < s.source.byteLength) {
 			const contentLen = tempPos - s.pos;
 			if (contentLen > 0) {
-				let content = "";
-				let ci = s.pos;
-				while (ci < tempPos) {
-					content = content + s.source.byteSlice(ci, ci + 1);
-					ci = ci + 1;
-				}
+				const content = s.source.byteSlice(s.pos, tempPos);
 				if (isOperatorName(content)) {
 					s.pos = tempPos;
 					s.column = s.column + contentLen;
@@ -190,23 +205,29 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 		}
 	}
 
+	// Run-copied for the same reason as scanString: single-byte slices of
+	// multi-byte UTF-8 are not representable on the Bun host.
+	let runStart = s.pos;
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if (ch === "`".code) {
+			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
 			advanceChar(s);
 			addToken(s, isContinuation ? TokenKind.TemplateTail : TokenKind.TemplateNoSub, val, startLine, startCol);
 			return;
 		}
 		if (ch === "$".code && peekAt(s, 1) === "{".code) {
+			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
 			skip(s, 2);
 			s.templateDepth += 1;
 			addToken(s, isContinuation ? TokenKind.TemplateMiddle : TokenKind.TemplateHead, val, startLine, startCol);
 			return;
 		}
 		if (ch === "\\".code) {
+			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
 			val += scanEscape(s);
+			runStart = s.pos;
 		} else {
-			val += s.source.byteSlice(s.pos, s.pos + 1);
 			advanceChar(s);
 		}
 	}
@@ -258,27 +279,24 @@ export function scanIdentifier(s: LexerState): void {
 export function scanLineComment(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column - 2; // includes //
-	let content = "//";
+	const runStart = s.pos;
 	while (s.pos < s.source.byteLength && peek(s) !== "\n".code && peek(s) !== "\r".code) {
-		content += s.source.byteSlice(s.pos, s.pos + 1);
 		advanceChar(s);
 	}
-	addComment(s, content, startLine, startCol);
+	addComment(s, "//" + s.source.byteSlice(runStart, s.pos), startLine, startCol);
 }
 
 export function scanBlockComment(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column - 2; // includes /*
-	let content = "/*";
+	const runStart = s.pos;
 	while (s.pos < s.source.byteLength) {
-		const ch = peek(s);
-		if (ch === "*".code && peekAt(s, 1) === "/".code) {
-			content += "*/";
+		if (peek(s) === "*".code && peekAt(s, 1) === "/".code) {
+			const content = "/*" + s.source.byteSlice(runStart, s.pos) + "*/";
 			skip(s, 2);
 			addComment(s, content, startLine, startCol);
 			return;
 		}
-		content += s.source.byteSlice(s.pos, s.pos + 1);
 		advanceChar(s);
 	}
 }
@@ -288,38 +306,35 @@ export function scanBlockComment(s: LexerState): void {
 function scanRegex(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column;
-	let pattern = "/";
 	advanceChar(s); // skip opening /
 
+	// The whole pattern (escapes included) is taken verbatim — one contiguous
+	// span instead of per-byte slices (multi-byte UTF-8 safety, see scanString).
+	const bodyStart = s.pos;
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if (ch === "/".code) {
-			pattern += "/";
 			advanceChar(s);
 			break;
 		}
 		if (ch === "\\".code) {
-			pattern += "\\";
 			advanceChar(s);
-			pattern += s.source.byteSlice(s.pos, s.pos + 1);
-			advanceChar(s);
+			if (s.pos < s.source.byteLength) advanceChar(s);
 			continue;
 		}
 		if (ch === "\n".code) {
 			// Regex cannot span lines
 			break;
 		}
-		pattern += s.source.byteSlice(s.pos, s.pos + 1);
 		advanceChar(s);
 	}
 
 	// Scan flags (g, i, m, s, u, y, d)
 	while (s.pos < s.source.byteLength && isLetter(peek(s))) {
-		pattern += s.source.byteSlice(s.pos, s.pos + 1);
 		advanceChar(s);
 	}
 
-	addToken(s, TokenKind.Regex, pattern, startLine, startCol);
+	addToken(s, TokenKind.Regex, "/" + s.source.byteSlice(bodyStart, s.pos), startLine, startCol);
 }
 
 // ===== Operator & Punctuation Scanning =====

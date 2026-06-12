@@ -13,18 +13,30 @@ export function printNumberLiteral(node: Node): Doc {
 // We must reverse that to produce valid source.
 function escapeString(s: string, quote: number): string {
 	let out = "";
+	// Plain bytes are copied in runs, not one at a time: a single-byte slice
+	// inside a multi-byte UTF-8 sequence is not representable on the Bun host.
+	// Escape-relevant bytes are all ASCII, so runs break on char boundaries.
+	let runStart = 0;
 	let i = 0;
 	while (i < s.byteLength) {
 		const ch = s.byteAt(i);
-		if (ch === "\\".code) { out = out + "\\\\"; }
-		else if (ch === "\n".code) { out = out + "\\n"; }
-		else if (ch === "\t".code) { out = out + "\\t"; }
-		else if (ch === "\r".code) { out = out + "\\r"; }
-		else if (ch === "\"".code && quote === "\"".code) { out = out + "\\\""; }
-		else if (ch === "'".code && quote === "'".code) { out = out + "\\'"; }
-		else { out = out + s.byteSlice(i, i + 1); }
+		const isEsc = ch === "\\".code || ch === "\n".code || ch === "\t".code || ch === "\r".code
+			|| (ch === "\"".code && quote === "\"".code) || (ch === "'".code && quote === "'".code);
+		if (isEsc) {
+			if (runStart < i) out = out + s.byteSlice(runStart, i);
+			out = out + match (ch) {
+				"\\".code => "\\\\",
+				"\n".code => "\\n",
+				"\t".code => "\\t",
+				"\r".code => "\\r",
+				"\"".code => "\\\"",
+				_ => "\\'",
+			};
+			runStart = i + 1;
+		}
 		i = i + 1;
 	}
+	if (runStart < s.byteLength) out = out + s.byteSlice(runStart, s.byteLength);
 	return out;
 }
 

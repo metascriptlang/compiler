@@ -137,12 +137,19 @@ function parseString(input: string, pos: number): ParseResult {
 	const len = input.byteLength;
 	let result = "";
 
+	// Plain bytes are copied in RUNS (runStart..p), never one byte at a time:
+	// a single-byte slice inside a multi-byte UTF-8 sequence is not
+	// representable as a string on the Bun host. Runs only break at ASCII
+	// bytes (quote/backslash), so every slice stays on character boundaries.
+	let runStart = p;
 	while (p < len) {
 		const ch = input.byteAt(p);
 		if (ch === "\"".code) {
+			if (runStart < p) result += input.byteSlice(runStart, p);
 			return Result.ok({ node: jsonString(result), pos: p + 1 });
 		}
 		if (ch === "\\".code) {
+			if (runStart < p) result += input.byteSlice(runStart, p);
 			p = p + 1;
 			if (p >= len) return errorAt("Unexpected end of string", p);
 			const esc = input.byteAt(p);
@@ -170,6 +177,7 @@ function parseString(input: string, pos: number): ParseResult {
 								result += fromCodePoint(full);
 								p = p + 10;
 								p = p + 1;
+								runStart = p;
 								continue;
 							}
 						}
@@ -179,11 +187,8 @@ function parseString(input: string, pos: number): ParseResult {
 				},
 				_ => { return errorAt(`Invalid escape '\\${input.byteSlice(p, p + 1)}'`, p); },
 			};
-		} else {
-			// Copy raw byte — for ASCII chars this is the char itself, for
-			// UTF-8 multibyte content we append each byte in turn and the
-			// concatenation reconstructs valid UTF-8 in `result`.
-			result += input.byteSlice(p, p + 1);
+			// Escape consumed — the next plain run starts after it.
+			runStart = p + 1;
 		}
 		p = p + 1;
 	}

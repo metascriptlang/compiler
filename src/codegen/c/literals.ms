@@ -10,48 +10,68 @@ import { Type, TypeKind } from "../../ast/node";
 // ===== C String Escaping =====
 // Produces a C-compatible escaped string literal body (without quotes).
 
-function isHexCh(ch: string): boolean {
-	return (ch >= "0" && ch <= "9") || (ch >= "a" && ch <= "f") || (ch >= "A" && ch <= "F");
+function isHexByte(b: number): boolean {
+	return (b >= "0".code && b <= "9".code) || (b >= "a".code && b <= "f".code) || (b >= "A".code && b <= "F".code);
 }
 
+// Detect a literal \xHH sequence at byte offset i.
+function isHexEscapeAt(s: string, i: number): boolean {
+	return s.byteAt(i) === "\\".code && i + 3 < s.byteLength
+		&& s.byteAt(i + 1) === "x".code
+		&& isHexByte(s.byteAt(i + 2)) && isHexByte(s.byteAt(i + 3));
+}
+
+// BYTE-PURE walk (both functions): indexes here are UTF-8 byte offsets, so only
+// the byte tier (byteAt/byteLength/byteSlice — host-uniform) may be used.
+// charAt/slice are UTF-16-unit APIs: past the first non-ASCII character a byte
+// offset reads the wrong position, and the emitted literal length drifts
+// (the gen-2 string-corruption bug). All escape-relevant bytes are ASCII, so
+// byte comparison is exact; plain bytes are copied in RUNS so multi-byte UTF-8
+// sequences stay intact through byteSlice.
 export function escapeCString(s: string): string {
 	let result = "";
+	let runStart = 0;
 	let i = 0;
 	while (i < s.byteLength) {
-		const ch = s.charAt(i);
-		if (ch === "\\" && i + 3 < s.byteLength && s.charAt(i + 1) === "x" && isHexCh(s.charAt(i + 2)) && isHexCh(s.charAt(i + 3))) {
-			// Hex escape \xHH — pass through as-is for C
-			result = result + s.slice(i, i + 4);
+		const b = s.byteAt(i);
+		if (isHexEscapeAt(s, i)) {
+			// Hex escape \xHH — pass through as-is for C (stays in the plain run)
 			i += 4;
-		} else if (ch === "\\") { result = result + "\\\\"; i += 1; }
-		else if (ch === "\"") { result = result + "\\\""; i += 1; }
-		else if (ch === "\n") { result = result + "\\n"; i += 1; }
-		else if (ch === "\r") { result = result + "\\r"; i += 1; }
-		else if (ch === "\t") { result = result + "\\t"; i += 1; }
-		else if (ch === "\0") { result = result + "\\0"; i += 1; }
-		else if (ch === "?") { result = result + "\\?"; i += 1; }
-		else { result = result + ch; i += 1; }
+		} else if (b === "\\".code || b === "\"".code || b === "\n".code
+				|| b === "\r".code || b === "\t".code || b === 0 || b === "?".code) {
+			if (runStart < i) result = result + s.byteSlice(runStart, i);
+			result = result + match (b) {
+				"\\".code => "\\\\",
+				"\"".code => "\\\"",
+				"\n".code => "\\n",
+				"\r".code => "\\r",
+				"\t".code => "\\t",
+				0 => "\\0",
+				_ => "\\?",
+			};
+			i += 1;
+			runStart = i;
+		} else {
+			i += 1;
+		}
 	}
+	if (runStart < s.byteLength) result = result + s.byteSlice(runStart, s.byteLength);
 	return result;
 }
 
 // Compute actual C byte count for a string that may contain \xHH escape sequences.
-// In our representation, \xHH is 4 chars but compiles to 1 byte in C.
+// In our representation, \xHH is 4 bytes of source but compiles to 1 byte in C;
+// every other byte (including each byte of a multi-byte UTF-8 sequence) is
+// exactly one C byte.
 export function cStringByteLen(s: string): number {
 	let len = 0;
 	let i = 0;
 	while (i < s.byteLength) {
-		const ch = s.charAt(i);
-		if (ch === "\\" && i + 3 < s.byteLength && s.charAt(i + 1) === "x" && isHexCh(s.charAt(i + 2)) && isHexCh(s.charAt(i + 3))) {
+		if (isHexEscapeAt(s, i)) {
 			len += 1;
 			i += 4;
 		} else {
-			// UTF-8 byte count: code points determine encoded byte length
-			const cp = s.byteAt(i);
-			if (cp < 0x80) { len += 1; }
-			else if (cp < 0x800) { len += 2; }
-			else if (cp < 0x10000) { len += 3; }
-			else { len += 4; }
+			len += 1;
 			i += 1;
 		}
 	}
