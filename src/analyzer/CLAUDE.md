@@ -77,6 +77,7 @@ By Phase 4, 22+ transforms have already executed. Many complex syntax forms are 
 | `throw` | Set `needsTry` on all scopes |
 | Discarded `f()` | Capture in temp, register for cleanup |
 | Sink params | Register RC-typed params for cleanup at scope exit |
+| `Ptr<T>`-sourced value into owning slot | COPY via `sinkClassify` — a `Ptr<T>` whose pointee is a counted Ref classifies as the pointee at sink/return materialization points (`passCopyToSink`, `processMember`/`processArrayAccess`/`processIdentifier` SinkArg, `needsReturnIncref`), so the owning destination's decref stays balanced. A Ptr var is NEVER moved into an owning slot (it holds a borrow — no rc share to transfer). Ptr to non-Ref pointees (malloc/FFI) is untouched. |
 | `__envP*` params | Skip (managed by closure infrastructure) |
 
 ---
@@ -87,6 +88,8 @@ By Phase 4, 22+ transforms have already executed. Many complex syntax forms are 
 
 ```
 1. rcInfo.needsCleanup is false -> pass through (primitive)
+   EXCEPT at sink/return materialization: `sinkClassify` reclassifies Ptr<Ref-pointee>
+   as the pointee -> COPY (incref), never MOVE
 2. src is fresh (call/literal/constructor/move) -> SINK (no copy)
 3. src is identifier:
    a. isLastRead(src) -> MOVE: assign + wasMoved(src)
