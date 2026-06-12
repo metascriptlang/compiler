@@ -616,7 +616,11 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: number, 
 	if (line > 0 && isValidTypeIdentifier(name)
 			&& name.indexOf("__") < 0 && name.indexOf("typeof ") < 0
 			&& name !== "unknown" && name !== "any" && name !== "undefined" && name !== "never") {
-		addWarning(ctx, `Unresolved type '${name}' - missing import?`, line, col);
+		// Hard error, not warning: the unknownType() recovery reaches codegen as
+		// void*, and call sites then pass &global for what should be an object
+		// pointer — a silent memory-corruption miscompile, far worse than failing
+		// the build (the missing-NameSet-import incident, docs/NIM-REF.md §4).
+		addError(ctx, `Unresolved type '${name}' - missing import?`, line, col);
 	}
 	// Reference parity: unresolved types become unknownType, never TypeReference.
 	// All valid types must be resolved during semantic analysis — if lookupSymbol fails,

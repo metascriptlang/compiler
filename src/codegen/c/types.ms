@@ -11,7 +11,7 @@ import { monoTypeKey } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, SymbolKind } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, createNameSet } from "./context";
+import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet } from "./context";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { mangle, mangleFieldName, safeName } from "./names";
 import { useHeader } from "./context";
