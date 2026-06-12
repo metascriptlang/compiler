@@ -13,7 +13,7 @@ import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFla
 import { forEachChild } from "../ast/visitor";
 import { isSinkType, createPrimitive, isAwaitable } from "../checker/types";
 import { lookupSymbol, lookupLocal, hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
-import { NameSet, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
+import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeNull, makeMember, makeHiddenAddr, makeIf,
@@ -322,13 +322,27 @@ function processBinary(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	return node;
 }
 
+// Ownership-materialization classification: like classifyType, but a Ptr<T>
+// whose pointee is a counted Ref object classifies as that pointee. A Ptr-typed
+// expression flowing into an OWNING position (sink element/field, Ref return)
+// stores a counted object — the consumer's destroy/decref WILL run on it, so the
+// materialization must incref it like any borrow. Ptr to non-Ref pointees
+// (Ptr<void>, Ptr<struct> from malloc/FFI) stays unmanaged — no header to count.
+function sinkClassify(t: Type | null, ctx: TransformContext): RcInfo {
+	if (t !== null && t.kind === TypeKind.Ptr && t.typeReturn !== null) {
+		const inner = classifyType(t.typeReturn, ctx);
+		if (inner.needsCleanup && inner.rcKind === RcKind.Ref) return inner;
+	}
+	return classifyType(t, ctx);
+}
+
 // Reference parity: passCopyToSink — when a non-identifier expression (ArrayAccess, MemberExpr)
 // is consumed (sink param, push arg), create an independent deep copy in a temp.
 // Pattern: genWasMoved(tmp) → =copy(tmp, src) → use tmp → wasMoved(tmp) after consumption.
 // For simple refcounted types (String, Ref, Closure): shallow copy + incref is sufficient.
 // For Named types (structs with managed fields): null-init + 2-arg copy avoids aliased-field destruction.
 function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
-	const rcInfo = classifyType(srcExpr.nodeType, dctx.ctx);
+	const rcInfo = sinkClassify(srcExpr.nodeType, dctx.ctx);
 	if (!rcInfo.needsCleanup) return srcExpr;
 
 	const loc = srcExpr.location;
@@ -379,7 +393,7 @@ function processMember(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// Reference parity (MemberExpr sinkArg): field access is a borrow —
 	// must copy for ownership transfer UNLESS field is last-read (Phase B).
 	if (mode === DrcMode.SinkArg && node.nodeType !== null) {
-		const rcInfo = classifyType(node.nodeType, dctx.ctx);
+		const rcInfo = sinkClassify(node.nodeType, dctx.ctx);
 		if (rcInfo.needsCleanup) {
 			// Always copy from MemberExpr: source field may belong to a shared object.
 			return passCopyToSink(node, dctx);
@@ -399,7 +413,7 @@ function processArrayAccess(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// array-owned object to be double-freed when both the field destructor and
 	// the array destructor decref it.
 	if ((mode === DrcMode.SinkArg || mode === DrcMode.Consumed) && node.nodeType !== null) {
-		const rcInfo = classifyType(node.nodeType, dctx.ctx);
+		const rcInfo = sinkClassify(node.nodeType, dctx.ctx);
 		if (rcInfo.needsCleanup) {
 			return passCopyToSink(node, dctx);
 		}
@@ -588,7 +602,18 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	if (sym.symbolKind === SymbolKind.Function || sym.symbolKind === SymbolKind.Method) return node;
 
 	const rcInfo = classifyType(sym.symbolType, dctx.ctx);
-	if (!rcInfo.needsCleanup) return node;
+	if (!rcInfo.needsCleanup) {
+		// A Ptr-typed var holds a borrow — it owns no rc share to move, so sinking it
+		// into an owning slot must ALWAYS materialize a copy (incref), never a move.
+		if (mode === DrcMode.SinkArg || mode === DrcMode.Consumed) {
+			const sinkRc = sinkClassify(sym.symbolType, dctx.ctx);
+			if (sinkRc.needsCleanup) {
+				if (node.nodeType === null) node.nodeType = sym.symbolType;
+				return passCopyToSink(node, dctx);
+			}
+		}
+		return node;
+	}
 
 	// Reference parity: SinkArg mode — passCopyToSink or destructive move
 	// Used for object literal fields, array literal elements (reference: ObjectLiteral sinkArg)
@@ -1686,7 +1711,23 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], dctx: DrcC
 		const pName = paramNames[pi];
 		// Skip closure env params (item 11) — they're managed by msClosure infrastructure
 		if (!isEnvParam(pName)) {
-			const pRcInfo = classifyType(paramTypes[pi], dctx.ctx);
+			// Sink<T> signature wrapper (checker return-only inference): peel it for
+			// CLASSIFICATION only. Without the peel, classifyType sees the wrapper as
+			// non-RC and the param is never registered — reassignments then bail out of
+			// processAssignment with no RC treatment at all (tailCallLower param rebinds
+			// emitted raw: source share never materialized → use-after-free once the
+			// iteration scope destroyed it). Ownership stays with the CALLER (cursor):
+			// processCallArgs registers sink-arg temps for caller cleanup and
+			// needsReturnIncref balances `return p` — flipping to callee-owned cleanup
+			// double-frees against both. Sink ONLY — peeling Lent/Var here would flip
+			// cursor field-access analysis on for nearly every read-only param in one
+			// step (untested blast radius). Full sink/lent ownership transfer is the
+			// fresh-vs-borrow ownership project, not this registration.
+			let pType = paramTypes[pi];
+			if (pType !== null && pType.kind === TypeKind.Sink && pType.typeReturn !== null) {
+				pType = pType.typeReturn;
+			}
+			const pRcInfo = classifyType(pType, dctx.ctx);
 			if (pRcInfo.needsCleanup) {
 				// Implementation parity: regular params are BORROWED (cursor=true, no cleanup).
 				// Only sink params (SymbolFlag.Sink) take ownership and need cleanup at exit.
@@ -2037,7 +2078,7 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 		// we skip DRC on cursor init, so we incref at the return instead.
 		if (isCursorVar(dctx.cursors, name) || (name.startsWith("$") && name !== "$result")) {
 			if (expr.nodeType !== null) {
-				const rc = classifyType(expr.nodeType, dctx.ctx);
+				const rc = sinkClassify(expr.nodeType, dctx.ctx);
 				return rc.needsCleanup && rc.rcKind === RcKind.Ref;
 			}
 		}
@@ -2045,12 +2086,12 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 		if (vi !== null) return false;  // function-local var — ownership transferred via markReturnedVarsMoved
 		// Not a local var (parameter or global) — check if RC pointer type
 		if (expr.nodeType !== null) {
-			const rc = classifyType(expr.nodeType, dctx.ctx);
+			const rc = sinkClassify(expr.nodeType, dctx.ctx);
 			return rc.needsCleanup && rc.rcKind === RcKind.Ref;
 		}
 		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, name);
 		if (sym === null || sym.symbolType === null) return false;
-		const rc = classifyType(sym.symbolType, dctx.ctx);
+		const rc = sinkClassify(sym.symbolType, dctx.ctx);
 		// Only Ref types use msIncref. Strings/arrays use deep copy (handled by processReturn).
 		return rc.needsCleanup && rc.rcKind === RcKind.Ref;
 	}
@@ -2059,7 +2100,7 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 	// Reference parity: the reference reads n.typ on the node, never re-does scope lookup in DRC.
 	if (expr.kind === NodeKind.MemberExpr) {
 		if (expr.nodeType !== null) {
-			const rc = classifyType(expr.nodeType, dctx.ctx);
+			const rc = sinkClassify(expr.nodeType, dctx.ctx);
 			return rc.needsCleanup && rc.rcKind === RcKind.Ref;
 		}
 		// Fallback: look up object type via symbol table (module-scope symbols only)
@@ -2071,7 +2112,7 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 		const objType = objSym.symbolType;
 		for (let fi = 0; fi < objType.typeNames.length && fi < objType.typeChildren.length; fi += 1) {
 			if (objType.typeNames[fi] === md.property) {
-				const rc = classifyType(objType.typeChildren[fi], dctx.ctx);
+				const rc = sinkClassify(objType.typeChildren[fi], dctx.ctx);
 				return rc.needsCleanup && rc.rcKind === RcKind.Ref;
 			}
 		}
@@ -2080,7 +2121,7 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 	// ArrayAccess: use nodeType first, fallback to symbol lookup
 	if (expr.kind === NodeKind.ArrayAccess) {
 		if (expr.nodeType !== null) {
-			const rc = classifyType(expr.nodeType, dctx.ctx);
+			const rc = sinkClassify(expr.nodeType, dctx.ctx);
 			return rc.needsCleanup && rc.rcKind === RcKind.Ref;
 		}
 		const ad = expr.data as ArrayAccessData;
@@ -2089,7 +2130,7 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, arrName);
 		if (sym === null || sym.symbolType === null) return false;
 		if (sym.symbolType.typeReturn === null) return false;
-		const elemRc = classifyType(sym.symbolType.typeReturn, dctx.ctx);
+		const elemRc = sinkClassify(sym.symbolType.typeReturn, dctx.ctx);
 		return elemRc.needsCleanup && elemRc.rcKind === RcKind.Ref;
 	}
 
@@ -2097,7 +2138,7 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 	// callee scope frees pointer before caller's field-assign incref runs. Extend
 	// this function when new return shapes (CastExpr, TernaryExpr) need handling.
 	if (expr.nodeType !== null) {
-		const rc = classifyType(expr.nodeType, dctx.ctx);
+		const rc = sinkClassify(expr.nodeType, dctx.ctx);
 		if (rc.needsCleanup && rc.rcKind === RcKind.Ref) {
 			dctx.ctx.checkerCtx.errors.push({
 				message: "needsReturnIncref: unhandled NodeKind=" + (expr.kind as number) + " for Ref-typed return — extend inject.ms",
