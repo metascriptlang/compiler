@@ -167,6 +167,13 @@ export const CASES: NativeCase[] = [
 		note: "FIXED by destructorLifting shouldEmitTypeInfo for mono'd heap classes: a Map<K,V> dropped at scope exit did not free its entries — the mono Map__string_string never ran emitFullTypeInfo (only processDecl does, and a mono has no declaration) so TypeInfo.destroyFn stayed NULL and msDecref skipped the recursive entry free. The mono gate excludes `$`-prefixed synthetic env structs (forcing their TypeInfo in a consumer module breaks the self-host binary compile — they aren't forward-declared there). Nim parity: liftdestructors wires the destructor slot per-instantiation. Was 477MB @ 50k×50 fill+drop, now flat ~2MB drc+orc. Caught NOTHING in test-ms/probes; only the full self-host binary build exposed the cross-module compile cascade — this guard pairs with that build as the gate.",
 	},
 	{
+		name: "hashset-enlarge-keep",
+		file: "hashSetEnlargeKeep.ms",
+		maxRssMb: 40,
+		expectStdout: "hashset-enlarge-keep ok n=5000",
+		note: "FIXED in std/core/struct.ms hashSetEnlarge: the rehash loop wrote through the LOCAL `newData` after `s.data = newData` — under the C backend's value-array field-assign (deep copy) the rehash filled a dead local and every enlarge silently EMPTIED the live table. Correctness guard, not a leak guard: the marker only prints if all 5000 keys survive every enlarge and size is honest. Bun runs JS reference arrays where the alias forms, so test-ms is structurally blind to this family. Nim parity: tables.nim enlarge swaps then writes through t.data[j].",
+	},
+	{
 		name: "leak-hashmap-enlarge",
 		file: "leakHashMapEnlarge.ms",
 		maxRssMb: 40,

@@ -310,9 +310,9 @@ function hashSetEnlarge<T>(s: HashSet<T>): void {
 		if (oldData[i].hcode !== 0) {
 			const mask: int32 = newCap - 1;
 			let j: int32 = (oldData[i].hcode & (mask as int64)) as int32;
-			while (newData[j].hcode !== 0) { j = (j + 1) & mask; }
-			newData[j].hcode = oldData[i].hcode;
-			newData[j].key = oldData[i].key;
+			while (s.data[j].hcode !== 0) { j = (j + 1) & mask; }
+			s.data[j].hcode = oldData[i].hcode;
+			s.data[j].key = oldData[i].key;
 		}
 		i = i + 1;
 	}
