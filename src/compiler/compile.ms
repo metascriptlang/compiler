@@ -580,8 +580,18 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
 		futures.push(spawn(() => {
-			const r = compileCFile(j.fullPath, j.oFile, j.fileFlags, mode, ccOption, ccBinary);
+			let r = compileCFile(j.fullPath, j.oFile, j.fileFlags, mode, ccOption, ccBinary);
+			if (!r.ok && r.error.exitCode === 0) {
+				// exitCode 0 with !ok = the process never ran (posix_spawn failure,
+				// e.g. transient EAGAIN under fork pressure from N parallel jobs).
+				// One retry absorbs it; a real compile error has a nonzero exitCode
+				// and is not retried.
+				r = compileCFile(j.fullPath, j.oFile, j.fileFlags, mode, ccOption, ccBinary);
+			}
 			if (r.ok) return 0;
+			// Surface the failure reason — the parallel path otherwise discards
+			// stderr and the join loop only reports the exit code.
+			if (r.error.errorOutput !== "") console.log(r.error.errorOutput);
 			return r.error.exitCode !== 0 ? r.error.exitCode : -1;
 		}));
 	}
