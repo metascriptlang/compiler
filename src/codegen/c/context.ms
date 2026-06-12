@@ -398,12 +398,16 @@ export function popBlock(p: CProc): CBlock {
 	const block = p.blocks[idx];
 	p.blocks.pop();
 	if (block.isLoop) p.withinLoop -= 1;
-	// Merge block's sections into parent's stmts — splice arrays (no joining)
+	// Merge block's sections into parent's stmts — splice arrays (no joining).
+	// Push through the field chain, NOT a local alias: under value-array
+	// semantics `const parentParts = ...stmts.parts` copies {len, p}; growth
+	// reallocs through the copy and the parent's field keeps the freed buffer
+	// (Bun's reference arrays hide this — native msc read the stale pointer
+	// on the very next emit). Same disease as hashSetEnlarge.
 	const parentIdx = p.blocks.length - 1;
-	const parentParts = p.blocks[parentIdx].stmts.parts;
-	for (const s of block.locals.parts) parentParts.push(s);
-	for (const s of block.init.parts) parentParts.push(s);
-	for (const s of block.stmts.parts) parentParts.push(s);
+	for (const s of block.locals.parts) p.blocks[parentIdx].stmts.parts.push(s);
+	for (const s of block.init.parts) p.blocks[parentIdx].stmts.parts.push(s);
+	for (const s of block.stmts.parts) p.blocks[parentIdx].stmts.parts.push(s);
 	// Return a placeholder (callers rarely use the return value)
 	return p.blocks[parentIdx];
 }
