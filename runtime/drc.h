@@ -58,7 +58,12 @@ static inline msRefHeader* msHeader(void* p) {
  * Avoids calloc/free overhead for short-lived objects (e.g., spawn closure envs).
  * Objects are bucketed by rounded-up size. Each bucket is a singly-linked list
  * using the first 8 bytes of the freed block as the next pointer. */
+/* Overridable so sanitizer builds can bypass the free-list entirely
+ * (-DMS_SLAB_MAX=0): recycling inside the slab hides use-after-free from
+ * ASAN/guard-malloc, which only see real malloc/free boundaries. */
+#ifndef MS_SLAB_MAX
 #define MS_SLAB_MAX 128        /* max total size (header + payload) for caching */
+#endif
 #define MS_SLAB_BUCKET_SIZE 32 /* bucket granularity: 32, 64, 96, 128 */
 #define MS_SLAB_BUCKETS 4
 #define MS_SLAB_LIMIT 256      /* max cached entries per bucket (prevents unbounded growth) */
@@ -71,6 +76,7 @@ typedef struct msSlab {
 static _Thread_local msSlab msSlabTLS;
 
 static inline int msSlabBucket(size_t totalSize) {
+	if (totalSize > MS_SLAB_MAX) return -1;
 	if (totalSize <= 32) return 0;
 	if (totalSize <= 64) return 1;
 	if (totalSize <= 96) return 2;
