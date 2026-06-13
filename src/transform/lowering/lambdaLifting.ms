@@ -371,9 +371,16 @@ let _captureSS: ScopeStack = { names: [], funcMarkers: [] };
 
 function detectCaptures(body: Node, ss: ScopeStack, identNodes: Node[]): NameSet {
 	_captureCC = createNameSet();
-	_captureIdents = identNodes;
+	// TODO(ARRAY-MIGRATION): revert to `_captureIdents = identNodes` aliasing once
+	// T[] is reference-based (docs/ARRAY-MIGRATION.md Phase 4). Today native array
+	// assignment is a value-copy: aliasing the caller's array through this global
+	// detaches the two — walk pushes land in the copy, the caller's list stays
+	// empty, capture types are lost → missing DRC copies → UAF (gen-2
+	// "@compile failed for <garbage>" incident). Bun (JS reference arrays) hides it.
+	_captureIdents = [];
 	_captureSS = ss;
 	collectCaptures(body);
+	for (const n of _captureIdents) { identNodes.push(n); }
 	const result = _captureCC;
 	_captureCC = createNameSet();
 	_captureIdents = [];
