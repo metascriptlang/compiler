@@ -159,20 +159,34 @@ export function walkBodyForCallees(
 // types live in cross-module type-level declarations.
 
 function _collectTypeRefsFromType(t: Type, names: HashSet<string>): void {
+	_collectTypeRefsFromTypeImpl(t, names, new HashSet<string>());
+}
+
+// Inner walker carries a per-top-level-call visited set keyed by typeName so
+// self-referential types (e.g. interface Window { children: Window[] } or
+// Result<T, E> wrappers reached transitively) don't recurse forever through
+// typeChildren / typeReturn. Without this guard, importing parseJson into a
+// module that exports an interface with a recursive field crashes the comptime
+// VM with "Maximum call stack size exceeded" — the names HashSet alone does
+// not block recursion because the primitive-kind check skips adding (and the
+// caller pre-seeds it, so name presence does not imply "already walked").
+function _collectTypeRefsFromTypeImpl(t: Type, names: HashSet<string>, visited: HashSet<string>): void {
 	if (t === null) return;
-	// Skip primitive types by TypeKind (more robust than name matching —
-	// reuses checker's canonical predicate and naturally excludes literal-
-	// typed terms like the "true"/"false" disc values of match-type DUs).
-	if (t.typeName !== "" && !isPrimitiveKind(t.kind)) {
-		names.add(t.typeName);
+	if (t.typeName !== "") {
+		if (visited.has(t.typeName)) return;
+		visited.add(t.typeName);
+		// Skip primitive types by TypeKind (more robust than name matching —
+		// reuses checker's canonical predicate and naturally excludes literal-
+		// typed terms like the "true"/"false" disc values of match-type DUs).
+		if (!isPrimitiveKind(t.kind)) names.add(t.typeName);
 	}
 	if (t.typeChildren !== null) {
 		for (const c of t.typeChildren) {
-			_collectTypeRefsFromType(c, names);
+			_collectTypeRefsFromTypeImpl(c, names, visited);
 		}
 	}
 	if (t.typeReturn !== null) {
-		_collectTypeRefsFromType(t.typeReturn, names);
+		_collectTypeRefsFromTypeImpl(t.typeReturn, names, visited);
 	}
 }
 
