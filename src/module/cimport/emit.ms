@@ -32,9 +32,13 @@ function mapRuntimeType(name: string): string {
 	};
 }
 
-function cTypeToMs(t: CType): string {
-	// Check typedef name first — handles anonymous struct typedefs like msString
-	if (t.typedefName !== "") {
+// `skipTypedef=false` (default): USE-site — preserves typedef alias names so a
+// MyId parameter emits as `x: MyId`. `skipTypedef=true`: DEFINE-site — used by
+// emitTypedef so `type MyId = ...` resolves to the underlying type, not back
+// to itself (chibicc parse.ms:192 mutates typedefName on lookup, so the type
+// behind a self-named typedef has typedefName === obj.name).
+function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
+	if (!skipTypedef && t.typedefName !== "") {
 		const mapped = mapRuntimeType(t.typedefName);
 		if (mapped !== "") return mapped;
 		// Opaque types from heuristic (unknown C types without #include)
@@ -153,8 +157,13 @@ function emitTypedef(obj: Obj, prefix: string): string {
 	}
 	// Enum typedef → handled separately via emitEnum
 	if (t.kind === CTypeKind.Enum) return "";
-	// Simple type alias
-	return `${prefix}type ${obj.name} = ${cTypeToMs(t)};\n`;
+	// Skip cTypeToMs's typedefName short-circuit — it would return obj.name
+	// itself and emit `type X = X;`. Forward-declared struct whose tagName
+	// matches obj.name still produces self-reference via the kind branch;
+	// guard with "unknown" fallback.
+	let underlying = cTypeToMs(t, true);
+	if (underlying === obj.name) underlying = "unknown";
+	return `${prefix}type ${obj.name} = ${underlying};\n`;
 }
 
 // ===== Main Entry Point =====
@@ -168,13 +177,46 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 
 	const filterAll = importedNames.length === 0;
 
+	// Build "wanted" set: object names whose declaration must reach the
+	// emit pass. When filterAll, every parsed name is wanted. When the
+	// caller passed an import list, seed with that list and transitively
+	// close over type references so typedefs / struct tags / enum tags
+	// referenced by emitted functions/vars/typedefs also emit. Without
+	// this closure, `import { fn } from "x.h"` where `fn` takes a typedef
+	// param emits the function but drops the typedef → unresolved type.
+	const wantedNames = new HashSet<string>();
+	if (filterAll) {
+		for (const obj of parsed.objs) wantedNames.add(obj.name);
+	} else {
+		for (const name of importedNames) wantedNames.add(name);
+		const queue: string[] = [];
+		for (const name of importedNames) queue.push(name);
+		const processed = new HashSet<string>();
+		while (queue.length > 0) {
+			const name = queue.pop();
+			if (processed.has(name)) continue;
+			processed.add(name);
+			for (const obj of parsed.objs) {
+				if (obj.name !== name) continue;
+				const refs = new HashSet<string>();
+				const seenTypes = new HashSet<string>();
+				collectTypeRefNames(obj.type, refs, seenTypes);
+				for (const r of refs) {
+					if (!wantedNames.has(r)) {
+						wantedNames.add(r);
+						queue.push(r);
+					}
+				}
+			}
+		}
+	}
+
 	// Track which enum types we've already emitted
 	const emittedEnums: string[] = [];
 
 	let result = "";
 	for (const obj of parsed.objs) {
-		// Name filtering: skip declarations not in the import list
-		if (!filterAll && !nameMatches(obj, importedNames)) continue;
+		if (!wantedNames.has(obj.name)) continue;
 
 		match (obj.kind) {
 			ObjKind.Function => {
@@ -205,11 +247,38 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 	return result;
 }
 
-function nameMatches(obj: Obj, importedNames: string[]): boolean {
-	for (const name of importedNames) {
-		if (obj.name === name) return true;
+// Walk a CType tree and collect names of user-defined typedefs / tagged
+// struct/union/enum referenced anywhere inside. Used by translateCHeader
+// to compute the transitive closure for the import-name filter so a
+// typedef referenced by an emitted function is not silently dropped.
+// Skips primitive-mapped typedef names (int32_t, size_t, ...) since those
+// resolve via mapRuntimeType and need no separate emit. Struct self-refs
+// via pointer-to-self are guarded by a string-keyed seen set so the walk
+// terminates.
+function collectTypeRefNames(t: CType, refs: HashSet<string>, seen: HashSet<string>): void {
+	if (t === null) return;
+	if (t.typedefName !== "") {
+		const mapped = mapRuntimeType(t.typedefName);
+		// Runtime-mapped typedef (msString → string, size_t → uint64, ...):
+		// user code uses the MS-native alias; do NOT walk into the C struct
+		// internals or we drag implementation details (msStrPayload etc.)
+		// into the emitted MS source and clash with other modules' externs.
+		if (mapped !== "") return;
+		refs.add(t.typedefName);
 	}
-	return false;
+	const isAggregate = t.kind === CTypeKind.Struct
+		|| t.kind === CTypeKind.Union
+		|| t.kind === CTypeKind.Enum;
+	if (isAggregate && t.tagName !== "") {
+		refs.add(t.tagName);
+		const key = "tag:" + t.tagName;
+		if (seen.has(key)) return;
+		seen.add(key);
+	}
+	if (t.base !== null) collectTypeRefNames(t.base, refs, seen);
+	if (t.returnType !== null) collectTypeRefNames(t.returnType, refs, seen);
+	for (const p of t.params) collectTypeRefNames(p, refs, seen);
+	for (const m of t.members) collectTypeRefNames(m.type, refs, seen);
 }
 
 function arrayContains(arr: string[], val: string): boolean {
@@ -280,4 +349,16 @@ test "emit type alias" {
 test "emit function pointer param" {
 	const ms = translateCHeader("typedef int (*CompareFn)(const void *, const void *);", [], false);
 	assert ms.indexOf("CompareFn") >= 0;
+}
+
+test "user-defined typedef does not self-reference" {
+	const ms = translateCHeader("typedef int MyId;", [], false);
+	assert ms.indexOf("type MyId = int32") >= 0;
+	assert ms.indexOf("type MyId = MyId") < 0;
+}
+
+test "name filter transitively keeps referenced typedef" {
+	const ms = translateCHeader("typedef int MyId;\nMyId doThing(MyId x);", ["doThing"], false);
+	assert ms.indexOf("extern function doThing") >= 0;
+	assert ms.indexOf("type MyId = int32") >= 0;
 }
