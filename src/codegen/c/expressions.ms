@@ -15,7 +15,7 @@ import {
 	emitProcLocalsLine, lookupLocalName, typeCacheGet,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType, ensurePromiseAllInstance, typeKey } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto, isDrcLifecycleName } from "./forward";
@@ -2205,12 +2205,54 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	if (callee === "msSinkBoxStruct" && cd.arguments.length >= 1 && cd.arguments[0].nodeType !== null) {
 		const sinkType = getTypeDesc(g, cd.arguments[0].nodeType);
 		const boxTmp = getTemp(p, "void*");
-		const addrArg = argsStr.length > 0 && argsStr.charAt(0) === "&" ? argsStr : "&(" + argsStr + ")";
+		// `&` needs an lvalue; a call/rvalue arg (e.g. a boxed array literal) is first
+		// hoisted into a temp so the source can be taken-address-of and then neutralized.
+		const argK = cd.arguments[0].kind;
+		const argIsLValue = argK === NodeKind.Identifier || argK === NodeKind.MemberExpr || argK === NodeKind.ArrayAccess || argK === NodeKind.HiddenDeref;
+		let addrArg = argsStr.length > 0 && argsStr.charAt(0) === "&" ? argsStr : "&(" + argsStr + ")";
+		if (!argIsLValue) {
+			const valTmp = getTemp(p, sinkType);
+			emitStmtsLine(p, `${valTmp.snippet} = ${argsStr};`);
+			addrArg = "&" + valTmp.snippet;
+		}
 		emitStmtsLine(p, `${boxTmp.snippet} = malloc(sizeof(${sinkType}));`);
 		emitStmtsLine(p, `memcpy(${boxTmp.snippet}, ${addrArg}, sizeof(${sinkType}));`);
 		// Neutralize source: zero all bytes so DRC destroy sees no refs to release
 		emitStmtsLine(p, `memset(${addrArg}, 0, sizeof(${sinkType}));`);
 		ctx.results.push(boxTmp.snippet);
+		return;
+	}
+
+	// msBoxRefArray(valueArray) → refcounted heap cell holding the array, giving
+	// Ref<Array<T>> reference semantics. The cell's TypeInfo.destroyFn frees the
+	// array payload when rc hits 0; the DRC then frees the cell. The source value
+	// is neutralized (move) so the boxed payload has a single owner.
+	if (callee === "msBoxRefArray" && cd.arguments.length >= 1 && cd.arguments[0].nodeType !== null && node.nodeType !== null) {
+		const arrCType = getTypeDesc(g, cd.arguments[0].nodeType);
+		const cellCType = getTypeDesc(g, node.nodeType);
+		let destroyFn = "msNumberArrayDestroy";
+		const elemT = cd.arguments[0].nodeType.typeReturn;
+		if (elemT !== null) {
+			destroyFn = match (elemT.kind) {
+				TypeKind.String => "msStringArrayDestroy",
+				TypeKind.Ref | TypeKind.Ptr => "msRefArrayDestroy",
+				TypeKind.Function => "msClosureArrayDestroy",
+				// Unknown / Union(Ref,Null) / other pointer-payload elements collapse to the
+				// void* msRefArray payload; a free()-only destroyer would leak the elements.
+				// Fall back on the actual C payload type, not the (possibly unresolved) element kind.
+				_ => arrCType === "msRefArray" ? "msRefArrayDestroy" : "msNumberArrayDestroy",
+			};
+		}
+		const cellName = arrCType + "RefCell";
+		ensureRefArrayCellTypeInfo(g, cellName, destroyFn);
+		const tiArg = (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
+		const valTmp = getTemp(p, arrCType);
+		emitStmtsLine(p, `${valTmp.snippet} = ${argsStr};`);
+		const cellTmp = getTemp(p, cellCType);
+		emitStmtsLine(p, `${cellTmp.snippet} = (${cellCType})msAllocTyped(sizeof(${arrCType}), ${tiArg});`);
+		emitStmtsLine(p, `memcpy(${cellTmp.snippet}, &${valTmp.snippet}, sizeof(${arrCType}));`);
+		emitStmtsLine(p, `memset(&${valTmp.snippet}, 0, sizeof(${arrCType}));`);
+		ctx.results.push(cellTmp.snippet);
 		return;
 	}
 
@@ -2366,9 +2408,17 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[], sym
 	const needsAddr = hasAddrPrefix(nativeName);
 	let cName = stripAddrPrefix(nativeName);
 
+	// reference array: a Ref<Array> receiver is already the msXxxArray* the runtime
+	// helper expects. The `&`-prefix convention takes the address of a value-array
+	// receiver to form that pointer; for a Ref the address-of and the implied deref
+	// cancel (the Ref IS the pointer), so pass the receiver through unchanged.
+	const recvIsRefArray = args.length > 0 && args[0].nodeType !== null
+		&& args[0].nodeType.kind === TypeKind.Ref && args[0].nodeType.typeReturn !== null
+		&& args[0].nodeType.typeReturn.kind === TypeKind.Array;
+
 	// Array type suffix: ms_array_X → ms_array_X_number/_string/_ref
 	if (args.length > 0 && args[0].nodeType !== null) {
-		const recvType = args[0].nodeType;
+		const recvType = recvIsRefArray ? args[0].nodeType.typeReturn : args[0].nodeType;
 		if (recvType.kind === TypeKind.Array) {
 			if (cName.length >= 9 && cName.slice(0, 9) === "ms_array_") {
 				if (recvType.typeReturn !== null) {
@@ -2398,7 +2448,8 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[], sym
 	// Build call with & on first arg if mutating
 	if (needsAddr && args.length > 0) {
 		const firstArg = genExpr(g, p, args[0]);
-		let result = `${cName}(${safeAddrOf(g, p, firstArg, args[0], null)}`;
+		const recvSnippet = recvIsRefArray ? firstArg : safeAddrOf(g, p, firstArg, args[0], null);
+		let result = `${cName}(${recvSnippet}`;
 		let i = 1;
 		while (i < args.length) {
 			let arg = genExpr(g, p, args[i]);

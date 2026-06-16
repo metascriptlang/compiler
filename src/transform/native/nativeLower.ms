@@ -12,11 +12,28 @@
 //
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
-import { Node, NodeKind, ArrayAccessData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, ArrayAccessData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, Type, TypeKind, SymbolKind, createNode } from "../../ast/node";
 import { isNumeric, unwrapRefNullUnion } from "../../checker/types";
+import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber, makeMember } from "../util";
+import { makeCall, makeIdent, makeNumber, makeMember, syntheticToken } from "../util";
+
+// reference array: a Ref<Array> receiver reaching access/length lowering (e.g. a node
+// synthesized by forOfLower after the checker already ran) is a msXxxArray* pointer, but
+// the runtime access macros / `.len` field read want the value struct. Deref the Ref so
+// codegen emits `(*arr)`. A receiver already dereferenced by the checker is a value Array
+// here, so this is a no-op for it (guards against double-deref).
+function unwrapRefArrayRecv(recv: Node): Node {
+	const t = recv.nodeType;
+	if (t !== null && t.kind === TypeKind.Ref && t.typeReturn !== null
+			&& t.typeReturn.kind === TypeKind.Array) {
+		const deref = createNode(NodeKind.HiddenDeref, { expr: recv }, syntheticToken(recv.location));
+		deref.nodeType = t.typeReturn;
+		return deref;
+	}
+	return recv;
+}
 
 // ===== Main Entry Point =====
 
@@ -59,6 +76,41 @@ function rewriteAccess(node: Node): Node {
 	if (node.kind === NodeKind.ArrayAccess) return rewriteArrayAccess(node);
 	if (node.kind === NodeKind.MemberExpr) return rewriteMemberExpr(node);
 	if (node.kind === NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
+	if (node.kind === NodeKind.NewExpr) return rewriteNewExpr(node);
+	if (node.kind === NodeKind.CallExpr) return rewriteExternArrayReturn(node);
+	return node;
+}
+
+// An extern (FFI) function whose return is typed Ref<Array> returns the array BY VALUE at
+// the C ABI (msXxxArray); box that value into a refcounted cell so the pointer-typed
+// destination matches — same shape as a fresh array literal / new Array().
+function rewriteExternArrayReturn(node: Node): Node {
+	const refType = node.nodeType;
+	if (refType === null || refType.kind !== TypeKind.Ref || refType.typeReturn === null
+			|| refType.typeReturn.kind !== TypeKind.Array) return node;
+	const sym = node.resolvedSym;
+	if (sym === null || sym.nativeName === ""
+			|| sym.symbolKind === SymbolKind.Variable
+			|| sym.symbolKind === SymbolKind.Parameter
+			|| sym.symbolKind === SymbolKind.Property) return node;
+	if (findChar(sym.nativeName, "(") >= 0) return node;
+	node.nodeType = refType.typeReturn;
+	const box = makeCall(makeIdent("msBoxRefArray", node.location), [node], node.location);
+	box.nodeType = refType;
+	return box;
+}
+
+// new Array(N) / new Array<T>() typed as Ref<Array<T>>: the inner NewExpr builds a
+// value array (codegen calloc); box it into a refcounted cell, same as an array literal.
+function rewriteNewExpr(node: Node): Node {
+	const refType = node.nodeType;
+	if (refType !== null && refType.kind === TypeKind.Ref && refType.typeReturn !== null
+			&& refType.typeReturn.kind === TypeKind.Array) {
+		node.nodeType = refType.typeReturn;
+		const box = makeCall(makeIdent("msBoxRefArray", node.location), [node], node.location);
+		box.nodeType = refType;
+		return box;
+	}
 	return node;
 }
 
@@ -66,6 +118,7 @@ function rewriteAccess(node: Node): Node {
 
 function rewriteArrayAccess(node: Node): Node {
 	const d = node.data as ArrayAccessData;
+	d.array = unwrapRefArrayRecv(d.array);
 	const arrType = d.array.nodeType;
 	if (arrType === null) return node;
 
@@ -133,6 +186,7 @@ function getArrayMacroName(elemType: Type | null): string {
 
 function rewriteMemberExpr(node: Node): Node {
 	const d = node.data as MemberExprData;
+	d.object = unwrapRefArrayRecv(d.object);
 	const objType = d.object.nodeType;
 	if (objType === null) return node;
 
@@ -199,6 +253,19 @@ function rewriteMemberExpr(node: Node): Node {
 
 function rewriteArrayLiteral(node: Node): Node {
 	const d = node.data as ArrayLiteralData;
+
+	// reference array Ref<Array<T>>: lower the inner value array, then box it onto the
+	// heap via msBoxRefArray (refcounted cell) so the variable holds a shared pointer.
+	const refType = node.nodeType;
+	if (refType !== null && refType.kind === TypeKind.Ref && refType.typeReturn !== null
+			&& refType.typeReturn.kind === TypeKind.Array) {
+		node.nodeType = refType.typeReturn;
+		const inner = rewriteArrayLiteral(node);
+		const box = makeCall(makeIdent("msBoxRefArray", node.location), [inner], node.location);
+		box.nodeType = refType;
+		return box;
+	}
+
 	if (d.elements.length === 0) return node;
 
 	const arrType = node.nodeType;

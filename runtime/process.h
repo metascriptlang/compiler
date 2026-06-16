@@ -274,7 +274,7 @@ static inline void _msAppendWinArg(char** buf, size_t* len, size_t* cap, const c
 	*len = out - *buf;
 }
 
-static inline double msProcessExecFile(msString path, msStringArray args) {
+static inline double msProcessExecFile(msString path, msStringArray* args) {
 	const char* pathStr = msStringToCString(path);
 
 	/* Assemble command line: "path" arg1 arg2 ... */
@@ -283,11 +283,11 @@ static inline double msProcessExecFile(msString path, msStringArray args) {
 	char* cmdLine = (char*)malloc(cap);
 	if (!cmdLine) return -1.0;
 	_msAppendWinArg(&cmdLine, &len, &cap, pathStr);
-	if (args.p != NULL) {
-		for (int64_t i = 0; i < args.len; i++) {
+	if (args != NULL && args->p != NULL) {
+		for (int64_t i = 0; i < args->len; i++) {
 			if (len + 2 > cap) { cap *= 2; cmdLine = (char*)realloc(cmdLine, cap); }
 			cmdLine[len++] = ' ';
-			const char* a = msStringToCString(args.p->data[i]);
+			const char* a = msStringToCString(args->p->data[i]);
 			_msAppendWinArg(&cmdLine, &len, &cap, a);
 		}
 	}
@@ -323,15 +323,15 @@ static inline double msProcessExecFile(msString path, msStringArray args) {
 	return (double)exitCode;
 }
 #else
-static inline double msProcessExecFile(msString path, msStringArray args) {
+static inline double msProcessExecFile(msString path, msStringArray* args) {
 	const char* pathStr = msStringToCString(path);
-	int64_t argc = args.len;
+	int64_t argc = (args != NULL) ? args->len : 0;
 	char** argv = (char**)malloc(sizeof(char*) * (argc + 2));
 	if (!argv) return -1.0;
 	argv[0] = (char*)pathStr;
 	/* msStringToCString may reuse a shared buffer — materialize each arg now. */
 	for (int64_t i = 0; i < argc; i++) {
-		const char* src = msStringToCString(args.p->data[i]);
+		const char* src = msStringToCString(args->p->data[i]);
 		size_t slen = strlen(src);
 		char* copy = (char*)malloc(slen + 1);
 		if (!copy) {
