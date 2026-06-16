@@ -387,7 +387,7 @@ function buildCompileCommand(cFile: string, outBinary: string, extraFlags: strin
 	if (isCpp) _hasCppCompile = true;
 	const baseCompiler = getCompilerName(ccOption, ccBinary);
 	const compiler = isCpp ? toCppCompiler(baseCompiler) : baseCompiler;
-	const stdFlag = isCpp ? "-std=c++17" : "-std=c11";
+	const stdFlag = isCpp ? "-std=c++17" : "-std=gnu11";
 	let cmd = `${compiler} ${stdFlag}${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
@@ -415,7 +415,7 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 	const isCpp = isCppFile(cFile);
 	const baseCompiler = getCompilerName(ccOption, ccBinary);
 	const compiler = isCpp ? toCppCompiler(baseCompiler) : baseCompiler;
-	const stdFlag = isCpp ? "-std=c++17" : "-std=c11";
+	const stdFlag = isCpp ? "-std=c++17" : "-std=gnu11";
 	let cmd = `${compiler} ${stdFlag}${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();

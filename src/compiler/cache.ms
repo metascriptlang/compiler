@@ -92,7 +92,7 @@ export function stableOFile(srcPath: string): string {
 
 // Full compile command for fingerprint — includes compiler, -std, mode flags.
 export function fullCompileCmd(ccOption: number, mode: number, extraFlags: string): string {
-	return `${getCompilerName(ccOption, "")} -std=c11${modeFlags(mode)} ${extraFlags}`;
+	return `${getCompilerName(ccOption, "")} -std=gnu11${modeFlags(mode)} ${extraFlags}`;
 }
 
 // Fingerprint folds in VERSION so that any msc release that changes runtime/*.h
