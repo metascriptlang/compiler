@@ -22,7 +22,7 @@ import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify"
 import {
 	DrcContext, DrcScope, noSym,
 	createDrcContext, pushScope, popScope, currentScope, scopeDepth,
-	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, findVarInfo, findVarInfoInContext, findVarInfoInFunction,
+	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, varMovedInContext, clearMoveInContext, findVarInfo, findVarInfoInContext, findVarInfoInFunction,
 	setNeedsTryToLoop, setNeedsTryAll, addPending, hasPending, clearPendingForVar,
 	addPre,
 	pushOuterStmts, popOuterStmts,
@@ -2035,6 +2035,11 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		vi.isInitialized = true;
 	}
 
+	// Snapshot the LHS var's move-state BEFORE the RHS, so we can tell whether THIS RHS
+	// consumes it (`x = f([..., x])`) versus it having been conditionally moved earlier
+	// (e.g. a `return x` in a sibling branch — flow-insensitive move record).
+	const movedBeforeRhs = !isFirstWrite && varMovedInContext(dctx, leftD.name);
+
 	// Process RHS recursively with Consumed mode
 	bd.right = processNode(bd.right, dctx, DrcMode.Consumed);
 
@@ -2044,6 +2049,18 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 	// old value. The pending wasMoved would zero the NEW value. Clear it.
 	if (!isFirstWrite) {
 		clearPendingForVar(dctx, leftD.name);
+	}
+
+	// Reference parity (Nim wasMoved-then-sink-no-op): when the LHS var is consumed (moved)
+	// INSIDE this RHS — e.g. `x = f([..., x])`, where x sinks into an array/object literal —
+	// its old reference already lives there; destroying it again (save-assign-destroy)
+	// double-frees. Treat as a fresh write (no destroy-old) and clear the stale move so the
+	// new value is still destroyed at scope exit. Gate on !movedBeforeRhs so a prior
+	// conditional move is not mistaken for consumption by this RHS.
+	const consumedInRhs = !isFirstWrite && !movedBeforeRhs && varMovedInContext(dctx, leftD.name);
+	if (consumedInRhs) {
+		clearMoveInContext(dctx, leftD.name);
+		return moveOrCopy(stmt, bd.left, leftD.name, bd.right, rcInfo, MOC_IS_DECL, idx, stmts, dctx, loc);
 	}
 
 	// Unified RC decision (Reference parity: moveOrCopy)
@@ -2861,8 +2878,9 @@ test "classifyMemberFieldRc returns RC info for string field" {
 test "classifyArrayElementRc returns RC info for string array" {
 	const dctx = testDrcContext("const arr: string[] = [];");
 	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, "arr");
-	if (sym !== null && sym.symbolType !== null && sym.symbolType.typeReturn !== null) {
-		const rc = classifyType(sym.symbolType.typeReturn, dctx.ctx);
+	// arr is Ref<Array<string>>: typeReturn = Array<string>, its typeReturn = string element
+	if (sym !== null && sym.symbolType !== null && sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.typeReturn !== null) {
+		const rc = classifyType(sym.symbolType.typeReturn.typeReturn, dctx.ctx);
 		assert rc.needsCleanup;
 		assert rc.rcKind === RcKind.String;
 	}

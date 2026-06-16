@@ -188,6 +188,35 @@ export function recordMoveExpr(dctx: DrcContext, wasMovedCall: Node): void {
 	scope.wasMoved.push(mv);
 }
 
+// True if varName was recorded moved in the scope that actually tracks it.
+export function varMovedInContext(dctx: DrcContext, varName: string): boolean {
+	let i = dctx.scopes.length;
+	while (i > 0) {
+		i -= 1;
+		if (findVarInfo(dctx.scopes[i], varName) !== null) {
+			return wasMovedInScope(dctx.scopes[i], varName);
+		}
+	}
+	return false;
+}
+
+// Clear the moved record for varName in its owning scope — used when a reassignment gives
+// the var a fresh value, so scope-exit destroys the new value instead of skipping it.
+export function clearMoveInContext(dctx: DrcContext, varName: string): void {
+	let i = dctx.scopes.length;
+	while (i > 0) {
+		i -= 1;
+		if (findVarInfo(dctx.scopes[i], varName) !== null) {
+			const filtered: MovedVar[] = [];
+			for (const mv of dctx.scopes[i].wasMoved) {
+				if (mv.varName !== varName) filtered.push(mv);
+			}
+			dctx.scopes[i].wasMoved = filtered;
+			return;
+		}
+	}
+}
+
 // ===== needsTry Propagation =====
 
 // Set needsTry on all scopes from innermost to loop boundary (break/continue)
