@@ -6,7 +6,7 @@
 //   → { const $iter = arr; let $idx = 0; const $len = $iter.length;
 //       while ($idx < $len) { const item = $iter[$idx]; body; $idx++; } }
 
-import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, NodeFlag, Type, Symbol } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, NodeFlag, Type, TypeKind, Symbol } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { int32Type, unknownType, isIterator, getIteratorNextFnType } from "../../checker/types";
 import { walkNode } from "../walker";
@@ -97,6 +97,12 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const idxSym = freshTempSym(ctx, "idx", int32Type());
 	const lenSym = freshTempSym(ctx, "len", int32Type());
 	const iterType = d.forOfIterable.nodeType;
+	// reference array: the iter expr keeps its Ref<Array> type (nativeLower derefs the
+	// synthesized .length/[idx] access), but element-type stamping must read through the
+	// Ref to the value array so `.typeReturn` yields the element type, not the inner array.
+	const elemArrType = (iterType !== null && iterType.kind === TypeKind.Ref
+			&& iterType.typeReturn !== null && iterType.typeReturn.kind === TypeKind.Array)
+		? iterType.typeReturn : iterType;
 
 	// Stable lvalue check: Identifier/MemberExpr can be accessed directly without copy.
 	// Value-based arrays in C are {len, p} structs — copying creates a stale p pointer
@@ -143,14 +149,14 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 
 	if (d.forOfPattern !== null && d.forOfPattern.kind === NodeKind.ArrayPattern) {
 		// Destructured: const $elem = <iter>[$idx]; const a = $elem[0]; const b = $elem[1]; ...
-		const elemType = iterType !== null && iterType.typeReturn !== null ? iterType.typeReturn : unknownType();
+		const elemType = elemArrType !== null && elemArrType.typeReturn !== null ? elemArrType.typeReturn : unknownType();
 		const elemSym = freshTempSym(ctx, "elem", elemType);
 		const elemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
 		const elemDecl = makeVarDecl(elemSym.name, elemAccess, DeclKind.Const, loc);
 		elemDecl.resolvedSym = elemSym;
 		// Propagate element type for nativeLower (tuple → member access)
-		if (iterType !== null && iterType.typeReturn !== null) {
-			elemDecl.nodeType = iterType.typeReturn;
+		if (elemArrType !== null && elemArrType.typeReturn !== null) {
+			elemDecl.nodeType = elemArrType.typeReturn;
 		}
 		whileStmts.push(elemDecl);
 		const bindings = expandArrayPattern(d.forOfPattern, makeIdentResolved(elemSym, loc), itemDk, loc);
@@ -170,8 +176,8 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		// passes can see the monomorphized binding type. Same reason as the iterator
 		// path above — without this, generic for..of bindings degrade to `void*` in
 		// generated C and break DRC hook resolution.
-		if (iterType !== null && iterType.typeReturn !== null) {
-			itemDecl.nodeType = iterType.typeReturn;
+		if (elemArrType !== null && elemArrType.typeReturn !== null) {
+			itemDecl.nodeType = elemArrType.typeReturn;
 		}
 		whileStmts.push(itemDecl);
 	}

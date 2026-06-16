@@ -527,11 +527,18 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	const receiverType = fnType.typeChildren[0];
 	// Unknown receiver: match any (conservative — unresolved type)
 	if (receiverType.kind === TypeKind.Unknown) return true;
+	// Array methods are Ref-agnostic: T[] (Ref<Array>) and Vec<T> (value Array) share
+	// one element-typed method set. Unwrap the Ref<Array> envelope on both sides so
+	// matching compares element types; codegen dispatches &value vs ptr on the receiver.
+	let recvT = receiverType;
+	if (recvT.kind === TypeKind.Ref && recvT.typeReturn !== null && recvT.typeReturn.kind === TypeKind.Array) recvT = recvT.typeReturn;
+	let objT = objType;
+	if (objT.kind === TypeKind.Ref && objT.typeReturn !== null && objT.typeReturn.kind === TypeKind.Array) objT = objT.typeReturn;
 	// Generic extensions: try unification on receiver param.
 	// e.g. map<T>(this arr: T[]) should match number[] but NOT string.
-	if (hasGenericParams(receiverType)) {
+	if (hasGenericParams(recvT)) {
 		const eb = createUnifyBindings();
-		unifyType(receiverType, objType, eb);
+		unifyType(recvT, objT, eb);
 		if (eb.names.length > 0) return true;
 		// Unification failed (e.g., Array<T> class vs uint8[] array — different type kinds).
 		// Fall through to name-based matching below.
@@ -541,9 +548,9 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	// regardless of element type — e.g., pop(number[]) would incorrectly match Bar[]).
 	// Reference parity: sigmatch scores exact element match over generic, so concrete
 	// overloads with wrong element types are rejected, not accepted via name fallback.
-	if (receiverType.kind === TypeKind.Array && objType.kind === TypeKind.Array) {
-		const recvElem = receiverType.typeReturn;
-		const objElem = objType.typeReturn;
+	if (recvT.kind === TypeKind.Array && objT.kind === TypeKind.Array) {
+		const recvElem = recvT.typeReturn;
+		const objElem = objT.typeReturn;
 		if (recvElem === null || objElem === null) return false;
 		if (recvElem.kind === TypeKind.Unknown || objElem.kind === TypeKind.Unknown) return false;
 		return isAssignable(objElem, recvElem);

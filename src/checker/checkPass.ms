@@ -42,6 +42,12 @@ import { BreakState, markInitialized, saveInitState, restoreInitState, breaksBlo
 // Brief type description for error messages
 function formatTypeBrief(t: Type | null): string {
 	if (t === null) return "unknown";
+	// Generic-alias instance: show its resolved leaf body (U<Box<string>> → "string"),
+	// not the opaque alias name. Struct/Union-backed generics keep their own display.
+	if (t.kind === TypeKind.GenericInstance && t.typeReturn !== null
+		&& t.typeReturn.kind !== TypeKind.Struct && t.typeReturn.kind !== TypeKind.Union) {
+		return formatTypeBrief(t.typeReturn);
+	}
 	if (isResult(t)) {
 		const ok = getResultOkType(t);
 		const err = getResultErrType(t);
@@ -778,11 +784,18 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 
 function iterableElemType(t: Type): Type {
 	if (t === null) return unknownType();
-	return match (t.kind) {
+	// reference array: see through Ref<Array> to the value array's element type so
+	// for..of takes the direct array-iteration path, not the implicit toItems iterator.
+	let it = t;
+	if (it.kind === TypeKind.Ref && it.typeReturn !== null
+			&& (it.typeReturn.kind === TypeKind.Array || it.typeReturn.kind === TypeKind.SizedArray || it.typeReturn.kind === TypeKind.Span)) {
+		it = it.typeReturn;
+	}
+	return match (it.kind) {
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span =>
-			t.typeReturn !== null ? t.typeReturn : unknownType(),
+			it.typeReturn !== null ? it.typeReturn : unknownType(),
 		TypeKind.String => charType(),
-		_ => isIterator(t) ? getIteratorYieldType(t) : unknownType(),
+		_ => isIterator(it) ? getIteratorYieldType(it) : unknownType(),
 	};
 }
 
@@ -2051,7 +2064,7 @@ test "continue in loop" { assert checkOk("for (let i = 0; i < 10; i++) { continu
 
 test "continue outside loop" { assert !checkOk("continue;"); }
 
-test "for-of binding" { assert checkOk("const items = 1; for (const item of items) { const x = item; }"); }
+test "for-of binding" { assert checkOk("const items = [1, 2, 3]; for (const item of items) { const x = item; }"); }
 
 test "return in function" { assert checkOk("function foo() { return 1; }"); }
 
@@ -2174,7 +2187,7 @@ test "typed function params resolved" {
 	assert sym.symbolType.kind === TypeKind.Function;
 	assert sym.symbolType.typeChildren[0].kind === TypeKind.Number;
 	assert sym.symbolType.typeChildren[1].kind === TypeKind.Number;
-	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Int32;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Number;
 }
 
 test "typed function call returns annotated type" {
@@ -2188,8 +2201,10 @@ test "array literal infers element type" {
 	const ctx = checkSource("const arr = [1, 2, 3];");
 	const sym = lookupSymbol(ctx.table, "arr");
 	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Array;
-	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Int32;
+	// Post-flip: a bare array literal infers the reference array T[] = Ref<Array<T>>.
+	assert sym.symbolType.kind === TypeKind.Ref;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Array;
+	assert sym.symbolType.typeReturn.typeReturn !== null && sym.symbolType.typeReturn.typeReturn.kind === TypeKind.Int32;
 }
 
 test "arrow function has Function type" {
@@ -2576,32 +2591,44 @@ test "non-generic type alias unchanged" {
 
 // ===== Tier 3: Conditional Types =====
 
+// Return-path verification (const-init is not type-checked): the negative
+// assert errors only when the alias resolves to the named type.
 test "conditional type true branch" {
-	assert checkOk("type IsNum<T> = T extends number ? string : boolean; const a: IsNum<number> = \"yes\";");
+	// IsNum<number> resolves to string
+	assert checkOk("type IsNum<T> = T extends number ? string : boolean; function f(): IsNum<number> { return \"yes\"; }");
+	assert !checkOk("type IsNum<T> = T extends number ? string : boolean; function f(): IsNum<number> { return 5; }");
 }
 
 test "conditional type false branch" {
-	assert checkOk("type IsNum<T> = T extends number ? string : boolean; const b: IsNum<string> = true;");
+	// IsNum<string> resolves to boolean
+	assert checkOk("type IsNum<T> = T extends number ? string : boolean; function f(): IsNum<string> { return true; }");
+	assert !checkOk("type IsNum<T> = T extends number ? string : boolean; function f(): IsNum<string> { return \"x\"; }");
 }
 
 test "conditional type nested" {
-	assert checkOk("type Check<T> = T extends string ? number : T extends boolean ? string : void; const a: Check<string> = 42;");
+	// Check<string> resolves to number via the first branch
+	assert checkOk("type Check<T> = T extends string ? number : T extends boolean ? string : void; function f(): Check<string> { return 42; }");
+	assert !checkOk("type Check<T> = T extends string ? number : T extends boolean ? string : void; function f(): Check<string> { return \"x\"; }");
 }
 
 // ===== Gap 4: infer keyword =====
 
 test "infer extracts array element type" {
-	assert checkOk("type Unwrap<T> = T extends Array<infer U> ? U : T; const a: Unwrap<number[]> = 42;");
+	// Unwrap<number[]> resolves to number via Array<infer U>
+	assert checkOk("type Unwrap<T> = T extends Array<infer U> ? U : T; function f(): Unwrap<number[]> { return 42; }");
+	assert !checkOk("type Unwrap<T> = T extends Array<infer U> ? U : T; function f(): Unwrap<number[]> { return \"x\"; }");
 }
 
 test "infer fallback when no match" {
-	// Unwrap<string> → T (string doesn't extend Array<U>), so result is string
-	assert checkOk("type Unwrap<T> = T extends Array<infer U> ? U : T; const b: Unwrap<string> = \"hi\";");
+	// Unwrap<string> falls back to T = string
+	assert checkOk("type Unwrap<T> = T extends Array<infer U> ? U : T; function f(): Unwrap<string> { return \"hi\"; }");
+	assert !checkOk("type Unwrap<T> = T extends Array<infer U> ? U : T; function f(): Unwrap<string> { return 5; }");
 }
 
 test "infer with struct field" {
-	// Extract value type from Box
-	assert checkOk("type Box<T> = { value: T }; type UnboxVal<T> = T extends Box<infer U> ? U : T; const a: UnboxVal<Box<number>> = 42;");
+	// UnboxVal<Box<number>> extracts number from Box's value field
+	assert checkOk("type Box<T> = { value: T }; type UnboxVal<T> = T extends Box<infer U> ? U : T; function f(): UnboxVal<Box<number>> { return 42; }");
+	assert !checkOk("type Box<T> = { value: T }; type UnboxVal<T> = T extends Box<infer U> ? U : T; function f(): UnboxVal<Box<number>> { return \"x\"; }");
 }
 
 // ===== Gap 5: Generic constraint enforcement =====

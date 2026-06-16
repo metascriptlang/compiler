@@ -644,7 +644,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.nodeType = unknownType(); return;
 			}
 			checkExpr(ctx, d.array, null);
-			const arrType = d.array.nodeType;
+			let arrType = d.array.nodeType;
 			if (d.index !== null) checkExpr(ctx, d.index, null);
 			// Array sub-expr may have null nodeType when a macro expansion
 			// returns an Identifier whose lookup hasn't repopulated the
@@ -690,6 +690,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.flags = node.flags & ~NodeFlag.Sem;
 				node.nodeType = null;
 				node.nodeType = checkCallExpr(ctx, node, null); return;
+			}
+			// reference array: deref Ref<Array> so element-type + nativeLower/codegen see the value array
+			if (arrType.kind === TypeKind.Ref && arrType.typeReturn !== null && arrType.typeReturn.kind === TypeKind.Array) {
+				const drefTok = createToken(TokenKind.Ident, "", node.location.line);
+				const drefNode = createNode(NodeKind.HiddenDeref, { expr: d.array }, drefTok);
+				drefNode.nodeType = arrType.typeReturn;
+				d.array = drefNode;
+				arrType = arrType.typeReturn;
 			}
 			const idxType = d.index.nodeType;
 			// Implicit number → int64 cast for array index (C requires integer subscript)
@@ -779,7 +787,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					ki = ki + 1;
 				}
 				const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, mtok);
-				keysArr.nodeType = createArray(mapKeyType);
+				keysArr.nodeType = createRef(createArray(mapKeyType));
 				keysArr.flags = keysArr.flags | NodeFlag.Sem;
 				// 3. Build values array — reuse the already-checked property nodes.
 				const valNodes: Node[] = [];
@@ -789,7 +797,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					vi = vi + 1;
 				}
 				const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, mtok);
-				valsArr.nodeType = createArray(mapValType);
+				valsArr.nodeType = createRef(createArray(mapValType));
 				valsArr.flags = valsArr.flags | NodeFlag.Sem;
 				// 4. Build the builder callee (mapFromPairs for ordered Map,
 				// hashMapFromPairs for HashMap) + mutate this node into the call.
@@ -1056,7 +1064,15 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const d = node.data as ArrayLiteralData;
 			// Reference parity: semArrayConstr does expectedType.skipTypes(abstractRange)
 			// which strips Sink/Lent/Var wrappers before checking Array kind
-			const arrExpected = skipModifier(expectedType);
+			let arrExpected = skipModifier(expectedType);
+			// reference array: an expected Ref<Array<T>> checks the literal against the
+			// inner value array, but tags the result Ref so nativeLower boxes it onto the heap.
+			let refArrayWrap: Type | null = null;
+			if (arrExpected !== null && arrExpected.kind === TypeKind.Ref && arrExpected.typeReturn !== null
+					&& arrExpected.typeReturn.kind === TypeKind.Array) {
+				refArrayWrap = arrExpected;
+				arrExpected = arrExpected.typeReturn;
+			}
 			const elemExpected = (arrExpected !== null
 				&& (arrExpected.kind === TypeKind.Array || arrExpected.kind === TypeKind.SizedArray)
 				&& arrExpected.typeReturn !== null)
@@ -1064,9 +1080,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				: null;
 			if (d.elements.length === 0) {
 				if (arrExpected !== null && (arrExpected.kind === TypeKind.SizedArray || arrExpected.kind === TypeKind.Array)) {
-					node.nodeType = arrExpected; return;
+					node.nodeType = refArrayWrap !== null ? refArrayWrap : arrExpected; return;
 				} else {
-					node.nodeType = createArray(unknownType()); return;
+					node.nodeType = createRef(createArray(unknownType())); return;
 				}
 			} else {
 				for (let i = 0; i < d.elements.length; i += 1) {
@@ -1129,11 +1145,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					if (d.elements.length > expectedLen) {
 						addError(ctx, `Fixed-size array expects at most ${expectedLen} element(s), got ${d.elements.length}`, node.location.line, node.location.column);
 					}
-					node.nodeType = arrExpected; return;
+					node.nodeType = refArrayWrap !== null ? refArrayWrap : arrExpected; return;
 				} else if (arrExpected !== null && arrExpected.kind === TypeKind.Array && !hasGenericParams(arrExpected)) {
-					node.nodeType = arrExpected; return;
+					node.nodeType = refArrayWrap !== null ? refArrayWrap : arrExpected; return;
 				} else {
-					node.nodeType = createArray(elemType); return;
+					// No array context: a bare `[...]` literal is a reference array (T[] = Ref<Array>),
+					// so nativeLower boxes it and it matches T[] params/returns post-flip.
+					node.nodeType = refArrayWrap !== null ? refArrayWrap : createRef(createArray(elemType)); return;
 				}
 			}
 		},
@@ -1933,8 +1951,13 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): T
 			checkNewArgs(ctx, d.newArguments);
 			return expected;
 		}
-		// Array with expected element type: new Array(32) in typed context
-		if (expected !== null && expected.kind === TypeKind.Array && id.name === "Array") {
+		// Array with expected element type: new Array(32) in typed context.
+		// After the reference-array flip `expected` is Ref<Array>; accept both —
+		// the result keeps `expected` (Ref<Array>) and nativeLower boxes the value.
+		const expectedArrInner = (expected !== null && expected.kind === TypeKind.Ref
+			&& expected.typeReturn !== null && expected.typeReturn.kind === TypeKind.Array)
+			? expected.typeReturn : expected;
+		if (expected !== null && expectedArrInner !== null && expectedArrInner.kind === TypeKind.Array && id.name === "Array") {
 			node.nodeType = expected;
 			checkNewArgs(ctx, d.newArguments);
 			return expected;
@@ -1956,7 +1979,7 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): T
 				if (typeArgSym !== null) {
 					sgRecordSym(ctx, d.newCallee.location.line, ltCol + 1, ltCol + 1 + trimmed.length, typeArgSym, typeArgSym.symbolType, typeArgSym.symbolKind, trimmed, "", false);
 				}
-				const arrType = createArray(elemType);
+				const arrType = createRef(createArray(elemType));
 				node.nodeType = arrType;
 				checkNewArgs(ctx, d.newArguments);
 				return arrType;
@@ -3991,6 +4014,12 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		const lengthSym = makeSymbol("length", SymbolKind.Property, int32Type(), false);
 		lengthSym.state = SymbolState.Shaped;
 		node.resolvedSym = lengthSym;
+		if (needsDeref && resolvedObjType.kind === TypeKind.Array) {
+			const tok = createToken(TokenKind.Ident, "", node.location.line);
+			const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
+			derefNode.nodeType = resolvedObjType;
+			d.object = derefNode;
+		}
 		return int32Type();
 	}
 	// String .code — compile-time char code, folded by constantFolding transform
@@ -4083,6 +4112,22 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	if (ctx.extensionRegistry !== null) {
 		const allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
 		let ext = findFirstMatchingExt(allByName, objType);
+		let extObjType = objType;
+		// reference array: UFCS methods (push/slice/...) are declared on the value
+		// Array receiver; a Ref<Array> must deref before the lookup matches. Insert a
+		// HiddenDeref so codegen sees through the Ref, and unify generics on the
+		// unwrapped Array so T binds (mirrors the class-method deref path above).
+		if (ext === null && needsDeref && (resolvedObjType.kind === TypeKind.Array || resolvedObjType.kind === TypeKind.SizedArray || resolvedObjType.kind === TypeKind.Span)) {
+			const derefExt = findFirstMatchingExt(allByName, resolvedObjType);
+			if (derefExt !== null) {
+				ext = derefExt;
+				extObjType = resolvedObjType;
+				const tok = createToken(TokenKind.Ident, "", node.location.line);
+				const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
+				derefNode.nodeType = resolvedObjType;
+				d.object = derefNode;
+			}
+		}
 		// Static extension fallback: match 'typeof Type'
 		if (ext === null && objType.typeName !== "") {
 			const staticType = createTypeRef("typeof " + objType.typeName);
@@ -4124,7 +4169,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 				if (symHasGenerics) {
 					const eb = createUnifyBindings();
 					// GenericInstance unification — structural matching, no string parsing
-					unifyType(srcType.typeChildren[0], objType, eb);
+					unifyType(srcType.typeChildren[0], extObjType, eb);
 					if (eb.names.length > 0) {
 						// On-demand instantiation (generateInstance pattern)
 						// Clone the generic function, substitute types, register specialized version

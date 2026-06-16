@@ -134,6 +134,23 @@ function appendStructFields(operandStruct: Type, operandLabel: string, accumName
 	}
 }
 
+// `infer X` vars from a conditional's extends clause, in scope only while its
+// true/false branches resolve. A branch's bare `X` resolves against this stack to
+// a GenericParam (substituted by evaluateConditionalType) instead of erroring.
+let inferScope: string[] = [];
+
+function inferScopeHas(name: string): boolean {
+	for (const n of inferScope) { if (n === name) return true; }
+	return false;
+}
+
+function collectInferParamNames(t: Type | null, acc: string[]): void {
+	if (t === null) return;
+	if (t.kind === TypeKind.GenericParam) { acc.push(t.typeName); return; }
+	for (const c of t.typeChildren) collectInferParamNames(c, acc);
+	collectInferParamNames(t.typeReturn, acc);
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: number, col: number): Type {
 	let trimmed = text.trim();
 	if (trimmed === "") return unknownType();
@@ -208,8 +225,11 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 				const falsePart = afterQ.slice(colonIdx + 1, afterQ.length).trim();
 				const checkType = resolveAnnotation(checkPart, ctx, line, col);
 				const extendsType = resolveAnnotation(constraintPart, ctx, line, col);
+				const inferSaved = inferScope.length;
+				collectInferParamNames(extendsType, inferScope);
 				const trueType = resolveAnnotation(truePart, ctx, line, col);
 				const falseType = resolveAnnotation(falsePart, ctx, line, col);
+				while (inferScope.length > inferSaved) { inferScope.pop(); }
 				const cond = createConditionalType(checkType, extendsType, trueType, falseType);
 				return evaluateConditionalType(cond);
 			}
@@ -385,11 +405,11 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 	// Check for array suffix [] or [ ] (token-joined form from captureOptionalType)
 	if (trimmed.endsWith("[ ]")) {
 		const inner = trimmed.slice(0, trimmed.length - 3).trim();
-		return createArray(resolveAnnotation(inner, ctx, line, col));
+		return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
 	}
 	if (trimmed.endsWith("[]")) {
 		const inner = trimmed.slice(0, trimmed.length - 2);
-		return createArray(resolveAnnotation(inner, ctx, line, col));
+		return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
 	}
 	if (trimmed.endsWith("]")) {
 		const openBracket = findChar(trimmed, "[");
@@ -397,7 +417,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 			const inner = trimmed.slice(0, openBracket).trim();
 			const sizeStr = trimmed.slice(openBracket + 1, trimmed.length - 1).trim();
 			if (sizeStr === "" || sizeStr === " ") {
-				return createArray(resolveAnnotation(inner, ctx, line, col));
+				return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
 			}
 			const size = parseIntStr(sizeStr);
 			return createSizedArray(resolveAnnotation(inner, ctx, line, col), size);
@@ -421,6 +441,9 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 			return createIterator(resolveAnnotation(args[0], ctx, line, col));
 		}
 		if (baseName === "Array" && args.length === 1) {
+			return createRef(createArray(resolveAnnotation(args[0], ctx, line, col)));
+		}
+		if (baseName === "Vec" && args.length === 1) {
 			return createArray(resolveAnnotation(args[0], ctx, line, col));
 		}
 		if (baseName === "Span" && args.length === 1) {
@@ -593,6 +616,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 				// and all references automatically see the resolved type.
 				return sym.symbolType;
 			}
+			if (inferScopeHas(trimmed)) return createGenericParam(trimmed);
 			return emitUnresolvedTypeRef(ctx, trimmed, line, col, "");
 		},
 	};
@@ -1871,14 +1895,16 @@ test "empty" { assert resolveWith("").kind === TypeKind.Unknown; }
 
 test "number[]" {
 	const t = resolveWith("number[]");
-	assert t.kind === TypeKind.Array;
-	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Number;
+	assert t.kind === TypeKind.Ref;
+	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Array;
+	assert t.typeReturn.typeReturn !== null && t.typeReturn.typeReturn.kind === TypeKind.Number;
 }
 
 test "string[]" {
 	const t = resolveWith("string[]");
-	assert t.kind === TypeKind.Array;
-	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.String;
+	assert t.kind === TypeKind.Ref;
+	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Array;
+	assert t.typeReturn.typeReturn !== null && t.typeReturn.typeReturn.kind === TypeKind.String;
 }
 
 test "Result<number, string>" {
@@ -1892,8 +1918,15 @@ test "Result<number, string>" {
 
 test "Array<boolean>" {
 	const t = resolveWith("Array<boolean>");
+	assert t.kind === TypeKind.Ref;
+	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Array;
+	assert t.typeReturn.typeReturn !== null && t.typeReturn.typeReturn.kind === TypeKind.Boolean;
+}
+
+test "Vec<number> resolves to value array kind" {
+	const t = resolveWith("Vec<number>");
 	assert t.kind === TypeKind.Array;
-	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Boolean;
+	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Number;
 }
 
 test "number[4]" {

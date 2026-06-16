@@ -1855,7 +1855,8 @@ test "primitive-only no hooks" { assert generatedFnCount("interface Point { x: n
 
 test "string field generates 5 hooks" { assert generatedFnCount("interface Token { value: string; }") === 5; }
 
-test "array field generates 5 hooks" { assert generatedFnCount("interface Data { items: number[]; }") === 5; }
+// items is now Ref<Array> — cyclic-capable → Data gets _trace (6 hooks instead of 5)
+test "array field generates 6 hooks" { assert generatedFnCount("interface Data { items: number[]; }") === 6; }
 
 // Interface is now Ref type — B.a is Ref<A>, which is cyclic-capable → B gets _trace (6 hooks instead of 5)
 test "nested interface generates 11 hooks" { assert generatedFnCount("interface A { name: string; } interface B { a: A; }") === 11; }
