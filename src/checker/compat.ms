@@ -78,6 +78,19 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		};
 	}
 
+	// Generic-alias instance carries its resolved body in typeReturn
+	// (instantiateGenericBody). When the resolved body is a leaf (not a
+	// Struct/Union-backed generic like Map/Result), compare against it so
+	// `U<Box<string>>` (resolves to string) accepts a string value.
+	if (target.kind === TypeKind.GenericInstance && target.typeReturn !== null
+		&& target.typeReturn.kind !== TypeKind.Struct && target.typeReturn.kind !== TypeKind.Union) {
+		return isAssignable(source, target.typeReturn);
+	}
+	if (source.kind === TypeKind.GenericInstance && source.typeReturn !== null
+		&& source.typeReturn.kind !== TypeKind.Struct && source.typeReturn.kind !== TypeKind.Union) {
+		return isAssignable(source.typeReturn, target);
+	}
+
 	// Implicit coercion to Span: T[] -> Span<T> or T[N] -> Span<T> or string -> Span<char>
 	if (target.kind === TypeKind.Span) {
 		if (source.kind === TypeKind.Array || source.kind === TypeKind.SizedArray) {
