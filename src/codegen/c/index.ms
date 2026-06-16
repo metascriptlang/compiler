@@ -153,7 +153,7 @@ function genModuleInitFns(g: CGen): void {
 // Generates the global init dispatcher: forward decls, MsPreMainInner, MsMainInner,
 // MsMain, global vars, and POSIX main.
 
-export function genProjectDispatcher(modulePaths: string[], entryPath: string, hasUserMain: boolean, mainRetType: string, targetOs: string): string {
+export function genProjectDispatcher(modulePaths: string[], entryPath: string, autoCallMain: boolean, mainRetType: string, targetOs: string): string {
 	const b = createBuilder();
 	const retType = (mainRetType.length > 0) ? mainRetType : "void";
 
@@ -171,7 +171,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 		addLine(b, `void ${modName}__DatInit000(void);`);
 		addLine(b, `void ${modName}__Init000(void);`);
 	}
-	if (hasUserMain) {
+	if (autoCallMain) {
 		addLine(b, `${retType} main_(void);`);
 	}
 	addNewline(b);
@@ -202,7 +202,9 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 		}
 	}
 	addLine(b, `${mangleModuleName(entryPath)}__Init000();`);
-	if (hasUserMain) {
+	// Auto-invoke main only when the user never references it (see compile.ms autoCallMain).
+	// A user that calls main itself drives its own entry — auto-calling would double-run.
+	if (autoCallMain) {
 		if (retType.startsWith("msFuture_")) {
 			// Async main — run event loop until completion
 			addLine(b, "extern void* msWaitFor(void*);");

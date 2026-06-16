@@ -23,7 +23,7 @@ import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { getSimpleTypeDesc } from "../codegen/c/types";
 import { setTargetSizes, isAwaitable } from "../checker/types";
-import { lookupSymbol } from "../checker/symbol";
+import { lookupSymbol, SymbolFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
@@ -898,7 +898,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const processed: ProcessedModule[] = [];
 	let transformedPrograms: Node[] = [];
 	let transformedPaths: string[] = [];
-	let hasUserMain = false;
+	let autoCallMain = false;
 	let mainRetType = "void";
 	const bs = initCBuildState(opts);
 	let allFlags = bs.allFlags;
@@ -1019,7 +1019,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		// Check for user main() in entry module
 		if (modPath === entryPath && ctx !== null && ctx.table !== null) {
 			const mainSym = lookupSymbol(ctx.table, "main");
-			hasUserMain = mainSym !== null;
+			// Auto-invoke main ONLY when the user never references it themselves.
+			// A referenced main (top-level `main()`, `waitFor(main())`, etc.) means the
+			// program drives its own entry — auto-calling too would double-run it.
+			autoCallMain = mainSym !== null && (mainSym.symFlags & SymbolFlag.Used) === 0;
 			if (mainSym !== null && mainSym.symbolType !== null && mainSym.symbolType.typeReturn !== null) {
 				const retT = mainSym.symbolType.typeReturn;
 				if (isAwaitable(retT)) {
@@ -1159,7 +1162,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// Skip link step if --emit=c (only writing C source files)
 	if (opts.emitC) {
 		// Also emit dispatcher (MsMain + entry point)
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, hasUserMain, mainRetType, opts.targetOs);
+		const dispatcher = genProjectDispatcher(aliveModules, entryPath, autoCallMain, mainRetType, opts.targetOs);
 		const emitDir = outDirForMode(opts.mode);
 		const dispPath = `${emitDir}/_dispatch.c`;
 		writeOutput(dispPath, dispatcher);
@@ -1172,7 +1175,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// Generate global init dispatcher and compile to .o (skip for HCR — .so has no main)
 	if (!opts.isHcr) {
 		if (opts.verbose) verboseLog("generating dispatcher");
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, hasUserMain, mainRetType, opts.targetOs);
+		const dispatcher = genProjectDispatcher(aliveModules, entryPath, autoCallMain, mainRetType, opts.targetOs);
 		const dispFile = `${cd}/_dispatch.c`;
 		const dispObj = `${cd}/_dispatch.o`;
 		writeOutput(dispFile, dispatcher);
