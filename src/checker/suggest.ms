@@ -4,7 +4,7 @@
 // formatHover, collectDiagnostics. No I/O, no protocol knowledge.
 // Called by src/lsp/handlers.ms.
 
-import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, ArrayAccessData, BinaryExprData, ConditionalExprData, TypeAssertionData, UpdateExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, ArrayAccessData, BinaryExprData, ConditionalExprData, TypeAssertionData, UpdateExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, HiddenDerefData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, unknownType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable } from "./types";
 import { ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
@@ -2480,6 +2480,14 @@ function sgLeftmostLocation(node: Node): SourceLocation {
 	if (node.kind === NodeKind.UpdateExpr) {
 		const ud = node.data as UpdateExprData;
 		if (!ud.isPrefix && ud.updateArg !== null) return sgLeftmostLocation(ud.updateArg);
+	}
+	if (node.kind === NodeKind.HiddenDeref || node.kind === NodeKind.HiddenAddr) {
+		const hd = node.data as HiddenDerefData;
+		if (hd.expr !== null) return sgLeftmostLocation(hd.expr);
+	}
+	if (node.kind === NodeKind.HiddenStdConv || node.kind === NodeKind.HiddenSubConv) {
+		const hc = node.data as HiddenStdConvData;
+		if (hc.convExpr !== null) return sgLeftmostLocation(hc.convExpr);
 	}
 	return node.location;
 }
