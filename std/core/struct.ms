@@ -120,7 +120,7 @@ export struct HashMapEntry<K, V> {
 
 @builtin("IndexableMap")
 export class HashMap<K, V> {
-	data: HashMapEntry<K, V>[];
+	data: Vec<HashMapEntry<K, V>>;
 	size: int32;
 }
 
@@ -141,7 +141,7 @@ function hashMapRawGet<K, V>(m: HashMap<K, V>, key: K): int32 {
 function hashMapEnlarge<K, V>(m: HashMap<K, V>): void {
 	const oldData = m.data;
 	const newCap = oldData.length * 2;
-	const newData: HashMapEntry<K, V>[] = new Array(newCap);
+	const newData: Vec<HashMapEntry<K, V>> = new Array(newCap);
 	m.data = newData;
 	let i: int32 = 0;
 	while (i < oldData.length) {
@@ -159,7 +159,7 @@ function hashMapEnlarge<K, V>(m: HashMap<K, V>): void {
 
 export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
 	if (m.data.length === 0) {
-		const init: HashMapEntry<K, V>[] = new Array(INITIAL_CAPACITY);
+		const init: Vec<HashMapEntry<K, V>> = new Array(INITIAL_CAPACITY);
 		m.data = init;
 	}
 	const hc = key.hash();
@@ -270,7 +270,7 @@ export struct HashSetEntry<T> {
 }
 
 export class HashSet<T> {
-	data: HashSetEntry<T>[];
+	data: Vec<HashSetEntry<T>>;
 	size: int32;
 
 	constructor(items: T[] = []) {
@@ -303,7 +303,7 @@ function hashSetRawGet<T>(s: HashSet<T>, key: T): int32 {
 function hashSetEnlarge<T>(s: HashSet<T>): void {
 	const oldData = s.data;
 	const newCap = oldData.length * 2;
-	const newData: HashSetEntry<T>[] = new Array(newCap);
+	const newData: Vec<HashSetEntry<T>> = new Array(newCap);
 	s.data = newData;
 	let i: int32 = 0;
 	while (i < oldData.length) {
@@ -397,8 +397,8 @@ export struct OrderedMapEntry<K, V> {
 
 @builtin("IndexableMap")
 export class Map<K, V> {
-	entries: OrderedMapEntry<K, V>[];
-	indices: int32[];
+	entries: Vec<OrderedMapEntry<K, V>>;
+	indices: Vec<int32>;
 	size: int32;
 	tombstones: int32;
 }
@@ -449,7 +449,7 @@ function orderedMapEnlarge<K, V>(m: Map<K, V>): void {
 
 function orderedMapCompact<K, V>(m: Map<K, V>): void {
 	const oldEntries = m.entries;
-	const newEntries: OrderedMapEntry<K, V>[] = [];
+	const newEntries: Vec<OrderedMapEntry<K, V>> = [];
 	let i: int32 = 0;
 	while (i < oldEntries.length) {
 		if (oldEntries[i].hcode !== 0) {
@@ -534,7 +534,7 @@ export function delete<K, V>(this m: Map<K, V>, key: K): boolean {
 }
 
 export function clear<K, V>(this m: Map<K, V>): void {
-	const empty: OrderedMapEntry<K, V>[] = [];
+	const empty: Vec<OrderedMapEntry<K, V>> = [];
 	m.entries = empty;
 	let i: int32 = 0;
 	while (i < m.indices.length) { m.indices[i] = -1; i = i + 1; }
@@ -595,8 +595,8 @@ export struct OrderedSetEntry<T> {
 }
 
 export class Set<T> {
-	entries: OrderedSetEntry<T>[];
-	indices: int32[];
+	entries: Vec<OrderedSetEntry<T>>;
+	indices: Vec<int32>;
 	size: int32;
 	tombstones: int32;
 
@@ -661,7 +661,7 @@ function orderedSetEnlarge<T>(s: Set<T>): void {
 
 function orderedSetCompact<T>(s: Set<T>): void {
 	const oldEntries = s.entries;
-	const newEntries: OrderedSetEntry<T>[] = [];
+	const newEntries: Vec<OrderedSetEntry<T>> = [];
 	let i: int32 = 0;
 	while (i < oldEntries.length) {
 		if (oldEntries[i].hcode !== 0) {
@@ -739,7 +739,7 @@ export function delete<T>(this s: Set<T>, value: T): boolean {
 }
 
 export function clear<T>(this s: Set<T>): void {
-	const empty: OrderedSetEntry<T>[] = [];
+	const empty: Vec<OrderedSetEntry<T>> = [];
 	s.entries = empty;
 	let i: int32 = 0;
 	while (i < s.indices.length) { s.indices[i] = -1; i = i + 1; }
