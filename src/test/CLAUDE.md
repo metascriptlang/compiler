@@ -78,9 +78,20 @@ src/test/
 ├── js/                 # E2E pipeline: source → JS output
 │   ├── basic.ms
 │   └── result.ms
-└── handoff/            # phase-handoff contracts
-    └── index.ms
+├── handoff/            # phase-handoff contracts
+│   └── index.ms
+└── native/             # NATIVE-execution tier — builds real binaries (clang),
+    ├── README.md       #   runs under --gc=drc AND --gc=orc, asserts exit 0 +
+    ├── manifest.ts     #   peak-RSS bound. The ONLY tier that runs the C runtime
+    └── programs/*.ms   #   (DRC/ORC/actor/spawn). Runner: bun/test-native.ts.
 ```
+
+> **Why `native/` exists:** every other tier runs through the Bun transpiler
+> (`test-ms`), which executes MetaScript-as-TypeScript on Bun and **never runs
+> the emitted C runtime**. DRC over-free, ORC cycle-collector faults, actor
+> scheduler and spawn-pool leaks are all invisible to `test-ms` — that blind
+> spot shipped real regressions green. `native/` is the runtime guard: real
+> binary, both GC modes, exit-code + peak-RSS assertions.
 
 ---
 
@@ -210,6 +221,9 @@ silent contract drift between adjacent phases.
 # Full suite (lang + c + js + handoff + fixedbugs)
 bun run test-ms src/test/index.ms
 
+# Native runtime tier — real binaries under --gc=drc + --gc=orc, leak/crash guard
+bun run test-native
+
 # Language-only subset (fast, runs through bun transpiler)
 bun run test-ms src/test/lang.ms
 
@@ -259,6 +273,17 @@ Status legend: ✅ done · 🚧 in progress · 🔲 todo
 - [x] ✅ Wired into `lang.ms` + `index.ms`
 
 Result: `bun run test-ms src/test/lang.ms` → **159 pass / 0 fail** (was 138 before this push). Self-host stable at **2749/9** baseline.
+
+### P0.5 — Native runtime guard (the "test-ms is blind to the C runtime" tier)
+
+- [x] ✅ `src/test/native/` — builds real binaries via clang, runs under BOTH
+  `--gc=drc` and `--gc=orc`, asserts exit 0 (no over-free/UAF/crash) + peak RSS
+  under bound (no leak). Runner `bun/test-native.ts`, `bun run test-native`.
+  Seeded 5 cases; on first run it immediately caught **2 real leaks** invisible
+  to `test-ms` (call-result-in-non-RC-context, array-literal-of-strings — both
+  xfail anchors) and proved bug033 + PARALOCK spawn/actor/async hold natively.
+  This is the tier that would have caught the over-free crash in 149eb30 and the
+  "Bug D" leak-fix-gone-over-free that both passed `test-ms` green.
 
 ### P1 — Codegen drift detection
 

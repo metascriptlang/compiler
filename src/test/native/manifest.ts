@@ -41,6 +41,13 @@ export const CASES: NativeCase[] = [
 		note: "bug033 native repro: array of closures freed at scope exit. Was a misaligned-access crash; runs through C DRC here (test-ms ran it on Bun and never touched the crash path).",
 	},
 	{
+		name: "ref-array-share",
+		file: "refArrayShare.ms",
+		maxRssMb: 30,
+		expectStdout: "ref-array acc=13500000",
+		note: "Ref<Array<T>> reference semantics (Phase 3 array migration): share-on-assign, mutate-through (direct/param/closure capture), length/index, string-element arrays. Refcounted box via msAllocTyped + per-element-type cell TypeInfo. Flat RSS proves the box frees its payload + the cell once.",
+	},
+	{
 		name: "paralock-nested",
 		file: "paralockNested.ms",
 		maxRssMb: 80,
@@ -179,5 +186,12 @@ export const CASES: NativeCase[] = [
 		maxRssMb: 40,
 		expectStdout: "leak-hashmap-enlarge acc=",
 		note: "FIXED by classifyArray reading the instantiated body's hasAsgn + mono-TypeInfo wiring. hashMapEnlarge swaps the slot array (const old = m.data; m.data = newData; migrate), orphaning the old HashMapEntry__K_V[]. classifyArray decided RC from the abstract base (Entry<K,V>, K/V unbound → hasAsgn false) not the instantiated body (Entry__string → true), so the array of a mono'd generic struct misclassified non-RC → no per-element destroy on field-reassign; AND the mono HashMap__K_V TypeInfo.destroyFn was NULL (see leak-map-drop) so dropping never recursed. Nim parity: tfHasAsgn set per-instantiation. Was 574MB @ 50k×50 fill(+enlarge)+drop, now flat ~2MB drc+orc.",
+	},
+	{
+		name: "ref-array-self-consume",
+		file: "refArraySelfConsume.ms",
+		maxRssMb: 30,
+		expectStdout: "ref-array-self-consume n=",
+		note: "FIXED in inject.ms processAssignment + scope.ms (varMovedInContext/clearMoveInContext). `x = f([..., x])` — a borrowed value sunk into an array literal in the RHS while the holder is reassigned (matchLower's armBody = makeBlock([setMatched, armBody]) shape). The analyzer cleared the pending wasMoved yet still ran save-assign-destroy → double-free / UAF (ASAN-confirmed in buildSwitchDispatch; the self-host gen-2 crashed on it). Fix skips destroy-old (MOC_IS_DECL) + clears the stale move when the LHS var is consumed INSIDE this RHS, gated by a movedBeforeRhs snapshot so a prior conditional move (e.g. `return x` in a sibling branch — the findProjectRoot regression) is not mistaken for consumption. Nim parity: injectdestructors eqwasMoved-then-eqsink no-op. Invisible to test-ms (Bun JS-GC); only the native binary + ASAN exposed it.",
 	},
 ];
