@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, isFloatType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, awaitedType, unwrapRefNullUnion, peelToStructOrUnion } from "../../checker/types";
+import { isIntegerType, isFloatType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, awaitedType, unwrapRefNullUnion, peelToStructOrUnion, arrayElementNeedsCleanup } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -2233,14 +2233,22 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		let destroyFn = "msNumberArrayDestroy";
 		const elemT = cd.arguments[0].nodeType.typeReturn;
 		if (elemT !== null) {
+			// Two destroyer families. Pointer-payload elements (string / void*-ref / closure)
+			// share a GENERIC runtime destroyer regardless of the typed arrCType — e.g.
+			// string[][]'s element is a typed ref-to-array whose arrCType (msStringArraystar_Array)
+			// has no per-type walker, so it must use msRefArrayDestroy.
 			destroyFn = match (elemT.kind) {
 				TypeKind.String => "msStringArrayDestroy",
 				TypeKind.Ref | TypeKind.Ptr => "msRefArrayDestroy",
 				TypeKind.Function => "msClosureArrayDestroy",
-				// Unknown / Union(Ref,Null) / other pointer-payload elements collapse to the
-				// void* msRefArray payload; a free()-only destroyer would leak the elements.
-				// Fall back on the actual C payload type, not the (possibly unresolved) element kind.
-				_ => arrCType === "msRefArray" ? "msRefArrayDestroy" : "msNumberArrayDestroy",
+				// Managed VALUE element (struct / union / generic-instance / distinct-over-those):
+				// the array TYPE's per-type <Name>ArrayDestroy walker (NIM-REF §2), selected once
+				// via arrayElementNeedsCleanup — the whole value-struct family in ONE place, no
+				// per-kind enumeration. Else (primitive / nested-array / tuple / Unknown) free-only,
+				// with the msRefArray fallback for void*-collapsed payloads.
+				_ => arrayElementNeedsCleanup(elemT)
+					? arrCType + "Destroy"
+					: (arrCType === "msRefArray" ? "msRefArrayDestroy" : "msNumberArrayDestroy"),
 			};
 		}
 		const cellName = arrCType + "RefCell";

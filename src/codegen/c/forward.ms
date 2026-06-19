@@ -21,12 +21,31 @@ function findSuffix(name: string, suffixes: string[]): string {
 	return "";
 }
 
+// A generated DRC hook whose mangled name starts with "ms" — i.e. a per-type NESTED
+// value-array walker (msNumberArrayArrayDestroy, msStringArrayArrayDestroy, …). These
+// collide by prefix with the runtime-provided ms* hooks, so distinguish by the CLOSED
+// runtime base set, never by the prefix alone.
+function isGeneratedMsArrayHook(name: string): boolean {
+	if (!(name.length > 2 && name.byteAt(0) === "m".code && name.byteAt(1) === "s".code)) return false;
+	const suffix = findSuffix(name, DRC_SUFFIXES);
+	if (suffix === "") return false;
+	const base = name.slice(0, name.length - suffix.length);
+	// Runtime ms* array hooks are all single-level (msArray, msNumberArray, msStringArray,
+	// msRefArray, msUint8Array, msClosureArray); a generated nested value-array walker is
+	// array-OF-array, so its base ends in "ArrayArray". That alone discriminates — no denylist.
+	return base.endsWith("ArrayArray");
+}
+
 export function isDrcLifecycleName(name: string): boolean {
-	if (findSuffix(name, DRC_SUFFIXES) === "") return false;
-	// Built-in runtime functions (ms* prefix) are not generated DRC hooks
+	const suffix = findSuffix(name, DRC_SUFFIXES);
+	if (suffix === "") return false;
+	// Generated nested value-array walker (msNumberArrayArray, int32_tArrayArray, …) is
+	// array-OF-array → base ends "ArrayArray". Always a DRC hook, regardless of prefix/case.
+	if (name.slice(0, name.length - suffix.length).endsWith("ArrayArray")) return true;
+	// Other ms* hooks are runtime-provided (single-level array families, msArray, msString…).
 	if (name.length > 2 && name.byteAt(0) === "m".code && name.byteAt(1) === "s".code) return false;
-	// DRC hooks always start with a type name (PascalCase — uppercase first letter).
-	// User functions like hasTypeInfo, countHooks start with lowercase — not DRC hooks.
+	// DRC hooks otherwise start with a type name (PascalCase). User functions like
+	// hasTypeInfo, countHooks start with lowercase — not DRC hooks.
 	if (name.length > 0 && name.byteAt(0) >= "a".code && name.byteAt(0) <= "z".code) return false;
 	return true;
 }
@@ -37,9 +56,10 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 	if (callee === null || callee === "") return;
 	const suffix = findSuffix(callee, DRC_SUFFIXES);
 	if (suffix === "") return;
-	// Skip built-in runtime functions (ms* prefix) — they're defined in C headers, not generated.
-	// Only generate forward declarations for per-type hooks (e.g., TokenDestroy, PointCopy).
-	if (callee.length > 2 && callee.byteAt(0) === "m".code && callee.byteAt(1) === "s".code) return;
+	// Skip built-in runtime ms* hooks (defined in C headers) — but NOT generated nested
+	// value-array walkers (msNumberArrayArrayDestroy …), which need a forward proto.
+	if (callee.length > 2 && callee.byteAt(0) === "m".code && callee.byteAt(1) === "s".code
+		&& !isGeneratedMsArrayHook(callee)) return;
 	if (nameSetHas(g.declaredProcs, callee)) return;
 	nameSetAdd(g.declaredProcs, callee);
 

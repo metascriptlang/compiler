@@ -1073,6 +1073,20 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				refArrayWrap = arrExpected;
 				arrExpected = arrExpected.typeReturn;
 			}
+			// Tuple context: a bracket literal in tuple position is a tuple, not an array.
+			// Type each element against its positional type and tag the node Tuple — else it
+			// defaults to Ref<Array> and mismatches the expected tuple (e.g. `return [a, b]`
+			// for a `[T, U]` return type errors "expected Tuple, got Array"). Sibling of the
+			// Array / SizedArray / Ref<Array> contextual cases below.
+			if (arrExpected !== null && arrExpected.kind === TypeKind.Tuple && arrExpected.typeChildren !== null) {
+				for (let ti = 0; ti < d.elements.length; ti += 1) {
+					const te = ti < arrExpected.typeChildren.length ? arrExpected.typeChildren[ti] : null;
+					checkExpr(ctx, d.elements[ti], te);
+					if (te !== null) d.elements[ti] = fitNode(ctx, d.elements[ti], te, d.elements[ti].nodeType);
+				}
+				node.nodeType = arrExpected;
+				return;
+			}
 			const elemExpected = (arrExpected !== null
 				&& (arrExpected.kind === TypeKind.Array || arrExpected.kind === TypeKind.SizedArray)
 				&& arrExpected.typeReturn !== null)
@@ -2303,7 +2317,16 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 					if (!winner.isStatic && extType.typeChildren.length > 0) {
 						if (hasGenericParams(extType)) {
 							const eb = createUnifyBindings();
-							unifyType(extType.typeChildren[0], objType, eb);
+							// Array methods are Ref-agnostic (matchesExt parity): the receiver is
+							// declared `T[]` (Ref<Array<T>>) but a value Vec<T> call site is a bare
+							// Array — unwrap the Ref<Array> envelope on both sides so T binds to the
+							// element type, else the param stays generic and an object-literal arg
+							// never coerces to the element type.
+							let recvP = extType.typeChildren[0];
+							let objP = objType;
+							if (recvP.kind === TypeKind.Ref && recvP.typeReturn !== null && recvP.typeReturn.kind === TypeKind.Array) recvP = recvP.typeReturn;
+							if (objP !== null && objP.kind === TypeKind.Ref && objP.typeReturn !== null && objP.typeReturn.kind === TypeKind.Array) objP = objP.typeReturn;
+							unifyType(recvP, objP, eb);
 							if (eb.names.length > 0) extType = instantiateGeneric(extType, eb.names, eb.types);
 						}
 						calleeType = stripReceiverParam(extType);
@@ -4168,8 +4191,17 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 				const symHasGenerics = hasGenericParams(srcType) || (ext.sym !== null && ext.sym.declNode !== null && ext.sym.declNode.kind === NodeKind.FunctionDecl && isGenericFn((ext.sym.declNode.data as FunctionDeclData).fnFlags));
 				if (symHasGenerics) {
 					const eb = createUnifyBindings();
-					// GenericInstance unification — structural matching, no string parsing
-					unifyType(srcType.typeChildren[0], extObjType, eb);
+					// GenericInstance unification — structural matching, no string parsing.
+					// Array methods are Ref-agnostic (matchesExt parity, context.ms): the
+					// receiver is declared `T[]` (Ref<Array<T>>) but the call site may be a
+					// value Vec<T> (bare Array) — unwrap the Ref<Array> envelope on both sides
+					// so T binds to the element type either way (else the bare-Array param
+					// stays generic and an object-literal arg never coerces to the element).
+					let recvParam = srcType.typeChildren[0];
+					let unifyObj = extObjType;
+					if (recvParam.kind === TypeKind.Ref && recvParam.typeReturn !== null && recvParam.typeReturn.kind === TypeKind.Array) recvParam = recvParam.typeReturn;
+					if (unifyObj.kind === TypeKind.Ref && unifyObj.typeReturn !== null && unifyObj.typeReturn.kind === TypeKind.Array) unifyObj = unifyObj.typeReturn;
+					unifyType(recvParam, unifyObj, eb);
 					if (eb.names.length > 0) {
 						// On-demand instantiation (generateInstance pattern)
 						// Clone the generic function, substitute types, register specialized version

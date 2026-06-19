@@ -25,7 +25,7 @@ import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, instantiateGenericBody, peelToStruct } from "../../checker/types";
-import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks } from "../../codegen/c/types";
+import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
 import { walkNode } from "../walker";
@@ -393,20 +393,27 @@ function genArrayLoop(hook: string, elemType: Type, xf: Node, yf: Node, lctx: Li
 	buf.items.push(makeWhile(cond, makeBlock(bodyBuf.items, loc), loc));
 }
 
-// Register a sequence's element type for hook generation. String elements
-// share the runtime msStringArray helper; named Struct/Union elements get
-// per-T lifted hooks; everything else (Ref/Ptr/unknown) falls back to the
-// generic msRefArray family. Shared by `arrayOp` (call-site element use)
-// and `scanTypeForArrays` (post-pass scan).
+// Register a sequence's element type for per-type walker generation. The walker name is the
+// array's C type name from `arrayCTypeName` — the SAME single source codegen (genArrayType)
+// uses — so the transform-generated walker and the codegen box-site reference can never
+// drift, for every element kind (struct/tuple/enum/generic/nested/…). Built-in families
+// (msStringArray/msRefArray/…) are runtime/fixed-block provided; only per-type names get a
+// seqElemTypes entry. Shared by `arrayOp` (call-site element use) and `scanTypeForArrays`.
 function registerSeqElement(elem: Type, lctx: LiftCtx): void {
-	if (elem.kind === TypeKind.String) {
-		nameSetAdd(lctx.neededSeqHooks, "msStringArray");
-	} else if ((elem.kind === TypeKind.Struct || elem.kind === TypeKind.Union) && elem.typeName !== "") {
-		const seqName = elem.typeName + "Array";
-		nameSetAdd(lctx.neededSeqHooks, seqName);
+	if (elem.kind === TypeKind.Distinct && elem.typeReturn !== null) {
+		// distinct shares its base layout → reuse the base type's per-type walker
+		registerSeqElement(elem.typeReturn, lctx);
+		return;
+	}
+	const seqName = arrayCTypeName(createArray(elem));
+	nameSetAdd(lctx.neededSeqHooks, seqName);
+	if (seqName !== "msStringArray" && seqName !== "msRefArray" && seqName !== "msNumberArray"
+		&& seqName !== "msUint8Array" && seqName !== "msClosureArray") {
 		lctx.seqElemTypes.push({ name: seqName, elemType: elem });
-	} else {
-		nameSetAdd(lctx.neededSeqHooks, "msRefArray");
+	}
+	// Nested array element may itself need a per-type inner hook (e.g. Vec<Cell>[] → CellArray).
+	if (elem.kind === TypeKind.Array && elem.typeReturn !== null && !isPrimitiveKind(elem.typeReturn.kind)) {
+		registerSeqElement(elem.typeReturn, lctx);
 	}
 }
 
@@ -1529,7 +1536,15 @@ function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: NameSet): void {
 	if (t.kind === TypeKind.Array) {
 		const elem = t.typeReturn;
 		if (elem !== null && !isPrimitiveKind(elem.kind)) {
-			registerSeqElement(elem, lctx);
+			// Unwrap GenericInstance to its mangled struct body so the per-type
+			// <Name>ArrayDestroy walker name matches arrayOp + codegen (else a generic
+			// struct element array misregisters as msRefArray → undeclared walker).
+			let elemResolved = elem;
+			if (elem.kind === TypeKind.GenericInstance) {
+				const unwrapped = unwrapGenericInstance(elem);
+				if (unwrapped.mangledName !== "") elemResolved = unwrapped.body;
+			}
+			registerSeqElement(elemResolved, lctx);
 		}
 		return;
 	}
@@ -1667,6 +1682,16 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 				if (unwrapped.mangledName !== "") {
 					ensureHooks(unwrapped.mangledName, unwrapped.body, node.nodeType, false, lctx, node.location);
 				}
+			}
+			// Array element hooks for any array used anywhere, including expression
+			// position (literals, call args, returns). The decl-only scanStmtForArrayTypes
+			// misses those, leaving a boxed T[]'s per-type <Name>ArrayDestroy walker
+			// unemitted → undefined symbol once codegen references it.
+			if (node.nodeType.kind === TypeKind.Array
+				|| (node.nodeType.kind === TypeKind.Ref && node.nodeType.typeReturn !== null
+					&& node.nodeType.typeReturn.kind === TypeKind.Array)) {
+				const arrVisited: NameSet = createNameSet();
+				scanTypeForArrays(node.nodeType, lctx, arrVisited);
 			}
 		}
 		return node;

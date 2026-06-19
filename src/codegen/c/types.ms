@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct, hasDestructor, getAttachedOp } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct, hasDestructor, getAttachedOp, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
@@ -999,32 +999,20 @@ function genArrayType(g: CGen, t: Type): string {
 	const elemKey = (resolvedElem !== null) ? typeKey(resolvedElem) : "";
 	const selfRef = elemKey !== "" && isBeingDefined(elemKey);
 
+	// getTypeDesc(elem) kept for its emission side-effect (element typedef) + the data[] type.
 	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : getTypeDesc(g, t.typeReturn);
 
-	// Built-in array types for primitives
-	if (elemType === "double") { typeCacheSet(g.typeCache, key, "msNumberArray"); return "msNumberArray"; }
-	if (elemType === "msString") { typeCacheSet(g.typeCache, key, "msStringArray"); return "msStringArray"; }
-	if (elemType === "MS_BOOL") { typeCacheSet(g.typeCache, key, "msNumberArray"); return "msNumberArray"; }
-	if (elemType === "uint8_t") { typeCacheSet(g.typeCache, key, "msUint8Array"); return "msUint8Array"; }
-	// Closure layout is uniform — single runtime msClosureArray works for all
-	// closure types. Skip per-module typedef (would duplicate runtime decl).
-	if (elemType === "msClosure") { typeCacheSet(g.typeCache, key, "msClosureArray"); return "msClosureArray"; }
-
-	// Pointer element types (classes, refs, void*) → msRefArray (void* indirection is correct)
-	// Class types: symbol table returns Ref<Struct>, resolvedElem.kind === Ref → isPointerType catches it.
-	// Fallback: check type.sym for class kind (reference parity: t.sym.kind == skType).
-	const elemIsClass = t.typeReturn !== null && t.typeReturn.sym !== null &&
-		t.typeReturn.sym.symbolKind === SymbolKind.Class;
-	const elemIsRefArray = resolvedElem !== null && resolvedElem.kind === TypeKind.Ref
-		&& resolvedElem.typeReturn !== null && resolvedElem.typeReturn.kind === TypeKind.Array;
-	if (!elemIsRefArray && (elemType === "void*" || elemType.endsWith("*") || elemIsClass || (resolvedElem !== null && isPointerType(resolvedElem)))) {
-		typeCacheSet(g.typeCache, key, "msRefArray");
-		return "msRefArray";
-	}
-
-	// Value-type struct elements → per-type array typedef
-	const arrTypeName = mangle(elemType) + "Array";
+	// Single source for the name: arrayCTypeName reproduces the legacy inline rule exactly
+	// (verified zero-divergence across the full self-host). destructorLifting routes the
+	// per-type walker name through the same arrayCTypeName, so the two can never drift.
+	const arrTypeName = arrayCTypeName(t);
 	typeCacheSet(g.typeCache, key, arrTypeName);
+
+	// Built-in array families are runtime-provided — no per-type typedef.
+	if (arrTypeName === "msNumberArray" || arrTypeName === "msStringArray" || arrTypeName === "msUint8Array"
+		|| arrTypeName === "msClosureArray" || arrTypeName === "msRefArray") {
+		return arrTypeName;
+	}
 
 	// Emit typedef if not already done
 	const fwdKey = "arrtd:" + arrTypeName;
@@ -1045,12 +1033,63 @@ function genArrayType(g: CGen, t: Type): string {
 }
 
 // Returns the array type name for a given element type string (for use in expressions/statements).
+// Element-C-name → array-type-name rule. Used by destructorLifting (seqHookName) to name
+// per-type array walkers; mirrors the inline rule in genArrayType.
 export function getArrayTypeName(elemType: string): string {
 	if (elemType === "double") return "msNumberArray";
 	if (elemType === "msString") return "msStringArray";
+	if (elemType === "MS_BOOL") return "msNumberArray";
 	if (elemType === "uint8_t") return "msUint8Array";
 	if (elemType === "msClosure") return "msClosureArray";
 	return mangle(elemType) + "Array";
+}
+
+// Element's C type NAME (no emission) — mirrors EVERY name-producing branch of getTypeDesc
+// using the SAME building blocks (getSimpleTypeDesc / mangle / monoTypeKey / tupleTypeName),
+// so arrayCTypeName agrees with getTypeDesc for any element that appears in a value array.
+// Verified complete: a build-wide name-equality check found zero divergences from the legacy
+// inline rule across the whole self-host. If a new element kind is added, re-run that check.
+function elemArrayCName(elem: Type): string {
+	const simple = getSimpleTypeDesc(elem);
+	if (simple !== "") return simple;
+	if (elem.kind === TypeKind.Distinct && elem.typeReturn !== null) return elemArrayCName(elem.typeReturn);
+	if (elem.kind === TypeKind.Enum) return mangle(elem.typeName);
+	if (elem.kind === TypeKind.EnumLiteral) return (elem.typeReturn !== null && elem.typeReturn.kind === TypeKind.Enum) ? mangle(elem.typeReturn.typeName) : "int32_t";
+	if (elem.kind === TypeKind.Tuple) return tupleTypeName(elem);
+	if (elem.kind === TypeKind.Array) return arrayCTypeName(elem);
+	if ((elem.kind === TypeKind.Ref || elem.kind === TypeKind.Ptr || elem.kind === TypeKind.Var) && elem.typeReturn !== null) return elemArrayCName(elem.typeReturn) + "*";
+	if (elem.kind === TypeKind.Function) return "msClosure";
+	if (elem.kind === TypeKind.Union) {
+		const rm = unwrapRefNullUnion(elem);
+		if (rm !== null) return elemArrayCName(rm);
+		return isAnonTypeName(elem.typeName) ? anonTypeName(elem) : mangle(elem.typeName);
+	}
+	if (elem.kind === TypeKind.GenericInstance) {
+		let instName = elem.typeName;
+		for (let gi = 0; gi < elem.typeChildren.length; gi += 1) {
+			instName = `${instName}${gi === 0 ? "__" : "_"}${monoTypeKey(elem.typeChildren[gi])}`;
+		}
+		return instName;
+	}
+	if (elem.kind === TypeKind.Struct) {
+		return isAnonTypeName(elem.typeName) ? anonTypeName(elem) : mangle(elem.typeName);
+	}
+	return "void*";
+}
+
+// Single source for an array's C type name (NIM-REF: structural arrays/tuples carry no
+// stored identity, so this is the one place the name is derived). genArrayType (codegen)
+// and destructorLifting (transform) both route through here — no parallel naming.
+export function arrayCTypeName(t: Type): string {
+	const elem = t.typeReturn;
+	if (elem === null) return "msRefArray";
+	// Awaitable element → getTypeDesc emits msFuture_X* (pointer) → msRefArray.
+	if (isAwaitable(elem)) return "msRefArray";
+	const ecn = elemArrayCName(elem);
+	const elemIsRefArray = elem.kind === TypeKind.Ref && elem.typeReturn !== null && elem.typeReturn.kind === TypeKind.Array;
+	const elemIsClass = elem.sym !== null && elem.sym.symbolKind === SymbolKind.Class;
+	if (!elemIsRefArray && (ecn === "void*" || ecn.endsWith("*") || elemIsClass || isPointerType(elem))) return "msRefArray";
+	return getArrayTypeName(ecn);
 }
 
 // Returns the array content/payload struct name for a given array type name.

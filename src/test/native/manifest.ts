@@ -48,6 +48,13 @@ export const CASES: NativeCase[] = [
 		note: "Ref<Array<T>> reference semantics (Phase 3 array migration): share-on-assign, mutate-through (direct/param/closure capture), length/index, string-element arrays. Refcounted box via msAllocTyped + per-element-type cell TypeInfo. Flat RSS proves the box frees its payload + the cell once.",
 	},
 	{
+		name: "ref-array-struct-elem",
+		file: "refArrayStructElem.ms",
+		maxRssMb: 30,
+		expectStdout: "ref-array-struct-elem done",
+		note: "Reference-array T[] of value-struct + generic-instance elements with owned heap fields: the boxed cell's destroyFn must run the per-type <Name>ArrayDestroy walker (per-element decref), not a free-only buffer wipe. destructorLifting's comprehensive walk now registers array element hooks for expression-position arrays too, so the walker is emitted. Regression for the ~617MB leak the prior number[]/string[]/interface-element tests missed.",
+	},
+	{
 		name: "paralock-nested",
 		file: "paralockNested.ms",
 		maxRssMb: 80,
@@ -193,5 +200,12 @@ export const CASES: NativeCase[] = [
 		maxRssMb: 30,
 		expectStdout: "ref-array-self-consume n=",
 		note: "FIXED in inject.ms processAssignment + scope.ms (varMovedInContext/clearMoveInContext). `x = f([..., x])` — a borrowed value sunk into an array literal in the RHS while the holder is reassigned (matchLower's armBody = makeBlock([setMatched, armBody]) shape). The analyzer cleared the pending wasMoved yet still ran save-assign-destroy → double-free / UAF (ASAN-confirmed in buildSwitchDispatch; the self-host gen-2 crashed on it). Fix skips destroy-old (MOC_IS_DECL) + clears the stale move when the LHS var is consumed INSIDE this RHS, gated by a movedBeforeRhs snapshot so a prior conditional move (e.g. `return x` in a sibling branch — the findProjectRoot regression) is not mistaken for consumption. Nim parity: injectdestructors eqwasMoved-then-eqsink no-op. Invisible to test-ms (Bun JS-GC); only the native binary + ASAN exposed it.",
+	},
+	{
+		name: "ref-array-nested-vec",
+		file: "refArrayNestedVec.ms",
+		maxRssMb: 30,
+		expectStdout: "ref-array-nested-vec done",
+		note: "FIXED (Array->Ref migration tail): nested value array Vec<T>[] — a reference array whose elements are VALUE arrays — leaked because the box cell's destroyFn fell to the free-only msNumberArrayDestroy fallback (no per-element recursion into each inner array). 3 coordinated fixes: (1) checker arrayElementNeedsCleanup Array→true so the box-site selects arrCType+\"Destroy\" (the per-type msXxxArrayArrayDestroy walker); (2) the C type name comes from a SINGLE source — arrayCTypeName (codegen/c/types.ms) — that both genArrayType (codegen) and destructorLifting registerSeqElement (transform) route through, so the walker name can never drift from the box-site reference for ANY element kind (string/number/struct/enum/tuple); proven zero-divergence vs the legacy inline rule across the full self-host; (3) codegen forward.ms isDrcLifecycleName treats a base ending \"ArrayArray\" as a generated hook (emit body + forward proto) — the ms-prefixed nested name no longer collides with the runtime single-level helpers (msArray/msNumberArray/…). Walker body loops calling the inner destroyer (fillBody recurses), matching the reference seq[seq[T]] per-type destructor chain (twin-probe verified). Covers string/number/struct/enum/tuple inner. Was 7.5GB @ 200k for Vec<string>[], now flat ~2.6MB drc+orc. Invisible to test-ms (Bun JS-GC); the leak path is the C RefCell TypeInfo.destroyFn.",
 	},
 ];

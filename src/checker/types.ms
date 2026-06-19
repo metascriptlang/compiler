@@ -1362,6 +1362,35 @@ export function hasAsgnFlag(t: Type): boolean {
 	return (t.typeFlags & TypeFlag.HasAsgn) !== 0;
 }
 
+// Does an array element of this type need per-element cleanup — i.e. a per-type
+// <Name>ArrayDestroy walker that runs each element's destructor — vs a free-only buffer
+// wipe? Single source of truth for the destroyFn selection (codegen box site) AND
+// destructorLifting's walker emission; both must agree or a managed element leaks (false
+// → free-only) or a walker that was never emitted is referenced (true → link error).
+// Mirrors classifyArray's needs-cleanup decision. Tuple elements return false here pending
+// their per-type walker emission (tuple-literal codegen).
+export function arrayElementNeedsCleanup(elem: Type): boolean {
+	if (elem === null) return false;
+	if (elem.kind === TypeKind.String || elem.kind === TypeKind.Ref
+		|| elem.kind === TypeKind.Ptr || elem.kind === TypeKind.Function) return true;
+	if (elem.kind === TypeKind.Distinct && elem.typeReturn !== null) {
+		return arrayElementNeedsCleanup(elem.typeReturn);
+	}
+	// Nested value array (Vec<T>[]): the element owns heap (its own buffer + its elements'
+	// heap), so the box-site must pick the per-type <Name>ArrayDestroy walker — never the
+	// free-only fallback (else every inner buffer leaks).
+	if (elem.kind === TypeKind.Array) return true;
+	let structElem = elem;
+	if (elem.kind === TypeKind.GenericInstance && elem.typeExtra !== null && elem.typeExtra.kind === TypeKind.Struct) {
+		structElem = elem.typeExtra;
+	}
+	if ((structElem.kind === TypeKind.Struct || structElem.kind === TypeKind.Union) && structElem.typeName !== "") {
+		const bodyAsgn = elem.kind === TypeKind.GenericInstance && elem.typeReturn !== null && hasAsgnFlag(elem.typeReturn);
+		return hasAsgnFlag(structElem) || bodyAsgn;
+	}
+	return false;
+}
+
 export function propagateToOwner(parent: Type, child: Type): void {
 	if (child !== null && (child.typeFlags & TypeFlag.HasAsgn) !== 0) {
 		parent.typeFlags = parent.typeFlags | TypeFlag.HasAsgn;
