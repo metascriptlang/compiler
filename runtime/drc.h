@@ -211,9 +211,20 @@ static inline bool msDecRefIsLast(void* p) {
 	return false;
 }
 
+#ifdef MSGC_ORC
+void msUnregisterCycle(void* p);
+#endif
+
 static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {
 		msRefHeader* h = msHeader(p);
+#ifdef MSGC_ORC
+		/* Freeing a node that is still a registered cycle-root (rootIdx >= 0) must
+		 * scrub it from msRoots — every free path, including codegen's sole-owner
+		 * direct dispose that bypasses msOrcDecRefIsLast. Else msOrcCollect later
+		 * walks a dangling root (UAF in markGray/getColor). */
+		if (h->rootIdx >= 0) msUnregisterCycle(p);
+#endif
 		msSlabFree(h, h->allocSize);
 	}
 }
