@@ -83,7 +83,7 @@ function isTypeIdent(token: Token): boolean {
 	const k = token.kind;
 	if (k === TokenKind.Ident) return true;
 	// Contextual keywords usable as type names (string, number, boolean, void, etc.)
-	return (k as number) >= (TokenKind.Abstract as number) && k !== TokenKind.Comment && k !== TokenKind.Eof;
+	return (k as number) >= (TokenKind.Abstract as number) && k !== TokenKind.Comment && k !== TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
 }
 
 // Given an already-parsed leading atom, fold any trailing `& T & U` into a

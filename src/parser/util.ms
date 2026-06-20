@@ -112,7 +112,7 @@ export function isIdentLike(token: Token): boolean {
 	const k = token.kind;
 	if (k === TokenKind.Ident) { return true; }
 	// Keywords from Abstract onwards are contextual (can be used as variable/param names)
-	return (k as number) >= (TokenKind.Abstract as number) && k !== TokenKind.Comment && k !== TokenKind.Eof;
+	return (k as number) >= (TokenKind.Abstract as number) && k !== TokenKind.Comment && k !== TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
 }
 
 // Property/method name position — allows ALL keywords (TypeScript parity).
@@ -121,7 +121,7 @@ export function isPropertyName(token: Token): boolean {
 	const k = token.kind;
 	if (k === TokenKind.Ident) return true;
 	// Any keyword can be a property/method name
-	return (k as number) >= (TokenKind.Break as number) && k !== TokenKind.Comment && k !== TokenKind.Eof;
+	return (k as number) >= (TokenKind.Break as number) && k !== TokenKind.Comment && k !== TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
 }
 
 // ===== Initializer/Default Value Skip =====

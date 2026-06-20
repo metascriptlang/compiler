@@ -8,7 +8,7 @@ import { Node, NodeKind, CallExprData, IdentifierData, MemberExprData } from "..
 function isIdentLikeToken(token: Token): boolean {
 	const k = token.kind;
 	if (k === TokenKind.Ident) { return true; }
-	return (k as number) >= (TokenKind.Abstract as number) && k !== TokenKind.Comment && k !== TokenKind.Eof;
+	return (k as number) >= (TokenKind.Abstract as number) && k !== TokenKind.Comment && k !== TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
 }
 
 // ===== Parser State =====
