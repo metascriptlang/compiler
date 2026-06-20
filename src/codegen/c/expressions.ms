@@ -921,14 +921,18 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			const newType = node.nodeType;
 			// Unwrap Ref → inner struct to get the monomorphized C type name
 			let cName = "";
+			let infoType = newType;
 			if (newType !== null && newType.kind === TypeKind.Ref && newType.typeReturn !== null) {
 				cName = getTypeDesc(g, newType.typeReturn);
+				infoType = newType.typeReturn;
 			} else if (newType !== null) {
 				cName = getTypeDesc(g, newType);
+				infoType = newType;
 			} else {
 				cName = genExpr(g, p, d.newCallee);
+				infoType = null as unknown as Type;
 			}
-			ensureTypeInfoDef(g, cName, null as unknown as Type);
+			ensureTypeInfoDef(g, cName, infoType);
 			// Inline allocation + delegate to `<Class>_init(this, args)`. The ctor
 			// body lives at module top-level as `<Class>_init` (lifted by
 			// `methodToFunction` transform) — no `<Class>_new` wrapper exists any
@@ -2240,7 +2244,11 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 			// has no per-type walker, so it must use msRefArrayDestroy.
 			destroyFn = match (elemT.kind) {
 				TypeKind.String => "msStringArrayDestroy",
-				TypeKind.Ref | TypeKind.Ptr => "msRefArrayDestroy",
+				// Actor-handle elements are DRC-exempt (classify.ms classifyArray) — free the
+				// pointer buffer only, never per-element decref, else shared actors double-free.
+				TypeKind.Ref | TypeKind.Ptr => (elemT.sym !== null && elemT.sym.symbolKind === SymbolKind.Actor)
+					? "msNumberArrayDestroy"
+					: "msRefArrayDestroy",
 				TypeKind.Function => "msClosureArrayDestroy",
 				// Managed VALUE element (struct / union / generic-instance / distinct-over-those):
 				// the array TYPE's per-type <Name>ArrayDestroy walker (NIM-REF §2), selected once

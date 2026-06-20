@@ -623,6 +623,14 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
     if (a->monitorWatchers != NULL) free(a->monitorWatchers);
     if (a->monitorRefs != NULL) free(a->monitorRefs);
     if (a->refs != NULL) free(a->refs);
+    /* Sole owner: the handle is DRC-exempt (classify.ms) and the spawn-time msIncRef is
+     * cycle-detector-only, so neither releases state — teardown frees it (Pony parity). */
+    if (a->state != NULL) {
+        const msTypeInfo* __st = msHeader(a->state)->type;
+        if (__st != NULL && __st->destroyFn != NULL) __st->destroyFn(a->state);
+        msDestroyAndDispose(a->state);
+        a->state = NULL;
+    }
     free(a);
 }
 
