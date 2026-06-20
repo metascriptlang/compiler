@@ -3,6 +3,10 @@
 
 import { Token, TokenKind } from "./token";
 
+// JSX lexer mode stack frame (docs/JSX-ROADMAP.md "Architecture decision").
+// Tag = inside `<… >` opening tag; Children = between `>` and `</`; Closing = inside `</…>`;
+// Brace = inside an `{expr}` container (normal code, tracks nesting to know when to pop).
+export enum JsxMode { Tag, Children, Closing, Brace }
 
 export interface LexerState {
 	source: string;
@@ -14,10 +18,11 @@ export interface LexerState {
 	templateDepth: number;
 	braceStack: number[];
 	lastToken: TokenKind;
+	jsxStack: JsxMode[];
 }
 
 export function createLexerState(source: string): LexerState {
-	return { source, pos: 0, line: 1, column: 1, tokens: [], comments: [], templateDepth: 0, braceStack: [], lastToken: TokenKind.Eof };
+	return { source, pos: 0, line: 1, column: 1, tokens: [], comments: [], templateDepth: 0, braceStack: [], lastToken: TokenKind.Eof, jsxStack: [] };
 }
 
 export function peek(s: LexerState): number {
