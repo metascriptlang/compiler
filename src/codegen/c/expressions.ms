@@ -945,6 +945,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			const newTmp = `_new${g.labels}_`;
 			emitProcLocalsLine(p, `${cName}* ${newTmp};`);
 			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName)};`);
+			emitInstanceFieldDefaults(g, p, newTmp, node.nodeType, 0);
 			let initArgs = newTmp;
 			for (const argNode of d.newArguments) {
 				let argSnippet = genExpr(g, p, argNode);
