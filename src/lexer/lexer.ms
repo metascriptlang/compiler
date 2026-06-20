@@ -2,10 +2,11 @@
 // Converts source code into a sequence of tokens
 // Pattern: ~/projects/metascript/src/lexer/lexer.zig
 
-import { Token, TokenKind } from "./token";
+import { Token, TokenKind, isIdentOrKeyword } from "./token";
 import { createLexerState, peek, peekAt, advanceChar, skip, addToken } from "./state";
 import { isWhitespace, isNewline, isDigit, isLetter } from "./chars";
 import { scanNumber, scanString, scanTemplateString, scanIdentifier, scanOperator, scanPunctuation } from "./scanner";
+import { scanJsx } from "./jsx";
 
 // ===== Main Lex Function =====
 
@@ -14,6 +15,11 @@ export function lex(source: string): Result<Token[], string> {
 
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
+
+		// JSX mode (lexer-owned). Handles JSX-start in expression position and all scanning
+		// inside JSX tags/children/expression-containers. Must run before whitespace so JSX
+		// child text is captured raw.
+		if (scanJsx(s)) { continue; }
 
 		if (isWhitespace(ch) || isNewline(ch)) {
 			advanceChar(s);
@@ -392,4 +398,195 @@ test "realistic code" {
 	assert lexOk("match (x) { 1 => \"one\", _ => \"other\" }");
 	assert lexOk("a?.b?.c");
 	assert lexOk("data |> transform |> output");
+}
+
+// ===== JSX Lexer Tests (Phase 2, docs/JSX-ROADMAP.md) =====
+// RED until the lexer JSX mode lands — they pin the target token stream now (TDD).
+// `<` at start-of-input: lastToken is Eof → expression position → JSX.
+
+test "jsx self-closing element" {
+	assert lexKindAt("<Img/>", 0) === TokenKind.JsxTagStart;
+	assert lexValAt("<Img/>", 1) === "Img";
+	assert lexKindAt("<Img/>", 2) === TokenKind.Slash;
+	assert lexKindAt("<Img/>", 3) === TokenKind.Gt;
+}
+
+test "jsx element with text child" {
+	assert lexKindAt("<p>hi</p>", 0) === TokenKind.JsxTagStart;
+	assert lexKindAt("<p>hi</p>", 2) === TokenKind.Gt;
+	assert lexKindAt("<p>hi</p>", 3) === TokenKind.JsxText;
+	assert lexValAt("<p>hi</p>", 3) === "hi";
+	assert lexKindAt("<p>hi</p>", 4) === TokenKind.JsxClose;
+	assert lexValAt("<p>hi</p>", 5) === "p";
+}
+
+test "jsx text keeps apostrophe (no string-literal choke)" {
+	assert lexOk("<p>Don't</p>");
+	assert lexValAt("<p>Don't</p>", 3) === "Don't";
+}
+
+test "jsx fragment" {
+	assert lexKindAt("<></>", 0) === TokenKind.JsxTagStart;
+	assert lexKindAt("<></>", 1) === TokenKind.Gt;
+	assert lexKindAt("<></>", 2) === TokenKind.JsxClose;
+	assert lexKindAt("<></>", 3) === TokenKind.Gt;
+}
+
+test "jsx expression container" {
+	assert lexKindAt("<p>{x}</p>", 0) === TokenKind.JsxTagStart;
+	assert lexKindAt("<p>{x}</p>", 3) === TokenKind.LBrace;
+	assert lexKindAt("<p>{x}</p>", 4) === TokenKind.Ident;
+	assert lexKindAt("<p>{x}</p>", 5) === TokenKind.RBrace;
+	assert lexKindAt("<p>{x}</p>", 6) === TokenKind.JsxClose;
+}
+
+test "jsx empty expression container" {
+	assert lexKindAt("<p>{}</p>", 0) === TokenKind.JsxTagStart;
+	assert lexKindAt("<p>{}</p>", 3) === TokenKind.LBrace;
+	assert lexKindAt("<p>{}</p>", 4) === TokenKind.RBrace;
+	assert lexKindAt("<p>{}</p>", 5) === TokenKind.JsxClose;
+}
+
+test "jsx attribute single-quoted string" {
+	assert lexKindAt("<a href='x'/>", 0) === TokenKind.JsxTagStart;
+	assert lexValAt("<a href='x'/>", 2) === "href";
+	assert lexKindAt("<a href='x'/>", 3) === TokenKind.Assign;
+	assert lexKindAt("<a href='x'/>", 4) === TokenKind.String;
+	assert lexValAt("<a href='x'/>", 4) === "x";
+}
+
+test "jsx hyphenated attribute name folds to one ident" {
+	assert lexKindAt("<a data-x='1'/>", 0) === TokenKind.JsxTagStart;
+	assert lexValAt("<a data-x='1'/>", 2) === "data-x";
+}
+
+test "jsx spread attribute" {
+	assert lexKindAt("<a {...p}/>", 0) === TokenKind.JsxTagStart;
+	assert lexKindAt("<a {...p}/>", 2) === TokenKind.LBrace;
+	assert lexKindAt("<a {...p}/>", 3) === TokenKind.DotDotDot;
+	assert lexValAt("<a {...p}/>", 4) === "p";
+}
+
+test "jsx namespaced and member tag names" {
+	assert lexKindAt("<svg:rect/>", 0) === TokenKind.JsxTagStart;
+	assert lexKindAt("<svg:rect/>", 2) === TokenKind.Colon;
+	assert lexValAt("<svg:rect/>", 3) === "rect";
+	assert lexKindAt("<Foo.Bar/>", 2) === TokenKind.Dot;
+	assert lexValAt("<Foo.Bar/>", 3) === "Bar";
+}
+
+test "jsx nested element child" {
+	assert lexKindAt("<a><b/></a>", 0) === TokenKind.JsxTagStart;
+	assert lexKindAt("<a><b/></a>", 3) === TokenKind.JsxTagStart;
+	assert lexValAt("<a><b/></a>", 4) === "b";
+	assert lexKindAt("<a><b/></a>", 7) === TokenKind.JsxClose;
+}
+
+test "jsx less-than inside expression container stays Lt" {
+	assert lexKindAt("<p>{a < b}</p>", 0) === TokenKind.JsxTagStart;
+	assert lexKindAt("<p>{a < b}</p>", 5) === TokenKind.Lt;
+	assert lexKindAt("<p>{a < b}</p>", 8) === TokenKind.JsxClose;
+}
+
+test "jsx double-quoted and multiple attributes" {
+	assert lexKindAt("<a x=\"1\" y=\"2\"/>", 0) === TokenKind.JsxTagStart;
+	assert lexValAt("<a x=\"1\" y=\"2\"/>", 2) === "x";
+	assert lexKindAt("<a x=\"1\" y=\"2\"/>", 4) === TokenKind.String;
+	assert lexValAt("<a x=\"1\" y=\"2\"/>", 5) === "y";
+}
+
+test "jsx does not hijack less-than or generic call" {
+	assert lexKindAt("a < b", 1) === TokenKind.Lt;
+	assert lexKindAt("a < b", 1) !== TokenKind.JsxTagStart;
+	assert lexKindAt("foo<T>()", 1) === TokenKind.Lt;
+	assert lexKindAt("new Box<T>()", 2) === TokenKind.Lt;
+}
+
+test "jsx tokens are not ident-like (range-check guard)" {
+	assert isIdentOrKeyword(TokenKind.JsxTagStart) === false;
+	assert isIdentOrKeyword(TokenKind.JsxClose) === false;
+	assert isIdentOrKeyword(TokenKind.JsxText) === false;
+}
+
+test "jsx attribute value expression" {
+	assert lexKindAt("<a x={y}/>", 0) === TokenKind.JsxTagStart;
+	assert lexValAt("<a x={y}/>", 2) === "x";
+	assert lexKindAt("<a x={y}/>", 3) === TokenKind.Assign;
+	assert lexKindAt("<a x={y}/>", 4) === TokenKind.LBrace;
+	assert lexValAt("<a x={y}/>", 5) === "y";
+	assert lexKindAt("<a x={y}/>", 6) === TokenKind.RBrace;
+	assert lexKindAt("<a x={y}/>", 7) === TokenKind.Slash;
+}
+
+test "jsx object literal inside expression container" {
+	// nested braces must not close the container early — index 10 stays JsxClose
+	assert lexKindAt("<p>{ {a: 1} }</p>", 3) === TokenKind.LBrace;
+	assert lexKindAt("<p>{ {a: 1} }</p>", 4) === TokenKind.LBrace;
+	assert lexValAt("<p>{ {a: 1} }</p>", 5) === "a";
+	assert lexKindAt("<p>{ {a: 1} }</p>", 8) === TokenKind.RBrace;
+	assert lexKindAt("<p>{ {a: 1} }</p>", 9) === TokenKind.RBrace;
+	assert lexKindAt("<p>{ {a: 1} }</p>", 10) === TokenKind.JsxClose;
+}
+
+test "jsx element inside expression container" {
+	assert lexKindAt("<p>{<b/>}</p>", 3) === TokenKind.LBrace;
+	assert lexKindAt("<p>{<b/>}</p>", 4) === TokenKind.JsxTagStart;
+	assert lexValAt("<p>{<b/>}</p>", 5) === "b";
+	assert lexKindAt("<p>{<b/>}</p>", 8) === TokenKind.RBrace;
+	assert lexKindAt("<p>{<b/>}</p>", 9) === TokenKind.JsxClose;
+}
+
+test "jsx text element text mix" {
+	assert lexKindAt("<p>a<b/>c</p>", 3) === TokenKind.JsxText;
+	assert lexValAt("<p>a<b/>c</p>", 3) === "a";
+	assert lexKindAt("<p>a<b/>c</p>", 4) === TokenKind.JsxTagStart;
+	assert lexKindAt("<p>a<b/>c</p>", 8) === TokenKind.JsxText;
+	assert lexValAt("<p>a<b/>c</p>", 8) === "c";
+	assert lexKindAt("<p>a<b/>c</p>", 9) === TokenKind.JsxClose;
+}
+
+test "jsx in statement resumes normal lexing after close" {
+	assert lexKindAt("const x = <a/>; const y = b;", 3) === TokenKind.JsxTagStart;
+	assert lexKindAt("const x = <a/>; const y = b;", 6) === TokenKind.Gt;
+	assert lexKindAt("const x = <a/>; const y = b;", 7) === TokenKind.Semicolon;
+	assert lexKindAt("const x = <a/>; const y = b;", 8) === TokenKind.Const;
+	assert lexValAt("const x = <a/>; const y = b;", 9) === "y";
+}
+
+test "jsx stray brace in text does not hang" {
+	assert lexOk("<p>a}b</p>");
+	assert lexValAt("<p>a}b</p>", 3) === "a}b";
+	assert lexKindAt("<p>a}b</p>", 4) === TokenKind.JsxClose;
+}
+
+test "jsx text preserves raw whitespace" {
+	assert lexValAt("<p> hi </p>", 3) === " hi ";
+}
+
+test "jsx greater-than in text is not structural" {
+	assert lexValAt("<p>a > b</p>", 3) === "a > b";
+	assert lexKindAt("<p>a > b</p>", 4) === TokenKind.JsxClose;
+}
+
+test "jsx bare boolean attribute" {
+	assert lexValAt("<input disabled/>", 1) === "input";
+	assert lexValAt("<input disabled/>", 2) === "disabled";
+	assert lexKindAt("<input disabled/>", 3) === TokenKind.Slash;
+}
+
+test "jsx deeply nested elements balance the stack" {
+	assert lexKindAt("<a><b><c/></b></a>", 0) === TokenKind.JsxTagStart;
+	assert lexKindAt("<a><b><c/></b></a>", 3) === TokenKind.JsxTagStart;
+	assert lexKindAt("<a><b><c/></b></a>", 6) === TokenKind.JsxTagStart;
+	assert lexKindAt("<a><b><c/></b></a>", 10) === TokenKind.JsxClose;
+	assert lexKindAt("<a><b><c/></b></a>", 13) === TokenKind.JsxClose;
+	assert lexValAt("<a><b><c/></b></a>", 14) === "a";
+}
+
+test "jsx starts after return and inside array literal" {
+	assert lexKindAt("return <a/>", 0) === TokenKind.Return;
+	assert lexKindAt("return <a/>", 1) === TokenKind.JsxTagStart;
+	assert lexKindAt("[<a/>, <b/>]", 1) === TokenKind.JsxTagStart;
+	assert lexKindAt("[<a/>, <b/>]", 5) === TokenKind.Comma;
+	assert lexKindAt("[<a/>, <b/>]", 6) === TokenKind.JsxTagStart;
 }
