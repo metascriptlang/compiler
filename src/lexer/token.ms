@@ -40,6 +40,10 @@ export enum TokenKind {
 	QuoteInterp,
 	// Template keyword — appended at end to preserve ordinals.
 	Template,
+	// JSX structural tokens — appended to preserve ordinals. Unlike Actor these are NOT
+	// ident-like; the `>= Break`/`>= Abstract` range checks lack an upper bound (guard: the
+	// "jsx tokens are not ident-like" test).
+	JsxTagStart, JsxClose, JsxText,
 }
 
 export interface Token {
@@ -61,7 +65,7 @@ export function formatToken(token: Token): string {
 // Returns true for Ident and all keyword tokens.
 // Used by member expression parsing to allow keywords as property names (e.g., obj.get, obj.set).
 export function isIdentOrKeyword(kind: TokenKind): boolean {
-	return kind === TokenKind.Ident || ((kind as number) >= (TokenKind.Break as number) && kind !== TokenKind.Comment && kind !== TokenKind.Eof);
+	return kind === TokenKind.Ident || ((kind as number) >= (TokenKind.Break as number) && kind !== TokenKind.Comment && kind !== TokenKind.Eof && (kind as number) < (TokenKind.JsxTagStart as number));
 }
 
 // Map identifier string to keyword TokenKind (or Ident)
