@@ -454,8 +454,9 @@ export function linkObjects(oFileList: string, outBinary: string, extraFlags: st
 	if (cmd.length <= LINK_CMD_LIMIT) {
 		r = exec(cmd);
 	} else {
-		// Overflow: write bulk args to a response file in the same dir as the binary.
-		const rspPath = `${dirname(outBinary)}/_link.rsp`;
+		// Overflow: bulk args go to a per-binary response file. The path is keyed to
+		// outBinary (not its dir) so concurrent builds in a shared dir don't clobber it.
+		const rspPath = `${outBinary}_link.rsp`;
 		writeFile(rspPath, bulk);
 		r = exec(`${compiler}${rtFlag} @${rspPath} -o ${outBinary} -lm`);
 	}
