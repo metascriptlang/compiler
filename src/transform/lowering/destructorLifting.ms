@@ -421,7 +421,11 @@ function registerSeqElement(elem: Type, lctx: LiftCtx): void {
 // Primitive elements: runtime macros (no per-element cleanup).
 // Non-primitive elements: inline loops via genArrayLoop (reference loop pattern).
 function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
-	const needsElemLoop = elem !== null && !isPrimitiveKind(elem.kind);
+	// Actor-handle elements are DRC-exempt (classify.ms classifyArray) — free the array
+	// storage but never per-element decref, else the shared actors double-free.
+	const isActorElem = elem !== null && (elem.kind === TypeKind.Ref || elem.kind === TypeKind.Ptr)
+		&& elem.sym !== null && elem.sym.symbolKind === SymbolKind.Actor;
+	const needsElemLoop = elem !== null && !isPrimitiveKind(elem.kind) && !isActorElem;
 	// Unwrap GenericInstance element so it enters the Struct branch below.
 	// Mirrors codegen (types.ms:582-620): monomorphized struct is addressable by its
 	// mangled typeName (e.g., `OrderedMapEntry__int32_ref_Symbol`).
@@ -596,8 +600,15 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.Ref => {
-			const cyclic = isCyclicType(fieldType, lctx, visited);
-			refOp(hook, xf, yf, fieldName, cyclic, buf, loc);
+			// Actor handles are DRC-exempt (classify.ms: SymbolKind.Actor -> noRcInfo).
+			// Emitting decref/incref on a sibling actor field underflows its rc (spawn
+			// never increfs it) -> double-free of the shared actor's state.
+			if (fieldType.sym !== null && fieldType.sym.symbolKind === SymbolKind.Actor) {
+				defaultOp(hook, xf, yf, buf, loc);
+			} else {
+				const cyclic = isCyclicType(fieldType, lctx, visited);
+				refOp(hook, xf, yf, fieldName, cyclic, buf, loc);
+			}
 		},
 		TypeKind.Ptr => {
 			defaultOp(hook, xf, yf, buf, loc);
