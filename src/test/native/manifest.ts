@@ -208,4 +208,25 @@ export const CASES: NativeCase[] = [
 		expectStdout: "ref-array-nested-vec done",
 		note: "FIXED (Array->Ref migration tail): nested value array Vec<T>[] — a reference array whose elements are VALUE arrays — leaked because the box cell's destroyFn fell to the free-only msNumberArrayDestroy fallback (no per-element recursion into each inner array). 3 coordinated fixes: (1) checker arrayElementNeedsCleanup Array→true so the box-site selects arrCType+\"Destroy\" (the per-type msXxxArrayArrayDestroy walker); (2) the C type name comes from a SINGLE source — arrayCTypeName (codegen/c/types.ms) — that both genArrayType (codegen) and destructorLifting registerSeqElement (transform) route through, so the walker name can never drift from the box-site reference for ANY element kind (string/number/struct/enum/tuple); proven zero-divergence vs the legacy inline rule across the full self-host; (3) codegen forward.ms isDrcLifecycleName treats a base ending \"ArrayArray\" as a generated hook (emit body + forward proto) — the ms-prefixed nested name no longer collides with the runtime single-level helpers (msArray/msNumberArray/…). Walker body loops calling the inner destroyer (fillBody recurses), matching the reference seq[seq[T]] per-type destructor chain (twin-probe verified). Covers string/number/struct/enum/tuple inner. Was 7.5GB @ 200k for Vec<string>[], now flat ~2.6MB drc+orc. Invisible to test-ms (Bun JS-GC); the leak path is the C RefCell TypeInfo.destroyFn.",
 	},
+	{
+		name: "actor-churn-heapstate",
+		file: "actorChurnHeapState.ms",
+		maxRssMb: 40,
+		expectStdout: "actor-churn-heapstate done",
+		note: "FIXED: actor create+stop churn leaked a->state (and its heap string) on every teardown. The actor handle is DRC-exempt (classify.ms: actors are runtime-managed), the spawn-time msIncRef exists only so the cycle detector sees rc>0, and the with-ctor `new` path passed null objType to ensureTypeInfoDef so the state type's TypeInfo.destroyFn was never wired (HeavyDestroy existed but unreferenced). Two coordinated fixes: (1) codegen expressions.ms NewExpr with-ctor branch passes the inner struct type (symmetry with the no-ctor branch) so ensureTypeInfoDef wires destroyFn; (2) runtime msActorDestroyWithReason frees a->state via that destroyFn after onTerminate (Pony: actor heap dies with the actor) — unconditional since the exempt handle and cycle-detector incref mean the actor is the sole owner. Was 1.07GB @ 200k (heap-string state), now ~8MB drc+orc. Invisible to test-ms (Bun JS-GC) — only the native binary runs msActorDestroyWithReason; no prior native case churned actor create+destroy.",
+	},
+	{
+		name: "actor-churn-noctor",
+		file: "actorChurnNoCtorState.ms",
+		maxRssMb: 40,
+		expectStdout: "actor-churn-noctor done",
+		note: "FIXED (companion to actor-churn-heapstate): the NO-constructor actor teardown path is a distinct codegen branch (Ref-with-field-defaults, expressions.ms ~983) from the with-ctor one. State has a heap number[] field; the no-ctor branch already passed innerType so destroyFn is wired, and runtime msActorDestroyWithReason frees the state — without it the array leaked per teardown. Pins the no-ctor branch against drift.",
+	},
+	{
+		name: "actor-shared-actor-field",
+		file: "actorSharedActorField.ms",
+		maxRssMb: 40,
+		expectStdout: "actor-shared-actor-field done",
+		note: "FIXED (UAF caught by audit of the actor-state-free fix): an actor whose state holds OTHER actor handles (plain Ref / array element / nullable union) double-freed the shared actor on teardown. Actors are DRC-exempt (classify.ms: SymbolKind.Actor -> noRcInfo), spawn never increfs the handle, so a generated destroy/copy hook touching the field underflowed the shared actor's rc; once the actor-state-free fix wired the with-ctor destroyFn, the orphaned hook ran and double-freed. Root cause: destructorLifting had no actor exemption while classify.ms did. Fixes mirror classify.ms: destructorLifting skips RC ops on actor-typed Ref fields (fillBody) and actor-element arrays (arrayOp), and codegen picks the free-only msNumberArrayDestroy for an actor-element ref-array box (no per-element decref). Pre-fix: ASAN heap-use-after-free / malloc abort under --gc=drc+orc. Invisible to test-ms (Bun JS-GC).",
+	},
 ];
