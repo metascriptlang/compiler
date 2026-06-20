@@ -362,33 +362,24 @@ static inline void msActorSend(msActor* a, msMessage* msg) {
         msActorMute(msCurrentActor, a);
     }
 
-    /* Pony parity: schedule actor only if not already scheduled.
-     * CAS false→true prevents double-enqueue (which causes self-loop in
-     * the LIFO run queue and hangs the drain loop). Only the thread that
-     * wins the CAS pushes; all others know the actor is already queued. */
-    {
-        bool expected = false;
-        if (atomic_compare_exchange_strong_explicit(&a->scheduled, &expected, true,
-                memory_order_acq_rel, memory_order_relaxed)) {
-            int sid = a->schedulerID;
-            if (sid >= 0 && sid < msSchedulerCount) {
-                msSchedRunPush(&msSchedulers[sid], a);
-                /* Amortized wake: only issue a wake syscall if this scheduler
-                 * hasn't already been woken since its last drain. Worker clears
-                 * the flag after it fully drains the run queue (msActorPollLocal).
-                 * Turns O(actors) wake syscalls into O(schedulers) — critical
-                 * at 1M+ sends where each wake is ~500ns-1µs of syscall overhead.
-                 * The re-check loop in the worker (drain → clear → re-check)
-                 * bounds any lost-wake window; a skipped wake here is safe
-                 * because the actor is ALREADY on the run queue. */
-                if (!atomic_exchange_explicit(&msSchedulers[sid].wakeAmortized, true,
-                        memory_order_acq_rel)) {
-                    if (sid == 0) {
-                        msActorWakeEventLoop();
-                    } else {
-                        msPoolWakeWorker(sid);
-                    }
-                }
+    /* Pony messageq gate: schedule iff this push transitioned the mailbox empty→non-empty.
+     * wasEmpty is atomic with the processing thread's markEmpty, so exactly one party (this
+     * sender, or the processing thread's re-enqueue) schedules the actor — no stale-flag
+     * window (the old scheduled-CAS could observe scheduled=false mid-deschedule and push the
+     * actor onto a run queue while it was still being processed, so a popper popped it, failed
+     * the processing CAS, and dropped it = strand), and no double-enqueue (only the
+     * empty→non-empty edge pushes). A SUSPENDED actor is re-scheduled by its resume path. */
+    if (wasEmpty && !msActorHasFlag(a, MS_ACTOR_SUSPENDED)) {
+        atomic_store_explicit(&a->scheduled, true, memory_order_release);
+        int sid = a->schedulerID;
+        if (sid >= 0 && sid < msSchedulerCount) {
+            msSchedRunPush(&msSchedulers[sid], a);
+            /* Amortized wake: skip the wake syscall if this scheduler was already woken since
+             * its last drain — O(schedulers) wakes instead of O(actors) at high send rates. */
+            if (!atomic_exchange_explicit(&msSchedulers[sid].wakeAmortized, true,
+                    memory_order_acq_rel)) {
+                if (sid == 0) msActorWakeEventLoop();
+                else msPoolWakeWorker(sid);
             }
         }
     }
@@ -406,7 +397,18 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     bool expected = false;
     if (!atomic_compare_exchange_strong_explicit(&a->processing, &expected, true,
             memory_order_acquire, memory_order_relaxed)) {
-        return 0;  /* another thread is already processing this actor */
+        /* Another thread holds processing AND the actor is on a run queue (a sender's
+         * wasEmpty push landed in that thread's deschedule window, between its markEmpty and
+         * its processing release). We already popped it off the queue, so re-enqueue it
+         * instead of dropping it: the holder's deschedule branch does NOT re-push, so a drop
+         * here would strand the pending message. No double-push — the CAS only fails inside
+         * that window, where the holder never re-pushes; a later pop wins the freed CAS. */
+        if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
+            msSchedRunPush(&msSchedulers[a->schedulerID], a);
+            if (a->schedulerID == 0) msActorWakeEventLoop();
+            else msPoolWakeWorker(a->schedulerID);
+        }
+        return 0;
     }
 
     msActor* prevActor = msCurrentActor;
@@ -451,66 +453,46 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         processed++;
     }
 
-    /* Check mailbox state after batch — Pony-parity scheduling */
-    if (msMpscIsEmpty(&a->mailbox)) {
-        if (msMpscMarkEmpty(&a->mailbox)) {
-            /* Truly empty: deschedule actor (Pony: notempty→false). */
-            atomic_store_explicit(&a->hasWork, false, memory_order_release);
-            atomic_store_explicit(&a->scheduled, false, memory_order_release);
-            /* Pony re-check: a message may have arrived between isEmpty and
-             * markEmpty/deschedule. If so, CAS back to scheduled and re-enqueue.
-             * Without this, the actor idles with a pending message. */
-            if (!msMpscIsEmpty(&a->mailbox)) {
-                bool exp = false;
-                if (atomic_compare_exchange_strong_explicit(&a->scheduled, &exp, true,
-                        memory_order_acq_rel, memory_order_relaxed)) {
-                    if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
-                        msSchedRunPush(&msSchedulers[a->schedulerID], a);
-                        if (a->schedulerID == 0) msActorWakeEventLoop();
-                        else msPoolWakeWorker(a->schedulerID);
-                    }
-                }
-            }
-        } else {
-            /* markEmpty CAS failed: message arrived during check.
-             * scheduled stays true. Re-enqueue for next poll. */
-            if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
-                msSchedRunPush(&msSchedulers[a->schedulerID], a);
-                if (a->schedulerID == 0) msActorWakeEventLoop();
-                else msPoolWakeWorker(a->schedulerID);
-            }
-        }
-        /* Caught up: clear overload + unmute senders */
+    /* Scheduling decision, made WHILE HOLDING processing. Flags (heuristics) from the
+     * pre-check; markEmpty is the LAST mailbox op and runs under processing so it shares the
+     * single-consumer exclusion with msMpscPop (reading/CASing q->tail off-processing is the
+     * two-consumer race). OVERLOADED/BLOCKED slightly-stale on a racing late message is
+     * harmless. */
+    bool emptyPre = msMpscIsEmpty(&a->mailbox);
+    if (emptyPre) {
         if (msActorHasFlag(a, MS_ACTOR_OVERLOADED)) {
             msActorClearFlag(a, MS_ACTOR_OVERLOADED);
             msActorUnmuteAll(a);
         }
-        /* Idle with RC > 0: candidate for cycle detection */
-        if (a->state != NULL) {
-            msRefHeader* h = msHeader(a->state);
-            if (h->rc > 0) {
-                msActorSetFlag(a, MS_ACTOR_BLOCKED);
-            }
+        if (a->state != NULL && msHeader(a->state)->rc > 0) {
+            msActorSetFlag(a, MS_ACTOR_BLOCKED);
         }
     } else {
-        /* Still has messages after batch: release lock first, then re-enqueue.
-         * scheduled stays true — prevents double-push from concurrent senders.
-         * Release-before-push ensures the drain loop can CAS-acquire when it
-         * pops the re-enqueued actor. */
         msActorSetFlag(a, MS_ACTOR_OVERLOADED);
+    }
+
+    /* markEmpty: the LAST consumer op, under processing.
+     *   TRUE  → truly empty → deschedule, NO re-push. A future sender's wasEmpty push
+     *           re-queues it (atomic with markEmpty, so exactly one party schedules) — Pony parity.
+     *   FALSE → a message is pending → re-enqueue, but DEFER the run-queue push to AFTER the
+     *           processing release below, so a concurrent popper acquires processing only once
+     *           we have let go (it wins the freed CAS, never drops). */
+    bool reEnqueue;
+    if (msMpscMarkEmpty(&a->mailbox)) {
+        atomic_store_explicit(&a->hasWork, false, memory_order_release);
+        atomic_store_explicit(&a->scheduled, false, memory_order_release);
+        reEnqueue = false;
+    } else {
+        reEnqueue = true;
     }
 
     msCurrentActor = prevActor;
     atomic_store_explicit(&a->processing, false, memory_order_release);
 
-    /* Re-enqueue AFTER releasing processing lock (overloaded path only).
-     * The scheduled flag (still true) prevents double-push from senders. */
-    if (msActorHasFlag(a, MS_ACTOR_OVERLOADED)) {
-        if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
-            msSchedRunPush(&msSchedulers[a->schedulerID], a);
-            if (a->schedulerID == 0) msActorWakeEventLoop();
-            else msPoolWakeWorker(a->schedulerID);
-        }
+    if (reEnqueue && a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
+        msSchedRunPush(&msSchedulers[a->schedulerID], a);
+        if (a->schedulerID == 0) msActorWakeEventLoop();
+        else msPoolWakeWorker(a->schedulerID);
     }
 
     return processed;
