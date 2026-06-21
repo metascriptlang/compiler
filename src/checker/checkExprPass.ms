@@ -185,6 +185,21 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | 
 	node.flags = node.flags | NodeFlag.Sem;
 }
 
+// Walk `nodes` with the unconsumed-JSX leak check suppressed. A raw JSX node is legal as a
+// macro argument (the macro consumes it) or as a child of a JSX node already accounted for by
+// its parent — jsxMacroArgDepth > 0 marks both, so reportUnconsumedJsx stays silent inside.
+function checkJsxConsumed(ctx: CheckerContext, nodes: Node[]): void {
+	ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth + 1;
+	for (const n of nodes) { checkExpr(ctx, n, null); }
+	ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth - 1;
+}
+
+function reportUnconsumedJsx(ctx: CheckerContext, node: Node, what: string): void {
+	if (ctx.jsxMacroArgDepth === 0) {
+		addError(ctx, what + " must be consumed by a macro (it produces a compile-time Node)", node.location.line, node.location.column);
+	}
+}
+
 // Internal: compute type for node. All match arms and sub-functions return Type.
 function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const result = match (node.kind) {
@@ -263,13 +278,15 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		// codegen. Still walk the embedded expressions/attribute values so their symbols resolve.
 		NodeKind.JSXElement => {
 			const d = node.data as JSXElementData;
-			for (const a of d.jsxAttrs) { checkExpr(ctx, a, null); }
-			for (const c of d.jsxChildren) { checkExpr(ctx, c, null); }
+			reportUnconsumedJsx(ctx, node, "JSX expression");
+			checkJsxConsumed(ctx, d.jsxAttrs);
+			checkJsxConsumed(ctx, d.jsxChildren);
 			node.nodeType = unknownType(); return;
 		},
 		NodeKind.JSXFragment => {
 			const d = node.data as JSXFragmentData;
-			for (const c of d.jsxFragChildren) { checkExpr(ctx, c, null); }
+			reportUnconsumedJsx(ctx, node, "JSX fragment");
+			checkJsxConsumed(ctx, d.jsxFragChildren);
 			node.nodeType = unknownType(); return;
 		},
 		NodeKind.JSXExpressionContainer => {
@@ -1386,13 +1403,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				processEmitInterpolation(ctx, md, node);
 			}
 			// @import args are pure syntax (not evaluated) — skip type-checking
-			if (md.macroName !== "import") {
-				let ai = 0;
-				while (ai < md.macroArgs.length) {
-					checkExpr(ctx, md.macroArgs[ai], null);
-					ai = ai + 1;
-				}
-			}
+			if (md.macroName !== "import") { checkJsxConsumed(ctx, md.macroArgs); }
 			// SERIALIZE Bug 8: deferred user macros expand eagerly when re-checked
 			// with concrete types. After mono clones a generic body, replaceTypeVars
 			// substitutes T→concrete in arg.nodeType. The re-check then hits this
@@ -2249,11 +2260,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			}
 			// Type-check args first (errors inside them are reported)
 			const macroArgsRef = d.arguments;
-			let mai = 0;
-			while (mai < macroArgsRef.length) {
-				checkExpr(ctx, macroArgsRef[mai], null);
-				mai = mai + 1;
-			}
+			checkJsxConsumed(ctx, macroArgsRef);
 			// Mutate node to MacroInvocation form so expandMacroInvocation can read it
 			node.kind = NodeKind.MacroInvocation;
 			node.data = { macroName: calleeName, macroArgs: macroArgsRef };
