@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, hasAsgnFlag, isAwaitable, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion } from "../checker/types";
+import { isPrimitiveKind, hasAsgnFlag, isAwaitable, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, tupleTypeName } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
@@ -248,14 +248,16 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			} else { return noRcInfo(); }
 		},
 		TypeKind.Tuple => {
-			// Check if any element needs RC
+			// RC tuples get first-class named hooks (destructorLifting ensureTupleHooks); the
+			// name MUST be tupleTypeName — the single source codegen + hooks share — so
+			// moveOrCopy's msTuple_<hash>{Copy,Destroy} calls resolve.
 			let hasRc = false;
 			for (const child of t.typeChildren) {
 				if (classifyType(child, ctx).needsCleanup) { hasRc = true; }
 			}
-			// TODO: Tuples with RC elements need per-field hooks from destructorLifting.
-			// For now, emit Named with empty hooks — helper functions guard against empty fnName.
-			if (hasRc) { return makeRcInfo(RcKind.Named, "", "", "", "", "", false); } else { return noRcInfo(); }
+			if (!hasRc) return noRcInfo();
+			const n = tupleTypeName(t);
+			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", false);
 		},
 		_ => noRcInfo(),
 	};

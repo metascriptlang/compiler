@@ -1379,8 +1379,10 @@ function genTupleType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 	if (typeCacheHas(g.typeCache, key)) return typeCacheGet(g.typeCache, key);
 
-	// Hash-based name for uniqueness
-	const name = "msTuple_" + hashToBase36(key);
+	// tupleTypeName is the single source of the msTuple_<hash> name (analyzer, lifted
+	// hooks and array-element refs all derive from it). A second name computed here from
+	// codegen's own typeKey drifted for non-primitive elements → "unknown type name" at link.
+	const name = tupleTypeName(t);
 	typeCacheSet(g.typeCache, key, name);
 	ensureForwardDecl(g, name);
 

@@ -76,6 +76,13 @@ export function monoTypeKey(t: Type | null): string {
 		TypeKind.Distinct => "distinct_" + monoTypeKey(t.typeReturn),
 		TypeKind.Function => "function",
 		TypeKind.Union => t.typeName !== "" ? t.typeName : "union",
+		TypeKind.Tuple => {
+			let key = "tuple";
+			for (const child of t.typeChildren) {
+				key = key + "_" + monoTypeKey(child);
+			}
+			return key;
+		},
 		_ => "unknown",
 	};
 }

@@ -1240,7 +1240,8 @@ export function tupleTypeName(t: Type | null): string {
 	return "msTuple_" + _stdHashToBase36(key);
 }
 
-// typeKey for tuples — matches codegen/c/types.ms:typeKey
+// Structural key for tuple naming. tupleTypeName is the SINGLE source of the
+// msTuple_<hash> name, so this key need only be internally stable.
 function typeKey(t: Type): string {
 	if (t === null) return "null";
 	if (t.typeName !== "" && t.kind !== TypeKind.Tuple) return t.typeName;
@@ -1380,6 +1381,12 @@ export function arrayElementNeedsCleanup(elem: Type): boolean {
 	// heap), so the box-site must pick the per-type <Name>ArrayDestroy walker — never the
 	// free-only fallback (else every inner buffer leaks).
 	if (elem.kind === TypeKind.Array) return true;
+	if (elem.kind === TypeKind.Tuple) {
+		for (const child of elem.typeChildren) {
+			if (arrayElementNeedsCleanup(child)) return true;
+		}
+		return false;
+	}
 	let structElem = elem;
 	if (elem.kind === TypeKind.GenericInstance && elem.typeExtra !== null && elem.typeExtra.kind === TypeKind.Struct) {
 		structElem = elem.typeExtra;

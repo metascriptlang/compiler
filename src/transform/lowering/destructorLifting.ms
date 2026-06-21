@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, instantiateGenericBody, peelToStruct } from "../../checker/types";
+import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, instantiateGenericBody, peelToStruct, tupleTypeName } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
@@ -557,15 +557,12 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 
 	// Tuple case extracted from match (MetaScript match arm limitation with block-scoped vars)
 	if (fieldType.kind === TypeKind.Tuple) {
-		let ti = 0;
-		while (ti < fieldType.typeChildren.length) {
+		// Emit the named msTuple_<hash> hooks for moveOrCopy to reference at tuple
+		// assignment sites (classify.ms); this container hook still walks elements inline.
+		ensureTupleHooks(tupleTypeName(fieldType), fieldType, lctx, loc);
+		for (let ti = 0; ti < fieldType.typeChildren.length; ti += 1) {
 			const visited2: NameSet = createNameSet();
-			// Use named field if available, otherwise positional _0, _1 pattern
-			const tupleFn = (ti < fieldType.typeNames.length && fieldType.typeNames[ti].length > 0)
-				? fieldType.typeNames[ti]
-				: "_" + ti.toString();
-			fillBody(hook, xf, yf, tupleFn, fieldType.typeChildren[ti], lctx, buf, visited2, loc);
-			ti += 1;
+			fillBody(hook, xf, yf, "_" + ti.toString(), fieldType.typeChildren[ti], lctx, buf, visited2, loc);
 		}
 		return;
 	}
@@ -1244,6 +1241,13 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 	if (fieldType.kind === TypeKind.Struct && fieldType.typeName !== "") {
 		return makeCall(makeIdent(fieldType.typeName + "Eq", loc), [aField, bField], loc);
 	}
+	// Tuple fields are C structs — `===` would emit an invalid struct comparison.
+	// Route to the generated msTuple_<hash>Eq (field-by-field), ensuring it exists.
+	if (fieldType.kind === TypeKind.Tuple) {
+		const tn = tupleTypeName(fieldType);
+		ensureTupleEq(tn, fieldType, lctx, loc);
+		return makeCall(makeIdent(tn + "Eq", loc), [aField, bField], loc);
+	}
 	// String fields — reference parity: genStrEquals → eqStrings().
 	// msString is a C struct, so === doesn't work. Call msStringEquals(a, b).
 	if (isStringLike(fieldType)) {
@@ -1313,6 +1317,90 @@ function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
 	if (eqType.kind !== TypeKind.Struct) return;
 
 	generateEq(typeName, eqType, lctx, loc);
+}
+
+// ===== Tuple Lifecycle Hooks (first-class value type) =====
+// A tuple is a structural value type — codegen emits `struct msTuple_<hash> { T _0; U _1; }`
+// — so its DRC hooks mirror a value-struct's: destroy/copy/sink/wasMoved over positional
+// fields _0, _1, ... The name is tupleTypeName (the single source codegen + classify.ms also
+// use, so they never drift). Without these the analyzer emits MS_NIL at tuple assignment
+// sites and the overwritten tuple's heap payload leaks.
+
+function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const buf = newBuf();
+	const isUnary = hook === "destroy" || hook === "wasMoved";
+	const p1 = isUnary ? "self" : "dest";
+	const p2 = isUnary ? "self" : "src";
+
+	if (!isUnary) {
+		buf.items.push(makeIf(
+			makeBinary(makeHiddenAddr(makeIdent(p1, loc), loc), "===", makeHiddenAddr(makeIdent(p2, loc), loc), loc),
+			makeBlock([makeReturn(null as unknown as Node, loc)], loc), null as unknown as Node, loc));
+	}
+
+	const x1 = makeIdent(p1, loc);
+	const x2 = makeIdent(p2, loc);
+	if (hook === "destroy") {
+		for (let i = t.typeChildren.length - 1; i >= 0; i -= 1) {
+			const visited: NameSet = createNameSet();
+			fillBody(hook, x1, x2, "_" + i.toString(), t.typeChildren[i], lctx, buf, visited, loc);
+		}
+	} else {
+		for (let i = 0; i < t.typeChildren.length; i += 1) {
+			const visited: NameSet = createNameSet();
+			fillBody(hook, x1, x2, "_" + i.toString(), t.typeChildren[i], lctx, buf, visited, loc);
+		}
+	}
+
+	const suffix = hookSuffix(hook);
+	const fnNode = isUnary
+		? makeFnDecl(tupleName + suffix, [p1], [tupleName], makeBlock(buf.items, loc), "", "void", loc)
+		: makeFnDecl(tupleName + suffix, [p1, p2], [tupleName, tupleName], makeBlock(buf.items, loc), "", "void", loc);
+	const paramType = createVar(t);
+	setHookParamType(fnNode, 0, paramType);
+	if (!isUnary) setHookParamType(fnNode, 1, paramType);
+	markGeneratedOp(fnNode, tupleName + suffix);
+	lctx.collector.push(fnNode);
+}
+
+// Probe whether any tuple element emits cleanup (mirror typeNeedsHooks for structs).
+function tupleNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
+	const probe = newBuf();
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		const visited: NameSet = createNameSet();
+		fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), "_" + i.toString(), t.typeChildren[i], lctx, probe, visited, loc);
+		if (probe.items.length > 0) return true;
+	}
+	return false;
+}
+
+// The four value-type hooks for a tuple, once per module + once globally (claimGlobal).
+// No-RC tuples generate nothing — classify.ms returns noRcInfo, so no hook is referenced.
+function ensureTupleHooks(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	if (tupleName === "" || t === null || t.kind !== TypeKind.Tuple) return;
+	if (nameSetContains(lctx.generated, tupleName)) return;
+	if (isGloballyOwned(tupleName)) { nameSetAdd(lctx.generated, tupleName); return; }
+	if (nameSetContains(lctx.generating, tupleName)) return;
+	if (!tupleNeedsHooks(t, lctx, loc)) return;
+	nameSetAdd(lctx.generating, tupleName);
+	nameSetAdd(lctx.generated, tupleName);
+	claimGlobal(tupleName);
+	generateTupleHook("destroy",  tupleName, t, lctx, loc);
+	generateTupleHook("copy",     tupleName, t, lctx, loc);
+	generateTupleHook("sink",     tupleName, t, lctx, loc);
+	generateTupleHook("wasMoved", tupleName, t, lctx, loc);
+}
+
+// On-demand msTuple_<hash>Eq for a tuple compared as a struct/tuple field (fieldEqExpr).
+// Shares the `tupleName + "Eq"` dedup key with operatorLower's pending-ops, so one body.
+function ensureTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	if (tupleName === "" || t === null || t.kind !== TypeKind.Tuple) return;
+	const key = tupleName + "Eq";
+	if (nameSetContains(lctx.generated, key)) return;
+	if (isGloballyOwned(key)) { nameSetAdd(lctx.generated, key); return; }
+	nameSetAdd(lctx.generated, key);
+	claimGlobal(key);
+	generateTupleEq(tupleName, t, lctx, loc);
 }
 
 // ===== Tuple Comparison Operators (reference parity: reference core lines 1973-1996) =====
@@ -1703,6 +1791,12 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 					&& node.nodeType.typeReturn.kind === TypeKind.Array)) {
 				const arrVisited: NameSet = createNameSet();
 				scanTypeForArrays(node.nodeType, lctx, arrVisited);
+			}
+			// A bare tuple local (reassigned or dropped) needs the same named hooks, but
+			// fillBody only emits them for tuples that appear as a struct field — pre-register
+			// here so classify.ms's msTuple_<hash>{Destroy,Sink} reference isn't undefined.
+			if (node.nodeType.kind === TypeKind.Tuple) {
+				ensureTupleHooks(tupleTypeName(node.nodeType), node.nodeType, lctx, node.location);
 			}
 		}
 		return node;

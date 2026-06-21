@@ -36,12 +36,26 @@ function isGeneratedMsArrayHook(name: string): boolean {
 	return base.endsWith("ArrayArray");
 }
 
+// Generated tuple hook (msTuple_<hash>{Destroy,Copy,Sink,WasMoved}) for a structural tuple.
+// Runtime ms* families never carry a "_<hash>" segment, so the msTuple_ base discriminates.
+function isGeneratedMsTupleHook(name: string): boolean {
+	if (!(name.length > 2 && name.byteAt(0) === "m".code && name.byteAt(1) === "s".code)) return false;
+	const suffix = findSuffix(name, DRC_SUFFIXES);
+	if (suffix === "") return false;
+	const base = name.slice(0, name.length - suffix.length);
+	return base.length > 8 && base.slice(0, 8) === "msTuple_";
+}
+
 export function isDrcLifecycleName(name: string): boolean {
 	const suffix = findSuffix(name, DRC_SUFFIXES);
 	if (suffix === "") return false;
 	// Generated nested value-array walker (msNumberArrayArray, int32_tArrayArray, …) is
 	// array-OF-array → base ends "ArrayArray". Always a DRC hook, regardless of prefix/case.
-	if (name.slice(0, name.length - suffix.length).endsWith("ArrayArray")) return true;
+	const drcBase = name.slice(0, name.length - suffix.length);
+	if (drcBase.endsWith("ArrayArray")) return true;
+	// Generated tuple hooks are DRC hooks despite the ms prefix; without this the blanket
+	// ms→false below would DCE them, leaving an undefined symbol at link.
+	if (drcBase.length > 8 && drcBase.slice(0, 8) === "msTuple_") return true;
 	// Other ms* hooks are runtime-provided (single-level array families, msArray, msString…).
 	if (name.length > 2 && name.byteAt(0) === "m".code && name.byteAt(1) === "s".code) return false;
 	// DRC hooks otherwise start with a type name (PascalCase). User functions like
@@ -57,9 +71,10 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 	const suffix = findSuffix(callee, DRC_SUFFIXES);
 	if (suffix === "") return;
 	// Skip built-in runtime ms* hooks (defined in C headers) — but NOT generated nested
-	// value-array walkers (msNumberArrayArrayDestroy …), which need a forward proto.
+	// value-array walkers (msNumberArrayArrayDestroy …) or tuple hooks (msTuple_<hash>Destroy …),
+	// which are emitted by destructorLifting and need a forward proto.
 	if (callee.length > 2 && callee.byteAt(0) === "m".code && callee.byteAt(1) === "s".code
-		&& !isGeneratedMsArrayHook(callee)) return;
+		&& !isGeneratedMsArrayHook(callee) && !isGeneratedMsTupleHook(callee)) return;
 	if (nameSetHas(g.declaredProcs, callee)) return;
 	nameSetAdd(g.declaredProcs, callee);
 

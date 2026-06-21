@@ -285,6 +285,16 @@ export function monoConcreteTypeName(t: Type | null): string {
 				+ " ? " + monoConcreteTypeName(t.typeChildren[2])
 				+ " : " + monoConcreteTypeName(t.typeChildren[3]);
 		},
+		TypeKind.Tuple => {
+			// Roundtrip the `[A, B]` literal through resolveAnnotation back to a Tuple —
+			// "unknown" would erase the element types and drop per-element DRC cleanup.
+			let lit = "";
+			for (const child of t.typeChildren) {
+				if (lit !== "") lit = lit + ", ";
+				lit = lit + monoConcreteTypeName(child);
+			}
+			return "[" + lit + "]";
+		},
 		TypeKind.Function => {
 			// Function type substituted into a generic body has to roundtrip
 			// through `resolveAnnotation` after the substitution string is
