@@ -158,8 +158,14 @@ void msStringPrepareAdd(msString* s, int64_t addLen) {
 
 void msStringAppend(msString* dest, msString src) {
 	if (src.len > 0) {
+		/* Self-append (`s = s + s`, `s += s`): stringOpLower rewrites self-first concat to an
+		   in-place append, so src may alias dest. msStringPrepareAdd can realloc dest's payload,
+		   freeing the buffer src points at — read the preserved bytes from dest's grown buffer
+		   (prepareAdd copies existing content forward), like std::string::append(*this). */
+		int aliased = (src.p == dest->p);
 		msStringPrepareAdd(dest, src.len);
-		memcpy(dest->p->data + dest->len, src.p->data, src.len);
+		const char* srcData = aliased ? dest->p->data : src.p->data;
+		memcpy(dest->p->data + dest->len, srcData, src.len);
 		dest->len += src.len;
 		dest->p->data[dest->len] = '\0';
 	}
@@ -858,7 +864,30 @@ msString msStringConcatArr(const msString* arr, int64_t count) {
 }
 
 void msStringAppendArr(msString* dest, const msString* arr, int64_t count) {
-	for (int64_t i = 0; i < count; i++) msStringAppend(dest, arr[i]);
+	/* Multi-part self-append (`s = s + mid + s`): an element may alias dest's ORIGINAL
+	   payload. msStringAppend's own self-guard only catches an element that still equals
+	   dest->p — but a prior element's append can realloc dest, freeing the buffer a LATER
+	   aliased element points at (its pointer no longer equals the moved dest->p). Snapshot
+	   the original content once and serve every original-aliased element from the snapshot. */
+	const msStrPayload* origP = dest->p;
+	int anyAlias = 0;
+	for (int64_t i = 0; i < count; i++) {
+		if (arr[i].len > 0 && arr[i].p == origP) { anyAlias = 1; break; }
+	}
+	if (!anyAlias) {
+		for (int64_t i = 0; i < count; i++) msStringAppend(dest, arr[i]);
+		return;
+	}
+	msString snap = msStringNew(dest->p->data, dest->len);
+	for (int64_t i = 0; i < count; i++) {
+		if (arr[i].len > 0 && arr[i].p == origP) {
+			msString view = { .len = arr[i].len, .p = snap.p };
+			msStringAppend(dest, view);
+		} else {
+			msStringAppend(dest, arr[i]);
+		}
+	}
+	msStringDecref(snap);
 }
 
 void msStringSetChar(msString* s, int64_t idx, msString ch) {
