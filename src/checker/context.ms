@@ -1,6 +1,6 @@
 import { platform } from "std/process";
 import { unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
-import { isAssignable } from "./compat";
+import { isAssignable, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
@@ -479,14 +479,25 @@ export function getExtFnType(ext: ExtensionMethod): Type {
 	return ext.fnType;
 }
 
-export function findOperatorExt(registry: ExtensionRegistry, receiverTypeName: string, methodName: string, arity: int32): ExtensionMethod {
-	for (const m of registry.methods) {
-		if (m.receiverTypeName === receiverTypeName && m.methodName === methodName) {
-			const ft = getExtFnType(m);
-			if (ft !== null && ft.typeChildren.length === arity) return m;
+export function resolveOperatorExt(registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
+	const exts = findAllExtensionsByName(registry, methodName);
+	let best: ExtensionMethod = null as unknown as ExtensionMethod;
+	let bestFt: Type = null as unknown as Type;
+	let bestScore = emptyCandidateScore();
+	let i = 0;
+	while (i < exts.length) {
+		const m = exts[i];
+		i = i + 1;
+		const ft = getExtFnType(m);
+		if (ft === null || ft.kind !== TypeKind.Function) continue;
+		if (ft.typeChildren.length !== argTypes.length) continue;
+		const score = scoreCandidatePriority(ft.typeChildren, argTypes, getMinArity(ft));
+		if (isNoMatch(score)) continue;
+		if (best === null || cmpCandidates(score, bestScore, ft, bestFt) > 0) {
+			best = m; bestScore = score; bestFt = ft;
 		}
 	}
-	return null as unknown as ExtensionMethod;
+	return best;
 }
 
 // Strip receiver (param[0]) from an extension's function type for overload scoring.
