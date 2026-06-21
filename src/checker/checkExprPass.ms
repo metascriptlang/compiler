@@ -1465,6 +1465,7 @@ function widenIntegers(a: Type, b: Type): Type {
 // Mixed numeric promotion: number stays number, otherwise float64.
 function promoteNumeric(a: Type, b: Type): Type {
 	if (a.kind === TypeKind.Number || b.kind === TypeKind.Number) return numberType();
+	if (a.kind === TypeKind.Float32 && b.kind === TypeKind.Float32) return createPrimitive(TypeKind.Float32);
 	return float64Type();
 }
 
