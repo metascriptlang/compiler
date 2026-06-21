@@ -491,7 +491,16 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 	match (hook) {
 		"destroy" => { genCall(decrefFn, hook, xf, yf, buf, loc); },
 		"copy" => { genCopyRef(increfFn, xf, yf, fieldName, buf, loc); },
-		"sink" => { buf.items.push(makeExprStmt(makeAssign(xf, yf, loc), loc)); },
+		"sink" => {
+			// =sink owns the old value: decref dest before taking src (guard self-assign),
+			// mirroring stringOp/arrayOp sinks. The prior raw assign leaked the old ref of
+			// every value-type Ref field on each reassignment-sink. decref is null-safe.
+			const guardCond = makeBinary(clonePath(xf, loc), "!==", clonePath(yf, loc), loc);
+			const destroyBuf = newBuf();
+			genCall(decrefFn, "destroy", clonePath(xf, loc), yf, destroyBuf, loc);
+			buf.items.push(makeIf(guardCond, makeBlock(destroyBuf.items, loc), null as unknown as Node, loc));
+			buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
+		},
 		"wasMoved" => { genCall("msPtrWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
 			// Reference parity: pass &field (slot address) so ORC can null it during collection
