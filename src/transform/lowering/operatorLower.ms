@@ -16,13 +16,13 @@
 //   reference comparisons  — template `>` = y < x           → derived from <
 //   reference comparisons  — template `>=` = y <= x         → derived from <=
 
-import { Node, NodeKind, BinaryExprData, IdentifierData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
-import { findExtension, ExtensionMethod } from "../../checker/context";
+import { findExtension, findOperatorExt, ExtensionMethod } from "../../checker/context";
 
 // ===== Type Resolution =====
 
@@ -163,7 +163,52 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 
 // ===== Visitor =====
 
+function cloneLvalue(node: Node): Node {
+	if (node.kind === NodeKind.Identifier) {
+		const d = node.data as IdentifierData;
+		const c = makeIdent(d.name, node.location);
+		c.nodeType = node.nodeType;
+		c.resolvedSym = node.resolvedSym;
+		return c;
+	}
+	if (node.kind === NodeKind.MemberExpr) {
+		const d = node.data as MemberExprData;
+		const c = makeMember(cloneLvalue(d.object), d.property, node.location);
+		c.nodeType = node.nodeType;
+		c.resolvedSym = node.resolvedSym;
+		return c;
+	}
+	return node;
+}
+
+function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
+	if (ctx.checkerCtx === null) return node;
+	if (ctx.checkerCtx.extensionRegistry === null) return node;
+	const d = node.data as UnaryExprData;
+	const op = d.unaryOp;
+	if (op !== "-" && op !== "+" && op !== "!" && op !== "~") return node;
+	const t = resolveType(ctx, d.operand);
+	if (t === null) return node;
+	if (isStringLike(t)) return node;
+	const typeName = typeNameOf(t);
+	if (typeName === "" || isBuiltinType(typeName)) return node;
+	const ext = findOperatorExt(ctx.checkerCtx.extensionRegistry, typeName, op, 1);
+	if (ext === null) return node;
+	let callName = op;
+	if (ext.sym !== null) {
+		if (ext.sym.nativeName !== null && ext.sym.nativeName !== "") {
+			callName = ext.sym.nativeName;
+		} else if (ext.sym.name !== "") {
+			callName = ext.sym.name;
+		}
+	}
+	const callIdent = makeIdent(callName, node.location);
+	callIdent.resolvedSym = ext.sym;
+	return makeCall(callIdent, [d.operand], node.location);
+}
+
 function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
+	if (node.kind === NodeKind.UnaryExpr) return lowerUnaryNode(node, ctx);
 	if (node.kind !== NodeKind.BinaryExpr) return node;
 	if (ctx.checkerCtx === null) return node;
 
@@ -173,6 +218,27 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 
 	const leftType = resolveType(ctx, d.left);
 	const loc = node.location;
+
+	const compoundBase = match (opName) {
+		"+=" => "+",
+		"-=" => "-",
+		"*=" => "*",
+		"/=" => "/",
+		"%=" => "%",
+		_ => "",
+	};
+	if (compoundBase !== "" && leftType !== null
+		&& (d.left.kind === NodeKind.Identifier || d.left.kind === NodeKind.MemberExpr)
+		&& ctx.checkerCtx.extensionRegistry !== null) {
+		const ltName = isStringLike(leftType) ? "string" : typeNameOf(leftType);
+		if (ltName !== "" && !isBuiltinType(ltName)) {
+			const cext = findOperatorExt(ctx.checkerCtx.extensionRegistry, ltName, compoundBase, 2);
+			if (cext !== null) {
+				const rhsCall = makeExtOpCall(cext, compoundBase, cloneLvalue(d.left), d.right, loc);
+				return makeBinary(d.left, "=", rhsCall, loc);
+			}
+		}
+	}
 
 	// 3. Null comparisons — check BEFORE typeName guard since null has typeName=""
 	// reference parity: objects can't be nil (reference comparisons, reference core)
@@ -235,7 +301,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	//    user overloads beat magic builtins). Checked BEFORE isBuiltinType
 	//    so that e.g. `==`(a: int32, b: int32) overrides native ==.
 	if (ctx.checkerCtx.extensionRegistry !== null) {
-		const ext = findExtension(ctx.checkerCtx.extensionRegistry, typeName, opName);
+		const ext = findOperatorExt(ctx.checkerCtx.extensionRegistry, typeName, opName, 2);
 		if (ext !== null) {
 			return makeExtOpCall(ext, opName, d.left, d.right, loc);
 		}
