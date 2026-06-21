@@ -390,7 +390,7 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 	}
 	// Stronger dedup: same logical extension may register through multiple
 	// import / re-export paths producing distinct Symbol instances for the
-	// same definition (same name + modulePath + receiver). Without this,
+	// same definition (same name + modulePath + receiver + location). Without this,
 	// `obj.asNumber()` reports "Ambiguous overloaded extension method" even
 	// though only one definition exists. Fast path skips this loop when
 	// the sym lacks a stable identity (modulePath empty).
@@ -400,7 +400,9 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 					&& other.sym.name === method.sym.name
 					&& other.sym.modulePath === method.sym.modulePath
 					&& other.receiverTypeName === method.receiverTypeName
-					&& other.isStatic === method.isStatic) {
+					&& other.isStatic === method.isStatic
+					&& other.sym.location.line === method.sym.location.line
+					&& other.sym.location.column === method.sym.location.column) {
 				return;
 			}
 		}
@@ -475,6 +477,16 @@ export function getExtFnType(ext: ExtensionMethod): Type {
 		return ext.sym.symbolType;
 	}
 	return ext.fnType;
+}
+
+export function findOperatorExt(registry: ExtensionRegistry, receiverTypeName: string, methodName: string, arity: int32): ExtensionMethod {
+	for (const m of registry.methods) {
+		if (m.receiverTypeName === receiverTypeName && m.methodName === methodName) {
+			const ft = getExtFnType(m);
+			if (ft !== null && ft.typeChildren.length === arity) return m;
+		}
+	}
+	return null as unknown as ExtensionMethod;
 }
 
 // Strip receiver (param[0]) from an extension's function type for overload scoring.
