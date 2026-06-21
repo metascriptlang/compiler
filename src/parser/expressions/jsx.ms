@@ -59,6 +59,7 @@ function parseJsxAttributes(state: ParserState, parseExpr: ExprParser): Result<N
 			advance(state);
 			if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
 				advance(state);
+				if (current(state).kind !== TokenKind.Ident) return Result.err("Expected name after ':' in JSX attribute");
 				attrName = attrName + ":" + current(state).value;
 				advance(state);
 			}
@@ -244,6 +245,13 @@ test "jsx parse member and namespace tag names" {
 
 test "jsx parse multiple attributes" {
 	assert (exprNode("<a x=\"1\" y=\"2\"/>").data as JSXElementData).jsxAttrs.length === 2;
+}
+
+test "jsx parse namespaced attribute and rejects non-ident after colon" {
+	const a = (exprNode("<a xlink:href=\"u\"/>").data as JSXElementData).jsxAttrs[0].data as JSXAttributeData;
+	assert a.jsxAttrName === "xlink:href";
+	assert !parseOk("<a foo:1/>");
+	assert !parseOk("<a foo:/>");
 }
 
 test "jsx parse text element text mix" {
