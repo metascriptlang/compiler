@@ -214,7 +214,8 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		ovDeclNodes.push(ovDN);
 
 		if (extensionRegistry !== null) {
-			const ovExt = findExtensionByType(extensionRegistry, sym.name, sym.overloads[ovi].symbolType);
+			let ovExt = findExtensionByType(extensionRegistry, sym.name, sym.overloads[ovi].symbolType);
+			if (ovExt === null && extRecv !== "") ovExt = findExtensionBySym(extensionRegistry, sym.overloads[ovi]);
 			if (ovExt !== null) {
 				ovExtRecvs.push(ovExt.receiverTypeName);
 				ovExtStatics.push(ovExt.isStatic);
@@ -878,6 +879,7 @@ export class CheckerContext {
 	macroBodyRegistry: HashMap<string, Node>;       // Phase B: macroName → macroDeclBody
 	macroParamsRegistry: HashMap<string, string[]>; // Phase B: macroName → param names
 	macroExpansionDepth: int32;                  // Phase B+ eager: recursion limit for macros that produce macros
+	jsxMacroArgDepth: int32;                     // JSX leak guard: >0 while checking a macro's args (JSX there is consumed, not leaked)
 	inferredReturn: Type;  // tracks inferred return type during function body checking
 	includeDirectives: string; // accumulated @include args, newline-separated
 	jsImportRegistry: JsImportEntry[]; // accumulated @import entries for JS backend
@@ -918,6 +920,7 @@ export function createContext(): CheckerContext {
 		macroBodyRegistry: new HashMap<string, Node>(),
 		macroParamsRegistry: new HashMap<string, string[]>(),
 		macroExpansionDepth: 0,
+		jsxMacroArgDepth: 0,
 		inferredReturn: unknownType(),
 		includeDirectives: "",
 		jsImportRegistry: [],

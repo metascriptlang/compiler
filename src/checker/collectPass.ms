@@ -894,6 +894,23 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 		methSym.state = SymbolState.Shaped;
 		if (markExported) setFlag(methSym, SymbolFlag.Exported);
 		registerExtension(ctx.extensionRegistry, createExtMethod(methName, expInfo.extReceiverType, sourcePath, expInfo.symType, expInfo.extIsStatic, methSym, 0));
+		if (expInfo.overloadExtReceiverTypes !== null && expInfo.overloadTypes !== null) {
+			let ovi = 0;
+			while (ovi < expInfo.overloadExtReceiverTypes.length && ovi < expInfo.overloadTypes.length) {
+				const ovRecv = expInfo.overloadExtReceiverTypes[ovi];
+				if (ovRecv !== "" && findExtension(ctx.extensionRegistry, ovRecv, methName) === null) {
+					const ovSym = makeSymbol(expInfo.name, SymbolKind.Function, expInfo.overloadTypes[ovi], false);
+					ovSym.modulePath = expInfo.definingModule !== "" ? expInfo.definingModule : sourcePath;
+					ovSym.overloadIdx = ovi + 1;
+					if (expInfo.overloadNativeNames !== null && ovi < expInfo.overloadNativeNames.length && expInfo.overloadNativeNames[ovi] !== "") ovSym.nativeName = expInfo.overloadNativeNames[ovi];
+					ovSym.state = SymbolState.Shaped;
+					if (markExported) setFlag(ovSym, SymbolFlag.Exported);
+					const ovStatic = expInfo.overloadExtIsStatic !== null && ovi < expInfo.overloadExtIsStatic.length ? expInfo.overloadExtIsStatic[ovi] : false;
+					registerExtension(ctx.extensionRegistry, createExtMethod(methName, ovRecv, sourcePath, expInfo.overloadTypes[ovi], ovStatic, ovSym, 0));
+				}
+				ovi = ovi + 1;
+			}
+		}
 	}
 }
 

@@ -320,6 +320,18 @@ test "non-exported name produces error" {
 	assert modA.errors.length > 0;
 }
 
+test "cross-module non-primary operator overload resolves" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export struct V { x: float64; } export struct T { a: float64; } export function `*`(this m: T, n: T): T { return { a: m.a }; } export function `*`(this p: V, m: T): V { return { x: p.x }; }" });
+	entries.push({ entryPath: "/src/a.ms", entrySource: "import { V, T } from \"./b\"; const pp: V = { x: 1.0 }; const mm: T = { a: 2.0 }; const rr = pp * mm; const zz: float64 = rr.x;" });
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	checkModuleGraph(graph, "");
+	const modA = findModule(graph, "/src/a.ms");
+	assert modA !== null;
+	assert modA.errors.length === 0;
+}
+
 test "3-module chain propagates types" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/c.ms", entrySource: "export function makeStr(): string { return \"hello\"; }" });
