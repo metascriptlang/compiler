@@ -40,18 +40,15 @@ function emitSimple(s: LexerState, kind: TokenKind, val: string): void {
 }
 
 function emitTagStart(s: LexerState): void {
-	const ln = s.line;
-	const cl = s.column;
-	advanceChar(s); // '<'
-	addToken(s, TokenKind.JsxTagStart, "<", ln, cl);
+	emitSimple(s, TokenKind.JsxTagStart, "<");
 	s.jsxStack.push(JsxMode.Tag);
 }
 
 function emitClose(s: LexerState): void {
 	const ln = s.line;
 	const cl = s.column;
-	advanceChar(s); // '<'
-	advanceChar(s); // '/'
+	advanceChar(s);
+	advanceChar(s);
 	addToken(s, TokenKind.JsxClose, "</", ln, cl);
 	s.jsxStack.push(JsxMode.Closing);
 }
@@ -61,16 +58,14 @@ function emitBraceOpen(s: LexerState): void {
 	s.jsxStack.push(JsxMode.Brace);
 }
 
-// Raw text run between tags/braces — emitted verbatim (no trim/collapse). JSX whitespace
-// rules are the parser's job, keeping the lexer dumb. Runs break only at ASCII `< { }`, so
-// every byteSlice stays on a character boundary (multi-byte UTF-8 safe).
+// Raw text run, emitted verbatim — whitespace rules are the consuming macro's job. Breaks only
+// at `<`/`{` (a stray `}` is text; the container's `}` is consumed in Brace mode), which also
+// guarantees forward progress. Breaks fall on ASCII bytes, so each byteSlice stays on a
+// character boundary (multi-byte UTF-8 safe).
 function scanJsxText(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column;
 	const startPos = s.pos;
-	// Break only at `<` and `{`. A `}` here is stray (the container's `}` is consumed in Brace
-	// mode), so treat it as text — this also guarantees progress (the entry char is never `<`/`{`,
-	// so at least one byte is always consumed; no empty-text infinite loop).
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if (ch === "<".code || ch === "{".code) break;
@@ -135,8 +130,9 @@ function scanJsxClosing(s: LexerState): boolean {
 	if (isWhitespace(ch) || isNewline(ch)) { advanceChar(s); return true; }
 	if (ch === ">".code) {
 		emitSimple(s, TokenKind.Gt, ">");
-		s.jsxStack.pop(); // Closing
-		if (s.jsxStack.length > 0) { s.jsxStack.pop(); } // the element's Children frame
+		// pop the Closing frame and the element's own Children frame beneath it
+		s.jsxStack.pop();
+		if (s.jsxStack.length > 0) { s.jsxStack.pop(); }
 		return true;
 	}
 	if (ch === ":".code) { emitSimple(s, TokenKind.Colon, ":"); return true; }
@@ -154,10 +150,10 @@ function scanJsxBrace(s: LexerState): boolean {
 		s.jsxStack.pop();
 		return true;
 	}
-	return false; // normal code — fall through to the main lexer
+	return false;
 }
 
-// Main entry: called at the top of the lex loop. Returns true if the iteration was handled.
+// Returns true when the JSX modes fully handled this iteration (caller continues the lex loop).
 export function scanJsx(s: LexerState): boolean {
 	const n = s.jsxStack.length;
 	if (n === 0) {
