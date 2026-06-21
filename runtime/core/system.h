@@ -374,6 +374,10 @@ static inline void* msBoxStruct(const void* val, size_t size) {
 /* Bounds check failure — prints error and exits */
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
 
+/* Concurrent Map/Set access detected — unrecoverable (Go fatal model: a detected
+   race means memory may already be corrupt, so unwinding past it is unsafe). */
+_Noreturn void msMapFatal(msString msg);
+
 /* ===== Bounds-Checked Array Access ===== */
 /* GCC statement expression returning lvalue via dereferenced-pointer trick.
    Works with any MS_ARRAY(T) typedef. Supports both reads and writes. */

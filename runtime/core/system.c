@@ -50,4 +50,10 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 	exit(1);
 }
 
+_Noreturn void msMapFatal(msString msg) {
+	fprintf(stderr, "fatal error: %.*s\n",
+		(int)msg.len, (msg.p != NULL) ? msg.p->data : "");
+	exit(2);
+}
+
 #endif /* MSOS_BARE */
