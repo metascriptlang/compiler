@@ -13,6 +13,14 @@
 // slot, matching reference-compiler stdlib layout. This keeps memory cost minimal
 // and keeps each type independently optimizable.
 
+// ===== Concurrent-access guard (Go writing-flag model) =====
+extern function msMapFatal(msg: string): void;
+
+function hashMapEndWrite<K, V>(m: HashMap<K, V>): void { if (!m.writing) { msMapFatal("concurrent map writes"); } m.writing = false; }
+function hashSetEndWrite<T>(s: HashSet<T>): void { if (!s.writing) { msMapFatal("concurrent map writes"); } s.writing = false; }
+function mapEndWrite<K, V>(m: Map<K, V>): void { if (!m.writing) { msMapFatal("concurrent map writes"); } m.writing = false; }
+function setEndWrite<T>(s: Set<T>): void { if (!s.writing) { msMapFatal("concurrent map writes"); } s.writing = false; }
+
 // ===== Iterator<T> =====
 // Return type for function* generators. Matches generatorLower's output shape.
 // Users write: function* range(): Iterator<int32> { yield 1; }
@@ -122,6 +130,7 @@ export struct HashMapEntry<K, V> {
 export class HashMap<K, V> {
 	data: Vec<HashMapEntry<K, V>>;
 	size: int32;
+	writing: boolean;
 }
 
 function hashMapRawGet<K, V>(m: HashMap<K, V>, key: K): int32 {
@@ -158,6 +167,9 @@ function hashMapEnlarge<K, V>(m: HashMap<K, V>): void {
 }
 
 export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
+	if (m.writing) { msMapFatal("concurrent map writes"); }
+	m.writing = true;
+	defer hashMapEndWrite(m);
 	if (m.data.length === 0) {
 		const init: Vec<HashMapEntry<K, V>> = new Array(INITIAL_CAPACITY);
 		m.data = init;
@@ -181,16 +193,21 @@ export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
 }
 
 export function get<K, V>(this m: HashMap<K, V>, key: K): V {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	const idx = hashMapRawGet(m, key);
 	if (idx >= 0) return m.data[idx].value;
 	return null as unknown as V;
 }
 
 export function has<K, V>(this m: HashMap<K, V>, key: K): boolean {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	return hashMapRawGet(m, key) >= 0;
 }
 
 export function delete<K, V>(this m: HashMap<K, V>, key: K): boolean {
+	if (m.writing) { msMapFatal("concurrent map writes"); }
+	m.writing = true;
+	defer hashMapEndWrite(m);
 	let i = hashMapRawGet(m, key);
 	if (i < 0) return false;
 	const mask: int32 = m.data.length - 1;
@@ -216,12 +233,16 @@ export function delete<K, V>(this m: HashMap<K, V>, key: K): boolean {
 }
 
 export function clear<K, V>(this m: HashMap<K, V>): void {
+	if (m.writing) { msMapFatal("concurrent map writes"); }
+	m.writing = true;
+	defer hashMapEndWrite(m);
 	let i: int32 = 0;
 	while (i < m.data.length) { m.data[i].hcode = 0; i = i + 1; }
 	m.size = 0;
 }
 
 export function keys<K, V>(this m: HashMap<K, V>): K[] {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	const result: K[] = [];
 	let i: int32 = 0;
 	while (i < m.data.length) {
@@ -232,6 +253,7 @@ export function keys<K, V>(this m: HashMap<K, V>): K[] {
 }
 
 export function values<K, V>(this m: HashMap<K, V>): V[] {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	const result: V[] = [];
 	let i: int32 = 0;
 	while (i < m.data.length) {
@@ -244,6 +266,7 @@ export function values<K, V>(this m: HashMap<K, V>): V[] {
 // Iterator protocol: toItems() makes HashMap iterable with for...of.
 export function* toItems<K, V>(this m: HashMap<K, V>): Iterator<K> {
 	for (const entry of m.data) {
+		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
 		if (entry.hcode !== 0) yield entry.key;
 	}
 }
@@ -272,6 +295,7 @@ export struct HashSetEntry<T> {
 export class HashSet<T> {
 	data: Vec<HashSetEntry<T>>;
 	size: int32;
+	writing: boolean;
 
 	constructor(items: T[] = []) {
 		if (items.length > 0) {
@@ -319,6 +343,9 @@ function hashSetEnlarge<T>(s: HashSet<T>): void {
 }
 
 export function add<T>(this s: HashSet<T>, value: T): void {
+	if (s.writing) { msMapFatal("concurrent map writes"); }
+	s.writing = true;
+	defer hashSetEndWrite(s);
 	if (s.data.length === 0) { s.data = new Array(INITIAL_CAPACITY); }
 	const idx = hashSetRawGet(s, value);
 	if (idx >= 0) return;
@@ -335,10 +362,14 @@ export function add<T>(this s: HashSet<T>, value: T): void {
 }
 
 export function has<T>(this s: HashSet<T>, value: T): boolean {
+	if (s.writing) { msMapFatal("concurrent map read and map write"); }
 	return hashSetRawGet(s, value) >= 0;
 }
 
 export function delete<T>(this s: HashSet<T>, value: T): boolean {
+	if (s.writing) { msMapFatal("concurrent map writes"); }
+	s.writing = true;
+	defer hashSetEndWrite(s);
 	let i = hashSetRawGet(s, value);
 	if (i < 0) return false;
 	const mask: int32 = s.data.length - 1;
@@ -360,6 +391,9 @@ export function delete<T>(this s: HashSet<T>, value: T): boolean {
 }
 
 export function clear<T>(this s: HashSet<T>): void {
+	if (s.writing) { msMapFatal("concurrent map writes"); }
+	s.writing = true;
+	defer hashSetEndWrite(s);
 	let i: int32 = 0;
 	while (i < s.data.length) { s.data[i].hcode = 0; i = i + 1; }
 	s.size = 0;
@@ -367,6 +401,7 @@ export function clear<T>(this s: HashSet<T>): void {
 
 export function* toItems<T>(this s: HashSet<T>): Iterator<T> {
 	for (const entry of s.data) {
+		if (s.writing) { msMapFatal("concurrent map iteration and map write"); }
 		if (entry.hcode !== 0) yield entry.key;
 	}
 }
@@ -401,6 +436,7 @@ export class Map<K, V> {
 	indices: Vec<int32>;
 	size: int32;
 	tombstones: int32;
+	writing: boolean;
 }
 
 function orderedMapInitIndices<K, V>(m: Map<K, V>, cap: int32): void {
@@ -474,6 +510,9 @@ function orderedMapCompact<K, V>(m: Map<K, V>): void {
 }
 
 export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
+	if (m.writing) { msMapFatal("concurrent map writes"); }
+	m.writing = true;
+	defer mapEndWrite(m);
 	if (m.indices.length === 0) { orderedMapInitIndices(m, INITIAL_CAPACITY); }
 	const hc = key.hash();
 	const slot = orderedMapRawGet(m, key, hc);
@@ -504,6 +543,7 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 }
 
 export function get<K, V>(this m: Map<K, V>, key: K): V {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	if (m.indices.length === 0) return null as unknown as V;
 	const hc = key.hash();
 	const slot = orderedMapRawGet(m, key, hc);
@@ -512,12 +552,16 @@ export function get<K, V>(this m: Map<K, V>, key: K): V {
 }
 
 export function has<K, V>(this m: Map<K, V>, key: K): boolean {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	if (m.indices.length === 0) return false;
 	const hc = key.hash();
 	return orderedMapRawGet(m, key, hc) >= 0;
 }
 
 export function delete<K, V>(this m: Map<K, V>, key: K): boolean {
+	if (m.writing) { msMapFatal("concurrent map writes"); }
+	m.writing = true;
+	defer mapEndWrite(m);
 	if (m.indices.length === 0) return false;
 	const hc = key.hash();
 	const slot = orderedMapRawGet(m, key, hc);
@@ -534,6 +578,9 @@ export function delete<K, V>(this m: Map<K, V>, key: K): boolean {
 }
 
 export function clear<K, V>(this m: Map<K, V>): void {
+	if (m.writing) { msMapFatal("concurrent map writes"); }
+	m.writing = true;
+	defer mapEndWrite(m);
 	const empty: Vec<OrderedMapEntry<K, V>> = [];
 	m.entries = empty;
 	let i: int32 = 0;
@@ -543,6 +590,7 @@ export function clear<K, V>(this m: Map<K, V>): void {
 }
 
 export function keys<K, V>(this m: Map<K, V>): K[] {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	const result: K[] = [];
 	let i: int32 = 0;
 	while (i < m.entries.length) {
@@ -553,6 +601,7 @@ export function keys<K, V>(this m: Map<K, V>): K[] {
 }
 
 export function values<K, V>(this m: Map<K, V>): V[] {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	const result: V[] = [];
 	let i: int32 = 0;
 	while (i < m.entries.length) {
@@ -564,6 +613,7 @@ export function values<K, V>(this m: Map<K, V>): V[] {
 
 export function* toItems<K, V>(this m: Map<K, V>): Iterator<K> {
 	for (const entry of m.entries) {
+		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
 		if (entry.hcode !== 0) yield entry.key;
 	}
 }
@@ -599,6 +649,7 @@ export class Set<T> {
 	indices: Vec<int32>;
 	size: int32;
 	tombstones: int32;
+	writing: boolean;
 
 	constructor(items: T[] = []) {
 		if (items.length > 0) {
@@ -691,6 +742,9 @@ function orderedSetCompact<T>(s: Set<T>): void {
 }
 
 export function add<T>(this s: Set<T>, value: T): void {
+	if (s.writing) { msMapFatal("concurrent map writes"); }
+	s.writing = true;
+	defer setEndWrite(s);
 	if (s.indices.length === 0) { orderedSetInitIndices(s, INITIAL_CAPACITY); }
 	const hc = value.hash();
 	const slot = orderedSetRawGet(s, value, hc);
@@ -717,12 +771,16 @@ export function add<T>(this s: Set<T>, value: T): void {
 }
 
 export function has<T>(this s: Set<T>, value: T): boolean {
+	if (s.writing) { msMapFatal("concurrent map read and map write"); }
 	if (s.indices.length === 0) return false;
 	const hc = value.hash();
 	return orderedSetRawGet(s, value, hc) >= 0;
 }
 
 export function delete<T>(this s: Set<T>, value: T): boolean {
+	if (s.writing) { msMapFatal("concurrent map writes"); }
+	s.writing = true;
+	defer setEndWrite(s);
 	if (s.indices.length === 0) return false;
 	const hc = value.hash();
 	const slot = orderedSetRawGet(s, value, hc);
@@ -739,6 +797,9 @@ export function delete<T>(this s: Set<T>, value: T): boolean {
 }
 
 export function clear<T>(this s: Set<T>): void {
+	if (s.writing) { msMapFatal("concurrent map writes"); }
+	s.writing = true;
+	defer setEndWrite(s);
 	const empty: Vec<OrderedSetEntry<T>> = [];
 	s.entries = empty;
 	let i: int32 = 0;
@@ -749,6 +810,7 @@ export function clear<T>(this s: Set<T>): void {
 
 export function* toItems<T>(this s: Set<T>): Iterator<T> {
 	for (const entry of s.entries) {
+		if (s.writing) { msMapFatal("concurrent map iteration and map write"); }
 		if (entry.hcode !== 0) yield entry.key;
 	}
 }
