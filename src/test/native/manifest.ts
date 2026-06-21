@@ -21,6 +21,9 @@ export interface NativeCase {
 	// If set, the program's stdout must contain this marker — catches
 	// correctness bugs that exit 0 with low RSS (wrong output, not a leak/crash).
 	expectStdout?: string;
+	// If set, the program must exit with this code (default 0). Lets a case assert
+	// a deliberate fail-loud path (e.g. msMapFatal's exit 2) instead of a clean run.
+	expectExit?: number;
 	xfail?: ("drc" | "orc")[];
 	note?: string;
 }
@@ -284,5 +287,20 @@ export const CASES: NativeCase[] = [
 		maxRssMb: 30,
 		expectStdout: "jsx-macro-native PASS",
 		note: "End-to-end JSX → macro → native (the closed cycle, Phases 3+4+7). A user `macro jsx(node)` consumes JSX `Node` values the parser produced and the checker typed compile-time-only, reads the serialized `jsxTag`, and emits a StringLiteral. The macro expands while THIS program compiles to native, so the build exercises parse → check → macro-expand → codegen; the marker prints only if every tag form — element, member (`Foo.Bar`), namespace (`svg:rect`), and a tag with attributes + expr container + nested children — round-tripped through the macro. ~2MB drc+orc. Proves JSX is usable end-to-end, not just parseable. (Macro array-field access, e.g. `node.jsxChildren.length`, is a separate macro-VM gap — returns -1 — so the toy macro reads the scalar tag only.)",
+	},
+	{
+		name: "map-mutation-guard-ok",
+		file: "mapMutationGuardOk.ms",
+		maxRssMb: 30,
+		expectStdout: "map-guard-ok sum=280 sum2=288 set=4 hmk=6 hs=4",
+		note: "Positive half of the Map/Set concurrent-access guard (#188, Go writing-flag model). Exercises all four containers + a single-threaded mutate-during-iterate (value-update of each key while ranging m.toItems()). That must NOT fire — Go allows single-threaded mutation during range (the `writing` flag is set only for the duration of one op and clears before the iterator resumes), so this pins that the guard does not over-fire on legitimate sequential code. Invisible to test-ms (the guard's msMapFatal/exit only runs in the native binary).",
+	},
+	{
+		name: "map-mutation-guard-fatal",
+		file: "mapMutationGuardFatal.ms",
+		maxRssMb: 30,
+		expectStdout: "map-guard-fatal armed",
+		expectExit: 2,
+		note: "Negative half of the Map/Set concurrent-access guard (#188). After a clean set, forces the `writing` flag true (simulating a concurrent writer mid-mutation) then reads — get() detects writing and calls msMapFatal, which prints `fatal error: concurrent map read and map write` and exit(2) UNRECOVERABLE (Go fatal model: a detected race may already have corrupted memory, so it must not be a catchable throw). expectExit:2 asserts the fail-loud actually fired (the 'armed' marker prints before it; SHOULD-NOT-REACH never does). Locks the guard in CI so a future refactor can't silently disable it.",
 	},
 ];
