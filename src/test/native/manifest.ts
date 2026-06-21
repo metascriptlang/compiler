@@ -243,4 +243,11 @@ export const CASES: NativeCase[] = [
 		expectStdout: "jsx-parse-native acc=5000",
 		note: "JSX parser (src/parser/expressions/jsx.ms) CRASH + CORRECTNESS guard: lex()+parseExpression() 5000× building a 3-child JSXElement (text + expr container + nested element), asserting the AST shape under the C runtime — catches over-free / UAF in JSX node construction (jsxChildren / jsxAttrs arrays, Result/try temporaries, nested nodes) that exits 0 on the Bun transpiler. NOT a leak guard: parseExpression accumulates per call regardless of JSX (A/B-proven — a plain `a + b * c` expr leaks the same ~2.7KB/iter; the parser frees per-compilation memory at process exit, not per call), so iterations are capped at 5000 (~14MB baseline) and the 40MB bound rides it while still catching a large JSX-specific leak on top. jsxLexNative is the leak guard.",
 	},
+	{
+		name: "jsx-macro-native",
+		file: "jsxMacroNative.ms",
+		maxRssMb: 30,
+		expectStdout: "jsx-macro-native PASS",
+		note: "End-to-end JSX → macro → native (the closed cycle, Phases 3+4+7). A user `macro jsx(node)` consumes JSX `Node` values the parser produced and the checker typed compile-time-only, reads the serialized `jsxTag`, and emits a StringLiteral. The macro expands while THIS program compiles to native, so the build exercises parse → check → macro-expand → codegen; the marker prints only if every tag form — element, member (`Foo.Bar`), namespace (`svg:rect`), and a tag with attributes + expr container + nested children — round-tripped through the macro. ~2MB drc+orc. Proves JSX is usable end-to-end, not just parseable. (Macro array-field access, e.g. `node.jsxChildren.length`, is a separate macro-VM gap — returns -1 — so the toy macro reads the scalar tag only.)",
+	},
 ];
