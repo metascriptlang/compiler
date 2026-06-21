@@ -229,4 +229,18 @@ export const CASES: NativeCase[] = [
 		expectStdout: "actor-shared-actor-field done",
 		note: "FIXED (UAF caught by audit of the actor-state-free fix): an actor whose state holds OTHER actor handles (plain Ref / array element / nullable union) double-freed the shared actor on teardown. Actors are DRC-exempt (classify.ms: SymbolKind.Actor -> noRcInfo), spawn never increfs the handle, so a generated destroy/copy hook touching the field underflowed the shared actor's rc; once the actor-state-free fix wired the with-ctor destroyFn, the orphaned hook ran and double-freed. Root cause: destructorLifting had no actor exemption while classify.ms did. Fixes mirror classify.ms: destructorLifting skips RC ops on actor-typed Ref fields (fillBody) and actor-element arrays (arrayOp), and codegen picks the free-only msNumberArrayDestroy for an actor-element ref-array box (no per-element decref). Pre-fix: ASAN heap-use-after-free / malloc abort under --gc=drc+orc. Invisible to test-ms (Bun JS-GC).",
 	},
+	{
+		name: "jsx-lex-native",
+		file: "jsxLexNative.ms",
+		maxRssMb: 30,
+		expectStdout: "jsx-lex-native acc=800000",
+		note: "JSX lexer (src/lexer/jsx.ms) leak guard under the C runtime: lex() 200k× on a JSX string covering every mode — apostrophe text, attribute, expr container, nested + self-close. The lexer allocates per call (byteSlice for text/idents, jsxStack push/pop, token array) and frees per call, so RSS is flat ~2.5MB drc+orc. acc=800000 is the deterministic JSX-token count (4 × 200000 % 1e6); a regressed token stream — e.g. the `'` in \"Don't\" choking the scanner into an unterminated string — changes it. test-ms runs the lexer on Bun and never frees the emitted C strings, so it is blind to this path.",
+	},
+	{
+		name: "jsx-parse-native",
+		file: "jsxParseNative.ms",
+		maxRssMb: 40,
+		expectStdout: "jsx-parse-native acc=5000",
+		note: "JSX parser (src/parser/expressions/jsx.ms) CRASH + CORRECTNESS guard: lex()+parseExpression() 5000× building a 3-child JSXElement (text + expr container + nested element), asserting the AST shape under the C runtime — catches over-free / UAF in JSX node construction (jsxChildren / jsxAttrs arrays, Result/try temporaries, nested nodes) that exits 0 on the Bun transpiler. NOT a leak guard: parseExpression accumulates per call regardless of JSX (A/B-proven — a plain `a + b * c` expr leaks the same ~2.7KB/iter; the parser frees per-compilation memory at process exit, not per call), so iterations are capped at 5000 (~14MB baseline) and the 40MB bound rides it while still catching a large JSX-specific leak on top. jsxLexNative is the leak guard.",
+	},
 ];
