@@ -5,7 +5,7 @@ import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLoc
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, findExtension, findOperatorExt, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn } from "./context";
+import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorExt, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn } from "./context";
 import {
 	isAssignable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -625,16 +625,15 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			const isArithmeticOp = d.operator === "+" || d.operator === "-" || d.operator === "*"
 				|| d.operator === "/" || d.operator === "%" || d.operator === "**";
-			if (isArithmeticOp && effLeft !== null && !isNumeric(effLeft) && !isStringLike(effLeft)
+			if (isArithmeticOp && effLeft !== null && effRight !== null
+				&& (!isNumeric(effLeft) || !isNumeric(effRight))
+				&& !isStringLike(effLeft) && !isStringLike(effRight)
 				&& ctx.extensionRegistry !== null) {
-				const recvTypeName = typeNameOf(effLeft);
-				if (recvTypeName !== "") {
-					const opExt = findOperatorExt(ctx.extensionRegistry, recvTypeName, d.operator, 2);
-					if (opExt !== null) {
-						const opFnType = getExtFnType(opExt);
-						if (opFnType !== null && opFnType.typeReturn !== null) {
-							node.nodeType = opFnType.typeReturn; return;
-						}
+				const opExt = resolveOperatorExt(ctx.extensionRegistry, d.operator, [effLeft, effRight]);
+				if (opExt !== null) {
+					const opFnType = getExtFnType(opExt);
+					if (opFnType !== null && opFnType.typeReturn !== null) {
+						node.nodeType = opFnType.typeReturn; return;
 					}
 				}
 			}
@@ -659,14 +658,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if ((d.unaryOp === "-" || d.unaryOp === "+" || d.unaryOp === "!" || d.unaryOp === "~")
 				&& operandType !== null && !isNumeric(operandType) && !isStringLike(operandType)
 				&& ctx.extensionRegistry !== null) {
-				const recvTypeName = typeNameOf(operandType);
-				if (recvTypeName !== "") {
-					const unExt = findOperatorExt(ctx.extensionRegistry, recvTypeName, d.unaryOp, 1);
-					if (unExt !== null) {
-						const unFnType = getExtFnType(unExt);
-						if (unFnType !== null && unFnType.typeReturn !== null) {
-							node.nodeType = unFnType.typeReturn; return;
-						}
+				const unExt = resolveOperatorExt(ctx.extensionRegistry, d.unaryOp, [operandType]);
+				if (unExt !== null) {
+					const unFnType = getExtFnType(unExt);
+					if (unFnType !== null && unFnType.typeReturn !== null) {
+						node.nodeType = unFnType.typeReturn; return;
 					}
 				}
 			}

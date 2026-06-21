@@ -22,7 +22,7 @@ import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
-import { findExtension, findOperatorExt, ExtensionMethod } from "../../checker/context";
+import { findExtension, resolveOperatorExt, ExtensionMethod } from "../../checker/context";
 
 // ===== Type Resolution =====
 
@@ -192,7 +192,7 @@ function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
 	if (isStringLike(t)) return node;
 	const typeName = typeNameOf(t);
 	if (typeName === "" || isBuiltinType(typeName)) return node;
-	const ext = findOperatorExt(ctx.checkerCtx.extensionRegistry, typeName, op, 1);
+	const ext = resolveOperatorExt(ctx.checkerCtx.extensionRegistry, op, [t]);
 	if (ext === null) return node;
 	let callName = op;
 	if (ext.sym !== null) {
@@ -232,7 +232,8 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		&& ctx.checkerCtx.extensionRegistry !== null) {
 		const ltName = isStringLike(leftType) ? "string" : typeNameOf(leftType);
 		if (ltName !== "" && !isBuiltinType(ltName)) {
-			const cext = findOperatorExt(ctx.checkerCtx.extensionRegistry, ltName, compoundBase, 2);
+			const crt = resolveType(ctx, d.right);
+			const cext = crt !== null ? resolveOperatorExt(ctx.checkerCtx.extensionRegistry, compoundBase, [leftType, crt]) : null as unknown as ExtensionMethod;
 			if (cext !== null) {
 				const rhsCall = makeExtOpCall(cext, compoundBase, cloneLvalue(d.left), d.right, loc);
 				return makeBinary(d.left, "=", rhsCall, loc);
@@ -301,7 +302,8 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	//    user overloads beat magic builtins). Checked BEFORE isBuiltinType
 	//    so that e.g. `==`(a: int32, b: int32) overrides native ==.
 	if (ctx.checkerCtx.extensionRegistry !== null) {
-		const ext = findOperatorExt(ctx.checkerCtx.extensionRegistry, typeName, opName, 2);
+		const rt = resolveType(ctx, d.right);
+		const ext = rt !== null ? resolveOperatorExt(ctx.checkerCtx.extensionRegistry, opName, [leftType, rt]) : null as unknown as ExtensionMethod;
 		if (ext !== null) {
 			return makeExtOpCall(ext, opName, d.left, d.right, loc);
 		}
