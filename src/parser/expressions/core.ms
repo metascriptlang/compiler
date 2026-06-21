@@ -10,6 +10,7 @@ import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedenc
 import { parseMatchExpr } from "./match";
 import { isArrowFunction, parseArrowFunction, parseBareIdentArrow } from "./arrow";
 import { parseObjectLiteral } from "./object";
+import { parseJsxRoot } from "./jsx";
 import { parseExprList, parseCallExpr } from "./call";
 import { parseTemplateLiteral } from "./template";
 import { registerParseExpr, parseOk, exprKind, exprNode, exprOp, binLeftKind, tryParseLiteralKeyword } from "./util";
@@ -235,6 +236,11 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 
 function parsePrimary(state: ParserState): ExprResult {
 	const token = current(state);
+
+	// JSX — the lexer emits JsxTagStart only for JSX, so no disambiguation here.
+	if (token.kind === TokenKind.JsxTagStart) {
+		return parseJsxRoot(state, parseExprWithPrec);
+	}
 
 	if (token.kind === TokenKind.Number) {
 		advance(state);
