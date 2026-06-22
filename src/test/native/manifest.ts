@@ -304,10 +304,24 @@ export const CASES: NativeCase[] = [
 		note: "Negative half of the Map/Set concurrent-access guard (#188). After a clean set, forces the `writing` flag true (simulating a concurrent writer mid-mutation) then reads — get() detects writing and calls msMapFatal, which prints `fatal error: concurrent map read and map write` and exit(2) UNRECOVERABLE (Go fatal model: a detected race may already have corrupted memory, so it must not be a catchable throw). expectExit:2 asserts the fail-loud actually fired (the 'armed' marker prints before it; SHOULD-NOT-REACH never does). Locks the guard in CI so a future refactor can't silently disable it.",
 	},
 	{
+		name: "arc-shared-box",
+		file: "arcSharedBox.ms",
+		maxRssMb: 40,
+		expectStdout: "arc-shared-box total=112000",
+		note: "Arc<T> atomic-refcount shared box — the first per-type atomic-rc path in the compiler. 4000 rounds × 4 spawn tasks each take an OWNING reference to one shared Arc<Payload> (return a → atomic incref) and drop the awaited result (atomic decref): concurrent owning rc traffic that a non-atomic refcount corrupts under contention (the reason Rust needs Arc<Mutex<T>>; MS's plain Ref rc is non-atomic, racing the check-then-decrement TOCTOU). createArc tags a Ref with TypeFlag.IsAtomic; classify.ms emits msAtomicIncref/Decref; new Arc(v) lowers to msBoxArc → msAllocArc cell at rc=MS_RC_INCREMENT (Rust convention — msAtomicDecRefIsLast frees when fetch_sub sees old==INC, so the box must NOT start at the rc=0 sole-owner of the non-atomic path). The cell reuses a weak-linkage Arc TypeInfo (ensureArcCellTypeInfo) whose destroyFn is the pointee's destructor — weak so a lifted-closure module can box without the owning-module gating that left PayloadTypeInfo undefined. Flat RSS proves box+pointee free once; total=112000 (4000×4×7) proves the value round-trips. ASAN-clean drc+orc separately (no UAF/double-free under contention); the atomic primitive proven by an 8-thread pthread+TSAN probe. Invisible to test-ms — Bun never runs the atomic C rc.",
+	},
+	{
 		name: "macro-node-fields",
 		file: "macroNodeFields.ms",
 		maxRssMb: 30,
 		expectStdout: "macro-node-fields PASS",
 		note: "Locks addKindFields (expand.ms) ↔ bridge.ms nodeToValue parity: a macro reading an ARRAY field of a NodeKind addKindFields didn't serialize used to abort at expansion with 'array handle out of bounds: 0' (e.g. MatchExpr.matchCases). Brought addKindFields to full parity (54 missing kinds added: MatchExpr/MatchCase, all For/Switch/Try/Do stmts, New/Await/Yield/Spread/TryExpr, Class/Interface/Enum/Method/Property/Ctor/Struct/Actor/Import/Export/Macro decls, patterns, etc.). The macros here read matchCases.length, matchCases[0].caseBody.kind, and casePatterns.length — building this program natively re-runs them at compile time, so a regression re-breaks the BUILD (macro abort), not just this assert. Invisible to compileToC tests (isolated module graph can't resolve std/meta).",
+	},
+	{
+		name: "jsxdom-native",
+		file: "jsxDomNative.ms",
+		maxRssMb: 30,
+		expectStdout: "jsxdom-native PASS",
+		note: "End-to-end proof of the jsxDom reference macro (std/meta/jsxDom.ms): JSX → DomNode tree → render string. A macro rewrites <div id=app><h1>Hi</h1><p>x</p></div> into el()/txt()/attr() runtime calls at compile time; nested <h1>/<p> recurse via RE-EXPANSION (the macro emits jsxDom(child), the expander re-walks it — macro helper fns can't navigate/build Node values, only the macro body's return position is special-typed, so recursion can't be a helper). The marker prints only if render() is byte-exact, so this guards the whole JSX→macro→codegen path natively. Proves JSX is usable end-to-end, not just parseable.",
 	},
 ];
