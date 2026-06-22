@@ -1636,6 +1636,11 @@ test "non-capturing arrow lifted" {
 	assert firstStmtKindAfter("const f = (x) => x + 1;", lowerLambda) === NodeKind.FunctionDecl;
 }
 
+test "arrow inside array literal lifted" {
+	assert stmtCountAfter("const a = [() => 1];", lowerLambda) === 2;
+	assert firstStmtKindAfter("const a = [() => 1];", lowerLambda) === NodeKind.FunctionDecl;
+}
+
 test "non-capturing arrow in function lifted" {
 	// Inner arrow lifted to program level: lifted fn + outer fn = 2 stmts
 	assert stmtCountAfter("function f(x) { const g = (y) => y + 1; }", lowerLambda) === 2;
