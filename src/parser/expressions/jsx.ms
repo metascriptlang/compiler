@@ -137,13 +137,16 @@ function parseJsxElement(state: ParserState, parseExpr: ExprParser, start: Token
 	const tagTok = current(state);
 	const tag = try parseJsxName(state);
 	const attrs = try parseJsxAttributes(state, parseExpr);
+	// Positioned tag-name node on `typeExpr` (the LSP side-channel) so the checker can bind an
+	// uppercase component tag to its function symbol — see recordJsxTagSym for go-to-def / rename.
+	const tagNode = createNode(NodeKind.Identifier, { name: tagTok.value }, tagTok);
 
 	if (current(state).kind === TokenKind.Slash) {
 		advance(state);
 		if (current(state).kind !== TokenKind.Gt) return Result.err("Expected '>' after '/' in self-closing JSX element");
 		advance(state);
 		const selfNode = createNode(NodeKind.JSXElement, { jsxTag: tag, jsxAttrs: attrs, jsxChildren: [], jsxSelfClosing: true }, start);
-		selfNode.typeExpr = createNode(NodeKind.Identifier, { name: tagTok.value }, tagTok);
+		selfNode.typeExpr = tagNode;
 		return Result.ok(selfNode);
 	}
 
@@ -153,7 +156,7 @@ function parseJsxElement(state: ParserState, parseExpr: ExprParser, start: Token
 	const closeTag = try parseJsxClose(state);
 	if (closeTag !== tag) return Result.err(`JSX closing tag </${closeTag}> does not match <${tag}>`);
 	const openNode = createNode(NodeKind.JSXElement, { jsxTag: tag, jsxAttrs: attrs, jsxChildren: children, jsxSelfClosing: false }, start);
-	openNode.typeExpr = createNode(NodeKind.Identifier, { name: tagTok.value }, tagTok);
+	openNode.typeExpr = tagNode;
 	return Result.ok(openNode);
 }
 
