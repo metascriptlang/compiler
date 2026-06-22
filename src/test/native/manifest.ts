@@ -303,4 +303,11 @@ export const CASES: NativeCase[] = [
 		expectExit: 2,
 		note: "Negative half of the Map/Set concurrent-access guard (#188). After a clean set, forces the `writing` flag true (simulating a concurrent writer mid-mutation) then reads — get() detects writing and calls msMapFatal, which prints `fatal error: concurrent map read and map write` and exit(2) UNRECOVERABLE (Go fatal model: a detected race may already have corrupted memory, so it must not be a catchable throw). expectExit:2 asserts the fail-loud actually fired (the 'armed' marker prints before it; SHOULD-NOT-REACH never does). Locks the guard in CI so a future refactor can't silently disable it.",
 	},
+	{
+		name: "macro-node-fields",
+		file: "macroNodeFields.ms",
+		maxRssMb: 30,
+		expectStdout: "macro-node-fields PASS",
+		note: "Locks addKindFields (expand.ms) ↔ bridge.ms nodeToValue parity: a macro reading an ARRAY field of a NodeKind addKindFields didn't serialize used to abort at expansion with 'array handle out of bounds: 0' (e.g. MatchExpr.matchCases). Brought addKindFields to full parity (54 missing kinds added: MatchExpr/MatchCase, all For/Switch/Try/Do stmts, New/Await/Yield/Spread/TryExpr, Class/Interface/Enum/Method/Property/Ctor/Struct/Actor/Import/Export/Macro decls, patterns, etc.). The macros here read matchCases.length, matchCases[0].caseBody.kind, and casePatterns.length — building this program natively re-runs them at compile time, so a regression re-breaks the BUILD (macro abort), not just this assert. Invisible to compileToC tests (isolated module graph can't resolve std/meta).",
+	},
 ];
