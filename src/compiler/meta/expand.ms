@@ -43,6 +43,13 @@ import {
 	SpliceManyData,
 	// JSX (compile-time only — addKindFields cases for quote {<...>})
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
+	// Full addKindFields parity with bridge.ms nodeToValue (macros read fields of any NodeKind)
+	BigIntLiteralData, RegexLiteralData, UpdateExprData, TypeAssertionData, SpreadExprData,
+	NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData,
+	ComptimeBlockData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
+	DestructuringDeclData, BreakStmtData, ContinueStmtData, UnreachableStmtData, ImportDeclData,
+	TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ActorDeclData, ExternDeclData, MacroDeclData,
+	TestDeclData, AssertStmtData,
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
 	SymbolKind,
 } from "../../ast/node";
@@ -278,9 +285,9 @@ function addNodeArrayArrayField(keys: string[], values: Node[], name: string, ar
 // different output shapes. Update BOTH when adding new NodeKinds, or macros
 // will see undefined fields.)
 //
-// For v1, we cover the most commonly-used NodeKinds. Others get only
-// kind/line/column written — if a macro reads a field we don't handle here,
-// it'll see undefined and the wrapper Program will fail at runtime.
+// Full parity with bridge.ms nodeToValue: every NodeKind with data fields is
+// covered (src/test/native/programs/macroNodeFields.ms locks this at runtime).
+// Kinds reaching the fall-through have no fields, or are stripped earlier.
 function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLocation): void {
 	const k = node.kind;
 	if (k === NodeKind.NumberLiteral) {
@@ -494,8 +501,342 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		return;
 	}
 
-	// Other NodeKinds: kind/line/column only. Extend here as macro authors
-	// need more NodeKinds in quote bodies.
+	if (k === NodeKind.BigIntLiteral) {
+		const d = node.data as BigIntLiteralData;
+		addStrField(keys, values, "bigintValue", d.bigintValue, loc);
+		return;
+	}
+	if (k === NodeKind.RegexLiteral) {
+		const d = node.data as RegexLiteralData;
+		addStrField(keys, values, "regexPattern", d.regexPattern, loc);
+		return;
+	}
+	if (k === NodeKind.UpdateExpr) {
+		const d = node.data as UpdateExprData;
+		addStrField(keys, values, "updateOp", d.updateOp, loc);
+		addNodeField(keys, values, "updateArg", d.updateArg, loc);
+		addBoolField(keys, values, "isPrefix", d.isPrefix, loc);
+		return;
+	}
+	if (k === NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		addNodeField(keys, values, "asExpr", d.asExpr, loc);
+		addStrField(keys, values, "asType", d.asType, loc);
+		return;
+	}
+	if (k === NodeKind.SpreadExpr) {
+		const d = node.data as SpreadExprData;
+		addNodeField(keys, values, "spreadArg", d.spreadArg, loc);
+		return;
+	}
+	if (k === NodeKind.NewExpr) {
+		const d = node.data as NewExprData;
+		addNodeField(keys, values, "newCallee", d.newCallee, loc);
+		addNodeArrayField(keys, values, "newArguments", d.newArguments, loc);
+		return;
+	}
+	if (k === NodeKind.TryExpr) {
+		const d = node.data as TryExprData;
+		addNodeField(keys, values, "tryArg", d.tryArg, loc);
+		addBoolField(keys, values, "hasCatch", d.hasCatch, loc);
+		if (d.hasCatch) { addNodeField(keys, values, "catchVal", d.catchVal, loc); }
+		return;
+	}
+	if (k === NodeKind.MatchExpr) {
+		const d = node.data as MatchExprData;
+		addNodeField(keys, values, "matchDisc", d.matchDisc, loc);
+		addNodeArrayField(keys, values, "matchCases", d.matchCases, loc);
+		return;
+	}
+	if (k === NodeKind.MatchCase) {
+		const d = node.data as MatchCaseData;
+		addNodeArrayField(keys, values, "casePatterns", d.casePatterns, loc);
+		addNodeField(keys, values, "caseGuard", d.caseGuard, loc);
+		addNodeField(keys, values, "caseBody", d.caseBody, loc);
+		return;
+	}
+	if (k === NodeKind.AwaitExpr) {
+		const d = node.data as AwaitExprData;
+		addNodeField(keys, values, "awaitArg", d.awaitArg, loc);
+		return;
+	}
+	if (k === NodeKind.YieldExpr) {
+		const d = node.data as YieldExprData;
+		addNodeField(keys, values, "yieldArg", d.yieldArg, loc);
+		addBoolField(keys, values, "isDelegate", d.isDelegate, loc);
+		return;
+	}
+	if (k === NodeKind.MoveExpr) {
+		const d = node.data as MoveExprData;
+		addNodeField(keys, values, "moveArg", d.moveArg, loc);
+		return;
+	}
+	if (k === NodeKind.OutExpr) {
+		const d = node.data as OutExprData;
+		addNodeField(keys, values, "outArg", d.outArg, loc);
+		return;
+	}
+	if (k === NodeKind.SizeofExpr) {
+		const d = node.data as SizeofExprData;
+		addStrField(keys, values, "sizeofType", d.sizeofType, loc);
+		return;
+	}
+	if (k === NodeKind.QuoteExpr) {
+		const d = node.data as QuoteExprData;
+		addNodeField(keys, values, "quoteBody", d.quoteBody, loc);
+		return;
+	}
+	if (k === NodeKind.ComptimeBlock) {
+		const d = node.data as ComptimeBlockData;
+		addNodeField(keys, values, "comptimeBody", d.comptimeBody, loc);
+		return;
+	}
+	if (k === NodeKind.TypeAnnotation) {
+		const d = node.data as TypeAnnotationData;
+		addStrField(keys, values, "annotationType", d.annotationType, loc);
+		return;
+	}
+	if (k === NodeKind.FunctionExpr) {
+		const d = node.data as FunctionExprData;
+		addStrArrayField(keys, values, "funcExprParams", d.funcExprParams, loc);
+		addStrArrayField(keys, values, "funcExprParamTypes", d.funcExprParamTypes, loc);
+		addNodeField(keys, values, "funcExprBody", d.funcExprBody, loc);
+		addStrField(keys, values, "funcExprFlags", d.funcExprFlags, loc);
+		addStrField(keys, values, "funcExprReturnType", d.funcExprReturnType, loc);
+		return;
+	}
+	if (k === NodeKind.ArrayPattern) {
+		const d = node.data as ArrayPatternData;
+		addNodeArrayField(keys, values, "patternElements", d.patternElements, loc);
+		addBoolField(keys, values, "hasRestElement", d.hasRestElement, loc);
+		return;
+	}
+	if (k === NodeKind.ObjectPattern) {
+		const d = node.data as ObjectPatternData;
+		addNodeArrayField(keys, values, "patternProps", d.patternProps, loc);
+		addBoolField(keys, values, "hasRestProp", d.hasRestProp, loc);
+		return;
+	}
+	if (k === NodeKind.ObjectPatternProp) {
+		const d = node.data as ObjectPatternPropData;
+		addStrField(keys, values, "propKey", d.propKey, loc);
+		addNodeField(keys, values, "propAlias", d.propAlias, loc);
+		return;
+	}
+	if (k === NodeKind.DestructuringDecl) {
+		const d = node.data as DestructuringDeclData;
+		addNodeField(keys, values, "destrPattern", d.destrPattern, loc);
+		addNodeField(keys, values, "destrInit", d.destrInit, loc);
+		addBoolField(keys, values, "destrIsConst", d.destrIsConst, loc);
+		return;
+	}
+	if (k === NodeKind.ThrowStmt) {
+		const d = node.data as ThrowStmtData;
+		addNodeField(keys, values, "throwArg", d.throwArg, loc);
+		return;
+	}
+	if (k === NodeKind.DeferStmt) {
+		const d = node.data as DeferStmtData;
+		addNodeField(keys, values, "deferExpr", d.deferExpr, loc);
+		return;
+	}
+	if (k === NodeKind.DoWhileStmt) {
+		const d = node.data as DoWhileStmtData;
+		addNodeField(keys, values, "doBody", d.doBody, loc);
+		addNodeField(keys, values, "doCondition", d.doCondition, loc);
+		return;
+	}
+	if (k === NodeKind.ForStmt) {
+		const d = node.data as ForStmtData;
+		addNodeField(keys, values, "forInit", d.forInit, loc);
+		addNodeField(keys, values, "forCondition", d.forCondition, loc);
+		addNodeField(keys, values, "forUpdate", d.forUpdate, loc);
+		addNodeField(keys, values, "forBody", d.forBody, loc);
+		return;
+	}
+	if (k === NodeKind.ForOfStmt) {
+		const d = node.data as ForOfStmtData;
+		addStrField(keys, values, "forOfBinding", d.forOfBinding, loc);
+		addBoolField(keys, values, "forOfIsConst", d.forOfIsConst, loc);
+		addNodeField(keys, values, "forOfIterable", d.forOfIterable, loc);
+		addNodeField(keys, values, "forOfBody", d.forOfBody, loc);
+		return;
+	}
+	if (k === NodeKind.ForInStmt) {
+		const d = node.data as ForInStmtData;
+		addStrField(keys, values, "forInBinding", d.forInBinding, loc);
+		addBoolField(keys, values, "forInIsConst", d.forInIsConst, loc);
+		addNodeField(keys, values, "forInObject", d.forInObject, loc);
+		addNodeField(keys, values, "forInBody", d.forInBody, loc);
+		return;
+	}
+	if (k === NodeKind.BreakStmt) {
+		const d = node.data as BreakStmtData;
+		addStrField(keys, values, "breakLabel", d.breakLabel, loc);
+		return;
+	}
+	if (k === NodeKind.ContinueStmt) {
+		const d = node.data as ContinueStmtData;
+		addStrField(keys, values, "continueLabel", d.continueLabel, loc);
+		return;
+	}
+	if (k === NodeKind.UnreachableStmt) {
+		const d = node.data as UnreachableStmtData;
+		addStrField(keys, values, "unreachableMsg", d.unreachableMsg, loc);
+		return;
+	}
+	if (k === NodeKind.SwitchStmt) {
+		const d = node.data as SwitchStmtData;
+		addNodeField(keys, values, "switchDisc", d.switchDisc, loc);
+		addNodeArrayField(keys, values, "switchCases", d.switchCases, loc);
+		return;
+	}
+	if (k === NodeKind.SwitchCase) {
+		const d = node.data as SwitchCaseData;
+		addNodeArrayField(keys, values, "caseTests", d.caseTests, loc);
+		addNodeArrayField(keys, values, "caseStmts", d.caseStmts, loc);
+		addBoolField(keys, values, "isDefault", d.isDefault, loc);
+		return;
+	}
+	if (k === NodeKind.MatchStmt) {
+		const d = node.data as MatchStmtData;
+		addNodeField(keys, values, "matchStmtDisc", d.matchStmtDisc, loc);
+		addNodeArrayField(keys, values, "matchStmtCases", d.matchStmtCases, loc);
+		return;
+	}
+	if (k === NodeKind.TryCatchStmt) {
+		const d = node.data as TryCatchStmtData;
+		addNodeField(keys, values, "tryBody", d.tryBody, loc);
+		addStrField(keys, values, "catchName", d.catchName, loc);
+		addNodeField(keys, values, "catchBody", d.catchBody, loc);
+		addNodeField(keys, values, "finallyBody", d.finallyBody, loc);
+		return;
+	}
+	if (k === NodeKind.ImportDecl) {
+		const d = node.data as ImportDeclData;
+		addStrArrayField(keys, values, "importNames", d.importNames, loc);
+		addStrArrayField(keys, values, "importAliases", d.importAliases, loc);
+		addStrField(keys, values, "importSource", d.importSource, loc);
+		return;
+	}
+	if (k === NodeKind.ExportDecl) {
+		const d = node.data as ExportDeclData;
+		addNodeField(keys, values, "exportedDecl", d.exportedDecl, loc);
+		return;
+	}
+	if (k === NodeKind.TypeAliasDecl) {
+		const d = node.data as TypeAliasDeclData;
+		addStrField(keys, values, "aliasName", d.aliasName, loc);
+		addStrField(keys, values, "aliasType", d.aliasType, loc);
+		addBoolField(keys, values, "aliasIsDistinct", d.aliasIsDistinct, loc);
+		return;
+	}
+	if (k === NodeKind.EnumDecl) {
+		const d = node.data as EnumDeclData;
+		addStrField(keys, values, "enumName", d.enumName, loc);
+		addStrArrayField(keys, values, "enumMembers", d.enumMembers, loc);
+		return;
+	}
+	if (k === NodeKind.InterfaceDecl || k === NodeKind.StructDecl) {
+		const d = node.data as InterfaceDeclData;
+		addStrField(keys, values, "interfaceName", d.interfaceName, loc);
+		addStrArrayField(keys, values, "interfaceFields", d.interfaceFields, loc);
+		addStrArrayField(keys, values, "interfaceFieldTypes", d.interfaceFieldTypes, loc);
+		return;
+	}
+	if (k === NodeKind.ClassDecl) {
+		const d = node.data as ClassDeclData;
+		addStrField(keys, values, "className", d.className, loc);
+		addStrField(keys, values, "classExtends", d.classExtends, loc);
+		addNodeArrayField(keys, values, "classBody", d.classBody, loc);
+		return;
+	}
+	if (k === NodeKind.ActorDecl) {
+		const d = node.data as ActorDeclData;
+		addStrField(keys, values, "actorName", d.actorName, loc);
+		addNodeArrayField(keys, values, "actorBody", d.actorBody, loc);
+		return;
+	}
+	if (k === NodeKind.PropertyDecl) {
+		const d = node.data as PropertyDeclData;
+		addStrField(keys, values, "propName", d.propName, loc);
+		addStrField(keys, values, "propType", d.propType, loc);
+		addBoolField(keys, values, "propIsStatic", d.propIsStatic, loc);
+		return;
+	}
+	if (k === NodeKind.MethodDecl) {
+		const d = node.data as MethodDeclData;
+		addStrField(keys, values, "methodName", d.methodName, loc);
+		addStrArrayField(keys, values, "methodParams", d.methodParams, loc);
+		addStrArrayField(keys, values, "methodParamTypes", d.methodParamTypes, loc);
+		addNodeField(keys, values, "methodBody", d.methodBody, loc);
+		addBoolField(keys, values, "methodIsStatic", d.methodIsStatic, loc);
+		addStrField(keys, values, "methodFlags", d.methodFlags, loc);
+		addStrField(keys, values, "methodReturnType", d.methodReturnType, loc);
+		return;
+	}
+	if (k === NodeKind.ConstructorDecl) {
+		const d = node.data as ConstructorDeclData;
+		addStrArrayField(keys, values, "ctorParams", d.ctorParams, loc);
+		addStrArrayField(keys, values, "ctorParamTypes", d.ctorParamTypes, loc);
+		addNodeField(keys, values, "ctorBody", d.ctorBody, loc);
+		return;
+	}
+	if (k === NodeKind.ExternDecl) {
+		const d = node.data as ExternDeclData;
+		addNumField(keys, values, "externKind", d.externKind as number, loc);
+		addStrField(keys, values, "externName", d.externName, loc);
+		addStrField(keys, values, "nativeName", d.nativeName, loc);
+		addStrField(keys, values, "externType", d.externType, loc);
+		return;
+	}
+	if (k === NodeKind.MacroDecl) {
+		const d = node.data as MacroDeclData;
+		addStrField(keys, values, "macroDeclName", d.macroDeclName, loc);
+		addStrArrayField(keys, values, "macroDeclParams", d.macroDeclParams, loc);
+		addStrArrayField(keys, values, "macroDeclParamTypes", d.macroDeclParamTypes, loc);
+		addNodeField(keys, values, "macroDeclBody", d.macroDeclBody, loc);
+		return;
+	}
+	if (k === NodeKind.DecoratedDecl) {
+		const d = node.data as DecoratedDeclData;
+		addNodeArrayField(keys, values, "decorators", d.decorators, loc);
+		addNodeField(keys, values, "decoratedNode", d.decoratedNode, loc);
+		return;
+	}
+	if (k === NodeKind.MacroInvocation) {
+		const d = node.data as MacroInvocationData;
+		addStrField(keys, values, "macroName", d.macroName, loc);
+		addNodeArrayField(keys, values, "macroArgs", d.macroArgs, loc);
+		return;
+	}
+	if (k === NodeKind.TestDecl) {
+		const d = node.data as TestDeclData;
+		addStrField(keys, values, "testName", d.testName, loc);
+		addNodeField(keys, values, "testBody", d.testBody, loc);
+		return;
+	}
+	if (k === NodeKind.AssertStmt) {
+		const d = node.data as AssertStmtData;
+		addNodeField(keys, values, "assertExpr", d.assertExpr, loc);
+		addStrField(keys, values, "assertSource", d.assertSource, loc);
+		addStrField(keys, values, "assertMessage", d.assertMessage, loc);
+		return;
+	}
+	if (k === NodeKind.Program) {
+		const d = node.data as ProgramData;
+		addNodeArrayField(keys, values, "programStmts", d.programStmts, loc);
+		return;
+	}
+	if (k === NodeKind.SpliceMany) {
+		const d = node.data as SpliceManyData;
+		addNodeArrayField(keys, values, "spliceNodes", d.spliceNodes, loc);
+		return;
+	}
+
+	// Remaining kinds have no data fields to serialize (e.g. NullLiteral handled
+	// above), or are stripped before reaching here (Hidden* wrappers, see
+	// nodeToASTLiteral). Kept at parity with bridge.ms nodeToValue.
 }
 
 // ===== hasUserMacroInvocation: quick predicate =====
