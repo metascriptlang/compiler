@@ -834,9 +834,13 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		return;
 	}
 
-	// Remaining kinds have no data fields to serialize (e.g. NullLiteral handled
-	// above), or are stripped before reaching here (Hidden* wrappers, see
-	// nodeToASTLiteral). Kept at parity with bridge.ms nodeToValue.
+	// Every NodeKind is handled above or stripped before reaching here (Hidden*
+	// wrappers, see nodeToASTLiteral L141-153) — full parity with bridge.ms nodeToValue.
+	// A NodeKind reaching this point means addKindFields wasn't updated for a newly
+	// added kind: fail loud. A silent fall-through would serialize kind/line/column
+	// only, so a macro reading the missing field aborts cryptically downstream
+	// ("array handle out of bounds") instead of pointing here.
+	unreachable;
 }
 
 // ===== hasUserMacroInvocation: quick predicate =====
