@@ -344,6 +344,74 @@ test "definition on param inside template literal" {
 	assert r.indexOf("\"character\":13") >= 0;
 }
 
+test "definition on JSX component tag jumps to its function" {
+	const src = "function Counter(): number { return 0; }\nconst v = <Counter/>;";
+	const db = testDb("file:///test.ms", src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12}}";
+	const r = handleDefinition("60", params, db);
+	assert r.indexOf("\"line\":0") >= 0;
+}
+
+test "definition on nested JSX component tag resolves" {
+	// line2: const v = <Outer><Inner/></Outer>;  Inner at chars 18-22
+	const src = "function Outer(): number { return 0; }\nfunction Inner(): number { return 1; }\nconst v = <Outer><Inner/></Outer>;";
+	const db = testDb("file:///test.ms", src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":2,\"character\":19}}";
+	const r = handleDefinition("61", params, db);
+	assert r.indexOf("\"line\":1") >= 0;
+}
+
+test "definition on member JSX tag <Foo.Bar/> resolves base" {
+	// line1: const v = <Foo.Bar/>;  Foo at chars 11-13
+	const src = "function Foo(): number { return 0; }\nconst v = <Foo.Bar/>;";
+	const db = testDb("file:///test.ms", src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12}}";
+	const r = handleDefinition("62", params, db);
+	assert r.indexOf("\"line\":0") >= 0;
+}
+
+test "definition on lowercase JSX tag does not resolve (platform string)" {
+	// `function div` exists, but a lowercase tag is a platform string, NOT a component.
+	const src = "function div(): number { return 0; }\nconst v = <div/>;";
+	const db = testDb("file:///test.ms", src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12}}";
+	const r = handleDefinition("63", params, db);
+	assert r.indexOf("\"line\":0") < 0;
+}
+
+test "definition on undefined JSX component does not crash" {
+	const src = "const v = <Missing/>;";
+	const db = testDb("file:///test.ms", src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":12}}";
+	const r = handleDefinition("64", params, db);
+	assert lspGetNumberField(r, "id") === 64;
+}
+
+test "definition on JSX tag with attributes resolves" {
+	// line1: const v = <Btn id="x" disabled/>;  Btn at chars 11-13
+	const src = "function Btn(): number { return 0; }\nconst v = <Btn id=\"x\" disabled/>;";
+	const db = testDb("file:///test.ms", src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12}}";
+	const r = handleDefinition("65", params, db);
+	assert r.indexOf("\"line\":0") >= 0;
+}
+
+test "find references from a JSX tag finds the other usages" {
+	const src = "function Counter(): number { return 0; }\nconst a = <Counter/>;\nconst b = <Counter/>;";
+	const db = testDb("file:///test.ms", src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12}}";
+	const r = handleReferences("66", params, db);
+	assert r.indexOf("\"line\":2") >= 0;
+}
+
+test "rename a component updates its JSX tag occurrence" {
+	const src = "function Counter(): number { return 0; }\nconst v = <Counter/>;";
+	const db = testDb("file:///test.ms", src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12},\"newName\":\"Tally\"}";
+	const r = handleRename("67", params, db);
+	assert r.indexOf("\"line\":0") >= 0;
+}
+
 test "returns symbols for file" {
 	const db = testDb("file:///test.ms", "function foo() { return 1; }\nconst x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"}}";
