@@ -402,6 +402,7 @@ test "find references from a JSX tag finds the other usages" {
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12}}";
 	const r = handleReferences("66", params, db);
 	assert r.indexOf("\"line\":2") >= 0;
+	assert r.indexOf("\"line\":0") >= 0;
 }
 
 test "rename a component updates its JSX tag occurrence" {
@@ -410,6 +411,7 @@ test "rename a component updates its JSX tag occurrence" {
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12},\"newName\":\"Tally\"}";
 	const r = handleRename("67", params, db);
 	assert r.indexOf("\"line\":0") >= 0;
+	assert r.indexOf("\"line\":1") >= 0;
 }
 
 test "returns symbols for file" {
