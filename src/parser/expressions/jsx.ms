@@ -134,6 +134,7 @@ function parseJsxClose(state: ParserState): Result<string, string> {
 }
 
 function parseJsxElement(state: ParserState, parseExpr: ExprParser, start: Token): ExprResult {
+	const tagTok = current(state);
 	const tag = try parseJsxName(state);
 	const attrs = try parseJsxAttributes(state, parseExpr);
 
@@ -141,7 +142,9 @@ function parseJsxElement(state: ParserState, parseExpr: ExprParser, start: Token
 		advance(state);
 		if (current(state).kind !== TokenKind.Gt) return Result.err("Expected '>' after '/' in self-closing JSX element");
 		advance(state);
-		return Result.ok(createNode(NodeKind.JSXElement, { jsxTag: tag, jsxAttrs: attrs, jsxChildren: [], jsxSelfClosing: true }, start));
+		const selfNode = createNode(NodeKind.JSXElement, { jsxTag: tag, jsxAttrs: attrs, jsxChildren: [], jsxSelfClosing: true }, start);
+		selfNode.typeExpr = createNode(NodeKind.Identifier, { name: tagTok.value }, tagTok);
+		return Result.ok(selfNode);
 	}
 
 	if (current(state).kind !== TokenKind.Gt) return Result.err("Expected '>' or '/>' to end JSX opening tag");
@@ -149,7 +152,9 @@ function parseJsxElement(state: ParserState, parseExpr: ExprParser, start: Token
 	const children = try parseJsxChildren(state, parseExpr);
 	const closeTag = try parseJsxClose(state);
 	if (closeTag !== tag) return Result.err(`JSX closing tag </${closeTag}> does not match <${tag}>`);
-	return Result.ok(createNode(NodeKind.JSXElement, { jsxTag: tag, jsxAttrs: attrs, jsxChildren: children, jsxSelfClosing: false }, start));
+	const openNode = createNode(NodeKind.JSXElement, { jsxTag: tag, jsxAttrs: attrs, jsxChildren: children, jsxSelfClosing: false }, start);
+	openNode.typeExpr = createNode(NodeKind.Identifier, { name: tagTok.value }, tagTok);
+	return Result.ok(openNode);
 }
 
 function parseJsxFragment(state: ParserState, parseExpr: ExprParser, start: Token): ExprResult {

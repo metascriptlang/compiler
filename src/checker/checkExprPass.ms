@@ -200,6 +200,20 @@ function reportUnconsumedJsx(ctx: CheckerContext, node: Node, what: string): voi
 	}
 }
 
+// Record the JSX tag's base name as a symbol reference for LSP go-to-def / rename. An uppercase
+// tag is a component reference (binds to the function symbol); a lowercase tag is a platform
+// string (no binding). node.typeExpr is the positioned Identifier the parser stored for the tag.
+function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
+	if (node.typeExpr === null) return;
+	const base = (node.typeExpr.data as IdentifierData).name;
+	if (base.byteLength === 0 || base.byteAt(0) < "A".code || base.byteAt(0) > "Z".code) return;
+	const sym = lookupSymbol(ctx.table, base);
+	if (sym === null) return;
+	node.typeExpr.resolvedSym = sym;
+	const loc = node.typeExpr.location;
+	sgRecordSym(ctx, loc.line, loc.column, loc.column + base.byteLength, sym, sym.symbolType, sym.symbolKind, base, "", false);
+}
+
 // Internal: compute type for node. All match arms and sub-functions return Type.
 function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const result = match (node.kind) {
@@ -278,6 +292,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		// codegen. Still walk the embedded expressions/attribute values so their symbols resolve.
 		NodeKind.JSXElement => {
 			const d = node.data as JSXElementData;
+			recordJsxTagSym(ctx, node);
 			reportUnconsumedJsx(ctx, node, "JSX expression");
 			checkJsxConsumed(ctx, d.jsxAttrs);
 			checkJsxConsumed(ctx, d.jsxChildren);
