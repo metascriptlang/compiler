@@ -48,10 +48,7 @@
   #define msCpuRelax() ((void)0)
 #endif
 
-typedef struct {
-	int nextTicket;
-	int nowServing;
-} msTicketLock;
+#include "runtime/promise/lockerLayout.h"
 
 static inline void msTicketLockAcquire(msTicketLock* L) {
 	int myTicket = msAtomicFetchAdd(&L->nextTicket, 1);
@@ -69,13 +66,7 @@ static inline void msTicketLockRelease(msTicketLock* L) {
 	msAtomicStore(&L->nowServing, current + 1);
 }
 
-/* ===== Locker<T> — value + lock ===== */
-
-typedef struct {
-	msTicketLock lock;
-	/* Value data follows inline (flexible member) */
-	char data[];
-} msLocker;
+/* ===== Locker<T> — value + lock (msLocker layout in lockerLayout.h) ===== */
 
 /* Create a Locker with space for `dataSize` bytes of value data.
  * Allocated via msAlloc so DRC refcount header is present —

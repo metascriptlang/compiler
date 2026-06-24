@@ -403,15 +403,17 @@ static inline void* msBoxStruct(const void* val, size_t size) {
     return p;
 }
 
-/* ===== Locker stubs (no threading) ===== */
-static inline void* msLockerCreate(int dataSize)             { return msAlloc((size_t)dataSize); }
-static inline void* msLockerCreateFrom(const void* s, int n) { (void)s; return msAlloc((size_t)n); }
+/* ===== Locker stubs (no threading; layout shared via lockerLayout.h) ===== */
+#include "runtime/promise/lockerLayout.h"
+static inline void* msLockerCreate(int dataSize)             { return msAlloc(sizeof(msLocker) + (size_t)dataSize); }
+static inline void* msLockerCreateFrom(const void* s, int n) { msLocker* c = (msLocker*)msAlloc(sizeof(msLocker) + (size_t)n); memcpy(c->data, s, (size_t)n); return c; }
+static inline void* msLockerData(void* p)                    { return ((msLocker*)p)->data; }
 static inline void  msLockerLock(void* p)                    { (void)p; }
 static inline void  msLockerUnlock(void* p)                  { (void)p; }
-static inline double msLockerGetDouble(void* p)              { return *(double*)((char*)p + 16); }
-static inline void  msLockerSetDouble(void* p, double v)     { *(double*)((char*)p + 16) = v; }
-static inline int32_t msLockerGetInt32(void* p)              { return *(int32_t*)((char*)p + 16); }
-static inline void  msLockerSetInt32(void* p, int32_t v)     { *(int32_t*)((char*)p + 16) = v; }
+static inline double msLockerGetDouble(void* p)              { return *(double*)((msLocker*)p)->data; }
+static inline void  msLockerSetDouble(void* p, double v)     { *(double*)((msLocker*)p)->data = v; }
+static inline int32_t msLockerGetInt32(void* p)             { return *(int32_t*)((msLocker*)p)->data; }
+static inline void  msLockerSetInt32(void* p, int32_t v)    { *(int32_t*)((msLocker*)p)->data = v; }
 static inline void  msLockerDestroy(void* p)                 { (void)p; }
 
 /* ===== ORC stubs ===== */
