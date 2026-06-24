@@ -15,7 +15,7 @@ import {
 	emitProcLocalsLine, lookupLocalName, typeCacheGet,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto, isDrcLifecycleName } from "./forward";
@@ -2269,6 +2269,24 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		emitStmtsLine(p, `${cellTmp.snippet} = (${cellCType})msAllocTyped(sizeof(${arrCType}), ${tiArg});`);
 		emitStmtsLine(p, `memcpy(${cellTmp.snippet}, &${valTmp.snippet}, sizeof(${arrCType}));`);
 		emitStmtsLine(p, `memset(&${valTmp.snippet}, 0, sizeof(${arrCType}));`);
+		ctx.results.push(cellTmp.snippet);
+		return;
+	}
+
+	// msBoxArc(value) → atomic-rc heap cell holding the pointee inline, allocated at
+	// rc=MS_RC_INCREMENT (msAllocArc) per the atomic-decref convention. Source is moved
+	// (memset) so the boxed payload has a single owner.
+	if (callee === "msBoxArc" && cd.arguments.length >= 1 && cd.arguments[0].nodeType !== null && node.nodeType !== null) {
+		const pointeeType = cd.arguments[0].nodeType;
+		const cType = getTypeDesc(g, pointeeType);
+		const cellCType = getTypeDesc(g, node.nodeType);
+		const tiArg = ensureArcCellTypeInfo(g, pointeeType, cType);
+		const valTmp = getTemp(p, cType);
+		emitStmtsLine(p, `${valTmp.snippet} = ${argsStr};`);
+		const cellTmp = getTemp(p, cellCType);
+		emitStmtsLine(p, `${cellTmp.snippet} = (${cellCType})msAllocArc(sizeof(${cType}), ${tiArg});`);
+		emitStmtsLine(p, `memcpy(${cellTmp.snippet}, &${valTmp.snippet}, sizeof(${cType}));`);
+		emitStmtsLine(p, `memset(&${valTmp.snippet}, 0, sizeof(${cType}));`);
 		ctx.results.push(cellTmp.snippet);
 		return;
 	}

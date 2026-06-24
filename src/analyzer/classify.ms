@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, hasAsgnFlag, isAwaitable, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, tupleTypeName } from "../checker/types";
+import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, tupleTypeName } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
@@ -182,6 +182,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			// messages are still in flight. Pony parity: actors are never GC'd while
 			// reachable; Malebolgia parity: concurrency primitives bypass GC entirely.
 			if (t.sym !== null && t.sym.symbolKind === SymbolKind.Actor) return noRcInfo();
+			if (isAtomicRef(t)) return makeRcInfo(RcKind.Ref, "", "msAtomicDecref", "msAtomicIncref", "msPtrWasMoved", "", false);
 			return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
 		},
 		TypeKind.GenericInstance => {

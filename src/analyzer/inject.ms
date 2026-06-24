@@ -1093,27 +1093,30 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 
 // ===== MoveExpr Source Classification =====
 
-// Classify RC type of a member expression's field.
-// Falls back to looking up the field type from the object's type when nodeType is null.
-// This covers cases where the checker didn't propagate nodeType to MemberExpr nodes
-// (e.g., assignment LHS, object literal fields), preventing missing RC operations.
-function classifyMemberFieldRc(memberExpr: Node, dctx: DrcContext): RcInfo {
-	if (memberExpr.nodeType !== null) return classifyType(memberExpr.nodeType, dctx.ctx);
-	// Fallback: infer field type from the object's type + field name
+// Recover a member-field's declared Type from the object's struct/interface type.
+// Synthetic field-access nodes (lambda-lifted fields) reach the analyzer with a null
+// nodeType; leaving it null makes the DRC save-temp emit as `double` and breaks msClosureDestroy.
+function recoverMemberFieldType(memberExpr: Node): Type {
 	const md = memberExpr.data as MemberExprData;
 	let objType = md.object.nodeType;
-	if (objType === null) return noRcInfo();
-	// Unwrap Ref → get the struct/interface underneath
+	if (objType === null) return null as unknown as Type;
 	if (objType.kind === TypeKind.Ref && objType.typeReturn !== null) objType = objType.typeReturn;
-	if (objType.typeNames === null || objType.typeChildren === null) return noRcInfo();
-	let fi = 0;
-	while (fi < objType.typeNames.length) {
+	if (objType.typeNames === null || objType.typeChildren === null) return null as unknown as Type;
+	for (let fi = 0; fi < objType.typeNames.length; fi += 1) {
 		if (objType.typeNames[fi] === md.property && fi < objType.typeChildren.length) {
-			return classifyType(objType.typeChildren[fi], dctx.ctx);
+			return objType.typeChildren[fi];
 		}
-		fi += 1;
 	}
-	return noRcInfo();
+	return null as unknown as Type;
+}
+
+// Classify RC type of a member expression's field, recovering the field type from the
+// object when the checker didn't stamp the MemberExpr (assignment LHS, lifted fields).
+function classifyMemberFieldRc(memberExpr: Node, dctx: DrcContext): RcInfo {
+	if (memberExpr.nodeType !== null) return classifyType(memberExpr.nodeType, dctx.ctx);
+	const ft = recoverMemberFieldType(memberExpr);
+	if (ft === null) return noRcInfo();
+	return classifyType(ft, dctx.ctx);
 }
 
 // Classify RC type of an array element
@@ -1982,6 +1985,12 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 
 	// Member assignment: obj.field = expr
 	if (bd.left.kind === NodeKind.MemberExpr) {
+		// Stamp the recovered field type onto synthetic (lambda-lifted) field-access
+		// nodes the checker left untyped, so the DRC save-temp gets a real C type.
+		if (bd.left.nodeType === null) {
+			const recovered = recoverMemberFieldType(bd.left);
+			if (recovered !== null) bd.left.nodeType = recovered;
+		}
 		let rcInfo = classifyMemberFieldRc(bd.left, dctx);
 		// Fallback: if LHS nodeType is null (checker didn't propagate), infer from RHS.
 		// Without this, field assignments like table.current = scope get no RC treatment,
@@ -2171,8 +2180,10 @@ function emitReturnWithIncref(arg: Node, dctx: DrcContext, loc: SourceLocation):
 	const retSym = freshTempSym(dctx.ctx, "ret", arg.nodeType);
 	const tmpDecl = makeVarDecl(retSym.name, arg, DeclKind.Const, loc);
 	tmpDecl.resolvedSym = retSym;
+	const rc = sinkClassify(arg.nodeType, dctx.ctx);
+	const increfFn = rc.copyFn !== "" ? rc.copyFn : "msIncref";
 	const incref = makeExprStmt(
-		makeCall(makeIdent("msIncref", loc), [makeIdentResolved(retSym, loc)], loc), loc);
+		makeCall(makeIdent(increfFn, loc), [makeIdentResolved(retSym, loc)], loc), loc);
 	markReturnedVarsMoved(arg, dctx);
 	const retStmt = makeReturn(makeIdentResolved(retSym, loc), loc);
 	return makeBlock([tmpDecl, incref, retStmt], loc);

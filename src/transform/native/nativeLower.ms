@@ -12,8 +12,8 @@
 //
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
-import { Node, NodeKind, ArrayAccessData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, Type, TypeKind, SymbolKind, createNode } from "../../ast/node";
-import { isNumeric, unwrapRefNullUnion } from "../../checker/types";
+import { Node, NodeKind, ArrayAccessData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Type, TypeKind, SymbolKind, createNode } from "../../ast/node";
+import { isNumeric, unwrapRefNullUnion, isAtomicRef } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -104,6 +104,16 @@ function rewriteExternArrayReturn(node: Node): Node {
 // value array (codegen calloc); box it into a refcounted cell, same as an array literal.
 function rewriteNewExpr(node: Node): Node {
 	const refType = node.nodeType;
+	// new Arc(value): box the argument value into an atomic-rc cell (msAllocArc).
+	// Checked BEFORE the Ref<Array> path so Arc<Array> also takes the atomic box.
+	if (isAtomicRef(refType)) {
+		const d = node.data as NewExprData;
+		if (d.newArguments.length === 1) {
+			const box = makeCall(makeIdent("msBoxArc", node.location), [d.newArguments[0]], node.location);
+			box.nodeType = refType;
+			return box;
+		}
+	}
 	if (refType !== null && refType.kind === TypeKind.Ref && refType.typeReturn !== null
 			&& refType.typeReturn.kind === TypeKind.Array) {
 		node.nodeType = refType.typeReturn;

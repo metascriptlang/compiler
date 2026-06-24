@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, instantiateGenericBody, peelToStruct, tupleTypeName } from "../../checker/types";
+import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
@@ -319,6 +319,7 @@ function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: 
 	}
 	// Unary incref types: decref old, assign, incref new
 	const decrefFn = increfFn === "msIncref" ? "msDecref"
+		: increfFn === "msAtomicIncref" ? "msAtomicDecref"
 		: increfFn === "msClosureCopy" ? "msClosureDestroy"
 		: increfFn === "msClosureIncref" ? "msClosureDecref"
 		: increfFn === "msMapIncref" ? "msMapDecref"
@@ -485,9 +486,9 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 // --- Standard atomic reference hook generator ---
 // isCyclic: true for types that can form reference cycles (reference parity: atomicRefOp)
 // Cyclic types use msDecrefCyclic/msIncrefCyclic (ORC-aware when MSGC_ORC defined)
-function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, buf: NodeBuf, loc: SourceLocation): void {
-	const decrefFn = isCyclic ? "msDecrefCyclic" : "msDecref";
-	const increfFn = isCyclic ? "msIncrefCyclic" : "msIncref";
+function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, atomic: boolean, buf: NodeBuf, loc: SourceLocation): void {
+	const decrefFn = atomic ? "msAtomicDecref" : (isCyclic ? "msDecrefCyclic" : "msDecref");
+	const increfFn = atomic ? "msAtomicIncref" : (isCyclic ? "msIncrefCyclic" : "msIncref");
 	match (hook) {
 		"destroy" => { genCall(decrefFn, hook, xf, yf, buf, loc); },
 		"copy" => { genCopyRef(increfFn, xf, yf, fieldName, buf, loc); },
@@ -503,8 +504,12 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 		},
 		"wasMoved" => { genCall("msPtrWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
-			// Reference parity: pass &field (slot address) so ORC can null it during collection
-			buf.items.push(makeExprStmt(makeCall(makeIdent("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
+			// Arc<T> is acyclic by construction — its atomic rc is the sole owner accountant,
+			// so it must never be traced into the cycle collector (a non-atomic flag mutation
+			// there would race the atomic count). Pass &field for plain Refs only.
+			if (!atomic) {
+				buf.items.push(makeExprStmt(makeCall(makeIdent("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
+			}
 		},
 		_ => {},
 	};
@@ -613,7 +618,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				defaultOp(hook, xf, yf, buf, loc);
 			} else {
 				const cyclic = isCyclicType(fieldType, lctx, visited);
-				refOp(hook, xf, yf, fieldName, cyclic, buf, loc);
+				refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), buf, loc);
 			}
 		},
 		TypeKind.Ptr => {

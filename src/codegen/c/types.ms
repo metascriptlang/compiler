@@ -582,6 +582,31 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	}
 }
 
+// TypeInfo for an Arc<T> heap cell; destroyFn runs the pointee's destructor on the
+// last atomic ref. Weak linkage (like the ref-array cell) so a box site in a lifted
+// module can emit it — ensureTypeInfoDef only defines in the declaring module, else an
+// undefined symbol. Returns the TypeInfo address, or "NULL" when no cleanup is needed.
+export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type | null, cType: string): string {
+	if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) return "NULL";
+	const cellName = cType + "Arc";
+	const tiRef = `&${cellName}TypeInfo`;
+	const key = "arcCell:" + cellName;
+	if (typeCacheHas(g.forwTypeCache, key)) return tiRef;
+	typeCacheSet(g.forwTypeCache, key, cellName);
+	let destroyHook = "";
+	if (pointeeType !== null && hasDestructor(pointeeType)) {
+		destroyHook = mangle(getAttachedOp(pointeeType, AttachedOp.AttachedDestructor));
+		ensureForwardDecl(g, cType);
+		addLine(sec(g, CSection.ForwardDecls), `void ${destroyHook}(${cType}* self);`);
+	}
+	addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${cellName}TypeInfo;`);
+	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.name = "${cellName}";`);
+	if (destroyHook.length > 0) {
+		addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.destroyFn = (msDestroyProc)${destroyHook};`);
+	}
+	return tiRef;
+}
+
 // Emit the TypeInfo for a reference-array heap cell (Ref<Array<T>>): a refcounted
 // cell whose destroyFn frees the boxed value-array's payload when rc hits 0. Weak
 // linkage — the same element type may be boxed in several modules; linker dedups.
