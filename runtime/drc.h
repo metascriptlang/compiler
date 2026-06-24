@@ -155,6 +155,16 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 	return (void*)(h + 1);
 }
 
+/* Arc<T> box: msAllocTyped, but starts at rc = MS_RC_INCREMENT (sole owner).
+ * msAtomicDecRefIsLast frees when fetch_sub sees the old rc == MS_RC_INCREMENT
+ * (Rust Arc convention) — an Arc must NOT start at the rc=0 "sole owner" of the
+ * non-atomic path, or its first decref would underflow and never free. */
+static inline void* msAllocArc(size_t size, const msTypeInfo* type) {
+	void* p = msAllocTyped(size, type);
+	msHeader(p)->rc = MS_RC_INCREMENT;
+	return p;
+}
+
 /* Uninit opt-in: payload stays dirty from the slab free-list (or malloc).
  * ONLY use when the caller guarantees every payload byte is written before
  * the next read. Mirrors Nim nimNewObjUninit. Codegen emits this only for
@@ -208,6 +218,21 @@ static inline bool msDecRefIsLast(void* p) {
 		return true;
 	}
 	h->rc -= MS_RC_INCREMENT;
+	return false;
+}
+
+/* Atomic decref-to-free for Arc<T> (cross-thread shared). The Release on the
+ * fetch_sub plus the Acquire fence before the caller destroys is the load-bearing
+ * ordering (Rust Arc protocol) — it must not be weakened. fetch_sub by
+ * MS_RC_INCREMENT preserves the ORC flag bits; Arc is acyclic so this never routes
+ * through the cycle collector even under --gc=orc. */
+static inline bool msAtomicDecRefIsLast(void* p) {
+	if (p == NULL) return false;
+	int32_t old = atomic_fetch_sub_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_release);
+	if ((old & ~MS_RC_MASK) == MS_RC_INCREMENT) {
+		atomic_thread_fence(memory_order_acquire);
+		return true;
+	}
 	return false;
 }
 

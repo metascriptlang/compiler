@@ -119,6 +119,12 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 
 #endif /* MSOS_BARE */
 
+/* Arc<T> box: manual mode has no RC and never frees, so the rc start value is
+ * irrelevant — delegate to msAllocTyped. */
+static inline void* msAllocArc(size_t size, const msTypeInfo* type) {
+    return msAllocTyped(size, type);
+}
+
 /* ===== RC Operations (all no-ops in both modes) ===== */
 
 static inline void  msIncRef(void* p)            { (void)p; }
@@ -309,6 +315,8 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msPtrWasMoved(p)      do { (p) = (void*)0; } while(0)
 #define msIncrefCyclic(p)     ((void)0)
 #define msDecrefCyclic(p)     ((void)0)
+#define msAtomicIncref(p)     ((void)0)
+#define msAtomicDecref(p)     ((void)0)
 
 #define msClosureDestroy(c)   do { (c).fn = (msClosureFn)0; (c).env = (void*)0; } while(0)
 #define msClosureCopy(c)      ((void)0)

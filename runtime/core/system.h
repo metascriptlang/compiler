@@ -263,6 +263,16 @@ static inline void msStringCopy(msString* dest, msString src) {
 } while(0)
 #define msPtrWasMoved(p)      msWasMoved(p)
 
+/* --- Arc<T> atomic ref lifecycle (cross-thread shared; decref tail == msDecref) --- */
+#define msAtomicIncref(p)     msAtomicIncRef(p)
+#define msAtomicDecref(p)     do { \
+	if ((p) != NULL && msAtomicDecRefIsLast(p)) { \
+		const msTypeInfo* __t = msHeader(p)->type; \
+		if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(p); \
+		msDestroyAndDispose(p); \
+	} \
+} while(0)
+
 /* --- ORC-aware ref lifecycle for cyclic types --- */
 #ifdef MSGC_ORC
 #define msIncrefCyclic(p)     do { if ((p) != NULL) msOrcIncRef(p); } while(0)
