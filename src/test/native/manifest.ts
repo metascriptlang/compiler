@@ -311,6 +311,13 @@ export const CASES: NativeCase[] = [
 		note: "Arc<T> atomic-refcount shared box — the first per-type atomic-rc path in the compiler. 4000 rounds × 4 spawn tasks each take an OWNING reference to one shared Arc<Payload> (return a → atomic incref) and drop the awaited result (atomic decref): concurrent owning rc traffic that a non-atomic refcount corrupts under contention (the reason Rust needs Arc<Mutex<T>>; MS's plain Ref rc is non-atomic, racing the check-then-decrement TOCTOU). createArc tags a Ref with TypeFlag.IsAtomic; classify.ms emits msAtomicIncref/Decref; new Arc(v) lowers to msBoxArc → msAllocArc cell at rc=MS_RC_INCREMENT (Rust convention — msAtomicDecRefIsLast frees when fetch_sub sees old==INC, so the box must NOT start at the rc=0 sole-owner of the non-atomic path). The cell reuses a weak-linkage Arc TypeInfo (ensureArcCellTypeInfo) whose destroyFn is the pointee's destructor — weak so a lifted-closure module can box without the owning-module gating that left PayloadTypeInfo undefined. Flat RSS proves box+pointee free once; total=112000 (4000×4×7) proves the value round-trips. ASAN-clean drc+orc separately (no UAF/double-free under contention); the atomic primitive proven by an 8-thread pthread+TSAN probe. Invisible to test-ms — Bun never runs the atomic C rc.",
 	},
 	{
+		name: "arc-locker-shared-counter",
+		file: "arcLockerSharedCounter.ms",
+		maxRssMb: 30,
+		expectStdout: "arc-locker total=12000",
+		note: "Arc<struct{lock}> shared across spawn — the shipped shared-mutable-state pattern. Arc keeps the heap cell alive race-free (atomic rc); the bare Locker ticket lock serializes the read-modify-write. 3000 rounds × 4 spawn tasks hammer one shared Arc<Shared>; the counter lives in the lock's own slot, mutated ONLY inside withLock. total=12000 (3000×4) proves the ticket lock serializes race-free; flat RSS proves box+lock free once; clean under drc+orc. Replaces the dropped typed inline Mutex<T> (std/core/sync) — a redundant composition: Locker (exclusion) + Arc (cross-thread liveness) + struct (typed data) are orthogonal and compose without a dedicated lock-owns-data primitive, which MS can't make safe anyway (no field privacy / borrow checker to enforce no-unlocked-access). The sizeof-T-monomorphizes fix it was built on stays (general fix with its own regression). Invisible to test-ms — Bun never runs the C ticket lock.",
+	},
+	{
 		name: "macro-node-fields",
 		file: "macroNodeFields.ms",
 		maxRssMb: 30,
