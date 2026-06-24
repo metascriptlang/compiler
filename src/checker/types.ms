@@ -930,6 +930,18 @@ export function createRef(inner: Type | null): Type {
 	return t;
 }
 
+export function createArc(inner: Type | null): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Ref;
+	t.typeReturn = inner;
+	t.typeFlags = (TypeFlag.HasAsgn | TypeFlag.IsAtomic) as int32;
+	return t;
+}
+
+export function isAtomicRef(t: Type | null): boolean {
+	return t !== null && t.kind === TypeKind.Ref && (t.typeFlags & TypeFlag.IsAtomic) !== 0;
+}
+
 export function createPtr(inner: Type | null): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Ptr;
@@ -1622,7 +1634,9 @@ export function substituteType(t: Type | null, paramName: string, concrete: Type
 				}
 				return copy;
 			},
-			TypeKind.Ref => createRef(substituteType(t.typeReturn, paramName, concrete)),
+			TypeKind.Ref => isAtomicRef(t)
+				? createArc(substituteType(t.typeReturn, paramName, concrete))
+				: createRef(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Struct => substituteStruct(t, paramName, concrete),

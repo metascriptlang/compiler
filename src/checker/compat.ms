@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef } from "./types";
 
 
 // ===== Assignability =====
@@ -47,6 +47,11 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			TypeKind.SizedArray => source.typeFlags === target.typeFlags && isAssignable(source.typeReturn, target.typeReturn),
 			TypeKind.Array | TypeKind.Span | TypeKind.Ptr => isAssignable(source.typeReturn, target.typeReturn),
 			TypeKind.Ref => {
+				// Arc<T> and plain Ref<T> share kind=Ref but must not interconvert:
+				// mixing atomic + non-atomic rc ops on one object is UB.
+				if (isAtomicRef(source) !== isAtomicRef(target)) {
+					return false;
+				}
 				// Nominal shortcut: Ref types with same-named inner struct are assignable
 				// (handles cross-module interface identity where Type objects differ but names match)
 				if (source.typeReturn !== null && target.typeReturn !== null
@@ -165,15 +170,18 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 
 	// Ref<T> ↔ Ptr<T>: both are pointer types, interchangeable when inner types match.
 	// Must check BEFORE Ref→T auto-deref to prevent Ref being unwrapped then compared against Ptr.
+	// Arc<T> is excluded — it is not pointer-interchangeable (atomic rc must stay typed).
 	if ((source.kind === TypeKind.Ref && target.kind === TypeKind.Ptr)
 		|| (source.kind === TypeKind.Ptr && target.kind === TypeKind.Ref)) {
-		if (source.typeReturn !== null && target.typeReturn !== null) {
+		if (!isAtomicRef(source) && !isAtomicRef(target)
+			&& source.typeReturn !== null && target.typeReturn !== null) {
 			return isAssignable(source.typeReturn, target.typeReturn);
 		}
 	}
 	// Ref<T> → T auto-deref: self-referential fields are promoted to Ref<T>,
-	// but passing them to functions expecting T should work transparently
-	if (source.kind === TypeKind.Ref && source.typeReturn !== null) {
+	// but passing them to functions expecting T should work transparently.
+	// Arc<T> does NOT auto-unwrap — sharing the pointee unguarded defeats the atomic rc.
+	if (source.kind === TypeKind.Ref && !isAtomicRef(source) && source.typeReturn !== null) {
 		return isAssignable(source.typeReturn, target);
 	}
 

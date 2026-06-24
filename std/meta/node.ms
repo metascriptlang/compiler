@@ -56,6 +56,7 @@ export enum TypeFlag {
 	AwaitableScopeBound = 128,   // bit 7 — PARALOCK R3/E4 (cannot escape creating scope)
 	HasInheritedFields = 256,    // bit 8 — class has flattened parent fields (suppresses DRC parent-call)
 	Substituting = 1048576,      // bit 20 (high to avoid SizedArray size collision)
+	IsAtomic = 2097152,          // bit 21 (high, like Substituting — Arc<T> atomic-rc marker on a Ref; never on SizedArray size / Function minArity)
 }
 
 // ===== Attached Lifecycle Ops =====
