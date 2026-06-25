@@ -22,7 +22,7 @@ import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
-import { findExtension, resolveOperatorExt, ExtensionMethod } from "../../checker/context";
+import { findExtension, resolveOperatorExt, getExtFnType, ExtensionMethod } from "../../checker/context";
 
 // ===== Type Resolution =====
 
@@ -109,7 +109,10 @@ function makeExtOpCall(ext: ExtensionMethod, opName: string, left: Node, right: 
 	}
 	const callIdent = makeIdent(callName, loc);
 	callIdent.resolvedSym = ext.sym;
-	return makeCall(callIdent, [left, right], loc);
+	const call = makeCall(callIdent, [left, right], loc);
+	const fnType = getExtFnType(ext);
+	if (fnType !== null && fnType.typeReturn !== null) call.nodeType = fnType.typeReturn;
+	return call;
 }
 
 // Resolve a base operator to a CallExpr.

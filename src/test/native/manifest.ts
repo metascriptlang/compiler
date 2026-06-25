@@ -345,4 +345,11 @@ export const CASES: NativeCase[] = [
 		expectStdout: "nrvo-positions acc=79",
 		note: "Companion to nrvo-overload: locks NRVO for struct-returning calls (overloaded operator AND plain function) in object-literal field, member-access on a call result, and deeply nested call args f(g(h())). Closure-call and method-call struct returns are exercised by the broader suite. Proves NRVO is decided per-call in emitCallExpr/genClosureCall regardless of containing position.",
 	},
+	{
+		name: "op-chain",
+		file: "opChain.ms",
+		maxRssMb: 30,
+		expectStdout: "op-chain acc=105",
+		note: "Locks NESTED/CHAINED overloaded operators (a*b+c, a+b+c, c+a*b, a*b*c+a, -(a+b), v+=a*b). operatorLower.makeExtOpCall built the replacement CallExpr with no nodeType; the bottom-up walker then made a parent operator's resolveType return null → it skipped lowering → raw C operator on structs → clang 'invalid operands'. Fix: the lowered call carries its operator return type. Separate from NRVO (this is transform/operatorLower, not codegen out-param). Reference (Nim) resolves operators in sem and types the call at once, so it can't drop the type.",
+	},
 ];
