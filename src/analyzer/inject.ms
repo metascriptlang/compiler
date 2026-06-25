@@ -1093,30 +1093,16 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 
 // ===== MoveExpr Source Classification =====
 
-// Recover a member-field's declared Type from the object's struct/interface type.
-// Synthetic field-access nodes (lambda-lifted fields) reach the analyzer with a null
-// nodeType; leaving it null makes the DRC save-temp emit as `double` and breaks msClosureDestroy.
-function recoverMemberFieldType(memberExpr: Node): Type {
-	const md = memberExpr.data as MemberExprData;
-	let objType = md.object.nodeType;
-	if (objType === null) return null as unknown as Type;
-	if (objType.kind === TypeKind.Ref && objType.typeReturn !== null) objType = objType.typeReturn;
-	if (objType.typeNames === null || objType.typeChildren === null) return null as unknown as Type;
-	for (let fi = 0; fi < objType.typeNames.length; fi += 1) {
-		if (objType.typeNames[fi] === md.property && fi < objType.typeChildren.length) {
-			return objType.typeChildren[fi];
-		}
-	}
-	return null as unknown as Type;
-}
-
-// Classify RC type of a member expression's field, recovering the field type from the
-// object when the checker didn't stamp the MemberExpr (assignment LHS, lifted fields).
+// Classify RC type of a member expression's field. Every member access in an RC position
+// (move source, assignment LHS) is typed by the checker for value reads, and by lambdaLifting
+// (envFieldType) for lifted env access. Reaching here untyped is an upstream invariant
+// violation — fail loud instead of re-deriving the type downstream and masking the transform
+// that dropped it (which would silently emit the save-temp as C `double`).
 function classifyMemberFieldRc(memberExpr: Node, dctx: DrcContext): RcInfo {
 	if (memberExpr.nodeType !== null) return classifyType(memberExpr.nodeType, dctx.ctx);
-	const ft = recoverMemberFieldType(memberExpr);
-	if (ft === null) return noRcInfo();
-	return classifyType(ft, dctx.ctx);
+	const md = memberExpr.data as MemberExprData;
+	console.log("DRC INTERNAL ERROR: RC member access '." + md.property + "' reached DRC without a type at " + memberExpr.location.line + ":" + memberExpr.location.column + " — a transform built it without setting nodeType");
+	return noRcInfo();
 }
 
 // Classify RC type of an array element
@@ -1985,12 +1971,6 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 
 	// Member assignment: obj.field = expr
 	if (bd.left.kind === NodeKind.MemberExpr) {
-		// Stamp the recovered field type onto synthetic (lambda-lifted) field-access
-		// nodes the checker left untyped, so the DRC save-temp gets a real C type.
-		if (bd.left.nodeType === null) {
-			const recovered = recoverMemberFieldType(bd.left);
-			if (recovered !== null) bd.left.nodeType = recovered;
-		}
 		let rcInfo = classifyMemberFieldRc(bd.left, dctx);
 		// Fallback: if LHS nodeType is null (checker didn't propagate), infer from RHS.
 		// Without this, field assignments like table.current = scope get no RC treatment,
@@ -2341,7 +2321,10 @@ function clearPendingForReturnedVars(node: Node, dctx: DrcContext): void {
 function processFuncDecl(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as FunctionDeclData;
 	if (d.fnBody === null) return stmt;
-	// Reference parity: pass ownerSym directly (Reference: owner: PSym). No lookupSymbol.
+	// Generic template: its T-unbound body never reaches codegen (monomorphization emits the
+	// concrete instances, with the `gen:` flag stripped). RC-injecting the template is meaningless
+	// — its members are untyped — so skip it; only real instances get DRC.
+	if (d.fnFlags.indexOf("gen:") >= 0) return stmt;
 	d.fnBody = processFuncBodyWithParams(d.fnBody, stmt.resolvedSym, d.fnName, d.params, dctx, loc, stmt.nodeType);
 	return stmt;
 }
