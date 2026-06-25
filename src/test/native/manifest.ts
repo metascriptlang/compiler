@@ -352,4 +352,11 @@ export const CASES: NativeCase[] = [
 		expectStdout: "op-chain acc=105",
 		note: "Locks NESTED/CHAINED overloaded operators (a*b+c, a+b+c, c+a*b, a*b*c+a, -(a+b), v+=a*b). operatorLower.makeExtOpCall built the replacement CallExpr with no nodeType; the bottom-up walker then made a parent operator's resolveType return null → it skipped lowering → raw C operator on structs → clang 'invalid operands'. Fix: the lowered call carries its operator return type. Separate from NRVO (this is transform/operatorLower, not codegen out-param). Reference (Nim) resolves operators in sem and types the call at once, so it can't drop the type.",
 	},
+	{
+		name: "cond-nrvo",
+		file: "condNrvo.ms",
+		maxRssMb: 30,
+		expectStdout: "cond-nrvo acc=38",
+		note: "Locks conditional evaluation of `?:` branches that compile to statements. A struct/object/new in a ternary branch is statement-emitting (NRVO f(&tmp);); left inline before the C ?:, BOTH branches ran unconditionally → over-execution, or a crash when the untaken branch was only valid under the condition. conditionalExprLower now lowers hazardous ternaries to temp+if/else (matchLower / Reference genIf parity), keeping inline ?: for pure branches. Covers direct var-init, guard pattern (untaken branch is empty[0] → would crash, caught by exit code), nested ?: in a branch, and call-argument. acc=38 only if exactly the taken branches ran (runs==3). Also covers ?? and ?. since they are ternaries by this pass.",
+	},
 ];
