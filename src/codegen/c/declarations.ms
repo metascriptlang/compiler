@@ -52,6 +52,15 @@ function isDeclAlive(g: CGen, node: Node): boolean {
 	// Prefixes: $lifted_, $Env_ (lambda lifting), =copy/=dup (operators),
 	//           __ (builtinLower: __jsonParse_*, __jsonStringify_*)
 	// Suffixes: _destroy, _trace, _copy, _sink, _wasMoved, _dup (destructorLifting)
+	// Lambda-lifted closures ($lifted_/$fn_) ARE traceable by name: a live parent's body
+	// references the closure pair `{ fn: $lifted_x }` as an Identifier, so reachability marks
+	// live ones via the parent's walkBody. Gate ONLY these on the alive set so orphaned closures
+	// of un-instantiated generic templates (T=unknown env/body that won't compile) are dropped.
+	// Other $-prefixed functions ($Env_*Destroy etc. DRC hooks) are referenced by DRC-injected
+	// code the walker can't trace — keep them unconditionally alive.
+	const isLiftedClosure = (name.length >= 8 && name.slice(0, 8) === "$lifted_")
+		|| (name.length >= 4 && name.slice(0, 4) === "$fn_");
+	if (isLiftedClosure) return aliveSetHas(g.aliveSet, g.modulePath, name);
 	if (name.length > 0 && name.slice(0, 1) === "$") return true;
 	if (name.length > 0 && name.slice(0, 1) === "=") return true;
 	if (name.length > 1 && name.slice(0, 2) === "__") return true;
