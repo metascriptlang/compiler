@@ -452,6 +452,20 @@ function envHasField(envStructType: Type, fieldName: string): boolean {
 	return false;
 }
 
+// Declared type of an env struct field by name. A lifted member access derives its
+// type from the env field (the type authority), not from the captured identifier —
+// which may itself be untyped (e.g. destructuring/async-synthesized captures). Leaving
+// the lifted member untyped makes the DRC save-temp fall back to C `double`.
+function envFieldType(envStructType: Type, fieldName: string): Type {
+	if (envStructType === null || envStructType.typeNames === null || envStructType.typeChildren === null) return null as unknown as Type;
+	for (let i = 0; i < envStructType.typeNames.length; i += 1) {
+		if (envStructType.typeNames[i] === fieldName && i < envStructType.typeChildren.length) {
+			return envStructType.typeChildren[i];
+		}
+	}
+	return null as unknown as Type;
+}
+
 // Build an AST that walks one step up the env chain to access a field.
 // Emits the C equivalent of:
 //   (*((ParentEnvType*)((CurEnvType*)_envP)->$up)).fieldName
@@ -482,13 +496,13 @@ function chainWalkAccess(
 	const parentDeref = makeHiddenDeref(parentCast, loc);
 	parentDeref.nodeType = parentEnvType;
 	let result = makeMember(parentDeref, fieldName, loc);
-	if (nodeOriginalType !== null) result.nodeType = nodeOriginalType;
+	result.nodeType = nodeOriginalType !== null ? nodeOriginalType : envFieldType(parentEnvType, fieldName);
 	// If the parent env stores this field as a ccgIntroducedPtr (Array/Union/
 	// Span as `Ptr<T>`), one extra deref is needed to get back T — mirroring
 	// `rewriteNode`'s handling of the same case for current-env access.
 	if (isEnvPtrField(parentEnvType, fieldName)) {
 		result = makeHiddenDeref(result, loc);
-		if (nodeOriginalType !== null) result.nodeType = nodeOriginalType;
+		result.nodeType = nodeOriginalType !== null ? nodeOriginalType : envFieldType(parentEnvType, fieldName);
 	}
 	return result;
 }
@@ -524,11 +538,11 @@ function rewriteNode(
 			cast.nodeType = ptrType;
 			const deref = makeHiddenDeref(cast, node.location);
 			let result = makeMember(deref, d.name, node.location);
-			if (node.nodeType !== null) result.nodeType = node.nodeType;
+			result.nodeType = node.nodeType !== null ? node.nodeType : envFieldType(envStructType, d.name);
 			// Ptr field (pointer-promoted param capture): extra deref to get T from T*
 			if (isEnvPtrField(envStructType, d.name)) {
 				result = makeHiddenDeref(result, node.location);
-				if (node.nodeType !== null) result.nodeType = node.nodeType;
+				result.nodeType = node.nodeType !== null ? node.nodeType : envFieldType(envStructType, d.name);
 			}
 			return result;
 		}
@@ -556,11 +570,11 @@ function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 			const envIdent = makeIdent(rewrite.envVarName, node.location);
 			envIdent.nodeType = createRef(rewrite.envStructType);
 			let result = makeMember(envIdent, d.name, node.location);
-			if (node.nodeType !== null) result.nodeType = node.nodeType;
+			result.nodeType = node.nodeType !== null ? node.nodeType : envFieldType(rewrite.envStructType, d.name);
 			// Ptr field (ccgIntroducedPtr capture): extra deref to get T from T*
 			if (isEnvPtrField(rewrite.envStructType, d.name)) {
 				result = makeHiddenDeref(result, node.location);
-				if (node.nodeType !== null) result.nodeType = node.nodeType;
+				result.nodeType = node.nodeType !== null ? node.nodeType : envFieldType(rewrite.envStructType, d.name);
 			}
 			return result;
 		}
@@ -1140,6 +1154,10 @@ function walkLift(node: Node, state: LiftState): void {
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
+			// Generic template: never lifted. Monomorphization (instantiate.ms strips the `gen:`
+			// flag) emits concrete instances, which ARE lifted. Lifting the T-unbound template only
+			// manufactures orphan closures (void* env, unlowered methods) that codegen later drops.
+			if (d.fnFlags.indexOf("gen:") >= 0) return;
 			const savedName = state.currentFnName;
 			if (d.fnName !== "") {
 				state.currentFnName = d.fnName;
