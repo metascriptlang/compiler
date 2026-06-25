@@ -331,4 +331,18 @@ export const CASES: NativeCase[] = [
 		expectStdout: "jsxdom-native PASS",
 		note: "End-to-end proof of the jsxDom reference macro (std/meta/jsxDom.ms): JSX → DomNode tree → render string. A macro rewrites <div id=app><h1>Hi</h1><p>x</p></div> into el()/txt()/attr() runtime calls at compile time; nested <h1>/<p> recurse via RE-EXPANSION (the macro emits jsxDom(child), the expander re-walks it — macro helper fns can't navigate/build Node values, only the macro body's return position is special-typed, so recursion can't be a helper). The marker prints only if render() is byte-exact, so this guards the whole JSX→macro→codegen path natively. Proves JSX is usable end-to-end, not just parseable.",
 	},
+	{
+		name: "nrvo-overload",
+		file: "nrvoOverload.ms",
+		maxRssMb: 30,
+		expectStdout: "nrvo-overload acc=102",
+		note: "Locks NRVO for OVERLOADED struct-returning operators across every value position (return/arg/array/ternary). The TAG_CALL_OVERLOAD codegen path (emitCallExpr) emitted f(args) by-value instead of f(&tmp, args), so an overloaded operator returning a struct miscompiled (C 'too few arguments') everywhere except variable-decl (which pre-handles NRVO itself). Marker proves correct VALUES at runtime — a regression re-breaks the build or the math. Reference (Nim) has no such bug: overloads resolve in sem → one genCall path → isInvalidReturnType handled uniformly.",
+	},
+	{
+		name: "nrvo-positions",
+		file: "nrvoPositions.ms",
+		maxRssMb: 30,
+		expectStdout: "nrvo-positions acc=79",
+		note: "Companion to nrvo-overload: locks NRVO for struct-returning calls (overloaded operator AND plain function) in object-literal field, member-access on a call result, and deeply nested call args f(g(h())). Closure-call and method-call struct returns are exercised by the broader suite. Proves NRVO is decided per-call in emitCallExpr/genClosureCall regardless of containing position.",
+	},
 ];

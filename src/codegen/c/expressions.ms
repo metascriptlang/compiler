@@ -2030,6 +2030,18 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 	ctx.results.push(`(${envExpr} ? ${callWithEnv} : ${callNoEnv})`);
 }
 
+function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, calleeName: string, argsStr: string, retType: Type | null, funcType: Type | null): void {
+	if (retType !== null && isNrvoReturnType(retType, funcType)) {
+		const tmp = getTemp(p, getTypeDesc(g, retType));
+		let nrvoArgs = "&" + tmp.snippet;
+		if (argsStr !== "") nrvoArgs = `${nrvoArgs}, ${argsStr}`;
+		emitStmtsLine(p, `${calleeName}(${nrvoArgs});`);
+		ctx.results.push(tmp.snippet);
+		return;
+	}
+	ctx.results.push(`${calleeName}(${argsStr})`);
+}
+
 // ===== Emit CallExpr =====
 
 function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): void {
@@ -2112,7 +2124,8 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		const ovCalleeName = mangledFunctionName(sym, sym.name, ovIdx);
 		// On-demand cross-module prototype (reference parity: genProcPrototype)
 		ensureCrossModuleProto(g, ovCalleeName, ovType, sym);
-		ctx.results.push(`${ovCalleeName}(${argsStr})`);
+		const ovRet = (ovType !== null && ovType.kind === TypeKind.Function) ? ovType.typeReturn : null;
+		emitNrvoOrValueCall(g, p, ctx, ovCalleeName, argsStr, ovRet, ovType);
 		return;
 	}
 
@@ -2381,23 +2394,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		}
 	}
 
-	const calleeStr = callee;
-	// NRVO: call returns void, result via out-param
-	const nrvoRet = getCalleeReturnType(node);
-	const nrvoFuncType2 = getCalleeFuncType(node);
-	const nrvoType = (nrvoRet !== null && isNrvoReturnType(nrvoRet, nrvoFuncType2)) ? nrvoRet : null;
-	if (nrvoType !== null) {
-		const cType = getTypeDesc(g, nrvoType);
-		const tmp = getTemp(p, cType);
-		let nrvoArgs = "&" + tmp.snippet;
-		if (argsStr !== "") nrvoArgs = `${nrvoArgs}, ${argsStr}`;
-		emitStmtsLine(p, `${calleeStr}(${nrvoArgs});`);
-		ctx.results.push(tmp.snippet);
-	} else if (argsStr === "") {
-		ctx.results.push(calleeStr + "()");
-	} else {
-		ctx.results.push(`${calleeStr}(${argsStr})`);
-	}
+	emitNrvoOrValueCall(g, p, ctx, callee, argsStr, getCalleeReturnType(node), getCalleeFuncType(node));
 }
 // ===== genExprAssign — evaluate expression and assign to dest =====
 // For statement-level: `dest = expr;`
