@@ -72,7 +72,7 @@ export function msStringCompare(a: string, b: string): int32 {
 	const bb = b.asBytes();
 	let i = 0;
 	while (i < ab.length && i < bb.length) {
-		if (ab[i] !== bb[i]) return ab[i] - bb[i];
+		if (ab[i] !== bb[i]) return (ab[i] as int32) - (bb[i] as int32);
 		i = i + 1;
 	}
 	return ab.length - bb.length;

@@ -1,19 +1,19 @@
-// MetaScript Array Prelude — JavaScript Backend
-// Array<T> is a native JS type — methods provided by the runtime.
+// MetaScript Array Prelude — JavaScript Backend.
+// Array methods bind to native JS dispatch as element-typed UFCS extensions on
+// T[]. The `extern class Array` method form does NOT resolve for arrays (array
+// types carry an empty typeName, so the class-method path is never taken); only
+// `this arr: T[]` extensions reach the checker. Keep this UFCS shape.
 
-extern class Array<T> {
-	length: number;
-	extern push(value: T): void;
-	extern pop(): T;
-	extern shift(): T;
-	extern at(idx: number): T;
-	extern indexOf(value: T): number;
-	extern includes(value: T): boolean;
-	extern slice(start: number, end: number): T[];
-	extern concat(other: T[]): T[];
-	extern reverse(): void;
-	extern sort(): void;
-	extern fill(value: T): void;
-	extern join(sep: string): string;
-	extern splice(start: number, deleteCount: number): void;
-}
+export extern function push<T>(this arr: T[], value: T): void from "#.push(#)";
+export extern function pop<T>(this arr: T[]): T from "#.pop()";
+export extern function shift<T>(this arr: T[]): T from "#.shift()";
+export extern function at<T>(this arr: T[], idx: number): T from "#.at(#)";
+export extern function indexOf<T>(this arr: T[], value: T): number from "#.indexOf(#)";
+export extern function includes<T>(this arr: T[], value: T): boolean from "#.includes(#)";
+export extern function slice<T>(this arr: T[], start: number, end: number): T[] from "#.slice(#, #)";
+export extern function concat<T>(this arr: T[], other: T[]): T[] from "#.concat(#)";
+export extern function reverse<T>(this arr: T[]): void from "#.reverse()";
+export extern function sort<T>(this arr: T[]): void from "#.sort()";
+export extern function fill<T>(this arr: T[], value: T): void from "#.fill(#)";
+export extern function join<T>(this arr: T[], sep: string): string from "#.join(#)";
+export extern function splice<T>(this arr: T[], start: number, deleteCount: number): void from "#.splice(#, #)";
