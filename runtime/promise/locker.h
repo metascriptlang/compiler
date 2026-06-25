@@ -48,22 +48,72 @@
   #define msCpuRelax() ((void)0)
 #endif
 
+/* ===== Address-keyed park (Tier 1: adaptive spin→park) ===== */
+#if defined(__APPLE__)
+  #define MS_ULOCK_CMP_WAIT 1u
+  #define MS_ULOCK_WAKE_ALL 0x00000100u
+  extern int __ulock_wait(uint32_t op, void* addr, uint64_t val, uint32_t timeout_us);
+  extern int __ulock_wake(uint32_t op, void* addr, uint64_t wake);
+  static inline void msFutexWait(int* addr, int expected) {
+    __ulock_wait(MS_ULOCK_CMP_WAIT, (void*)addr, (uint32_t)expected, 0);
+  }
+  static inline void msFutexWakeAll(int* addr) {
+    __ulock_wake(MS_ULOCK_CMP_WAIT | MS_ULOCK_WAKE_ALL, (void*)addr, 0);
+  }
+#elif defined(__linux__)
+  #include <limits.h>
+  #include <unistd.h>
+  #include <sys/syscall.h>
+  #include <linux/futex.h>
+  static inline void msFutexWait(int* addr, int expected) {
+    syscall(SYS_futex, addr, FUTEX_WAIT_PRIVATE, expected, (void*)0, (void*)0, 0);
+  }
+  static inline void msFutexWakeAll(int* addr) {
+    syscall(SYS_futex, addr, FUTEX_WAKE_PRIVATE, INT_MAX, (void*)0, (void*)0, 0);
+  }
+#elif defined(_WIN32)
+  #define MS_INFINITE 0xFFFFFFFFul
+  __declspec(dllimport) int  __stdcall WaitOnAddress(volatile void* addr, void* cmp, size_t size, unsigned long ms);
+  __declspec(dllimport) void __stdcall WakeByAddressAll(void* addr);
+  static inline void msFutexWait(int* addr, int expected) {
+    int cmp = expected;
+    WaitOnAddress((volatile void*)addr, &cmp, sizeof(int), MS_INFINITE);
+  }
+  static inline void msFutexWakeAll(int* addr) {
+    WakeByAddressAll((void*)addr);
+  }
+#else
+  static inline void msFutexWait(int* addr, int expected) { (void)addr; (void)expected; msCpuRelax(); }
+  static inline void msFutexWakeAll(int* addr) { (void)addr; }
+#endif
+
 #include "runtime/promise/lockerLayout.h"
+
+#ifndef MS_LOCK_SPIN_BUDGET
+#define MS_LOCK_SPIN_BUDGET 40
+#endif
 
 static inline void msTicketLockAcquire(msTicketLock* L) {
 	int myTicket = msAtomicFetchAdd(&L->nextTicket, 1);
+	int spins = 0;
 	while (1) {
 		int current = msAtomicLoad(&L->nowServing);
-		if (current == myTicket) break;
-		/* Proportional backoff (Malebolgia pattern) */
-		int delay = 30 * (myTicket - current);
-		while (delay > 0) { msCpuRelax(); delay--; }
+		if (current == myTicket) return;
+		if (spins < MS_LOCK_SPIN_BUDGET) {
+			int delay = 30;
+			while (delay > 0) { msCpuRelax(); delay--; }
+			spins++;
+		} else {
+			msFutexWait(&L->nowServing, current);
+		}
 	}
 }
 
 static inline void msTicketLockRelease(msTicketLock* L) {
 	int current = msAtomicLoad(&L->nowServing);
 	msAtomicStore(&L->nowServing, current + 1);
+	if (msAtomicLoad(&L->nextTicket) != msAtomicLoad(&L->nowServing))
+		msFutexWakeAll(&L->nowServing);
 }
 
 /* ===== Locker<T> — value + lock (msLocker layout in lockerLayout.h) ===== */
