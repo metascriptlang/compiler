@@ -1,12 +1,13 @@
 # Raiser VM — Self-Hosted Bytecode Backend
 
-Statically-typed bytecode VM for MetaScript. **Three product roles**, in priority order:
+Statically-typed bytecode VM for MetaScript. **Four product roles**, in priority order:
 
 1. **Comptime engine** — executes `@comptime` blocks and macros during compilation (working today)
 2. **IDE eval-loop backend** — long-running runtime for inline-eval / hot-redefine / watch-style IDE experience (planned)
 3. **Embeddable scripting / REPL** — small-footprint runtime for sandboxed eval (small)
+4. **Game-logic scripting runtime** — long-lived, OTA-updatable runtime for turn-based / event-driven game logic on the mobile client, where shipping native code is not an option (planned). The C backend stays the training/server path; Raiser is the client-side scripting layer. This is the Lua / AngelScript niche — gameplay *logic*, not the render loop.
 
-Explicit non-goals: JIT compiler, general-purpose VM competing with browser engines, AAA game runtime, large stdlib.
+Explicit non-goals: JIT compiler, general-purpose VM competing with browser engines, the **60fps render loop** of an engine (that needs JIT — role #4 is the *scripting* layer above it), large stdlib.
 
 For shipping native binaries use the **C backend**. For browser/edge use the **JS backend**. Raiser only fills the iteration-loop / sandbox / comptime niche those two cannot cover.
 
@@ -26,6 +27,43 @@ Performance bands (typical, vs C native, integer-heavy):
 | Static-typed JIT | ~1.5–2× of C |
 
 The static-type path closes most of the gap to JIT without the engineering cost. Raiser targets the third band.
+
+---
+
+## Memory Model
+
+Two regimes, picked per role — not one allocator:
+
+| Roles | Regime | Reclamation |
+|---|---|---|
+| Comptime (1), sandbox (3) | **Arena heap-recycle** | bulk reset at each eval boundary; no per-value RC — lifetime is bounded by the compilation/eval, the same reasoning any compile-time VM uses (see below) |
+| IDE eval-loop (2), game-logic runtime (4) | **ORC** (ARC + cycle collector) | per-object refcount, deterministic incremental free; Bacon trial-deletion for the rare cycle |
+
+### Why ORC for the long-lived roles (not tracing GC, not arena)
+
+- **Arena fails for long-lived roles** — no bounded scope, references held across evals/ticks. A monotonic arena grows unboundedly; a per-tick reset corrupts persistent state.
+- **Tracing GC breaks parity** — the C backend uses deterministic destruction (`--gc=drc` / `--gc=orc`). A tracing-GC Raiser would fire `defer`/destructors at *different times* → same source, divergent behaviour on C vs Raiser. ORC keeps the **same destruction semantics as C** — the point of "one source, every target".
+- **ORC is the proven game-scripting model** — AngelScript, Squirrel, GDScript (and Python) all use RC + cycle collector. Deterministic + incremental → no stop-the-world frame spikes (the Lua/Unity GC-pause pain).
+- **Entity-as-id (engine `D2`) keeps the owning graph mostly acyclic** → the cycle collector rarely fires; plain ARC carries most of the load.
+
+### Feasibility (verified)
+
+ORC is **simpler on Raiser than on C**, because VM objects are *self-describing*:
+
+- C needs a static `msTypeInfo` per type (`runtime/types.h`) plus generated `_trace` / `_destroy` procs (`destructorLifting`). Raiser objects carry `fields: RaiserObjectField[]` at runtime → **one generic trace** (walk the field list, visit Array/Object handles) and **one generic destroy** (decref each ref field) cover every type. No per-type RTTI, no `destructorLifting`.
+- The DRC *analysis* (`analyzeProgram`, `src/analyzer/index.ms`) is a target-agnostic `Node → Node` pass already — Raiser can run it to place incref/decref at the **same program points as C** (true parity), or use VM-intrinsic RC (AngelScript-style) for a simpler near-parity version.
+- The cycle collector is Bacon trial-deletion (~360 LOC reference in `runtime/drc.c`) — reimplemented against the VM heap using the generic trace; rc + color bits live in the heap-entry header.
+
+No fundamental blocker found.
+
+### Work outline (planned)
+
+1. `rc` + color/flags on `RaiserObjectData` / `RaiserArrayData` (today: none).
+2. Free-list / slot recycle on the heaps (today: append-only `push`).
+3. VM `incref` / `decref(handle)`; on `decref → 0`, generic destroy (walk fields, decref refs, recycle slot).
+4. ARC placement: run the Phase-4 analyzer for the Raiser path (parity) **or** VM-intrinsic RC on ref store / overwrite / scope-pop.
+5. Bacon trial-deletion cycle collector over the VM heap (generic trace).
+6. `gcMode` toggle on `RaiserContext`.
 
 ---
 
@@ -134,10 +172,10 @@ Open questions deferred until Phase 1 ships:
 | Feature | Why skipped |
 |---|---|
 | JIT (x64/aarch64 codegen) | 18–30 month investment; static types close most of the perf gap without it |
-| Precise generational GC | Comptime VM lifetime is short; IDE state lives across edits via different model |
+| Tracing GC | Diverges from the C backend's deterministic destruction (`defer`/destructors fire at different times) → breaks multi-target parity. Long-lived roles (2, 4) use **ORC** instead — see Memory Model |
 | Threading runtime, sockets, regex, file I/O | Use C/JS backends — Raiser is not a general runtime |
 | Async/await event loop | Synchronous eval is sufficient for comptime + IDE eval-form |
-| 60fps frame-budget gameplay | Wrong target — that needs JIT |
+| 60fps render loop | Wrong target — needs JIT. Role #4 is the game-*logic* scripting layer (Lua niche), not the render loop |
 | Bytecode binary (`.rsr` files) | Defer until opcode numbering stabilizes after Phase 1–3 |
 
 ---
@@ -150,7 +188,7 @@ Source.ms → [1 Parse] → [2 Check] → [3 Transform] → src/codegen/raiser/ 
                                                        AST→bytecode                       executes bytecode
 ```
 
-Skips Phase 4 (DRC analyzer) and Phase 5 (C/JS codegen). The VM has its own memory model — heap-recycle between comptime evaluations, no per-value RC. AST→bytecode lives in `src/codegen/raiser/` and imports types from this directory; this directory knows nothing about AST nodes.
+Skips Phase 5 (C/JS codegen). Phase 4 (DRC analyzer) is **bypassed today**; the long-lived runtime roles (2, 4) will opt in for ORC parity (see Memory Model). Memory is two-regime: arena heap-recycle for comptime, ORC for the runtime roles. AST→bytecode lives in `src/codegen/raiser/` and imports types from this directory; this directory knows nothing about AST nodes.
 
 ---
 
@@ -277,3 +315,5 @@ rm -rf out && bun run run-ms run src/raiser/spike/bench.ms
 | Phase 3 (typed ops I32/F32) | PLANNED |
 | Phase 4 (threaded dispatch) | PLANNED |
 | Light Table IDE backend | PLANNED — depends on Phase 1 |
+| ORC memory (roles 2, 4) | PLANNED — feasibility verified (generic trace via self-describing objects); no blocker |
+| Game-logic scripting runtime (role 4) | PLANNED — needs ORC + per-session lifecycle |
