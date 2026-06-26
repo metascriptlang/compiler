@@ -334,11 +334,15 @@ export function createSpawnHandle(innerType: Type | null): Type {
 
 // Iterator<T> — return type of function* generators. Wraps yield type T.
 // At runtime: { next: () => { value: T, done: boolean } }
+export function createIteratorResult(yieldType: Type): Type {
+	const genericBase = createStruct("IteratorResult", ["value", "done"], [createGenericParam("T"), createPrimitive(TypeKind.Boolean)], false);
+	const gi = createGenericInstance(genericBase, [yieldType]);
+	instantiateGenericBody(gi, "T");
+	return gi;
+}
+
 export function createIterator(yieldType: Type): Type {
-	// Build IteratorResult<T> struct: { value: T, done: boolean }
-	const resultType = createStruct("IteratorResult", ["value", "done"], [yieldType, createPrimitive(TypeKind.Boolean)], false);
-	// Build Iterator<T> struct: { next: () => IteratorResult<T> }
-	const nextFnType = createFunction([], [], resultType);
+	const nextFnType = createFunction([], [], createIteratorResult(yieldType));
 	const iter = createStruct("Iterator", ["next"], [nextFnType], false);
 	return iter;
 }

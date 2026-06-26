@@ -27,7 +27,7 @@ import {
 	ConditionalExprData, TryCatchStmtData, YieldExprData,
 	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type, TypeKind,
 } from "../../ast/node";
-import { createStruct, isIterator, getIteratorYieldType, getIteratorNextFnType, createPrimitive, hasGenericParams } from "../../checker/types";
+import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
 import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
 import {
 	makeIdent, makeIdentResolved, makeTypedIdent, makeNull, makeNumber, makeBool,
@@ -111,7 +111,7 @@ function buildIterResultType(returnNodeType: Type | null): Type | null {
 	if (returnNodeType === null || !isIterator(returnNodeType)) return null;
 	const yieldType = getIteratorYieldType(returnNodeType);
 	if (yieldType === null) return null;
-	return createStruct("IteratorResult", ["value", "done"], [yieldType, createPrimitive(TypeKind.Boolean)], false);
+	return createIteratorResult(yieldType);
 }
 
 function makeIterResult(value: Node, done: boolean, loc: SourceLocation, resultType: Type | null): Node {
