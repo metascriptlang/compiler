@@ -208,6 +208,12 @@ static bool gCompletionQueueInited = false;
  * Called from worker threads. Dispatcher drains the queue and fires callbacks. */
 void msCompletionQueuePush(void* fut, bool isFail, void* error) {
     if (!gCompletionQueueInited) return;  /* guard: dispatcher not yet initialized */
+    /* Queue owns a ref while the completion message is in flight: the future can
+     * finish (worker sets finished) and be freed by its owner before the drain pops
+     * this message, leaving a stale replyFuture → UAF in msFutureFireCallbacks.
+     * Non-atomic incref is safe — the MPSC push/pop barrier orders this worker incref
+     * before the dispatcher's matching decref; no other thread touches this rc. */
+    if (fut != NULL) msIncRef(fut);
     msMessage* msg = msMsgAlloc(/*kind=*/isFail ? -1 : 0, /*replyFut=*/fut);
     msMsgSetPtr(msg, 0, error);
     msMpscPush(&gCompletionQueue, msg);
@@ -267,6 +273,7 @@ static bool msCompletionQueueDrain(void) {
         if (fut != NULL) {
             if (isFail) msFutureFail(fut, msMsgGetPtr(msg, 0));
             else msFutureFireCallbacks((msFutureBase*)fut);
+            msFutureDrcDestroy(fut);  /* release the queue's in-flight ref (paired with push incref) */
         }
         didWork = true;
     }
