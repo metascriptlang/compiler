@@ -2,7 +2,7 @@
 
 // Native JS console
 export extern class console {
-	static extern log(value: string): void;
+	static extern log(...values: unknown[]): void;
 	static extern error(value: string): void;
 	static extern warn(value: string): void;
 }

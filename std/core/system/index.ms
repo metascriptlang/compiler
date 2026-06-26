@@ -9,7 +9,7 @@ export class console {
 	 * [MDN Reference](https://developer.mozilla.org/docs/Web/API/console/log_static)
 	 */
 	@builtin("Echo")
-	static extern log(value: string): void from "msPrintln";
+	static extern log(...values: unknown[]): void from "msPrintln";
 }
 
 export class Result<T, E> {

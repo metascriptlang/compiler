@@ -12,7 +12,7 @@
 
 import {
 	Node, NodeKind, NodeData, Type, TypeKind,
-	CallExprData, IdentifierData,
+	CallExprData, IdentifierData, MemberExprData,
 	createNode,
 } from "../../ast/node";
 import { TransformContext } from "../context";
@@ -31,6 +31,14 @@ export function lowerRestParams(program: Node, ctx: TransformContext): Node {
 	return program;
 }
 
+function isConsoleLogCallee(callee: Node): boolean {
+	if (callee.kind !== NodeKind.MemberExpr) return false;
+	const m = callee.data as MemberExprData;
+	if (m.property !== "log") return false;
+	if (m.object.kind !== NodeKind.Identifier) return false;
+	return (m.object.data as IdentifierData).name === "console";
+}
+
 function makeArrayLit(elements: Node[], restType: Type, line: number): Node {
 	const arr = createNode(NodeKind.ArrayLiteral,
 		{ elements } as unknown as NodeData,
@@ -45,6 +53,9 @@ function lowerRest(node: Node): Node {
 	const d = node.data as CallExprData;
 	const callee = d.callee;
 	if (callee === null) return node;
+	// console.log is a flat-varargs intrinsic — every backend prints its args
+	// individually (C debugLower, JS native, Raiser loop); packing breaks all three.
+	if (isConsoleLogCallee(callee)) return node;
 	let sym = callee.resolvedSym;
 	// Synthetic calls inserted by earlier transforms (stringConcatFlatten,
 	// nativeLower) emit bare Identifier callees with no resolvedSym. Look the
