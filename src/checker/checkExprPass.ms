@@ -4206,6 +4206,16 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 				if (hasGenericParams(receiverType)) {
 					unifyType(receiverType, objType, eb);
 				}
+				// Generic class instance method: monomorphize the method body with the
+				// discovered bindings and point the call at the mono'd symbol (mirrors the
+				// extension-method instantiation path below).
+				if (eb.names.length > 0 && classMethSym.builtinKind === "" && classMethSym.declNode !== null) {
+					const instSym = callInstantiateGeneric(classMethSym, eb.names, eb.types, ctx);
+					if (instSym !== null) {
+						ensureShaped(instSym, ctx);
+						node.resolvedSym = instSym;
+					}
+				}
 				let callParams: Type[] = [];
 				const callNames: string[] = [];
 				for (let ci = 1; ci < methType.typeChildren.length; ci += 1) {

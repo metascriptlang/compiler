@@ -4,9 +4,9 @@
 // immediately clone the function body, substitute types, and register
 // the specialized version. No separate monomorphize pass needed.
 
-import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, VariableDeclData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, NewExprData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { instantiateGeneric, substituteType, createFunction, createGenericInstance, createRef } from "./types";
+import { instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag } from "./context";
@@ -216,16 +216,10 @@ function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
 }
 
 
-// Unwrap ExportDecl/DecoratedDecl to get the inner FunctionDecl. For
-// generic STATIC class methods, synthesize an equivalent FunctionDecl from
-// the MethodDecl so the existing instantiation flow can drive mono on it.
-//
-// Limitation: only static methods are handled. Generic INSTANCE methods on
-// non-generic classes (e.g., `class Foo { method<T>(x: T): T }`) fall
-// through to null — the call site won't mono and the body emits with
-// T=Unknown. Reference parity (the reference handles skMethod natively
-// alongside skProc); long-term fix is to extend instantiateGenericFunction
-// to dispatch on declNode.kind directly instead of synthesizing.
+// Unwrap ExportDecl/DecoratedDecl to get the inner FunctionDecl. For class
+// methods (static OR instance) synthesize an equivalent FunctionDecl from the
+// MethodDecl so the existing instantiation flow drives mono on it. Instance
+// methods already carry `this` as param 0 (prepended in collectClassMethod).
 function unwrapToFunctionDecl(node: Node): Node {
 	if (node === null) return null as unknown as Node;
 	let n = node;
@@ -234,7 +228,6 @@ function unwrapToFunctionDecl(node: Node): Node {
 	if (n !== null && n.kind === NodeKind.FunctionDecl) return n;
 	if (n !== null && n.kind === NodeKind.MethodDecl) {
 		const md = n.data as MethodDeclDataLocal;
-		if (!md.methodIsStatic) return null as unknown as Node;
 		// Synthesize a FunctionDecl-shaped Node mirroring this method. The class
 		// name is woven in through the symbol's name (set by collectMethodMember
 		// as `${className}_${methodName}`) — mangleMonoName uses sym.name, so no
@@ -270,63 +263,24 @@ function substituteTypeStrings(strs: string[], names: string[], types: Type[]): 
 }
 
 // ===== clearCheckerState =====
-// Strip HiddenDeref/HiddenAddr/HiddenStdConv wrappers and clear resolvedSym/flags
-// on a cloned AST so the checker re-processes it fresh.
-// Reference parity: standard re-check tolerates stale HiddenDeref by reading child types.
-// We strip them entirely — the re-check regenerates correct wrappers with concrete types.
-
-function stripHidden(node: Node): Node {
-	if (node === null) return node;
-	if (node.kind === NodeKind.HiddenDeref || node.kind === NodeKind.HiddenAddr) {
-		return stripHidden((node.data as HiddenDerefData).expr);
-	}
-	if (node.kind === NodeKind.HiddenStdConv) {
-		return stripHidden((node.data as HiddenStdConvData).convExpr);
-	}
-	return node;
-}
-
-// Strip hidden wrappers and clear checker state on a single child, returning the cleaned node.
-function cleanChild(child: Node): Node {
-	const stripped = stripHidden(child);
-	clearCheckerState(stripped);
-	return stripped;
-}
-
+// Collapse HiddenDeref/HiddenAddr/HiddenStdConv wrappers and clear resolvedSym/flags on a
+// cloned AST so the re-check regenerates them against concrete types. forEachChild drives
+// the recursion so EVERY NodeKind is covered — a manual match silently missed ForStmt/Switch/
+// Match etc., stacking a second deref on loop/array accesses in instantiated method bodies.
 function clearCheckerState(node: Node): void {
 	if (node === null) return;
+	while (node.kind === NodeKind.HiddenDeref || node.kind === NodeKind.HiddenAddr || node.kind === NodeKind.HiddenStdConv) {
+		const inner = node.kind === NodeKind.HiddenStdConv
+			? (node.data as HiddenStdConvData).convExpr
+			: (node.data as HiddenDerefData).expr;
+		if (inner === null) break;
+		node.kind = inner.kind;
+		node.data = inner.data;
+		node.nodeType = inner.nodeType;
+	}
 	node.resolvedSym = null as unknown as Symbol;
 	node.flags = 0;
-	match (node.kind) {
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			for (let i = 0; i < d.statements.length; i += 1) { d.statements[i] = cleanChild(d.statements[i]); }
-		},
-		NodeKind.ExprStmt => { const d = node.data as ExprStmtData; d.expr = cleanChild(d.expr); },
-		NodeKind.ReturnStmt => { const d = node.data as ReturnStmtData; d.argument = cleanChild(d.argument); },
-		NodeKind.IfStmt => { const d = node.data as IfStmtData; d.condition = cleanChild(d.condition); d.consequent = cleanChild(d.consequent); d.alternate = cleanChild(d.alternate); },
-		NodeKind.WhileStmt => { const d = node.data as WhileStmtData; d.whileCondition = cleanChild(d.whileCondition); clearCheckerState(d.whileBody); },
-		NodeKind.ForOfStmt => { const d = node.data as ForOfStmtData; d.forOfIterable = cleanChild(d.forOfIterable); clearCheckerState(d.forOfBody); },
-		NodeKind.BinaryExpr => { const d = node.data as BinaryExprData; d.left = cleanChild(d.left); d.right = cleanChild(d.right); },
-		NodeKind.UnaryExpr => { const d = node.data as UnaryExprData; d.operand = cleanChild(d.operand); },
-		NodeKind.CallExpr => {
-			const d = node.data as CallExprData;
-			d.callee = cleanChild(d.callee);
-			for (let i = 0; i < d.arguments.length; i += 1) { d.arguments[i] = cleanChild(d.arguments[i]); }
-		},
-		NodeKind.MemberExpr => { const d = node.data as MemberExprData; d.object = cleanChild(d.object); },
-		NodeKind.ArrayAccess => { const d = node.data as ArrayAccessData; d.array = cleanChild(d.array); d.index = cleanChild(d.index); },
-		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; d.initializer = cleanChild(d.initializer); },
-		NodeKind.ObjectLiteral => { for (const p of (node.data as ObjectLiteralData).properties) { clearCheckerState(p); } },
-		NodeKind.ArrayLiteral => { for (const e of (node.data as ArrayLiteralData).elements) { clearCheckerState(e); } },
-		NodeKind.ConditionalExpr => { const d = node.data as ConditionalExprData; d.ternaryCondition = cleanChild(d.ternaryCondition); d.ternaryConsequent = cleanChild(d.ternaryConsequent); d.ternaryAlternate = cleanChild(d.ternaryAlternate); },
-		NodeKind.NewExpr => {
-			const d = node.data as NewExprData;
-			d.newCallee = cleanChild(d.newCallee);
-			for (let i = 0; i < d.newArguments.length; i += 1) { d.newArguments[i] = cleanChild(d.newArguments[i]); }
-		},
-		_ => {},
-	};
+	forEachChild(node, (child: Node): void => { clearCheckerState(child); });
 }
 
 // ===== replaceTypeVars =====
@@ -378,6 +332,12 @@ function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[])
 		d.fnReturnType = substAnnotationAll(d.fnReturnType, paramNames, concreteTypes);
 		for (let p = 0; p < d.fnParamTypes.length; p += 1) {
 			d.fnParamTypes[p] = substAnnotationAll(d.fnParamTypes[p], paramNames, concreteTypes);
+		}
+	} else if (node.kind === NodeKind.ArrowFunction) {
+		const d = node.data as ArrowFunctionData;
+		d.arrowReturnType = substAnnotationAll(d.arrowReturnType, paramNames, concreteTypes);
+		for (let p = 0; p < d.arrowParamTypes.length; p += 1) {
+			d.arrowParamTypes[p] = substAnnotationAll(d.arrowParamTypes[p], paramNames, concreteTypes);
 		}
 	} else if (node.kind === NodeKind.SizeofExpr) {
 		const d = node.data as SizeofExprData;
@@ -458,13 +418,17 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	cloned.nodeType = instType;
 
 	// Create and register symbol in root scope.
-	// Instance symbols get empty modulePath — codegen emits unqualified names
-	// and deduplicates across modules (first module to emit wins, others get forward decl).
-	// This matches the reference generateInstance where instances are identified by mangled name alone.
+	// Instance is OWNED by the generic's defining module (reference parity:
+	// generateInstance setOwner(result, fn)). It is emitted in that module's TU, so the
+	// generic body's module-private helpers (static functions, lifted closures) are visible
+	// to it — co-location, not cross-TU. The mangled C name becomes module-qualified
+	// (`gen__int32__<M>`) via mangledFunctionName; DCE/dedup predicates still key on the
+	// unqualified `fnName` containing `__`. Used-but-not-defining modules forward-decl it
+	// through the standard cross-module proto path.
 	const instSym = makeSymbol(mangledName, SymbolKind.Function, instType, false);
 	instSym.state = SymbolState.Shaped;
 	instSym.nativeName = "";
-	instSym.modulePath = "";
+	instSym.modulePath = sym.modulePath !== "" ? sym.modulePath : ctx.modulePath;
 	instSym.declNode = cloned;
 	instSym.originalName = mangledName;
 	let rootScope = ctx.table.current;
@@ -490,6 +454,10 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		for (const ct of dedup.types) {
 			injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
 		}
+		// Strip stale HiddenDeref/resolvedSym from the clone so re-check regenerates them
+		// against concrete types — a class-method body already checked once (this: Class<T>
+		// is a Ref) otherwise keeps its deref and the re-check stacks a second one.
+		clearCheckerState(cd.fnBody);
 		callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
 		bodyCtx.modulePath = savedModulePath;
 		// Clean up injected symbols to avoid polluting prelude scope
@@ -571,12 +539,25 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	}
 	ctorDeclNode.nodeType = createFunction(resolvedParamTypes, fnParams, null as unknown as Type);
 
-	// Mono'd receiver type for `this` and the synthetic ClassDecl. Wrapped
-	// as Ref<GenericInstance> so codegen renders `Class__args*` (e.g.
-	// `HashSet__string*`) rather than the un-instantiated `HashSet*` — the
-	// latter shares its field layout with whichever mono instance landed
-	// first, so cross-mono field assignments would type-mismatch in C.
-	const concreteClassType = createRef(createGenericInstance(classSym.symbolType, dedup.types));
+	// Mono receiver: Ref<Struct{substituted fields}> named `mangledClass`. genClassDecl
+	// reads non-static fields from node.nodeType's struct (typeNames/typeChildren); a
+	// Ref<GenericInstance> peels to type-args not fields → an empty struct in the ctor's TU.
+	let structBase: Type = classSym.symbolType;
+	if (structBase.kind === TypeKind.Ref && structBase.typeReturn !== null) structBase = structBase.typeReturn;
+	let substStruct: Type = structBase;
+	for (let si = 0; si < dedup.names.length; si += 1) {
+		if (si < dedup.types.length) substStruct = substituteType(substStruct, dedup.names[si].trim(), dedup.types[si]);
+	}
+	if (substStruct === structBase) {
+		const newNames: string[] = [];
+		for (const n of substStruct.typeNames) newNames.push(n);
+		const newChildren: Type[] = [];
+		for (const c of substStruct.typeChildren) newChildren.push(c);
+		substStruct = createStruct(mangledClass, newNames, newChildren, isStructType(substStruct));
+	} else {
+		substStruct.typeName = mangledClass;
+	}
+	const concreteClassType = createRef(substStruct);
 
 	// Re-check constructor body with concrete types in the class's DEFINING module ctx
 	// (from _moduleCtxMap registry). This resolves private module-level symbols
@@ -622,6 +603,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	const classNodeData: NodeData = { className: mangledClass, classExtends: "", classBody, nameLocation: loc };
 	const classNode = createNodeAt(NodeKind.ClassDecl, classNodeData, loc);
 	classNode.nodeType = concreteClassType;
+	classNode.resolvedSym = classSym;
 	addPendingInstance(classNode);
 }
 
