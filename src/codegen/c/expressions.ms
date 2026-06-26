@@ -21,6 +21,7 @@ import { findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto, isDrcLifecycleName } from "./forward";
 import { useHeader } from "./context";
 import { GcMode } from "../../checker/context";
+import { lookupCtorDefaults } from "../../checker/instantiate";
 
 // Build a msAllocTyped/msAllocTypedUninit call expression. Under --gc=manual,
 // TypeInfo is not emitted so we pass NULL; otherwise we reference the type's
@@ -938,13 +939,19 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			// `methodToFunction` transform) — no `<Class>_new` wrapper exists any
 			// more. This matches the inline pattern already used for class-without-
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
-			//
-			// Cross-module: defining module emits the `_init` proto via
-			// genFunctionDecl. If this NewExpr is in a different module, the
-			// caller's compile unit needs a forward decl too — `_init` symbol
-			// lookup goes through the exportRegistry, same path
-			// `ensureCrossModuleProto` uses for any cross-module call.
 			const initName = cName + "_init";
+			const ctorEntry = lookupCtorDefaults(cName + "_new");
+			const ctorProtoKey = "proto:" + initName;
+			if (ctorEntry !== null && ctorEntry.fnType !== null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
+				nameSetAdd(g.declaredProcs, ctorProtoKey);
+				let ctorProtoParams = `${cName}* this`;
+				if (ctorEntry.fnType.typeChildren !== null) {
+					for (let cpi = 0; cpi < ctorEntry.fnType.typeChildren.length; cpi += 1) {
+						ctorProtoParams = ctorProtoParams + ", " + getTypeDesc(g, ctorEntry.fnType.typeChildren[cpi]);
+					}
+				}
+				addLine(sec(g, CSection.ProcHeaders), `void ${initName}(${ctorProtoParams});`);
+			}
 			g.labels += 1;
 			const newTmp = `_new${g.labels}_`;
 			emitProcLocalsLine(p, `${cName}* ${newTmp};`);
