@@ -1,7 +1,7 @@
 // Destructuring Lowering — transforms DestructuringDecl → temp var + field access
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation,
+	Node, NodeKind, DeclKind, SourceLocation, Type, TypeKind,
 	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, IdentifierData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
@@ -15,6 +15,19 @@ import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 export function lowerDestructuring(program: Node, ctx: TransformContext): Node {
 	walkExpandBlocks(program, expandDestructuring, ctx);
 	return program;
+}
+
+// Element type at index `i` of a destructured base (tuple → per-index, array → element) —
+// mirrors the checker's own derivation (defineForOfPatternBindings). Carried onto the
+// synthetic index access so a later capture (lambda lifting) types the env field concretely;
+// without it a destructured closure element defaults to `double`/void* in the captured env.
+function destrElemType(base: Node, i: number): Type {
+	let bt = base.nodeType;
+	if (bt === null) return null as unknown as Type;
+	if (bt.kind === TypeKind.Ref && bt.typeReturn !== null) bt = bt.typeReturn;
+	if (bt.kind === TypeKind.Tuple && i < bt.typeChildren.length) return bt.typeChildren[i];
+	if (bt.kind === TypeKind.Array && bt.typeReturn !== null) return bt.typeReturn;
+	return null as unknown as Type;
 }
 
 // Expand array pattern [a, b, ...rest] → indexed access
@@ -44,6 +57,8 @@ function expandArrayRet(
 			const id = elem.data as IdentifierData;
 			if (id.name !== "_") {
 				const access = makeArrayAccess(base, makeNumber(i, loc), loc);
+				const elemType = destrElemType(base, i);
+				if (elemType !== null) access.nodeType = elemType;
 				items.push(makeVarDecl(id.name, access, declKind, loc));
 			}
 		}
