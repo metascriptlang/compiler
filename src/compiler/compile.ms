@@ -26,6 +26,7 @@ import { setTargetSizes, isAwaitable } from "../checker/types";
 import { lookupSymbol, SymbolFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
+import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
 import { createTransformContextWithChecker, createNameSet } from "../transform/context";
@@ -1493,26 +1494,35 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
 
-	// Parse each module → RaiserModuleInput (topological order)
 	const modules: RaiserModuleInput[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
 
-		if (opts.verbose) verboseLog("parsing " + modPath);
+		if (opts.verbose) verboseLog("compiling " + modPath);
 		const program = parseOrExit(mod.source, modPath);
-		const input: RaiserModuleInput = { modulePath: modPath, program };
+		const modCtx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
+		exitOnFatalCheckerErrors(modCtx, modPath, mod.source);
+		modCtx.errors = [];
+
+		const macroExpanded = expandMacros(program, modCtx);
+		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
+		const txCtx = createTransformContextWithChecker(modCtx);
+		const refined = refineTypes(comptimeResolved, txCtx, graphRegistry);
+		const transformed = transformForRaiser(refined, modCtx);
+
+		const input: RaiserModuleInput = { modulePath: modPath, program: transformed };
 		modules.push(input);
 	}
 
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
-	const raiserMod = generateRaiserProject(modules, null as unknown as CheckerContext);
+	const raiserMod = generateRaiserProject(modules);
 
 	if (opts.showTime) printTiming("compiled", t0);
 
 	const ctx = createRaiserContext();
 	raiserLoad(ctx, raiserMod);
-	raiserExecute(ctx);
+	const ranOk = raiserExecute(ctx);
 
 	if (ctx.lastOutput.length > 0) {
 		// Print captured output (strip trailing newline for clean display)
@@ -1522,5 +1532,9 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		} else {
 			console.log(lastOut);
 		}
+	}
+
+	if (!ranOk && ctx.lastError !== "") {
+		console.log(`${error("raiser runtime error")}: ${ctx.lastError}`);
 	}
 }

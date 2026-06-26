@@ -5,7 +5,10 @@
 import { Node } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry } from "../../checker/checkPass";
-import { CheckerContext } from "../../checker/context";
+import { ExportRegistry } from "../../checker/context";
+import { createTransformContextWithChecker } from "../../transform/context";
+import { refineTypes } from "../../transform/typeRefine";
+import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput } from "./rgen";
@@ -37,7 +40,10 @@ export function evalASTFull(program: Node): RaiserContext {
 	const checkerCtx = hasFullOuterCtx
 		? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, outer.preludeCtx)
 		: checkProgram(program);
-	const raiserMod = generateRaiser(program, checkerCtx);
+	const txCtx = createTransformContextWithChecker(checkerCtx);
+	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
+	const transformed = transformForRaiser(refined, checkerCtx);
+	const raiserMod = generateRaiser(transformed);
 	const ctx = createContext();
 	load(ctx, raiserMod);
 	execute(ctx);
@@ -212,7 +218,7 @@ function evalRaiserDirect(code: string): RaiserContext {
 		unreachable;
 		return createContext();
 	}
-	const mod = generateRaiser(parseResult.value, null as unknown as CheckerContext);
+	const mod = generateRaiser(parseResult.value);
 	const ctx = createContext();
 	load(ctx, mod);
 	execute(ctx);
@@ -293,7 +299,7 @@ function evalProject(codes: string[]): RaiserContext {
 		modules.push(input);
 		i = i - 1;
 	}
-	const raiserMod = generateRaiserProject(modules, null as unknown as CheckerContext);
+	const raiserMod = generateRaiserProject(modules);
 	const ctx = createContext();
 	load(ctx, raiserMod);
 	execute(ctx);
