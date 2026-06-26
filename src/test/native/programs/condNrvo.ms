@@ -36,7 +36,10 @@ function main(): void {
 	// 4. call-argument position (ternary nested in an unconditional call) → runs == 3
 	const s: int32 = sumV(condT ? mkA() : mkB());
 
-	// a.x=10, g.x=5, n.x=10, s=10, runs=3 → 38
-	const acc: int32 = (a.x + g.x + n.x + s + runs) as int32;
+	// 5. ternary nested in another ternary's CONDITION (unconditional position) → runs == 4
+	const m: int32 = ((condT ? mkA() : mkB()).x > 5) ? 1 : 2;
+
+	// a.x=10, g.x=5, n.x=10, s=10, m=1, runs=4 → 40
+	const acc: int32 = (a.x + g.x + n.x + s + m + runs) as int32;
 	console.log(`cond-nrvo acc=${acc}`);
 }

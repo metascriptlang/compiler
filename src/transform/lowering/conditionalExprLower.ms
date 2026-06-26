@@ -69,12 +69,15 @@ function containsHazardousTernary(node: Node): boolean {
 // top-down: a hazardous ternary's own branches are NOT descended into here — they
 // become assignments inside the generated if-blocks, hoisted by the re-walk in the
 // correct (guarded) scope. Descending bottom-up would lift a branch's inner ternary
-// above its guard → the very unconditional-execution bug we are fixing.
+// above its guard → the very unconditional-execution bug we are fixing. The CONDITION
+// is unconditionally evaluated, so it IS descended into (else a hazardous ternary in a
+// condition would stay inline and leak).
 function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	if (expr === null) return expr;
 	if (expr.kind === NodeKind.ConditionalExpr) {
-		if (!ternaryNeedsLowering(expr)) return expr;
 		const cd = expr.data as ConditionalExprData;
+		cd.ternaryCondition = hoistTernaries(cd.ternaryCondition, hoisted, ctx);
+		if (!ternaryNeedsLowering(expr)) return expr;
 		const loc = expr.location;
 		const t = freshTempSym(ctx, "tern", expr.nodeType);
 		const letDecl = makeVarDecl(t.name, makeNull(loc), DeclKind.Let, loc);
