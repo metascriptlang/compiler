@@ -530,6 +530,11 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 		return compileArrayPushCall(s, node);
 	}
 
+	// x.toString()
+	if (isToStringCall(d.callee) && d.arguments.length === 0) {
+		return compileToStringCall(s, node);
+	}
+
 	// str.charAt(i)
 	if (isStringMethod(s, d.callee, "charAt") && d.arguments.length === 1) {
 		return compileStrCharAt(s, node);
@@ -810,6 +815,23 @@ function isArrayPush(node: Node): boolean {
 	if (node.kind !== NodeKind.MemberExpr) return false;
 	const d = node.data as MemberExprData;
 	return d.property === "push";
+}
+
+function isToStringCall(node: Node): boolean {
+	if (node.kind !== NodeKind.MemberExpr) return false;
+	const d = node.data as MemberExprData;
+	return d.property === "toString";
+}
+
+function compileToStringCall(s: RaiserCompState, node: Node): number {
+	const d = node.data as CallExprData;
+	const md = d.callee.data as MemberExprData;
+	const objReg = compileExpr(s, md.object);
+	const emptyReg = allocReg(s);
+	emitLoadConst(s, emptyReg, raiserString(""));
+	const dest = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, dest, objReg, emptyReg));
+	return dest;
 }
 
 function compileArrayPushCall(s: RaiserCompState, node: Node): number {

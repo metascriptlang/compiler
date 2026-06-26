@@ -100,6 +100,11 @@ test "existing arithmetic still works" {
 	assert ctx.lastResult.intVal === 14;
 }
 
+test "number toString through full pipeline" {
+	const ctx = evalFull("return (10).toString() + \"-\" + (20).toString();");
+	assert ctx.lastResult.strVal === "10-20";
+}
+
 test "function call through transform" {
 	const ctx = evalFull("function add(a, b) { return a + b; } return add(10, 20);");
 	assert ctx.lastResult.intVal === 30;

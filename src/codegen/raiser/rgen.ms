@@ -614,6 +614,21 @@ test "console.log string" {
 	assert ctx.lastOutput === "world\n";
 }
 
+test "number toString" {
+	const ctx = evalRaiser("const x = 42; return x.toString();");
+	assert ctx.lastResult.strVal === "42";
+}
+
+test "bool toString" {
+	const ctx = evalRaiser("const b = true; return b.toString();");
+	assert ctx.lastResult.strVal === "true";
+}
+
+test "toString in concat" {
+	const ctx = evalRaiser("const x = 7; return \"n=\" + x.toString();");
+	assert ctx.lastResult.strVal === "n=7";
+}
+
 test "true && value" {
 	const ctx = evalRaiser("return 1 && 42;");
 	assert ctx.lastResult.intVal === 42;
