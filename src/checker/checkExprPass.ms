@@ -2652,10 +2652,6 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		return spawnRet;
 	}
 	// Check argument types + infer generic return
-	// DIAGNOSTIC PROBE — remove after root cause found
-	if (d.callee.resolvedSym !== null && d.callee.resolvedSym.builtinKind === "ResultOk") {
-		console.log(`[PROBE] ResultOk call: argTypes.length=${argTypes.length} calleeType.kind=${calleeType !== null ? calleeType.kind : -1} resolvedSym.builtinKind=${d.callee.resolvedSym.builtinKind}`);
-	}
 	// @builtin("Echo"): accept any number of args of any type (reference echo parity)
 	const isEchoBuiltin = node.resolvedSym !== null && node.resolvedSym.builtinKind === "Echo";
 	if (calleeType.kind === TypeKind.Function && !isEchoBuiltin) {
