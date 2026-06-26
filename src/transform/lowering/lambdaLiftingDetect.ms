@@ -14,7 +14,7 @@ import {
 	IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData,
 	BinaryExprData, UnaryExprData, CallExprData, SwitchStmtData,
 	SwitchCaseData, ExportDeclData, FunctionDeclData, MethodDeclData,
-	ConstructorDeclData, SymbolKind,
+	ConstructorDeclData, TestDeclData, SymbolKind,
 } from "../../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { mapChildren } from "../walker";
@@ -333,6 +333,11 @@ function detectPassWalk(node: Node, state: DetectionState, ss: ScopeStack, enclo
 	if (node.kind === NodeKind.ConstructorDecl) {
 		const d = node.data as ConstructorDeclData;
 		recordFnCaptures(node, d.ctorBody, d.ctorParams, state, ss);
+		return;
+	}
+	if (node.kind === NodeKind.TestDecl) {
+		const d = node.data as TestDeclData;
+		recordFnCaptures(node, d.testBody, [], state, ss);
 		return;
 	}
 	if (node.kind === NodeKind.ArrowFunction) {

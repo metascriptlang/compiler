@@ -1344,13 +1344,27 @@ function walkLift(node: Node, state: LiftState): void {
 			// `let` inside the test body).
 			const d = node.data as TestDeclData;
 			const savedName = state.currentFnName;
+			// Each test block lowers to its own C function — give its shared env a
+			// unique name so sibling test blocks don't collide on `$Env__shared`.
+			state.closureCounter += 1;
+			state.currentFnName = `test${state.closureCounter}`;
 			pushFuncBoundary(state.ss);
 			const savedParams = state.currentParams;
 			const savedActiveRewrites = state.activeEnvRewrites;
 			state.currentParams = createNameSet();
 			state.activeEnvRewrites = [];
 			const savedShared = saveSharedEnv(state);
-			walkLiftBody(d.testBody, state);
+			const allCaptures = detectionGetCaptures(state.detection, node);
+			const allCapturedIdents = detectionGetCapturedIdents(state.detection, node);
+			if (allCaptures.items.length > 0) {
+				preRegisterVarTypes(d.testBody, state);
+			}
+			const testLoc = node.location;
+			walkLiftBody(d.testBody, state, () => {
+				if (allCaptures.items.length > 0) {
+					setupSharedEnv(state, allCaptures, allCapturedIdents, testLoc);
+				}
+			});
 			popFuncBoundary(state.ss);
 			state.currentParams = savedParams;
 			state.activeEnvRewrites = savedActiveRewrites;
