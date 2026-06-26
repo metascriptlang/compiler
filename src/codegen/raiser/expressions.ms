@@ -546,12 +546,29 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 	}
 
 	if (isConsoleLog(d.callee)) {
-		let lastReg = 0;
-		for (let i = 0; i < d.arguments.length; i = i + 1) {
-			lastReg = compileExpr(s, d.arguments[i]);
-			emitInst(s, raiserABC(RaiserOpcode.Print, lastReg, 0, 0));
+		if (d.arguments.length <= 1) {
+			let lastReg = 0;
+			for (let i = 0; i < d.arguments.length; i = i + 1) {
+				lastReg = compileExpr(s, d.arguments[i]);
+				emitInst(s, raiserABC(RaiserOpcode.Print, lastReg, 0, 0));
+			}
+			return lastReg;
 		}
-		return lastReg;
+		// Multi-arg: coerce each (ConcatStr with "") and space-join into one line (C/JS parity).
+		const spaceReg = allocReg(s);
+		emitLoadConst(s, spaceReg, raiserString(" "));
+		const emptyReg = allocReg(s);
+		emitLoadConst(s, emptyReg, raiserString(""));
+		const acc = allocReg(s);
+		const firstReg = compileExpr(s, d.arguments[0]);
+		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, firstReg, emptyReg));
+		for (let i = 1; i < d.arguments.length; i = i + 1) {
+			emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, acc, spaceReg));
+			const argReg = compileExpr(s, d.arguments[i]);
+			emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, acc, argReg));
+		}
+		emitInst(s, raiserABC(RaiserOpcode.Print, acc, 0, 0));
+		return acc;
 	}
 
 	// Generic native call: any callee resolved to a Symbol with nativeName
