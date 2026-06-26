@@ -136,9 +136,9 @@ function parseTypeAtom(state: ParserState): Node {
 		return parseTypeFunctionOrParen(state);
 	}
 
-	// Object type: { x: T; y: U }
+	// Object type: { x: T; y: U } — with array suffix: { ... }[]
 	if (token.kind === TokenKind.LBrace) {
-		return parseTypeObjectLiteral(state);
+		return applyArraySuffix(state, parseTypeObjectLiteral(state));
 	}
 
 	// Tuple type: [T, U, ...] — bracket at start of type position (not array suffix).
@@ -180,6 +180,19 @@ function parseTypeAtom(state: ParserState): Node {
 	}
 
 	// Array type suffix: T[] or T[N] or T[][]
+	result = applyArraySuffix(state, result);
+
+	// Optional marker: T? — treat as union with null (skip but preserve base)
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+		advance(state);
+	}
+
+	return result;
+}
+
+// Apply the array type suffix `[]` / `[N]` (repeatable) to a parsed type atom. Shared by the
+// named-type path and inline object types so `{ ... }[]` parses like `Name[]`.
+function applyArraySuffix(state: ParserState, result: Node): Node {
 	while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
 		const brackToken = current(state);
 		advance(state); // consume [
@@ -193,12 +206,6 @@ function parseTypeAtom(state: ParserState): Node {
 		}
 		result = createNode(NodeKind.TypeArray, { typExprElement: result, typExprSize: size }, brackToken);
 	}
-
-	// Optional marker: T? — treat as union with null (skip but preserve base)
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
-		advance(state);
-	}
-
 	return result;
 }
 
@@ -460,9 +467,12 @@ function skipTypeAtom(state: ParserState): void {
 		return;
 	}
 
-	// Object type: { x: T; y: U }
+	// Object type: { x: T; y: U } — with array suffix: { ... }[]
 	if (token.kind === TokenKind.LBrace) {
 		skipBalanced(state, TokenKind.LBrace, TokenKind.RBrace);
+		while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
+			skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		}
 		return;
 	}
 
