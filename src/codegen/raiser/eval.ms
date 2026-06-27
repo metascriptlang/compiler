@@ -13,6 +13,7 @@ import { RaiserValueKind, heapObjectGetField, heapObjectGetString } from "../../
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput } from "./rgen";
 import { getComptimeOuterCtx } from "../../compiler/meta/callbacks";
+import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 
 // --- Full Pipeline API ---
 
@@ -31,6 +32,9 @@ export function evalSourceFull(code: string): RaiserContext {
 // back to the single-file checkProgram path (used by direct tests).
 
 export function evalASTFull(program: Node): RaiserContext {
+	// Macro bodies dispatch string/array builtins through CallHost — the host
+	// registry must be populated first (same as @comptime via evalComptimeBlock).
+	ensureHostTableLoaded();
 	const outer = getComptimeOuterCtx();
 	const hasFullOuterCtx = outer !== null
 		&& outer.registry !== null
