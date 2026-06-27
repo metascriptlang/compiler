@@ -16,6 +16,7 @@ import { generateJS, generateJSBundleModule } from "../codegen/js/jsgen";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
+import { mangleModuleName } from "../codegen/c/names";
 import { resetEmittedInstances } from "../codegen/c/declarations";
 import { aliveSetHasModule } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
@@ -163,23 +164,10 @@ function reportGraphErrors(graph: ModuleGraph): void {
 // Get a specific line from source text (1-based line number)
 function getSourceLine(source: string, lineNum: number): string {
 	if (source.byteLength === 0 || lineNum <= 0) return "";
-	let currentLine = 1;
-	let lineStart = 0;
-	let i = 0;
-	while (i < source.byteLength) {
-		if (currentLine === lineNum) {
-			let lineEnd = i;
-			while (lineEnd < source.byteLength && source.slice(lineEnd, lineEnd + 1) !== "\n") {
-				lineEnd = lineEnd + 1;
-			}
-			return source.slice(i, lineEnd);
-		}
-		if (source.slice(i, i + 1) === "\n") {
-			currentLine = currentLine + 1;
-		}
-		i = i + 1;
-	}
-	return "";
+	const lines = source.split("\n");
+	const idx = (lineNum as int32) - 1;
+	if (idx < 0 || idx >= lines.length) return "";
+	return lines[idx];
 }
 
 // Render a single structured error in Rust-style format
@@ -213,7 +201,7 @@ function renderModuleError(modPath: string, source: string, e: ModuleError): voi
 			if (e.column > 0) {
 				let caretPad = "";
 				let ci = 0;
-				while (ci < e.column - 1) {
+				while (ci < e.column - 1 && ci < 4096) {
 					caretPad = caretPad + " ";
 					ci = ci + 1;
 				}
@@ -498,7 +486,15 @@ interface CompileJob {
 //      serializes (no speedup, still correct).
 //   3. COLLECT (serial, main thread) — waitFor each future in input order, check
 //      exit codes, publish cache entries, emit oFiles deterministically.
+// --emit=c is emit-only (Nim's `-c`): write generated C, compile/link nothing.
+// Compiling @compile'd C here would (a) drop .o files beside the source, not in
+// out/, and (b) fail for targets whose sysroot lives in the host build tool
+// (e.g. --os=ios → Xcode owns the SDK). The host assembles those .c in its own
+// project. Set by cmdBuildC.
+let emitOnlyMode = false;
+
 function processCompileDirectives(directives: string, moduleDir: string, includePaths: HashSet<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, targetOs: string, projectRoot: string, compilerRoot: string): string {
+	if (emitOnlyMode) return "";
 	if (directives === "") return "";
 	// Per-call user-project flag: non-empty only when moduleDir is user code.
 	// Applied to every @compile job this call emits (all share same moduleDir).
@@ -807,6 +803,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// `entryPath` (dispatcher, transformedPaths) would use the original
 	// relative form → mangling mismatch → "undeclared function" link error.
 	entryPath = canonicalEntryPath(entryPath);
+	emitOnlyMode = opts.emitC;
 	initCache(opts.mode, opts.forceRebuild);
 	resetCompiledOFiles();
 	registerCoreParsers();
@@ -923,13 +920,18 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	let tAnalyze: number = 0;
 	let tLower: number = 0;
 
+	// Phase A1 — parse + check every module FIRST (no instance drain yet). A generic instance
+	// created during a later module's check is OWNED by its defining module (set in
+	// instantiateGenericFunction). To emit it in that module's TU — so the generic body's
+	// module-private static helpers are visible in the same translation unit — it must be
+	// appended to that module's program BEFORE the module's transform/lower runs. Load order
+	// is dependency-first, so the owner is already past transform by the time a dependent
+	// instantiates it; hence we defer all transform to A2 and route instances by owner between.
+	const checkedMods: { program: Node, ctx: CheckerContext, modPath: string, source: string }[] = [];
+	const programByPath: HashMap<string, Node> = new HashMap<string, Node>();
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
-
-		const modT0 = performance.now();
-		if (opts.verbose) verboseLog(`transforming ${modPath}`);
-
 		const _tp0 = performance.now();
 		const program = parseOrExit(mod.source, modPath);
 		tParse = tParse + (performance.now() - _tp0);
@@ -947,26 +949,51 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			totalCheckerErrors = totalCheckerErrors + errorCount(ctx);
 		}
 		ctx.errors = [];
+		checkedMods.push({ program, ctx, modPath, source: mod.source });
+		programByPath.set(modPath, program);
+	}
 
-		// Drain pending instances (reference parity: addCodeForGenerics at module close).
-		const pendingInsts = drainPendingInstances();
-		if (pendingInsts.length > 0) {
-			const instPd = program.data as ProgramData;
-			for (let ii = 0; ii < pendingInsts.length; ii += 1) {
-				const instNode = pendingInsts[ii];
-				if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
-					instNode.nodeType = instNode.resolvedSym.symbolType;
-				}
-				instPd.programStmts.push(instNode);
-			}
+	// Dispatch pending generic instances into their OWNER module's program (the module that
+	// defines the generic — `instNode.resolvedSym.modulePath`). Co-location makes the generic
+	// body's module-private static helpers visible in the same TU. Owner-less nodes (e.g.
+	// per-using-module synthesized helpers, modulePath="") fall back to the entry program so
+	// none is dropped. Instances are only ever created during checking (callInstantiateGeneric
+	// lives only in the checker), so this single drain after A1 catches them all.
+	const pendingInsts = drainPendingInstances();
+	for (let ii = 0; ii < pendingInsts.length; ii += 1) {
+		const instNode = pendingInsts[ii];
+		if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
+			instNode.nodeType = instNode.resolvedSym.symbolType;
 		}
+		let owner = "";
+		if (instNode.resolvedSym !== null && instNode.resolvedSym.modulePath !== "") {
+			owner = instNode.resolvedSym.modulePath;
+		}
+		let targetProgram: Node = null as unknown as Node;
+		if (owner !== "" && programByPath.has(owner)) {
+			targetProgram = programByPath.get(owner);
+		} else if (programByPath.has(entryPath)) {
+			targetProgram = programByPath.get(entryPath);
+		}
+		if (targetProgram !== null) {
+			(targetProgram.data as ProgramData).programStmts.push(instNode);
+		}
+	}
+
+	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
+	for (const cm of checkedMods) {
+		const program = cm.program;
+		const ctx = cm.ctx;
+		const modPath = cm.modPath;
+		const modT0 = performance.now();
+		if (opts.verbose) verboseLog(`transforming ${modPath}`);
 		const _tm0 = performance.now();
 		const monoed = monomorphizeProgram(program, ctx);
 		validateTypedAST(ctx, monoed);
 		tMono = tMono + (performance.now() - _tm0);
 		if (hasErrors(ctx)) {
 			for (const e of ctx.errors) {
-				renderModuleError(modPath, mod.source, {
+				renderModuleError(modPath, cm.source, {
 					message: e.message,
 					line: e.line,
 					column: e.column,
@@ -1099,11 +1126,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		oFiles = appendFlag(oFiles, compileObjs);
 
 		if (opts.emitC) {
+			// Flat, mangled filename keeps every module's C inside out/ — a
+			// path-relative name climbs `..` out of out/ for stdlib/runtime
+			// modules and drops generated C beside the source tree. The C is
+			// linked by symbol (dispatcher calls <mangled>__Init000), so the
+			// filename is free to be flat.
 			const emitDir = outDirForMode(opts.mode);
 			ensureDir(emitDir);
-			const relPath = relative(dirname(entryPath), p.modPath);
-			const emitPath = `${emitDir}/${replaceExt(relPath, ".c")}`;
-			ensureDir(dirname(emitPath));
+			const emitPath = `${emitDir}/${mangleModuleName(p.modPath)}.c`;
 			writeOutput(emitPath, cCode);
 			console.log(`${green("  Wrote")} ${bold(emitPath)}`);
 		} else {
@@ -1287,36 +1317,56 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	setGlobalHookOwners(sharedHookOwners);
 
 
+	// Phase A1 — parse + check every module FIRST (no instance drain yet), so a generic
+	// instance created while checking a dependent is routed to its OWNER module's program
+	// (still untransformed) and re-checking its body fires generic-method monomorphization.
+	// Per-module draining transforms the owner body before the dependent instantiates it,
+	// losing the mono trigger (e.g. Signal_get<int32> never emitted → Signal_get void*).
+	const checkedMods: { program: Node, ctx: CheckerContext, modPath: string, source: string }[] = [];
+	const programByPath: HashMap<string, Node> = new HashMap<string, Node>();
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
-
-		if (opts.verbose) verboseLog(`transforming ${modPath}`);
-
 		const program = parseOrExit(mod.source, modPath);
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
 		ctx.strictDefs = opts.strictDefs;
 		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
+		checkedMods.push({ program, ctx, modPath, source: mod.source });
+		programByPath.set(modPath, program);
+	}
 
-		// Drain pending instances BEFORE monomorphize/transform — matches cmdBuildC
-		// (line ~906). On-demand monomorphized methods (e.g. `hashMapRawGet<string,T>`)
-		// must flow through monomorphize → expandMacros → transformProgram →
-		// transformForNative just like static decls. Draining after transforms means
-		// generic-instance bodies skip extensionMethodLower (UFCS `key.hash()` →
-		// `hash(key)`) and operatorLower (string `==` → msStringEquals), producing
-		// broken C with raw method calls and pointer comparisons.
-		const pendingInsts = drainPendingInstances();
-		if (pendingInsts.length > 0) {
-			const instPd = program.data as ProgramData;
-			for (const inst of pendingInsts) {
-				if (inst.nodeType === null && inst.resolvedSym !== null && inst.resolvedSym.symbolType !== null) {
-					inst.nodeType = inst.resolvedSym.symbolType;
-				}
-				instPd.programStmts.push(inst);
-			}
+	// Single drain after A1 — route each pending generic instance to its OWNER module's
+	// program so the generic body's module-private helpers are visible in the same TU.
+	// Owner-less nodes fall back to the entry program.
+	const pendingInsts = drainPendingInstances();
+	for (let ii = 0; ii < pendingInsts.length; ii += 1) {
+		const instNode = pendingInsts[ii];
+		if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
+			instNode.nodeType = instNode.resolvedSym.symbolType;
 		}
+		let owner = "";
+		if (instNode.resolvedSym !== null && instNode.resolvedSym.modulePath !== "") {
+			owner = instNode.resolvedSym.modulePath;
+		}
+		let targetProgram: Node = null as unknown as Node;
+		if (owner !== "" && programByPath.has(owner)) {
+			targetProgram = programByPath.get(owner);
+		} else if (programByPath.has(filePath)) {
+			targetProgram = programByPath.get(filePath);
+		}
+		if (targetProgram !== null) {
+			(targetProgram.data as ProgramData).programStmts.push(instNode);
+		}
+	}
+
+	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
+	for (const cm of checkedMods) {
+		const program = cm.program;
+		const ctx = cm.ctx;
+		const modPath = cm.modPath;
+		if (opts.verbose) verboseLog(`transforming ${modPath}`);
 
 		const monoed = monomorphizeProgram(program, ctx);
 		validateTypedAST(ctx, monoed);
@@ -1343,7 +1393,6 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 		const resolved = resolveIncludeFlags(ctx.compilerFlags, includePaths);
 		allFlags = appendFlag(allFlags, resolved);
-		// @passL/@link go directly to global linkState — no per-module merge
 		registerIncludePaths(resolved, includePaths);
 	}
 
@@ -1362,6 +1411,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	if (rtObjs !== "") oFiles = appendFlag(oFiles, rtObjs);
 
 	// Phase C: Codegen + compile each module (per-module .c cache)
+	resetEmittedInstances();
 	let compiled = 0;
 	const tcd = cacheDir();
 	for (const p of processed) {
@@ -1485,8 +1535,6 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 }
 
 // ===== Raiser (Bytecode VM) Run =====
-// Loads module graph, parse-only per module (no checker/transforms — Raiser VM is dynamically typed),
-// compiles to bytecode via generateRaiserProject, executes in-process.
 
 export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	setTargetSizes(8, 8);
@@ -1521,6 +1569,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	if (opts.showTime) printTiming("compiled", t0);
 
 	const ctx = createRaiserContext();
+	ctx.gcMode = "orc";
 	raiserLoad(ctx, raiserMod);
 	const ranOk = raiserExecute(ctx);
 
