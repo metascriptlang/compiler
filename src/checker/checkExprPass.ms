@@ -1629,6 +1629,17 @@ function resolveSuper(ctx: CheckerContext, node: Node): Type {
 //   - non-null:    `{ value: expr, present: true }` ObjectLiteral typed as wrapper.
 //     Direct struct construction (Nim parity), no runtime helper.
 // Caller is responsible for the gating check (`isMaybeType(formal) && !isMaybeType(exprType)`).
+// Wrap a string arg passed to a cstring param in a HiddenStdConv so the FFI
+// boundary conversion (toJSStr on JS, msStringToCString on C) is inserted —
+// mirrors what an explicit `as cstring` cast does, but for implicit call args.
+function synthCStringConv(expr: Node, cstr: Type): Node {
+	const tok = createToken(TokenKind.Ident, "", expr.location.line);
+	const conv = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: cstr } as unknown as NodeData, tok);
+	conv.nodeType = cstr;
+	conv.flags = conv.flags | NodeFlag.Sem;
+	return conv;
+}
+
 function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
 	if (expr.kind === NodeKind.NullLiteral || exprType.kind === TypeKind.Null) {
 		expr.nodeType = formal;
@@ -2615,6 +2626,16 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			const me = d.callee.data as MemberExprData;
 			addError(ctx, `Too many arguments to '${me.property}': expected at most ${calleeType.typeChildren.length}, got ${d.arguments.length}`, node.location.line, node.location.column);
 		}
+		// FFI: implicit string→cstring at the call boundary (toJSStr on JS,
+		// msStringToCString on C) — mirrors an explicit `as cstring` cast.
+		for (let ci = 0; ci < d.arguments.length && ci < calleeType.typeChildren.length; ci += 1) {
+			const cpt = calleeType.typeChildren[ci];
+			if (cpt !== null && cpt.kind === TypeKind.CString && ci < argTypes.length && argTypes[ci] !== null
+					&& (argTypes[ci].kind === TypeKind.String || argTypes[ci].kind === TypeKind.StringLiteral)) {
+				d.arguments[ci] = synthCStringConv(d.arguments[ci], cpt);
+				argTypes[ci] = cpt;
+			}
+		}
 		// Static class methods need mono-instantiation
 		// for both explicit `<T>` AND arg-driven inference (e.g.
 		// `JSON.stringify(person)` without `<T>` should infer T=Person from
@@ -2730,6 +2751,11 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 							|| argTypes[pi].kind === TypeKind.Null
 							|| isAssignable(argTypes[pi], paramType.typeReturn))) {
 					d.arguments[pi] = synthMaybeWrap(d.arguments[pi], paramType, argTypes[pi]);
+					argTypes[pi] = paramType;
+				}
+				if (paramType.kind === TypeKind.CString
+						&& (argTypes[pi].kind === TypeKind.String || argTypes[pi].kind === TypeKind.StringLiteral)) {
+					d.arguments[pi] = synthCStringConv(d.arguments[pi], paramType);
 					argTypes[pi] = paramType;
 				}
 				if (!isAssignable(argTypes[pi], paramType)) {
