@@ -5,6 +5,7 @@
 
 import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isStructType } from "../../checker/types";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	CGen, CProc,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
@@ -240,6 +241,7 @@ function isUnionNarrowing(node: Node): boolean {
 }
 
 function genVarDecl(g: CGen, p: CProc, node: Node): void {
+	if (node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.ComptimeNodeAlias)) return;
 	const d = node.data as VariableDeclData;
 	// Reference parity (fillLocalName + cpsLocals): all locals get unique C names and
 	// hoist to function top. Prevents name collisions from same-named VarDecls in sibling scopes.

@@ -10,6 +10,7 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt } from "./emit";
 import { safeJsName } from "./expressions";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Typed Array Mapping (reference: arrayTypeForElemType) =====
 
@@ -101,6 +102,7 @@ function emitVariableDeclCore(gen: JSGenerator, node: Node): void {
 }
 
 export function emitVariableDecl(gen: JSGenerator, node: Node): void {
+	if (node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.ComptimeNodeAlias)) return;
 	emitIndent(gen);
 	emitVariableDeclCore(gen, node);
 	emit(gen, ";\n");
