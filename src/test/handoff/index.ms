@@ -40,3 +40,4 @@ import "./incompleteStruct";
 import "./anonStructCast";
 import "./nullVarType";
 import "./matchResultDrc";
+import "./outParamName";
