@@ -3,7 +3,7 @@
 
 import { Token, TokenKind } from "../lexer/token";
 import { Node, NodeKind, SourceLocation, makeLoc, NumberLiteralData } from "../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, skipDestructurePattern, takePendingComments, collectTokenText } from "./context";
+import { ParserState, createState, current, advance, peek, isAtEnd, skipDestructurePattern, takePendingComments, collectTokenText } from "./context";
 import { skipTypeAnnotation, parseTypeExpr } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
 import { callExprParser } from "./statements/callbacks";
@@ -195,19 +195,21 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			current(state).kind === TokenKind.Protected) {
 			advance(state);
 		}
-		// Out parameter: out name: Type → stored as "out:name"
-		if (current(state).kind === TokenKind.Out) {
+		// Out parameter: out name: Type → stored as "out:name". `out` is a contextual keyword:
+		// it's the modifier only when a param name follows; `out: Type` / `out, …` / `out)` mean
+		// `out` is itself the param name (same rule as the out-expression parser).
+		if (current(state).kind === TokenKind.Out && isIdentLike(peek(state, 1))) {
 			advance(state);
 			paramPrefix = `${paramPrefix}out:`;
 		}
-		// Ref parameter: ref name: Type → stored as "ref:name"
-		if (current(state).kind === TokenKind.Ref) {
+		// Ref parameter: ref name: Type → stored as "ref:name" (contextual, as above)
+		if (current(state).kind === TokenKind.Ref && isIdentLike(peek(state, 1))) {
 			advance(state);
 			paramPrefix = `${paramPrefix}ref:`;
 		}
-		// Readonly parameter: readonly name: Type → stored as "rdonly:name"
+		// Readonly parameter: readonly name: Type → stored as "rdonly:name" (contextual, as above)
 		// Cannot combine with out/ref — readonly means value copy, out/ref means pointer
-		if (current(state).kind === TokenKind.Readonly && paramPrefix.indexOf("out:") < 0 && paramPrefix.indexOf("ref:") < 0) {
+		if (current(state).kind === TokenKind.Readonly && isIdentLike(peek(state, 1)) && paramPrefix.indexOf("out:") < 0 && paramPrefix.indexOf("ref:") < 0) {
 			advance(state);
 			paramPrefix = `${paramPrefix}rdonly:`;
 		}
