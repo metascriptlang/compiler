@@ -11,6 +11,7 @@ import { refineTypes } from "../../transform/typeRefine";
 import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
+import { RaiserVM, execModule } from "../../raiser/vm";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput } from "./rgen";
 import { getComptimeOuterCtx } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
@@ -66,6 +67,57 @@ function evalFull(code: string): RaiserContext {
 		return createContext();
 	}
 	return evalASTFull(parseResult.value);
+}
+
+// Full pipeline under ORC (gcMode=orc) — returns the VM so heap state is inspectable.
+function evalOrcVM(code: string): RaiserVM {
+	const parseResult = parseSource(code);
+	if (!parseResult.ok) { unreachable; }
+	const program = parseResult.value;
+	const checkerCtx = checkProgram(program);
+	const txCtx = createTransformContextWithChecker(checkerCtx);
+	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
+	const transformed = transformForRaiser(refined, checkerCtx);
+	const mod = generateRaiser(transformed);
+	return execModule(mod, "orc");
+}
+
+test "orc: correct result + no error on object program" {
+	const vm = evalOrcVM("function mk(): { x: number } { return { x: 7 }; } const o = mk(); return o.x;");
+	assert vm.error === "";
+	assert vm.exitValue.intVal === 7;
+}
+
+test "orc: dead objects in loop are reclaimed (free-list grows)" {
+	const vm = evalOrcVM("function mk(): { x: number } { return { x: 1 }; } let i = 0; let s = 0; while (i < 40) { const o = mk(); s = s + o.x; i = i + 1; } return s;");
+	assert vm.error === "";
+	assert vm.exitValue.intVal === 40;
+	// arena would grow objectHeap ~40 with empty free-list; orc recycles dead objects
+	assert vm.objectHeap.freeList.length > 0;
+}
+
+test "orc: heap stays bounded under long alloc loop" {
+	const vm = evalOrcVM("function mk(): { x: number } { return { x: 1 }; } let i = 0; while (i < 500) { const o = mk(); i = i + 1; } return i;");
+	assert vm.error === "";
+	assert vm.exitValue.intVal === 500;
+	// arena would grow objectHeap to ~500; orc recycles dead objects → bounded
+	assert vm.objectHeap.objects.length < 50;
+}
+
+test "orc: reference cycles are collected (bounded heap)" {
+	// each mkCycle leaks an a<->b cycle that pure ARC can never free; the cycle
+	// collector must reclaim them so the heap stays bounded across 2000 iterations.
+	const src = "interface CNode { next: CNode; } function mkCycle(): void { const a: CNode = { next: null as unknown as CNode }; const b: CNode = { next: null as unknown as CNode }; a.next = b; b.next = a; } let i = 0; while (i < 2000) { mkCycle(); i = i + 1; } return 0;";
+	const vm = evalOrcVM(src);
+	assert vm.error === "";
+	// without cycle collection objectHeap would hold ~4000 leaked objects
+	assert vm.objectHeap.objects.length < 1000;
+}
+
+test "orc: shared ref survives (stored in array)" {
+	const vm = evalOrcVM("const a: number[] = []; let i = 0; while (i < 5) { a.push(i); i = i + 1; } let sum = 0; for (const v of a) { sum = sum + v; } return sum;");
+	assert vm.error === "";
+	assert vm.exitValue.intVal === 10;
 }
 
 // --- Phase 3 Integration Tests ---

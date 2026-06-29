@@ -194,21 +194,34 @@ test "array" { assert raiserToString(raiserArray(0)) === "[array]"; }
 
 export interface RaiserArrayData {
 	items: RaiserValue[];
+	rc: number;
+	color: number;
 }
 
 export interface RaiserArrayHeap {
 	arrays: RaiserArrayData[];
+	freeList: number[];
 }
 
 export function createArrayHeap(): RaiserArrayHeap {
 	const arrays: RaiserArrayData[] = [];
-	return { arrays };
+	const freeList: number[] = [];
+	return { arrays, freeList };
 }
 
 export function heapAllocArray(heap: RaiserArrayHeap): number {
+	if (heap.freeList.length > 0) {
+		const reused = heap.freeList[heap.freeList.length - 1];
+		heap.freeList.length = heap.freeList.length - 1;
+		const data = heap.arrays[reused];
+		data.items.length = 0;
+		data.rc = 0;
+		data.color = 0;
+		return reused;
+	}
 	const idx = heap.arrays.length;
 	const items: RaiserValue[] = [];
-	const data: RaiserArrayData = { items };
+	const data: RaiserArrayData = { items, rc: 0, color: 0 };
 	heap.arrays.push(data);
 	return idx;
 }
@@ -292,21 +305,34 @@ export interface RaiserObjectField {
 
 export interface RaiserObjectData {
 	fields: RaiserObjectField[];
+	rc: number;
+	color: number;
 }
 
 export interface RaiserObjectHeap {
 	objects: RaiserObjectData[];
+	freeList: number[];
 }
 
 export function createStructHeap(): RaiserObjectHeap {
 	const objects: RaiserObjectData[] = [];
-	return { objects };
+	const freeList: number[] = [];
+	return { objects, freeList };
 }
 
 export function heapAllocObject(heap: RaiserObjectHeap): number {
+	if (heap.freeList.length > 0) {
+		const reused = heap.freeList[heap.freeList.length - 1];
+		heap.freeList.length = heap.freeList.length - 1;
+		const data = heap.objects[reused];
+		data.fields.length = 0;
+		data.rc = 0;
+		data.color = 0;
+		return reused;
+	}
 	const idx = heap.objects.length;
 	const fields: RaiserObjectField[] = [];
-	const data: RaiserObjectData = { fields };
+	const data: RaiserObjectData = { fields, rc: 0, color: 0 };
 	heap.objects.push(data);
 	return idx;
 }
@@ -341,6 +367,108 @@ export function heapObjectSetField(heap: RaiserObjectHeap, handle: number, name:
 	const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal, strVal: val.strVal };
 	const field: RaiserObjectField = { name, value: copy };
 	obj.fields.push(field);
+}
+
+// --- ORC refcount primitives ---
+// Only Array/Object are heap refs; a ref can hold cross-heap children, so both
+// heaps are threaded through. Destroy is generic (the heap object is self-describing).
+
+export function rcIncref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, val: RaiserValue): void {
+	if (val.kind === RaiserValueKind.Array) {
+		arrHeap.arrays[val.intVal].rc = arrHeap.arrays[val.intVal].rc + 1;
+	} else if (val.kind === RaiserValueKind.Object) {
+		objHeap.objects[val.intVal].rc = objHeap.objects[val.intVal].rc + 1;
+	}
+}
+
+export function rcDecref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, val: RaiserValue): void {
+	if (val.kind === RaiserValueKind.Array) {
+		const data = arrHeap.arrays[val.intVal];
+		data.rc = data.rc - 1;
+		if (data.rc <= 0) { rcDestroyArray(arrHeap, objHeap, val.intVal); }
+	} else if (val.kind === RaiserValueKind.Object) {
+		const data = objHeap.objects[val.intVal];
+		data.rc = data.rc - 1;
+		if (data.rc <= 0) { rcDestroyObject(arrHeap, objHeap, val.intVal); }
+	}
+}
+
+function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: number): void {
+	const data = arrHeap.arrays[handle];
+	for (const item of data.items) {
+		rcDecref(arrHeap, objHeap, item);
+	}
+	data.items.length = 0;
+	arrHeap.freeList.push(handle);
+}
+
+function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: number): void {
+	const data = objHeap.objects[handle];
+	for (const field of data.fields) {
+		rcDecref(arrHeap, objHeap, field.value);
+	}
+	data.fields.length = 0;
+	objHeap.freeList.push(handle);
+}
+
+// --- ORC refcount tests ---
+test "rc incref/decref frees at zero" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const h = heapAllocArray(arr);
+	const v = raiserArray(h);
+	rcIncref(arr, obj, v);
+	assert arr.arrays[h].rc === 1;
+	rcIncref(arr, obj, v);
+	assert arr.arrays[h].rc === 2;
+	rcDecref(arr, obj, v);
+	assert arr.arrays[h].rc === 1;
+	rcDecref(arr, obj, v);
+	assert arr.freeList.length === 1;
+	assert arr.freeList[0] === h;
+}
+
+test "rc destroy decrefs children" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const parent = heapAllocArray(arr);
+	const child = heapAllocArray(arr);
+	const childVal = raiserArray(child);
+	rcIncref(arr, obj, childVal);
+	heapArrayPush(arr, parent, childVal);
+	const parentVal = raiserArray(parent);
+	rcIncref(arr, obj, parentVal);
+	assert arr.arrays[child].rc === 1;
+	rcDecref(arr, obj, parentVal);
+	assert arr.freeList.length === 2;
+}
+
+test "alloc reuses free-list slot" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const h1 = heapAllocArray(arr);
+	const v = raiserArray(h1);
+	rcIncref(arr, obj, v);
+	rcDecref(arr, obj, v);
+	const h2 = heapAllocArray(arr);
+	assert h2 === h1;
+	assert arr.freeList.length === 0;
+}
+
+test "rc object destroy decrefs field refs" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const o = heapAllocObject(obj);
+	const childArr = heapAllocArray(arr);
+	const childVal = raiserArray(childArr);
+	rcIncref(arr, obj, childVal);
+	heapObjectSetField(obj, o, "kids", childVal);
+	const oVal = raiserObject(o);
+	rcIncref(arr, obj, oVal);
+	assert arr.arrays[childArr].rc === 1;
+	rcDecref(arr, obj, oVal);
+	assert obj.freeList.length === 1;
+	assert arr.freeList.length === 1;
 }
 
 // --- Object field convenience accessors ---

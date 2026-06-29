@@ -29,6 +29,7 @@ export interface RaiserContext {
 	arrayHeap: RaiserArrayHeap;
 	objectHeap: RaiserObjectHeap;
 	lastError: string;
+	gcMode: string;
 }
 
 export function createContext(): RaiserContext {
@@ -38,7 +39,7 @@ export function createContext(): RaiserContext {
 	const nilResult = raiserNil();
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
-	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap, lastError: "" };
+	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap, lastError: "", gcMode: "arena" };
 }
 
 export function load(ctx: RaiserContext, mod: RaiserModule): void {
@@ -48,7 +49,7 @@ export function load(ctx: RaiserContext, mod: RaiserModule): void {
 
 export function execute(ctx: RaiserContext): boolean {
 	if (!ctx.hasModule) return false;
-	const vm = execModule(ctx.mod);
+	const vm = execModule(ctx.mod, ctx.gcMode);
 	ctx.lastResult = vm.exitValue;
 	ctx.lastOutput = vm.output;
 	ctx.arrayHeap = vm.arrayHeap;

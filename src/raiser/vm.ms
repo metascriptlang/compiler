@@ -10,12 +10,14 @@ import {
 	RaiserValue, RaiserValueKind,
 	raiserNil, raiserInt, raiserBool, raiserString, raiserArray, raiserToString, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArrayLen,
-	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject
+	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject,
+	rcIncref, rcDecref
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
 	makeTestModule, getFuncConst, getFuncConstLen, getFuncInst, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
+import { orcCollectCycles } from "./orc";
 import { lookupHostFn, registerHostFn, _resetHostRegistryForTests } from "./hostRegistry";
 import { RaiserHostFn } from "./marshal";
 
@@ -53,6 +55,8 @@ export interface RaiserVM {
 	opCount: number;
 	opLimit: number;
 	error: string;    // Non-empty when VM stopped due to error
+	gcMode: string;   // "arena" (default, no RC) | "orc" (refcount + cycle collector)
+	gcThreshold: number;  // live-object count that triggers a cycle collection (orc)
 }
 
 // Initial register file size. The slots array grows on demand via
@@ -71,7 +75,7 @@ export function ensureSlots(regs: RaiserRegFile, count: number): void {
 	}
 }
 
-export function createVM(mod: RaiserModule): RaiserVM {
+export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM {
 	const slots: RaiserValue[] = [];
 	const regs: RaiserRegFile = { slots };
 	// Reserve the entry function's frame up-front (and at least the initial
@@ -85,7 +89,7 @@ export function createVM(mod: RaiserModule): RaiserVM {
 	const callStack: RaiserCallFrames = { items: callFrames };
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
-	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, opCount: 0, opLimit: 10000000, error: "" };
+	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, opCount: 0, opLimit: 10000000, error: "", gcMode, gcThreshold: 256 };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -101,8 +105,44 @@ function getReg(vm: RaiserVM, idx: number): RaiserValue {
 	return vm.regs.slots[idx];
 }
 
+// --- ORC refcount helpers (gated on gcMode; no-op in arena mode) ---
+
+function vmIncref(vm: RaiserVM, val: RaiserValue): void {
+	if (vm.gcMode === "orc") rcIncref(vm.arrayHeap, vm.objectHeap, val);
+}
+
+function vmDecref(vm: RaiserVM, val: RaiserValue): void {
+	if (vm.gcMode === "orc") rcDecref(vm.arrayHeap, vm.objectHeap, val);
+}
+
+// Adaptive cycle collection: when the live (allocated minus recycled) heap object
+// count outgrows the threshold, run a collection. ARC keeps acyclic workloads
+// below threshold; only cyclic garbage makes `live` climb, which the collector
+// reclaims — so the threshold tracks the true live set rather than thrashing.
+function vmLiveCount(vm: RaiserVM): number {
+	return (vm.objectHeap.objects.length - vm.objectHeap.freeList.length)
+		+ (vm.arrayHeap.arrays.length - vm.arrayHeap.freeList.length);
+}
+
+function vmMaybeCollect(vm: RaiserVM): void {
+	if (vm.gcMode !== "orc") return;
+	if (vmLiveCount(vm) <= vm.gcThreshold) return;
+	orcCollectCycles(vm.arrayHeap, vm.objectHeap);
+	let next = vmLiveCount(vm) * 2;
+	if (next < 256) next = 256;
+	vm.gcThreshold = next;
+}
+
 function setReg(vm: RaiserVM, idx: number, val: RaiserValue): void {
 	if (idx >= vm.regs.slots.length) ensureSlots(vm.regs, idx + 1);
+	if (vm.gcMode === "orc") {
+		// incref-before-decref: safe under self-assignment (setReg(i, slots[i]))
+		const old = vm.regs.slots[idx];
+		rcIncref(vm.arrayHeap, vm.objectHeap, val);
+		vm.regs.slots[idx] = val;
+		rcDecref(vm.arrayHeap, vm.objectHeap, old);
+		return;
+	}
 	vm.regs.slots[idx] = val;
 }
 
@@ -117,8 +157,8 @@ const MAX_CALL_DEPTH = 1024;
 
 // --- Execute ---
 
-export function execModule(mod: RaiserModule): RaiserVM {
-	const vm = createVM(mod);
+export function execModule(mod: RaiserModule, gcMode: string = "arena"): RaiserVM {
+	const vm = createVM(mod, gcMode);
 
 	while (!vm.halted) {
 		// Budget check
@@ -384,6 +424,12 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	copyValueInto(retCopy, getReg(vm, vm.baseReg + inst.a));
 	setReg(vm, frame.returnReg, retCopy);
 
+	// No blanket frame-exit decref: the global register file is reused across
+	// calls, so a callee slot may hold a stale handle from a prior frame that this
+	// frame never owned — decref-ing the whole range over-decrefs it (UAF).
+	// Reclamation instead happens lazily via setReg's decref-on-overwrite when the
+	// slot is next written (frame reuse). Residual: a never-reused slot's ref lingers.
+
 	// Restore caller state
 	vm.funcIdx = frame.funcIdx;
 	vm.baseReg = frame.baseReg;
@@ -434,9 +480,11 @@ function vmHandleNewArray(vm: RaiserVM, inst: RaiserInstruction): void {
 	for (let i = 0; i < elemCount; i = i + 1) {
 		const elem = getReg(vm, vm.baseReg + inst.a + 1 + i);
 		heapArrayPush(vm.arrayHeap, handle, elem);
+		vmIncref(vm, elem);
 	}
 	const arrVal = raiserArray(handle);
 	setReg(vm, vm.baseReg + inst.a, arrVal);
+	vmMaybeCollect(vm);
 }
 
 function vmHandleLoadIndex(vm: RaiserVM, inst: RaiserInstruction): void {
@@ -453,7 +501,10 @@ function vmHandleLoadIndex(vm: RaiserVM, inst: RaiserInstruction): void {
 	}
 	const elem = heapArrayGet(vm.arrayHeap, handle, idx);
 	// Deep copy to avoid aliasing
-	copyValueInto(getReg(vm, vm.baseReg + inst.a), elem);
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmIncref(vm, elem);
+	vmDecref(vm, dst);
+	copyValueInto(dst, elem);
 }
 
 function vmHandleStoreIndex(vm: RaiserVM, inst: RaiserInstruction): void {
@@ -469,6 +520,8 @@ function vmHandleStoreIndex(vm: RaiserVM, inst: RaiserInstruction): void {
 	if (idx < 0 || idx >= arrLen) {
 		vmError(vm, `array index out of bounds: ${idx} (length ${arrLen})`); return;
 	}
+	vmIncref(vm, val);
+	vmDecref(vm, heapArrayGet(vm.arrayHeap, handle, idx));
 	heapArraySet(vm.arrayHeap, handle, idx, val);
 }
 
@@ -491,6 +544,7 @@ function vmHandleArrayPush(vm: RaiserVM, inst: RaiserInstruction): void {
 		vmError(vm, `array handle out of bounds: ${handle}`); return;
 	}
 	heapArrayPush(vm.arrayHeap, handle, val);
+	vmIncref(vm, val);
 }
 
 // --- Object opcode handlers ---
@@ -499,6 +553,7 @@ function vmHandleNewObject(vm: RaiserVM, inst: RaiserInstruction): void {
 	const handle = heapAllocObject(vm.objectHeap);
 	const objVal = raiserObject(handle);
 	setReg(vm, vm.baseReg + inst.a, objVal);
+	vmMaybeCollect(vm);
 }
 
 function vmHandleLoadField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruction): void {
@@ -517,7 +572,10 @@ function vmHandleLoadField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruct
 		const nameVal = getFuncConst(func, inst.c);
 		if (fields[idx].name === nameVal.strVal) {
 			// Cache hit — O(1) access
-			copyValueInto(getReg(vm, vm.baseReg + inst.a), fields[idx].value);
+			const dstHit = getReg(vm, vm.baseReg + inst.a);
+			vmIncref(vm, fields[idx].value);
+			vmDecref(vm, dstHit);
+			copyValueInto(dstHit, fields[idx].value);
 			return;
 		}
 	}
@@ -530,13 +588,17 @@ function vmHandleLoadField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruct
 	while (fi < fields.length) {
 		if (fields[fi].name === fieldName) {
 			inst.cachedIdx = fi;
-			copyValueInto(getReg(vm, vm.baseReg + inst.a), fields[fi].value);
+			const dstMiss = getReg(vm, vm.baseReg + inst.a);
+			vmIncref(vm, fields[fi].value);
+			vmDecref(vm, dstMiss);
+			copyValueInto(dstMiss, fields[fi].value);
 			return;
 		}
 		fi = fi + 1;
 	}
 	// Field not found — load nil
 	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.Nil;
 	dst.intVal = 0;
 	dst.floatVal = 0.0;
@@ -560,6 +622,8 @@ function vmHandleStoreField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruc
 		const nameVal = getFuncConst(func, inst.b);
 		if (fields[idx].name === nameVal.strVal) {
 			// Cache hit — O(1) update
+			vmIncref(vm, val);
+			vmDecref(vm, fields[idx].value);
 			copyValueInto(fields[idx].value, val);
 			return;
 		}
@@ -573,12 +637,15 @@ function vmHandleStoreField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruc
 	while (fi < fields.length) {
 		if (fields[fi].name === fieldName) {
 			inst.cachedIdx = fi;
+			vmIncref(vm, val);
+			vmDecref(vm, fields[fi].value);
 			copyValueInto(fields[fi].value, val);
 			return;
 		}
 		fi = fi + 1;
 	}
 	// New field — append
+	vmIncref(vm, val);
 	const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal, strVal: val.strVal };
 	const field: RaiserObjectField = { name: fieldName, value: copy };
 	fields.push(field);
@@ -592,6 +659,7 @@ function vmHandleConcatStr(vm: RaiserVM, inst: RaiserInstruction): void {
 	const rhs = getReg(vm, vm.baseReg + inst.c);
 	const result = raiserToString(lhs) + raiserToString(rhs);
 	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.String;
 	dst.intVal = 0;
 	dst.floatVal = 0.0;
@@ -619,6 +687,7 @@ function vmHandleNeStr(vm: RaiserVM, inst: RaiserInstruction): void {
 function vmHandleStrLen(vm: RaiserVM, inst: RaiserInstruction): void {
 	const src = getReg(vm, vm.baseReg + inst.b);
 	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.Int;
 	dst.intVal = src.strVal.length;
 	dst.floatVal = 0.0;
@@ -630,6 +699,7 @@ function vmHandleStrCharAt(vm: RaiserVM, inst: RaiserInstruction): void {
 	const idx = getReg(vm, vm.baseReg + inst.c);
 	const i = idx.intVal;
 	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.String;
 	dst.intVal = 0;
 	dst.floatVal = 0.0;
@@ -645,6 +715,7 @@ function vmHandleStrSlice(vm: RaiserVM, inst: RaiserInstruction): void {
 	const startReg = getReg(vm, vm.baseReg + inst.c);
 	const endReg = getReg(vm, vm.baseReg + inst.c + 1);
 	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.String;
 	dst.intVal = 0;
 	dst.floatVal = 0.0;
@@ -664,6 +735,7 @@ function vmHandleAddF64(vm: RaiserVM, inst: RaiserInstruction): void {
 	const lhs = getReg(vm, vm.baseReg + inst.b);
 	const rhs = getReg(vm, vm.baseReg + inst.c);
 	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.Float;
 	dst.floatVal = asNum(lhs) + asNum(rhs);
 	dst.intVal = 0;
@@ -674,6 +746,7 @@ function vmHandleSubF64(vm: RaiserVM, inst: RaiserInstruction): void {
 	const lhs = getReg(vm, vm.baseReg + inst.b);
 	const rhs = getReg(vm, vm.baseReg + inst.c);
 	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.Float;
 	dst.floatVal = asNum(lhs) - asNum(rhs);
 	dst.intVal = 0;
@@ -684,6 +757,7 @@ function vmHandleMulF64(vm: RaiserVM, inst: RaiserInstruction): void {
 	const lhs = getReg(vm, vm.baseReg + inst.b);
 	const rhs = getReg(vm, vm.baseReg + inst.c);
 	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.Float;
 	dst.floatVal = asNum(lhs) * asNum(rhs);
 	dst.intVal = 0;
@@ -694,6 +768,7 @@ function vmHandleDivF64(vm: RaiserVM, inst: RaiserInstruction): void {
 	const lhs = getReg(vm, vm.baseReg + inst.b);
 	const rhs = getReg(vm, vm.baseReg + inst.c);
 	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.Float;
 	const rv = asNum(rhs);
 	if (rv !== 0.0) {
@@ -708,6 +783,7 @@ function vmHandleDivF64(vm: RaiserVM, inst: RaiserInstruction): void {
 function vmHandleNegF64(vm: RaiserVM, inst: RaiserInstruction): void {
 	const src = getReg(vm, vm.baseReg + inst.b);
 	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.Float;
 	dst.floatVal = 0.0 - asNum(src);
 	dst.intVal = 0;
@@ -768,6 +844,8 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 	const result = fn(args);
 
 	const dst = getReg(vm, base + inst.a);
+	vmIncref(vm, result);
+	vmDecref(vm, dst);
 	copyValueInto(dst, result);
 }
 
