@@ -546,19 +546,7 @@ msRefArray msRefArrayNew(int64_t cap) {
 
 void msRefArrayDestroy(msRefArray* arr) {
 	if (arr->p != NULL) {
-		/* Decref each element before freeing the payload.
-		   Reference parity: destroy for ref-element sequences iterates elements
-		   and calls destroy on each before freeing the backing buffer.
-		   Without this, the inject pass (inline scope cleanup) frees the
-		   payload while elements still hold stale refcounts — use-after-free. */
-		for (int64_t i = 0; i < arr->len; i++) {
-			void* elem = arr->p->data[i];
-			if (elem != NULL && msDecRefIsLast(elem)) {
-				const msTypeInfo* t = msHeader(elem)->type;
-				if (t != NULL && t->destroyFn != NULL) t->destroyFn(elem);
-				msDestroyAndDispose(elem);
-			}
-		}
+		for (int64_t i = 0; i < arr->len; i++) msDecref(arr->p->data[i]);
 		free(arr->p);
 		arr->p = NULL;
 	}
@@ -588,10 +576,8 @@ void* msRefArrayAt(msRefArray* arr, int64_t idx) {
 void msRefArrayShrink(msRefArray* arr, int64_t newLen) {
 	if (newLen < 0) newLen = 0;
 	if (newLen >= arr->len) return;
-	/* Clear evicted slots without RC operations.
-	 * RC management (incref on store, decref on evict) is the DRC's responsibility.
-	 * The runtime must not assume ownership — elements may be referenced elsewhere. */
 	for (int64_t i = newLen; i < arr->len; i++) {
+		msDecref(arr->p->data[i]);
 		arr->p->data[i] = NULL;
 	}
 	arr->len = newLen;
@@ -623,16 +609,7 @@ int64_t msRefArrayCapacity(msRefArray* arr) {
 
 void msRefArraySetLenUninit(msRefArray* arr, int64_t newLen) {
 	if (newLen < arr->len) {
-		/* Still decref evicted refs for safety */
-		for (int64_t i = newLen; i < arr->len; i++) {
-			if (arr->p->data[i] != NULL) {
-				if (msDecRefIsLast(arr->p->data[i])) {
-					msDestroyAndDispose(arr->p->data[i]);
-				}
-				arr->p->data[i] = NULL;
-			}
-		}
-		arr->len = newLen;
+		msRefArrayShrink(arr, newLen);
 		return;
 	}
 	if (arr->p == NULL || arr->p->cap < newLen) {
@@ -658,6 +635,7 @@ void msStringArraySplice(msStringArray* arr, int64_t start, int64_t deleteCount)
 	if (arr->p == NULL || start < 0 || start >= arr->len) return;
 	if (deleteCount <= 0) return;
 	if (start + deleteCount > arr->len) deleteCount = arr->len - start;
+	for (int64_t i = start; i < start + deleteCount; i++) msStringDestroy(arr->p->data[i]);
 	int64_t remaining = arr->len - start - deleteCount;
 	if (remaining > 0) {
 		memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(msString));
@@ -669,6 +647,7 @@ void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
 	if (arr->p == NULL || start < 0 || start >= arr->len) return;
 	if (deleteCount <= 0) return;
 	if (start + deleteCount > arr->len) deleteCount = arr->len - start;
+	for (int64_t i = start; i < start + deleteCount; i++) msDecref(arr->p->data[i]);
 	int64_t remaining = arr->len - start - deleteCount;
 	if (remaining > 0) {
 		memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));
