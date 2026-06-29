@@ -214,6 +214,21 @@ function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
 	sgRecordSym(ctx, loc.line, loc.column, loc.column + base.byteLength, sym, sym.symbolType, sym.symbolKind, base, "", false);
 }
 
+function foldComptimeNodeAliasArgs(ctx: CheckerContext, args: Node[]): void {
+	let i = 0;
+	while (i < args.length) {
+		const a = args[i];
+		if (a.kind === NodeKind.Identifier) {
+			const sym = lookupSymbol(ctx.table, (a.data as IdentifierData).name);
+			if (sym !== null && hasFlag(sym, SymbolFlag.ComptimeNodeAlias) && sym.declNode !== null) {
+				markUsed(sym);
+				args[i] = cloneNodeForCheck(sym.declNode);
+			}
+		}
+		i += 1;
+	}
+}
+
 // Internal: compute type for node. All match arms and sub-functions return Type.
 function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const result = match (node.kind) {
@@ -352,6 +367,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
 			markUsed(sym);
+			if (hasFlag(sym, SymbolFlag.ComptimeNodeAlias)) {
+				addError(ctx, `'${d.name}' binds a compile-time JSX/Node and can only be consumed by a macro (e.g. element(${d.name})), not used as a runtime value`, node.location.line, node.location.column);
+				node.nodeType = errorType(); return;
+			}
 			// PARALOCK Phase 1 R2/E3: affine-Promise bindings are single-use.
 			// Reuse check is keyed by symbolConsumeKey (name + declaration site) so
 			// shadowed bindings don't false-positive. First-await is OK because the
@@ -1420,6 +1439,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				processEmitInterpolation(ctx, md, node);
 			}
 			// @import args are pure syntax (not evaluated) — skip type-checking
+			foldComptimeNodeAliasArgs(ctx, md.macroArgs);
 			if (md.macroName !== "import") { checkJsxConsumed(ctx, md.macroArgs); }
 			// SERIALIZE Bug 8: deferred user macros expand eagerly when re-checked
 			// with concrete types. After mono clones a generic body, replaceTypeVars
@@ -2294,6 +2314,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				return unknownType();
 			}
 			// Type-check args first (errors inside them are reported)
+			foldComptimeNodeAliasArgs(ctx, d.arguments);
 			const macroArgsRef = d.arguments;
 			checkJsxConsumed(ctx, macroArgsRef);
 			// Mutate node to MacroInvocation form so expandMacroInvocation can read it

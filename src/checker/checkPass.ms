@@ -223,6 +223,31 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
+	if (d.declKind === DeclKind.Const && d.initializer !== null
+			&& (d.initializer.kind === NodeKind.JSXElement || d.initializer.kind === NodeKind.JSXFragment)) {
+		ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth + 1;
+		checkExpr(ctx, d.initializer, null);
+		ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth - 1;
+		const aliasType = unknownType();
+		node.nodeType = aliasType;
+		let sym: Symbol = null as unknown as Symbol;
+		const existing = lookupLocal(ctx.table, d.declName);
+		if (existing !== null) {
+			existing.symbolType = aliasType;
+			sym = existing;
+		} else {
+			sym = makeSymbol(d.declName, SymbolKind.Variable, aliasType, false);
+			defineOrError(ctx, sym, node);
+		}
+		setFlag(sym, SymbolFlag.ComptimeNodeAlias);
+		sym.declNode = d.initializer;
+		d.initializer = null as unknown as Node;
+		node.resolvedSym = sym;
+		varDecl(ctx.initTracker, d.declName);
+		markInitialized(ctx.initTracker, d.declName);
+		node.flags = node.flags | NodeFlag.FirstWrite;
+		return;
+	}
 	// Resolve declared type FIRST so it can flow as expectedType into initializer (Implementation parity)
 	let declType: Type | null = null;
 	if (d.declType !== "") {
