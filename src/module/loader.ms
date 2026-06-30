@@ -383,7 +383,12 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 // error. Map-provider test paths like `/src/a.ms` already absolute → pass
 // through unchanged.
 export function canonicalModulePath(path: string): string {
-	if (isAbsolute(path)) return path;
+	// Normalize regardless of absolute/relative: a module's identity must collapse
+	// `..`/`.` segments so the same file reached via different import spellings
+	// (e.g. `crypto/index` vs `crypto/tls/../index`) maps to ONE module — otherwise
+	// it loads twice under two identities, emitting duplicate symbols whose mangled
+	// names diverge by path → undefined-symbol link errors.
+	if (isAbsolute(path)) return normalize(path);
 	return normalize(join(cwd(), path));
 }
 

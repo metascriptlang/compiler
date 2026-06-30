@@ -7,6 +7,7 @@ import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
 import { getModuleDir, appendFlag } from "../utils/string";
+import { normalize } from "std/fs/path";
 import { getGenericDecl } from "../parser/context";
 
 // ===== Top-Level Collector =====
@@ -533,7 +534,10 @@ function resolveImportSourcePath(ctx: CheckerContext, specifier: string): string
 				if (rel.length > 2 && rel.slice(0, 2) === "./") {
 					rel = rel.slice(2, rel.length);
 				}
-				return dir + "/" + rel;
+				// Collapse `..`/`.` so a re-exported symbol's defining module matches its
+				// canonical identity (the loader's). Un-normalized here (`crypto/tls/../index`)
+				// would mangle a divergent symbol name → undefined-symbol link error.
+				return normalize(dir + "/" + rel);
 			}
 		}
 		// Absolute std path (`std/serialize/json/decode`) → derive std root from modulePath

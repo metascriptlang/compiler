@@ -14,7 +14,7 @@ import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/fs";
 import { platform } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
-import { join } from "std/fs/path";
+import { join, normalize } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { globalImports } from "./prelude";
@@ -1778,6 +1778,12 @@ function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: s
 	} else {
 		return { path: "", source: "" };
 	}
+
+	// Collapse `..`/`.` so a prelude sub-module's identity is canonical — matches the
+	// loader's module key, so the export-registry dedup (findModuleExports below)
+	// recognizes an already-compiled module instead of re-checking it under a divergent
+	// path whose symbols then mangle to undefined-symbol link errors.
+	basePath = normalize(basePath);
 
 	// Backend-specific first so per-target prelude wins over generic .ms / .cms.
 	for (const ext of [backendExt, ".ms", ".cms", "/index" + backendExt, "/index.ms", "/index.cms"]) {

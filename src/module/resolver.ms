@@ -137,7 +137,10 @@ export function resolveImport(specifier: string, fromFile: string): ResolveCandi
 	if (!isRelative(specifier)) return result;
 
 	const baseDir = dirname(fromFile);
-	const base = join(baseDir, specifier);
+	// Normalize to collapse ./ and ../ — a file must resolve to ONE canonical path
+	// regardless of import spelling, else it loads twice under divergent identities
+	// (duplicate symbols → undefined-symbol link errors). Matches resolveImportWithConfig.
+	const base = normalize(join(baseDir, specifier));
 
 	// If specifier has a known extension (.h, .ms, etc.), use it directly
 	if (hasKnownExtension(specifier)) {
@@ -260,12 +263,12 @@ function isRelative(specifier: string): boolean {
 
 export function buildFilePath(specifier: string, fromFile: string): string {
 	const baseDir = dirname(fromFile);
-	return join(baseDir, specifier + ".ms");
+	return normalize(join(baseDir, specifier + ".ms"));
 }
 
 export function buildIndexPath(specifier: string, fromFile: string): string {
 	const baseDir = dirname(fromFile);
-	return join(baseDir, join(specifier, "index.ms"));
+	return normalize(join(baseDir, join(specifier, "index.ms")));
 }
 
 // ===== Tests =====
