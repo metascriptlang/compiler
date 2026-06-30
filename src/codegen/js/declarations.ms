@@ -52,44 +52,15 @@ export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
 
 function emitEnumDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as EnumDeclData;
-	if (gen.bundleMode) {
-		// Bundle mode: flat constants (matches transform output of EnumName_Member)
-		// + namespace object for cross-module import via __mod["..."].EnumName.Member
-		for (let i = 0; i < d.enumMembers.length; i += 1) {
-			emitIndent(gen);
-			emit(gen, `var ${safeJsName(d.enumName)}_${d.enumMembers[i]} = ${i};\n`);
-		}
-		return;
-	}
-	// Non-bundle: TypeScript IIFE pattern
-	emit(gen, "var ");
-	emit(gen, d.enumName);
-	emit(gen, ";\n");
-	emitIndent(gen);
-	emit(gen, "(function (");
-	emit(gen, d.enumName);
-	emit(gen, ") {\n");
-	gen.indentLevel = gen.indentLevel + 1;
+	// Flat constants matching the checker's `EnumName_Member` rewrite, in both
+	// bundle and non-bundle output. The IIFE `E.Member` object form is never
+	// referenced — the checker lowers every `E.Member` access to `E_Member`.
+	// Honor explicit values (enumValues), else fall back to ordinal index.
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
-		emitIndent(gen);
-		emit(gen, d.enumName);
-		emit(gen, "[");
-		emit(gen, d.enumName);
-		emit(gen, "[\"");
-		emit(gen, d.enumMembers[i]);
-		emit(gen, "\"] = ");
-		emit(gen, "" + i);
-		emit(gen, "] = \"");
-		emit(gen, d.enumMembers[i]);
-		emit(gen, "\";\n");
+		const val = (d.enumValues !== null && i < d.enumValues.length) ? d.enumValues[i] : i;
+		if (i > 0) emitIndent(gen);
+		emit(gen, `var ${safeJsName(d.enumName)}_${d.enumMembers[i]} = ${val};\n`);
 	}
-	gen.indentLevel = gen.indentLevel - 1;
-	emitIndent(gen);
-	emit(gen, "})(");
-	emit(gen, d.enumName);
-	emit(gen, " || (");
-	emit(gen, d.enumName);
-	emit(gen, " = {}));\n");
 }
 
 export function emitEnumDecl(gen: JSGenerator, node: Node): void {
@@ -181,6 +152,8 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	// inlined alongside the ImportDecl by inlineHeaderImports, and the JS
 	// backend doesn't consume C headers. Skip emission entirely.
 	if (d.importSource.length >= 2 && d.importSource.slice(d.importSource.length - 2, d.importSource.length) === ".h") return;
+	// std/meta is the compile-time AST/macro API — no runtime JS counterpart.
+	if (d.importSource === "std/meta" || (d.importSource.length >= 9 && d.importSource.slice(0, 9) === "std/meta/")) return;
 	if (gen.bundleMode) {
 		// All modules in global scope — skip all MetaScript imports (symbols already in scope)
 		return;
@@ -271,6 +244,9 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	if (inner.kind === NodeKind.StructDecl) return;
 	if (inner.kind === NodeKind.TypeAliasDecl) return;
 	if (inner.kind === NodeKind.ExternDecl) return;
+	// Compile-time-only — no runtime JS (mirrors the bare-decl skip in jsgen.ms)
+	if (inner.kind === NodeKind.MacroDecl) return;
+	if (inner.kind === NodeKind.ComptimeBlock) return;
 	// Skip extern functions — imported via @import, not compiled
 	if (inner.kind === NodeKind.FunctionDecl && isExternFlag((inner.data as FunctionDeclData).fnFlags)) return;
 	if (gen.bundleMode) {
