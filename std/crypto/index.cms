@@ -176,11 +176,10 @@ export function timingSafeEqual(a: string, b: string): boolean {
 
 export class Hasher {
 	_ctx: int64;
-	_algorithm: string;
 
 	static create(algorithm: string): Hasher {
 		const ctx = msCryptoHashInitHandle(algorithm);
-		return { _ctx: ctx, _algorithm: algorithm };
+		return { _ctx: ctx };
 	}
 
 	update(data: string): Hasher {
@@ -220,11 +219,10 @@ export class Hasher {
 
 export class Hmac {
 	_ctx: int64;
-	_algorithm: string;
 
 	static create(algorithm: string, key: string): Hmac {
 		const ctx = msCryptoHmacInitHandle(algorithm, key);
-		return { _ctx: ctx, _algorithm: algorithm };
+		return { _ctx: ctx };
 	}
 
 	update(data: string): Hmac {
