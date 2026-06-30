@@ -41,6 +41,7 @@ export interface CliOptions {
 	emitC: boolean;
 	fmtCheck: boolean;
 	isHcr: boolean;
+	appMode: string;           // --app=console|lib|staticlib: executable vs shared/static library
 	strictDefs: boolean;       // --strict-defs: warn on all uninit var use
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
 	gcMode: string;            // --gc=drc|none|manual: memory management mode
@@ -79,6 +80,7 @@ export function parseArgs(): CliOptions {
 		emitC: false,
 		fmtCheck: false,
 		isHcr: false,
+		appMode: "console",
 		strictDefs: false,
 		strictNullChecks: false,
 		gcMode: "orc",
@@ -138,9 +140,9 @@ export function parseArgs(): CliOptions {
 			else { opts.ccBinary = ccVal; }
 		} else if (arg.startsWith("--os=")) {
 			const osVal = arg.slice(5, arg.length);
-			if (osVal !== "bare" && osVal !== "solana" && osVal !== "wasm" && osVal !== "emcc" && osVal !== "linux" && osVal !== "macos" && osVal !== "windows" && osVal !== "darwin" && osVal !== "freebsd") {
+			if (osVal !== "bare" && osVal !== "solana" && osVal !== "wasm" && osVal !== "emcc" && osVal !== "linux" && osVal !== "macos" && osVal !== "windows" && osVal !== "darwin" && osVal !== "freebsd" && osVal !== "ios" && osVal !== "android") {
 				console.log(`error: unknown --os target: "${osVal}"`);
-				console.log(`  Valid targets: bare, solana, wasm, emcc, linux, macos, windows`);
+				console.log(`  Valid targets: bare, solana, wasm, emcc, linux, macos, windows, ios, android`);
 				return opts;
 			}
 			opts.targetOs = osVal;
@@ -164,6 +166,14 @@ export function parseArgs(): CliOptions {
 			opts.fmtCheck = true;
 		} else if (arg === "--hcr") {
 			opts.isHcr = true;
+		} else if (arg.startsWith("--app=")) {
+			const appVal = arg.slice(6, arg.length);
+			if (appVal === "console" || appVal === "lib" || appVal === "staticlib") {
+				opts.appMode = appVal;
+			} else {
+				console.log(error("error") + ": unknown --app mode '" + bold(appVal) + "'. Valid: " + cyan("console") + ", " + cyan("lib") + ", " + cyan("staticlib"));
+				exit(1);
+			}
 		} else if (arg === "--strict-defs") {
 			opts.strictDefs = true;
 		} else if (arg === "--strict-nil") {

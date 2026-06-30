@@ -63,6 +63,12 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 		if (ctx !== null && ctx.targetOs === "emcc") {
 			addLine(sec(g, CSection.Headers), "#define MSOS_EMCC");
 		}
+		if (ctx !== null && ctx.targetOs === "ios") {
+			addLine(sec(g, CSection.Headers), "#define MSOS_IOS");
+		}
+		if (ctx !== null && ctx.targetOs === "android") {
+			addLine(sec(g, CSection.Headers), "#define MSOS_ANDROID");
+		}
 		addLine(sec(g, CSection.Headers), "#include \"runtime/core/system.h\"");
 		nameSetAdd(g.declaredThings, "inc:runtime/core/system.h");
 	}
@@ -153,7 +159,7 @@ function genModuleInitFns(g: CGen): void {
 // Generates the global init dispatcher: forward decls, MsPreMainInner, MsMainInner,
 // MsMain, global vars, and POSIX main.
 
-export function genProjectDispatcher(modulePaths: string[], entryPath: string, autoCallMain: boolean, mainRetType: string, targetOs: string): string {
+export function genProjectDispatcher(modulePaths: string[], entryPath: string, autoCallMain: boolean, mainRetType: string, targetOs: string, noMain: boolean): string {
 	const b = createBuilder();
 	const retType = (mainRetType.length > 0) ? mainRetType : "void";
 
@@ -227,6 +233,10 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, a
 	addLine(b, "}");
 	addNewline(b);
 
+	// Library output: the host owns the entry point and calls MsMain() — emit no
+	// main wrapper, whatever the target OS.
+	if (noMain) return extract(b);
+
 	match (targetOs) {
 		"bare" => {
 			addLine(b, "int main(void) {");
@@ -247,6 +257,10 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, a
 			addLine(b, "  MsMain();");
 			addLine(b, "  return msProgramResult;");
 			addLine(b, "}");
+		},
+		"ios" | "android" => {
+			// No POSIX main: the host app (Xcode/Swift/ObjC) owns the entry and
+			// calls MsMain() to initialize — parity with the host owning the entry point.
 		},
 		_ => {
 			addLine(b, "int main(int argc, char** argv, char** env) {");
@@ -278,7 +292,7 @@ function cOutput(input: string): string {
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
 	const moduleCode = generateCModule(pr.value, null as unknown as CheckerContext, "test/input", createAliveSet(), false, false);
 	const paths: string[] = ["test/input"];
-	const dispatcher = genProjectDispatcher(paths, "test/input", false, "void", "");
+	const dispatcher = genProjectDispatcher(paths, "test/input", false, "void", "", false);
 	return moduleCode + "\n" + dispatcher;
 }
 

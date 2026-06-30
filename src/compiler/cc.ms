@@ -156,11 +156,9 @@ export function getCompilerName(ccOption: number, ccBinary: string): string {
 	return "cc";
 }
 
-// -- C++ source support (Nim-style: per-file extension detection drives
-// compiler + std-flag switch; a sticky flag drives the link-step driver
-// switch so libc++ / libstdc++ is linked automatically when needed).
-// References: ~/projects/nim/compiler/extccomp.nim:533 (useCpp), :545
-// (getCompilerExe), :575 (getLinkerExe), :591 (optMixedMode).
+// -- C++ source support: per-file extension detection drives compiler + std-flag
+// switch; a sticky flag drives the link-step driver switch so libc++ / libstdc++
+// is linked automatically when needed.
 //
 // IMPORTANT — flag set timing: `_hasCppCompile` MUST be set at directive-
 // resolution time (call `markCppCompile` from processCompileDirectives'
@@ -239,8 +237,13 @@ export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boo
 		if (targetOs === "macos" || targetOs === "darwin") zigOs = "macos";
 		if (targetOs === "windows") return `-target ${cpu}-windows-gnu`;
 		if (targetOs === "linux") return `-target ${cpu}-linux-gnu`;
+		if (targetOs === "android") return `-target ${cpu}-linux-android`;
 		return `-target ${cpu}-${zigOs}`;
 	}
+	// Android/iOS: the toolchain owns the triple + sysroot (NDK API-specific clang
+	// wrapper, or Xcode -isysroot). Emitting our own --target shadows the wrapper's
+	// API level and breaks libc-header/sysroot resolution.
+	if (targetOs === "android" || targetOs === "ios") return "";
 	// clang/gcc target format: cpu-vendor-os[-abi]
 	let triple = cpu;
 	if (targetOs === "linux") {
@@ -329,7 +332,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
 	flags = appendFlag(flags, "-fdata-sections");
 	flags = appendFlag(flags, "-ffunction-sections");
-	if (opts.isHcr) flags = appendFlag(flags, "-fPIC");
+	if (opts.isHcr || opts.appMode === "lib" || opts.appMode === "staticlib") flags = appendFlag(flags, "-fPIC");
 	flags = appendFlag(flags, opts.passC);
 	return flags;
 }
@@ -354,7 +357,7 @@ export function cliLinkFlags(base: string, opts: CliOptions): string {
 	let flags = base;
 	flags = appendFlag(flags, opts.passL);
 	if (opts.strip) flags = appendFlag(flags, "-s");
-	if (opts.isHcr) {
+	if (opts.isHcr || opts.appMode === "lib") {
 		flags = appendFlag(flags, "-shared");
 	} else {
 		if (opts.targetOs === "linux") {
@@ -433,7 +436,7 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 // Windows cmd.exe caps command lines at 8191 chars. Link commands with hundreds
 // of .o files exceed that. GCC/clang/zig cc accept `@file` response files —
 // spill the bulky middle (.o list + extraFlags) there and pass one `@path` on
-// the CLI. Threshold matches Nim's preventLinkCmdMaxCmdLen (8000 on Windows).
+// the CLI. Windows cmd.exe caps the line at 8191; 7800 leaves headroom.
 const LINK_CMD_LIMIT = 7800;
 
 // Link object files + runtime into a binary.
@@ -460,6 +463,15 @@ export function linkObjects(oFileList: string, outBinary: string, extraFlags: st
 		writeFile(rspPath, bulk);
 		r = exec(`${compiler}${rtFlag} @${rspPath} -o ${outBinary} -lm`);
 	}
+	if (!r.ok) return Result.err(r.error);
+	return Result.ok(null);
+}
+
+// Archive object files into a static library for --app=staticlib. Remove the stale
+// archive first: `ar rcs` appends, so a leftover would keep already-dropped members.
+export function archiveStatic(oFileList: string, outArchive: string): Result<void, ProcessError> {
+	exec(`rm -f ${outArchive}`);
+	const r = exec(`ar rcs ${outArchive} ${oFileList}`);
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
 }

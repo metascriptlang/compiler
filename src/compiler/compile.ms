@@ -44,7 +44,7 @@ import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { CliOptions, Target } from "./options";
 import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
-import { compileCFile, linkObjects, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker, markCppCompile } from "./cc";
+import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker, markCppCompile } from "./cc";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
 import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCSource, writeCompileFingerprint, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
@@ -486,7 +486,7 @@ interface CompileJob {
 //      serializes (no speedup, still correct).
 //   3. COLLECT (serial, main thread) — waitFor each future in input order, check
 //      exit codes, publish cache entries, emit oFiles deterministically.
-// --emit=c is emit-only (Nim's `-c`): write generated C, compile/link nothing.
+// --emit=c is emit-only: write generated C, compile/link nothing.
 // Compiling @compile'd C here would (a) drop .o files beside the source, not in
 // out/, and (b) fail for targets whose sysroot lives in the host build tool
 // (e.g. --os=ios → Xcode owns the SDK). The host assembles those .c in its own
@@ -794,7 +794,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 //   Pass 2: Full pipeline + codegen + per-module compile to .o
 //   Link all .o files into final binary
 
-export function cmdBuildC(entryPath: string, opts: CliOptions): void {
+export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
 	// Canonicalize entry path to absolute form. The module loader keys the
 	// module graph by path, and the codegen dispatcher (`genProjectDispatcher`)
 	// mangles the entry path into a function call (`<mangled>__Init000()`).
@@ -809,7 +809,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
-	const config = buildResolverConfig(Target.C, defaultResolveSection(), opts.targetOs, opts.projectRoot);
+	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs);
 	applyGcMode(opts);
 
@@ -868,9 +868,11 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	if (outBinary === "") {
 		const outDir = outDirForMode(opts.mode);
 		ensureDir(outDir);
-		let suffix = opts.isHcr ? soSuffix() : exeSuffix();
+		const dynLib = opts.isHcr || opts.appMode === "lib";
+		let suffix = dynLib ? soSuffix() : exeSuffix();
 		// Use target OS suffix (works for both native + cross since targetOs always set).
-		if (opts.targetOs === "windows") suffix = opts.isHcr ? ".dll" : ".exe";
+		if (opts.targetOs === "windows") suffix = dynLib ? ".dll" : ".exe";
+		if (opts.appMode === "staticlib") suffix = ".a";
 		if (opts.targetOs === "solana") suffix = ".so";
 		if (opts.targetOs === "wasm") suffix = ".wasm";
 		if (opts.targetOs === "emcc") suffix = ".js";  // emcc outputs .js + .wasm pair
@@ -1193,7 +1195,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// Skip link step if --emit=c (only writing C source files)
 	if (opts.emitC) {
 		// Also emit dispatcher (MsMain + entry point)
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, autoCallMain, mainRetType, opts.targetOs);
+		const dispatcher = genProjectDispatcher(aliveModules, entryPath, autoCallMain, mainRetType, opts.targetOs, opts.appMode === "lib" || opts.appMode === "staticlib");
 		const emitDir = outDirForMode(opts.mode);
 		const dispPath = `${emitDir}/_dispatch.c`;
 		writeOutput(dispPath, dispatcher);
@@ -1206,7 +1208,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// Generate global init dispatcher and compile to .o (skip for HCR — .so has no main)
 	if (!opts.isHcr) {
 		if (opts.verbose) verboseLog("generating dispatcher");
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, autoCallMain, mainRetType, opts.targetOs);
+		const dispatcher = genProjectDispatcher(aliveModules, entryPath, autoCallMain, mainRetType, opts.targetOs, opts.appMode === "lib" || opts.appMode === "staticlib");
 		const dispFile = `${cd}/_dispatch.c`;
 		const dispObj = `${cd}/_dispatch.o`;
 		writeOutput(dispFile, dispatcher);
@@ -1258,7 +1260,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	}
 
 	if (opts.verbose) verboseLog("linking → " + outBinary);
-	if (opts.targetOs === "solana") {
+	if (opts.appMode === "staticlib") {
+		const arRes = archiveStatic(oFiles, outBinary);
+		if (!arRes.ok) {
+			console.log(`${error("error")}: ar failed ${dim(`(exit ${arRes.error.exitCode})`)}`);
+			if (arRes.error.errorOutput !== "") console.log(arRes.error.errorOutput);
+			exit(1);
+		}
+	} else if (opts.targetOs === "solana") {
 		const linkRes = linkSolana(oFiles, outBinary);
 		if (!linkRes.ok) {
 			console.log(`${error("error")}: sbpf-linker failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);

@@ -109,8 +109,9 @@ export function main(): number {
 			}
 			// Cross-compile default: prefer zig cc over platform-specific cross-gcc.
 			// zig cc bundles clang + lld + sysroots for all targets — no external deps.
-			// Skip for bare/solana — they resolve their own toolchains.
-			if (opts.targetOs !== platform && opts.targetOs !== "bare" && opts.targetOs !== "solana" && cmdExists("zig")) {
+			// Skip for bare/solana — they resolve their own toolchains. An explicit
+			// --cc (path or clang/gcc) always wins — never stomp a user toolchain.
+			if (opts.ccBinary === "" && opts.ccCompiler === 0 && opts.targetOs !== platform && opts.targetOs !== "bare" && opts.targetOs !== "solana" && cmdExists("zig")) {
 				opts.ccBinary = "zig cc";
 			}
 			if ((cfg.valid && cfg.build.target === "js") || opts.target === Target.JS) {
@@ -120,7 +121,7 @@ export function main(): number {
 				if (cfg.valid && opts.outputPath === "" && cfg.build.outFile !== "") {
 					opts.outputPath = cfg.build.outFile;
 				}
-				cmdBuildC(opts.inputFile, opts);
+				cmdBuildC(opts.inputFile, opts, cfg.resolve);
 			}
 		},
 		"add" => {
