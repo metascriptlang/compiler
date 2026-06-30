@@ -4,8 +4,10 @@
 
 import { Node } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
-import { checkProgram, checkProgramWithRegistry } from "../../checker/checkPass";
-import { ExportRegistry } from "../../checker/context";
+import { checkProgram, checkProgramWithRegistry, buildPreludeContext } from "../../checker/checkPass";
+import { ExportRegistry, CheckerContext } from "../../checker/context";
+import { resolveRuntimeDir } from "../../utils/path";
+import { join } from "std/fs/path";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { refineTypes } from "../../transform/typeRefine";
 import { transformForRaiser } from "../../transform/raiserLowering";
@@ -32,6 +34,20 @@ export function evalSourceFull(code: string): RaiserContext {
 // so cross-module imports inside the @comptime body resolve. Otherwise fall
 // back to the single-file checkProgram path (used by direct tests).
 
+// Macros always execute in the Raiser VM, so their std (string/array) methods must
+// resolve to the .rms prelude (extern → host functions) regardless of the build
+// target. The build target's prelude (e.g. .jms's pure-MS startsWith via asBytes)
+// does not run in the VM. Cached — built once per process.
+let _raiserPreludeCtx: CheckerContext | null = null;
+function raiserPreludeCtx(): CheckerContext {
+	if (_raiserPreludeCtx === null) {
+		const root = resolveRuntimeDir();
+		const stdPath = root !== "" ? join(root, "std") : "";
+		_raiserPreludeCtx = buildPreludeContext(stdPath, ".rms");
+	}
+	return _raiserPreludeCtx;
+}
+
 export function evalASTFull(program: Node): RaiserContext {
 	// Macro bodies dispatch string/array builtins through CallHost — the host
 	// registry must be populated first (same as @comptime via evalComptimeBlock).
@@ -43,7 +59,7 @@ export function evalASTFull(program: Node): RaiserContext {
 		&& outer.module !== null
 		&& outer.preludeCtx !== null;
 	const checkerCtx = hasFullOuterCtx
-		? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, outer.preludeCtx)
+		? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
 		: checkProgram(program);
 	const txCtx = createTransformContextWithChecker(checkerCtx);
 	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
@@ -165,6 +181,25 @@ test "existing arithmetic still works" {
 test "number toString through full pipeline" {
 	const ctx = evalFull("return (10).toString() + \"-\" + (20).toString();");
 	assert ctx.lastResult.strVal === "10-20";
+}
+
+// Enum member access through the FULL pipeline: the checker rewrites `Color.Green`
+// → Identifier "Color_Green" before codegen, so the codegen-only enum path
+// (evalProject, MemberExpr-based) never exercises this. Without resolution of the
+// mangled identifier the VM yields nil / 0 and match-on-enum collapses to arm 0.
+test "enum member through full pipeline" {
+	const ctx = evalFull("enum Color { Red, Green, Blue } return Color.Green as number;");
+	assert ctx.lastResult.intVal === 1;
+}
+
+test "enum explicit values through full pipeline" {
+	const ctx = evalFull("enum Status { Active = 5, Inactive = 2, Pending = 9 } return Status.Pending as number;");
+	assert ctx.lastResult.intVal === 9;
+}
+
+test "match on enum through full pipeline" {
+	const ctx = evalFull("enum Color { Red, Green, Blue } const c = Color.Blue; return match (c) { Color.Red => 10, Color.Green => 20, Color.Blue => 30, };");
+	assert ctx.lastResult.intVal === 30;
 }
 
 test "function call through transform" {

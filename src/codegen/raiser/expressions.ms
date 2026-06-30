@@ -2,7 +2,7 @@
 // AST expression nodes → typed bytecode instructions.
 
 import {
-	Node, NodeKind, NodeFlag, TypeKind,
+	Node, NodeKind, NodeFlag, TypeKind, SymbolKind,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BinaryExprData, UnaryExprData,
 	CallExprData, IdentifierData, MemberExprData,
@@ -15,7 +15,7 @@ import { RaiserOpcode, raiserABC } from "../../raiser/bytecode";
 import { raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
-	resolveFunc, isLocalString, isEnumName, resolveEnumMember,
+	resolveFunc, isLocalString, isEnumName, findEnumConstant,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
 	markRegFloat, isRegFloat
 } from "./context";
@@ -207,6 +207,19 @@ export function compileExpr(s: RaiserCompState, node: Node): number {
 			const d = node.data as IdentifierData;
 			const reg = resolveLocal(s, d.name);
 			if (reg >= 0) return reg;
+			// The checker rewrites `Enum.Member` into an Identifier "Enum_Member".
+			// Raiser emits no enum declaration, so that name has no binding —
+			// inline the ordinal from the enum table. Key by the symbol's enum name
+			// + member (not the mangled identifier) so it can't collide.
+			if (node.resolvedSym !== null && node.resolvedSym.symbolKind === SymbolKind.EnumMember
+				&& node.resolvedSym.symbolType !== null) {
+				const ec = findEnumConstant(s, `${node.resolvedSym.symbolType.typeName}.${node.resolvedSym.name}`);
+				if (ec >= 0) {
+					const r = allocReg(s);
+					emitLoadConst(s, r, raiserInt(s.enumMap.items[ec].index));
+					return r;
+				}
+			}
 			const funcIdx = resolveFunc(s, d.name);
 			if (funcIdx >= 0) {
 				const r = allocReg(s);
@@ -797,13 +810,14 @@ function compileArrayAccess(s: RaiserCompState, node: Node): number {
 function compileMemberExpr(s: RaiserCompState, node: Node): number {
 	const d = node.data as MemberExprData;
 
-	// Enum member access: Color.Red → integer constant
+	// Enum member access: Color.Red → integer constant (codegen-only path; the
+	// checked AST carries this as an Identifier, handled in compileExpr).
 	if (d.object.kind === NodeKind.Identifier) {
 		const objId = d.object.data as IdentifierData;
 		if (isEnumName(s, objId.name)) {
-			const val = resolveEnumMember(s, objId.name, d.property);
+			const ec = findEnumConstant(s, `${objId.name}.${d.property}`);
 			const reg = allocReg(s);
-			emitLoadConst(s, reg, raiserInt(val >= 0 ? val : 0));
+			emitLoadConst(s, reg, raiserInt(ec >= 0 ? s.enumMap.items[ec].index : 0));
 			return reg;
 		}
 	}

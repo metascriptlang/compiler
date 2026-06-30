@@ -219,9 +219,9 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 			if (enumNode !== null) {
 				const ed = enumNode.data as EnumDeclData;
 				for (let ei = 0; ei < ed.enumMembers.length; ei += 1) {
-					const key = `${ed.enumName}.${ed.enumMembers[ei]}`;
-					const me: RaiserFuncEntry = { name: key, index: ei };
-					globalEnumMap.items.push(me);
+					const val = (ed.enumValues !== null && ei < ed.enumValues.length) ? ed.enumValues[ei] : ei;
+					const entry: RaiserFuncEntry = { name: `${ed.enumName}.${ed.enumMembers[ei]}`, index: val };
+					globalEnumMap.items.push(entry);
 				}
 			}
 		}

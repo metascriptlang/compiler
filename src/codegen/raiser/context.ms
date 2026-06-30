@@ -272,12 +272,11 @@ export function declareEnum(s: RaiserCompState, enumName: string, members: strin
 	}
 }
 
-export function resolveEnumMember(s: RaiserCompState, enumName: string, memberName: string): number {
-	const key = `${enumName}.${memberName}`;
+// Returns the enumMap entry index for an "EnumName.Member" key (caller reads
+// .index for the value, which may be negative), or -1 if not an enum constant.
+export function findEnumConstant(s: RaiserCompState, key: string): number {
 	for (let i = 0; i < s.enumMap.items.length; i = i + 1) {
-		if (s.enumMap.items[i].name === key) {
-			return s.enumMap.items[i].index;
-		}
+		if (s.enumMap.items[i].name === key) return i;
 	}
 	return -1;
 }
