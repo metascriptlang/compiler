@@ -1994,8 +1994,15 @@ function cloneDefaultNode(node: Node): Node {
 // Shared default-filling logic: clone defaults into args array.
 // Used by both function calls (fillDefaultArgsForNode) and constructor calls (checkNewExpr).
 function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[],
-	totalParams: number, defaultOffset: number, paramTypes: Type[]): void {
+	totalParams: number, defaultOffset: number, paramTypes: Type[], definingModulePath: string = ""): void {
 	if (defaults === null) return;
+	// A default expression's free identifiers belong to the callee's module (where
+	// the function is defined), not the caller's. Resolve it in the defining
+	// module's ctx so an imported/private helper referenced by the default (e.g.
+	// `x = defaultResolveSection()`) is visible at cross-module call sites — same
+	// mechanism as generic-body re-check (reference: `graph.ifaces[module]`).
+	// Same-module calls get `ctx` back, preserving existing behavior.
+	const defCtx = pickBodyCtx(definingModulePath, ctx);
 	let argIdx = args.length;
 	while (argIdx < totalParams) {
 		const defIdx = argIdx + defaultOffset;
@@ -2007,8 +2014,8 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[],
 		const cloned = cloneDefaultNode(defNode);
 		// Type-check with expected param type so empty containers get correct type
 		const expectedType = paramTypes !== null && argIdx < paramTypes.length ? paramTypes[argIdx] : null;
-		checkExpr(ctx, cloned, expectedType);
-		const fitted = expectedType !== null ? fitNode(ctx, cloned, expectedType, cloned.nodeType) : cloned;
+		checkExpr(defCtx, cloned, expectedType);
+		const fitted = expectedType !== null ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
 		args.push(fitted);
 		argIdx = argIdx + 1;
 	}
@@ -2038,7 +2045,8 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 	if (defSym !== null && defSym.symbolType !== null && defSym.symbolType.typeChildren !== null) {
 		paramTypes = defSym.symbolType.typeChildren;
 	}
-	fillDefaults(ctx, cd.arguments, fnDefaults, totalParams, defaultOffset, paramTypes);
+	const definingModulePath = defSym !== null ? defSym.modulePath : "";
+	fillDefaults(ctx, cd.arguments, fnDefaults, totalParams, defaultOffset, paramTypes, definingModulePath);
 }
 
 // ===== NewExpr =====
@@ -5181,7 +5189,7 @@ function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawnNode: N
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { callCheckFunctionBody } from "./checkerCallbacks";
-import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults } from "./instantiate";
+import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
 import { getIdentId } from "./idents";
 
 // Lower-level: register a freshly-synthesized FunctionDecl as a root-scope symbol,

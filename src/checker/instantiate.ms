@@ -79,7 +79,7 @@ export function lookupModuleProgram(modulePath: string): Node | null {
 //   4. Caller's ctx — last resort when all lookups miss.
 // Reference parity: Nim's `graph.ifaces[module]` via the `symMap` for generic
 // instantiation body re-check.
-function pickBodyCtx(definingModulePath: string, ctx: CheckerContext): CheckerContext {
+export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext): CheckerContext {
 	if (definingModulePath === "" || definingModulePath === ctx.modulePath) return ctx;
 	const defining = lookupModuleCtx(definingModulePath);
 	if (defining !== null) return defining;
