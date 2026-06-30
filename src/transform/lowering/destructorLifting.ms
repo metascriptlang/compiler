@@ -726,10 +726,15 @@ function getBaseClass(typeName: string, lctx: LiftCtx): string {
 }
 
 // ===== User-Defined Hook Dispatch (Reference considerUserDefinedOp) =====
-// Maps lifecycle hooks to user extension method names.
+// Maps each lifecycle op to its user-facing method name. A user hook is any
+// method/extension with that name on the receiver type — class methods and
+// free-function extensions both land in the extension registry (collectPass),
+// keyed by (receiverTypeName, methodName) with the real callable sym attached.
+// Reference: Nim binds `=destroy`/`=copy`/… to the type and getAttachedOp
+// retrieves by type — never by reconstructing a symbol name.
 
-function userHookName(typeName: string, hook: string): string {
-	const suffix = match (hook) {
+function userHookMethodName(hook: string): string {
+	return match (hook) {
 		"destroy" => "onDestroy",
 		"copy" => "onCopy",
 		"sink" => "onMove",
@@ -738,21 +743,45 @@ function userHookName(typeName: string, hook: string): string {
 		"trace" => "onTrace",
 		_ => "",
 	};
-	if (suffix === "") return "";
-	return typeName + suffix;
-}
-
-function hasUserDefinedHook(typeName: string, hook: string, lctx: LiftCtx): boolean {
-	const name = userHookName(typeName, hook);
-	if (name === "") return false;
-	const sym = lookupSymbol(lctx.checkerCtx.table, name);
-	return sym !== null;
 }
 
 function getUserDefinedHookSym(typeName: string, hook: string, lctx: LiftCtx): Symbol {
-	const name = userHookName(typeName, hook);
-	if (name === "") return null as unknown as Symbol;
-	return lookupSymbol(lctx.checkerCtx.table, name);
+	const methodName = userHookMethodName(hook);
+	if (methodName === "") return null as unknown as Symbol;
+	if (lctx.checkerCtx === null || lctx.checkerCtx.extensionRegistry === null) return null as unknown as Symbol;
+	// A type may carry duplicate registry entries reached through different import
+	// paths — distinct Symbol instances whose modulePath differs only by spelling
+	// (e.g. `crypto/index` vs `crypto/tls/../index`), each mangling to a different
+	// C name. Reference rule: a type-bound op is defined in the type's own module.
+	// Prefer the sym whose module matches the type's so the emitted call resolves
+	// to the emitted definition (a stale-path sym links to an undefined symbol).
+	let typeModulePath = "";
+	const typeSym = lookupSymbol(lctx.checkerCtx.table, typeName);
+	if (typeSym !== null) typeModulePath = typeSym.modulePath;
+	let fallback: Symbol = null as unknown as Symbol;
+	for (const m of lctx.checkerCtx.extensionRegistry.methods) {
+		if (m.receiverTypeName !== typeName || m.methodName !== methodName || m.isStatic) continue;
+		if (m.sym === null) continue;
+		if (typeModulePath !== "" && m.sym.modulePath === typeModulePath) return m.sym;
+		if (fallback === null) fallback = m.sym;
+	}
+	return fallback;
+}
+
+function hasUserDefinedHook(typeName: string, hook: string, lctx: LiftCtx): boolean {
+	return getUserDefinedHookSym(typeName, hook, lctx) !== null;
+}
+
+// Reference parity: declaring any lifecycle hook makes the type need lifecycle
+// management (Nim sets tfHasAsgn in bindTypeHook). A handle-only type (e.g. a
+// uint32 GPU buffer) has no RC fields, so typeNeedsHooks alone would skip it —
+// the user hook would then never be wired into <T>Destroy.
+function hasAnyUserHook(typeName: string, lctx: LiftCtx): boolean {
+	return hasUserDefinedHook(typeName, "destroy", lctx)
+		|| hasUserDefinedHook(typeName, "copy", lctx)
+		|| hasUserDefinedHook(typeName, "sink", lctx)
+		|| hasUserDefinedHook(typeName, "wasMoved", lctx)
+		|| hasUserDefinedHook(typeName, "trace", lctx);
 }
 
 // ===== Union variant arm generation (if/else chain on _tag) =====
@@ -960,7 +989,14 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 		));
 	}
 
-	// User-defined hook dispatch (Reference considerUserDefinedOp)
+	// User-defined hook dispatch (Reference considerUserDefinedOp).
+	// A user hook fully OVERRIDES the compiler's field traversal (reference parity:
+	// destructors.md "the compiler-generated hooks can be overridden ... to use an
+	// alternative traversal ... or to avoid deep recursions"). This is load-bearing:
+	// the default destroy recurses per field, so a deep/self-referential structure
+	// overflows the stack (see resolvePass owning-self-referential-field warning) —
+	// a user hook lets the author traverse iteratively instead. The author is
+	// therefore responsible for ALL owned fields. Same for copy/sink/wasMoved/trace.
 	const hookSym = getUserDefinedHookSym(typeName, hook, lctx);
 	if (hookSym !== null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
@@ -1182,7 +1218,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 	// manages lifetime; no per-element loop references them. Unions backed by
 	// primitives (`type X = "a" | "b"` → msString at runtime) must also skip —
 	// emitting tagged-union hooks would access `_tag` on a non-union.
-	if (!typeNeedsHooks(objType, lctx, loc)) {
+	if (!typeNeedsHooks(objType, lctx, loc) && !hasAnyUserHook(typeName, lctx)) {
 		const isPlainValueStruct = !isClassOrInterface && objType.kind === TypeKind.Struct;
 		if (!isPlainValueStruct) {
 			if (shouldEmitTypeInfo) {
