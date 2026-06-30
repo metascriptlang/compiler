@@ -436,6 +436,11 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
+	if (nextKind === TokenKind.Distinct) {
+		const decl = try parseDistinctTypeDecl(state);
+		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+	}
+
 	if (nextKind === TokenKind.Class || nextKind === TokenKind.Abstract) {
 		const decl = try parseClassDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
@@ -1860,6 +1865,17 @@ test "struct single field" { assert programOk("struct Id { value: number; }"); }
 test "struct generic" { assert programOk("struct Box<T> { value: T; }"); }
 
 test "export struct" { assert programOk("export struct Vec2 { x: number; y: number; }"); }
+
+test "export distinct type" { assert programOk("export distinct type EntityId = number;"); }
+
+test "export distinct is ExportDecl" { assert stmtKind("export distinct type EntityId = number;") === NodeKind.ExportDecl; }
+
+test "export distinct wraps distinct alias" {
+	const ex = stmtAt("export distinct type EntityId = number;", 0).data as ExportDeclData;
+	const d = ex.exportedDecl.data as TypeAliasDeclData;
+	assert d.aliasIsDistinct;
+	assert d.aliasName === "EntityId";
+}
 
 test "extern struct" { assert programOk("extern struct NativePoint { x: float64; y: float64; }"); }
 
