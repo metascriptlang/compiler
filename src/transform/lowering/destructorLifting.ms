@@ -33,6 +33,7 @@ import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/sym
 import { CheckerContext } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
+import { lowerOperators } from "./operatorLower";
 
 // ===== Global Hook Ownership Registry =====
 // Reference parity: attachedOps[] is global — hooks generated once per canonical type.
@@ -1287,8 +1288,9 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 // by iterating typeNames/typeChildren at transform time.
 
 function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
-	// For nested value-type objects, call their _eq function
+	// For nested value-type objects, call their _eq function — ensure it exists (on-demand, like tuples below)
 	if (fieldType.kind === TypeKind.Struct && fieldType.typeName !== "") {
+		ensureEq(fieldType.typeName, lctx, loc);
 		return makeCall(makeIdent(fieldType.typeName + "Eq", loc), [aField, bField], loc);
 	}
 	// Tuple fields are C structs — `===` would emit an invalid struct comparison.
@@ -1351,7 +1353,7 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 	lctx.collector.push(eqFn);
 }
 
-// ===== Ensure Eq (called for ALL interface types, even primitive-only) =====
+// ===== Ensure Eq (on-demand: only for struct/interface types actually compared) =====
 
 function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
 	if (nameSetContains(lctx.generated, typeName + "Eq")) return;
@@ -1891,7 +1893,6 @@ function processDecl(stmt: Node, lctx: LiftCtx): void {
 		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = stmt.data as InterfaceDeclData;
 			ensureHooksByName(d.interfaceName, lctx, stmt.location);
-			ensureEq(d.interfaceName, lctx, stmt.location);
 		},
 		NodeKind.ClassDecl => {
 			const d = stmt.data as ClassDeclData;
@@ -1962,6 +1963,12 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 		}
 	}
 
+	// Lift Eq only for structs actually compared (collected by operatorLower); ensureEq is
+	// idempotent and recurses into nested struct fields via fieldEqExpr.
+	for (const structName of ctx.pendingStructEqs) {
+		ensureEq(structName, lctx, defaultLoc);
+	}
+
 	for (const decl of lctx.collector) {
 		pd.programStmts.push(decl);
 	}
@@ -2005,17 +2012,32 @@ function generatedFnCount(input: string): number {
 	return count;
 }
 
-// Check if a specific named function was generated
-function hasGeneratedFn(input: string, fnSuffix: string): boolean {
-	const prog = liftWithChecker(input);
+// Run the full lower→lift pipeline so `===` in the source drives on-demand Eq generation.
+function liftWithCompare(input: string): Node {
+	_globalHookOwners = createNameSet();
+	_globalTypeInfoOwners = createNameSet();
+	const pr = parseInput(input);
+	if (!pr.ok) return pr.value;
+	const checkerCtx = checkProgram(pr.value);
+	const ctx = createTransformContextWithChecker(checkerCtx);
+	const lowered = lowerOperators(pr.value, ctx);
+	return liftDestructors(lowered, ctx);
+}
+
+function hasGeneratedFnIn(prog: Node, fnSuffix: string): boolean {
 	const pd = prog.data as ProgramData;
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind === NodeKind.FunctionDecl) {
 			const d = stmt.data as FunctionDeclData;
-			if (d.fnName.endsWith( fnSuffix)) return true;
+			if (d.fnName.endsWith(fnSuffix)) return true;
 		}
 	}
 	return false;
+}
+
+// Check if a specific named function was generated
+function hasGeneratedFn(input: string, fnSuffix: string): boolean {
+	return hasGeneratedFnIn(liftWithChecker(input), fnSuffix);
 }
 
 // Check if a TypeInfo variable was generated
@@ -2071,17 +2093,25 @@ test "all core hooks generated" {
 	assert hasGeneratedFn(src, "Dup");
 }
 
-// Auto-generated == (reference parity: generic proc `==`*[T: tuple|object])
-test "eq generated for primitive-only interface" {
-	assert hasGeneratedFn("interface Point { x: number; y: number; }", "PointEq");
+// Auto-generated == is lifted on-demand — only for value structs actually compared.
+test "eq NOT generated for uncompared struct" {
+	assert !hasGeneratedFn("struct Point { x: number; y: number; }", "PointEq");
 }
 
-test "eq generated for string-field interface" {
-	assert hasGeneratedFn("interface Token { value: string; }", "TokenEq");
+test "eq generated on-demand for compared struct" {
+	const src = "struct Point { x: number; y: number; } function f(a: Point, b: Point): boolean { return a === b; }";
+	assert hasGeneratedFnIn(liftWithCompare(src), "PointEq");
 }
 
-test "eq generated for exported interface" {
-	assert hasGeneratedFn("export interface Loc { line: number; col: number; }", "LocEq");
+test "eq transitive to nested struct field when outer compared" {
+	const src = "struct Inner { a: number; } struct Outer { i: Inner; } function f(a: Outer, b: Outer): boolean { return a === b; }";
+	assert hasGeneratedFnIn(liftWithCompare(src), "OuterEq");
+	assert hasGeneratedFnIn(liftWithCompare(src), "InnerEq");
+}
+
+// Interfaces are reference types — `===` is pointer equality, no structural Eq is lifted.
+test "eq NOT generated for interface" {
+	assert !hasGeneratedFn("interface Token { value: string; }", "TokenEq");
 }
 
 test "eq NOT generated for class" {

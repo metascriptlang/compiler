@@ -19,10 +19,11 @@ export class TransformContext {
 	checkerCtx: CheckerContext;  // type info from Phase 2 (null in test mode)
 	jsBackend: boolean;  // true = skip C-specific transforms (lambda lifting, destructor lifting, etc.)
 	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (reference parity)
+	pendingStructEqs: string[];  // struct/interface == uses to lift Eq for on-demand
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, pendingTupleOps: [] };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, pendingTupleOps: [], pendingStructEqs: [] };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {

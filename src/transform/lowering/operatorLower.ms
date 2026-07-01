@@ -97,6 +97,14 @@ function registerTupleOp(ctx: TransformContext, t: Type, tName: string, op: stri
 	ctx.pendingTupleOps.push(entry);
 }
 
+// Register a struct/interface == use for later on-demand Eq generation by destructorLifting.
+function registerStructEq(ctx: TransformContext, typeName: string): void {
+	for (const n of ctx.pendingStructEqs) {
+		if (n === typeName) return;
+	}
+	ctx.pendingStructEqs.push(typeName);
+}
+
 // Build a call to an operator extension — resolves nativeName for extern operators.
 function makeExtOpCall(ext: ExtensionMethod, opName: string, left: Node, right: Node, loc: SourceLocation): Node {
 	let callName = opName;
@@ -126,6 +134,7 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 	}
 	// Auto-generated == for interfaces (=== same as == for value types)
 	if ((opName === "==" || opName === "===") && isValueObject(leftType)) {
+		registerStructEq(ctx, typeName);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(typeName + "Eq", loc);
 		callee.nodeType = fnType;
@@ -353,6 +362,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	// 5. Direct base operators for value-type objects (auto-generated ==).
 	// === is the same as == for value types (no reference identity distinction).
 	if ((opName === "==" || opName === "===") && isValueObject(leftType)) {
+		registerStructEq(ctx, typeName);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(typeName + "Eq", loc);
 		callee.nodeType = fnType;
