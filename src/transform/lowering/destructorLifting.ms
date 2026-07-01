@@ -682,6 +682,18 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 	};
 }
 
+// A tagged (match-type) DU emits `struct { _tag; union{...} }` — its variants peel to
+// structs. A primitive/string union (`"a" | "b"`) has no struct variants and is backed by
+// msString at runtime, so it must NOT get tagged-union hooks (they'd touch `_tag`).
+function isTaggedUnion(t: Type): boolean {
+	if (t.kind !== TypeKind.Union) return false;
+	for (let vi = 0; vi < t.typeChildren.length; vi += 1) {
+		const v = peelToStruct(t.typeChildren[vi]);
+		if (v !== null && v.kind === TypeKind.Struct) return true;
+	}
+	return false;
+}
+
 // ===== Needs Hooks Check =====
 // Probe: run fillBody("destroy") on throwaway buf. If it emits anything, type needs hooks.
 
@@ -1216,12 +1228,15 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 	// field needs work (loop over typeChildren adds nothing).
 	//
 	// Class/interface (Ref<Struct>) don't need this exception — msRefHeader
-	// manages lifetime; no per-element loop references them. Unions backed by
-	// primitives (`type X = "a" | "b"` → msString at runtime) must also skip —
-	// emitting tagged-union hooks would access `_tag` on a non-union.
+	// manages lifetime; no per-element loop references them. A value tagged (match-type)
+	// DU is the same case as a value struct: a containing type destroys it by an
+	// unconditionally-emitted per-field call, so the empty-body hook must exist to link.
+	// Primitive/string unions (`type X = "a" | "b"` → msString) still skip — their hooks
+	// would touch `_tag` on a non-tagged value.
 	if (!typeNeedsHooks(objType, lctx, loc) && !hasAnyUserHook(typeName, lctx)) {
-		const isPlainValueStruct = !isClassOrInterface && objType.kind === TypeKind.Struct;
-		if (!isPlainValueStruct) {
+		const isPlainValueAggregate = !isClassOrInterface
+			&& (objType.kind === TypeKind.Struct || isTaggedUnion(objType));
+		if (!isPlainValueAggregate) {
 			if (shouldEmitTypeInfo) {
 				emitMinimalTypeInfo(typeName, lctx, loc);
 				claimGlobalTypeInfo(typeName);
