@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, cmdExists, execFile, cwd, platform } from "std/process";
+import { exit, exec, cmdExists, execFile, platform } from "std/process";
 import { exists } from "std/fs";
 import { parseSource } from "../parser/statements/validation";
 import { Node, ProgramData } from "../ast/node";
@@ -33,7 +33,7 @@ import { liftHcrState } from "../transform/native/hcrLift";
 import { createTransformContextWithChecker, createNameSet } from "../transform/context";
 import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, hasModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
-import { createFileSystemProvider, loadModule, provideSource, SourceProvider } from "../module/loader";
+import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider } from "../module/loader";
 import { ResolverConfig, createDefaultConfig, Backend, resolveImportWithConfig } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
@@ -274,16 +274,6 @@ function resetCompiledOFiles(): void {
 
 // Apply --gc flag: set GcMode on the shared prelude context so all modules inherit it.
 // analyzeProgram checks ctx.gcMode and skips DRC injection for None/Manual.
-// Canonicalize a CLI entry path to absolute form. The codegen dispatcher
-// (`genProjectDispatcher`) mangles entryPath into a function call name
-// (`<mangled>__Init000()`); the module loader keys the graph by path. Both
-// must agree, so the path must be absolute before either touches it. Mirrors
-// the same canonicalization in `module/loader.ms:canonicalModulePath`.
-export function canonicalEntryPath(entryPath: string): string {
-	if (isAbsolute(entryPath)) return entryPath;
-	return normalize(join(cwd(), entryPath));
-}
-
 export function applyGcMode(opts: CliOptions): void {
 	if (graphPreludeCtx === null) return;
 	if (opts.gcMode === "none") graphPreludeCtx.gcMode = GcMode.None;
@@ -795,14 +785,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 //   Link all .o files into final binary
 
 export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
-	// Canonicalize entry path to absolute form. The module loader keys the
-	// module graph by path, and the codegen dispatcher (`genProjectDispatcher`)
-	// mangles the entry path into a function call (`<mangled>__Init000()`).
-	// Both must agree. If the user passes a relative path (`src/index.ms`),
-	// the loader canonicalizes it to absolute, but downstream uses of
-	// `entryPath` (dispatcher, transformedPaths) would use the original
-	// relative form → mangling mismatch → "undeclared function" link error.
-	entryPath = canonicalEntryPath(entryPath);
+	entryPath = canonicalModulePath(entryPath);
 	emitOnlyMode = opts.emitC;
 	initCache(opts.mode, opts.forceRebuild);
 	resetCompiledOFiles();
@@ -878,6 +861,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		if (opts.targetOs === "emcc") suffix = ".js";  // emcc outputs .js + .wasm pair
 		outBinary = outDir + "/" + replaceExt(basename(entryPath), "") + suffix;
 	}
+	outBinary = normalize(outBinary);
 
 	// Project-level cache: skip entire pipeline if nothing changed.
 	// Reference-aligned: changeDetectedViaJsonBuildInstructions — early return before codegen.
@@ -1303,7 +1287,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 // Compiles all modules, suppresses user's main(), executes test binary.
 
 export function cmdTest(filePath: string, opts: CliOptions): void {
-	filePath = canonicalEntryPath(filePath);
+	filePath = canonicalModulePath(filePath);
 	initCache(opts.mode, opts.forceRebuild);
 	resetCompiledOFiles();
 	registerCoreParsers();
