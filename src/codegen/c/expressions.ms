@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, isFloatType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, awaitedType, unwrapRefNullUnion, peelToStructOrUnion, arrayElementNeedsCleanup } from "../../checker/types";
+import { isIntegerType, isFloatType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, awaitedType, unwrapRefNullUnion, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -44,6 +44,26 @@ function unwrapPointerLikeForVariant(t: Type | null): Type | null {
 		return t.typeReturn;
 	}
 	return t;
+}
+
+// Declared (un-narrowed) union of a member-access object: walk HiddenDeref to the
+// underlying reference and read its symbol's declared type. The object's own
+// nodeType may be flow-narrowed (variant struct / sub-union) — the declared union
+// is the authoritative v<N> index space for tagged-union routing.
+function duDeclaredUnionOfObject(objNode: Node): Type | null {
+	let walk: Node = objNode;
+	while (walk !== null && walk.kind === NodeKind.HiddenDeref) {
+		walk = (walk.data as ExprStmtData).expr;
+	}
+	if (walk === null || walk.resolvedSym === null) return null;
+	if (walk.kind !== NodeKind.Identifier && walk.kind !== NodeKind.MemberExpr) return null;
+	let declTy = walk.resolvedSym.symbolType;
+	while (declTy !== null && declTy.kind === TypeKind.Ref && declTy.typeReturn !== null) {
+		declTy = declTy.typeReturn;
+	}
+	declTy = peelToStructOrUnion(declTy);
+	if (declTy === null || declTy.kind !== TypeKind.Union || !isRealDiscriminatedUnion(declTy)) return null;
+	return declTy;
 }
 
 // True if the Union should be lowered to a tagged union in C (`{_tag, v0, v1, ...}`)
@@ -1387,19 +1407,32 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					return;
 				}
 			}
-			// Variant field access: s.radius → s.v<N>.radius. The DU gate above
-			// (`isRealDiscriminatedUnion`) already excluded `T | null` nullable
-			// patterns, so the peel inside `findVariantByFieldName` is safe.
-			const varIdx = findVariantByFieldName(objType, d.property);
+			// Variant field access: s.radius → s.v<N>.radius.
+			// objType may be a flow-NARROWED sub-union (subset of the declared union) whose
+			// child indexes are a different index space than the declared union's v<N>
+			// slots — map the matching child back to the declared union by identity.
+			// Order: sub-union identity map → checker stamp → by-name (sound only for
+			// unique / same-offset shared fields, which the checker now enforces).
+			let varIdx = -1;
+			const mainDeclTy = duDeclaredUnionOfObject(d.object);
+			if (mainDeclTy !== null && mainDeclTy !== objType) {
+				const subIdx = findVariantByFieldName(objType, d.property);
+				if (subIdx >= 0) varIdx = duVariantIndexOfType(mainDeclTy, objType.typeChildren[subIdx]);
+			}
+			if (varIdx < 0 && node.resolvedSym !== null && node.resolvedSym.duVariantSlot > 0) {
+				varIdx = node.resolvedSym.duVariantSlot - 1;
+			}
+			if (varIdx < 0) varIdx = findVariantByFieldName(objType, d.property);
 			if (varIdx >= 0) {
 				ctx.results.push(`${obj}${acc}v${varIdx}.${field}`);
 				return;
 			}
 		}
-		// Narrowed-variant field access: when type-checker narrows a Union down
-		// to a specific variant inside a guarded branch, the C memory is still
-		// the union wrapper. Walk through HiddenDeref to reach the underlying
-		// identifier and route through `v<N>` slot if it's a Union.
+		// Narrowed-variant field access: when the checker narrows a Union down to a
+		// specific variant (guarded if / match arm), the object's nodeType is that
+		// VARIANT STRUCT while the C memory is still the union wrapper. Recover the
+		// declared union from the object's symbol and map the narrowed variant back
+		// to its v<N> slot BY IDENTITY — never by field name (offset-blind).
 		let walkObj: Node = d.object;
 		while (walkObj !== null && walkObj.kind === NodeKind.HiddenDeref) {
 			// HiddenDerefData and ExprStmtData are both `{ expr: Node }` —
@@ -1407,14 +1440,29 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			// other HiddenDeref consumers use elsewhere in this file.
 			walkObj = (walkObj.data as ExprStmtData).expr;
 		}
-		if (walkObj !== null && walkObj.kind === NodeKind.Identifier && walkObj.resolvedSym !== null) {
+		if (walkObj !== null && walkObj.resolvedSym !== null
+				&& (walkObj.kind === NodeKind.Identifier || walkObj.kind === NodeKind.MemberExpr)) {
 			let declTy = walkObj.resolvedSym.symbolType;
 			while (declTy !== null && declTy.kind === TypeKind.Ref && declTy.typeReturn !== null) {
 				declTy = declTy.typeReturn;
 			}
+			declTy = peelToStructOrUnion(declTy);
 			// Same DU-only filter as the main path.
 			if (declTy !== null && declTy.kind === TypeKind.Union && isRealDiscriminatedUnion(declTy)) {
-				const declVarIdx = findVariantByFieldName(declTy, d.property);
+				let declVarIdx = -1;
+				if (objType !== null && objType.kind === TypeKind.Struct) {
+					declVarIdx = duVariantIndexOfType(declTy, objType);
+				}
+				if (declVarIdx < 0 && node.resolvedSym !== null && node.resolvedSym.duVariantSlot > 0) {
+					declVarIdx = node.resolvedSym.duVariantSlot - 1;
+				}
+				if (declVarIdx < 0) declVarIdx = findVariantByFieldName(declTy, d.property);
+				if (declVarIdx >= 0 && walkObj.kind === NodeKind.MemberExpr) {
+					// Chained access (m.lifecycle.condition): the object snippet is already
+					// emitted correctly — just route through the variant slot.
+					ctx.results.push(`${obj}${objIsPtr ? "->" : "."}v${declVarIdx}.${field}`);
+					return;
+				}
 				if (declVarIdx >= 0) {
 					// `obj` may already wrap the identifier in `(*x)` via HiddenDeref;
 					// regenerate the raw C name to avoid double-deref like `(*(*r))`.
