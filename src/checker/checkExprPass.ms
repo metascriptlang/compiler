@@ -4150,14 +4150,16 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 					narrowedSlot = fullIdx + 1;
 					subSym.duVariantSlot = narrowedSlot;
 					node.resolvedSym = subSym;
+					sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, subSym, propType, SymbolKind.Property, d.property, resolvedObjType.typeName, false);
 				}
 			}
 		}
 		// Un-narrowed access to a field that variants lay at DIFFERENT offsets has no
 		// single correct read — reject instead of silently reading another variant's
-		// bytes. Same-offset shared fields (identical type prefix) stay legal.
+		// bytes. Same-offset shared fields (identical type prefix) stay legal. No
+		// disc gate: structural no-disc unions route through v<N> in C just the same,
+		// and the helper only fires on a real cross-variant layout conflict.
 		if (narrowedSlot === 0 && propType.kind !== TypeKind.Unknown
-				&& (isDiscriminatedUnion(resolvedObjType) || findSharedStringDiscriminant(resolvedObjType) !== "")
 				&& duSharedFieldOffsetDiffers(resolvedObjType, d.property)) {
 			addError(ctx, `field '${d.property}' sits at different offsets across variants of '${typeDisplayName(resolvedObjType)}' — narrow with match/if on the discriminant before accessing it`,
 				node.location.line, node.location.column);
