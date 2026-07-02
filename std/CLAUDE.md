@@ -54,6 +54,16 @@ std/
 
 ## Conventions
 
+### std NEVER imports src/ (deployability invariant)
+
+`std/` is copied standalone to `~/.metascript/std` at install — `src/` is not.
+Any `import ... from "../../src/..."` inside `std/` works in the repo tree but
+breaks every installed msc (the prelude chain loads it for ALL programs).
+Direction is one-way: shared types live in `std/` (e.g. `std/meta/node.ms`,
+`std/meta/token.ms`) and `src/` re-exports from them — never the reverse.
+Incident: `std/meta/node.ms` imported `src/lexer/token` (2026-03-31 → 2026-07-03);
+undetected for months because all gates run inside the repo where the path resolves.
+
 ### Module Structure
 
 - Each module directory has an `index.cms` or `index.ms` as its entry point
