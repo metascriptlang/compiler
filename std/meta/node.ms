@@ -164,6 +164,7 @@ export class Symbol {
 	overloadIdx: int32;    // Index within overload set (0=primary, 1+=overload)
 	mutatedParams: int32;  // Bitfield: bit i = param i is mutated in body (gates const-ptr promotion)
 	staticFields: Symbol[];  // Static properties (only for class symbols)
+	duVariantSlot: int32;  // Narrowed DU field access: 0 = none, N = union variant N-1 (checker stamps on the property sym; C codegen routes .v<N-1>)
 }
 
 // ===== Node Flags (Standard parity: TNodeFlags) =====

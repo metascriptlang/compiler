@@ -2973,6 +2973,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		overloadIdx: 0 as int32,
 		mutatedParams: 0 as int32,
 		staticFields: [],
+		duVariantSlot: 0 as int32,
 	};
 }
 

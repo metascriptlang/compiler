@@ -206,6 +206,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 	sym.jsModulePath = "";
 	sym.overloadIdx = 0;
 	sym.staticFields = [];
+	sym.duVariantSlot = 0;
 	return sym;
 }
 
