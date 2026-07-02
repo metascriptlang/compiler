@@ -2,7 +2,7 @@
 // Source of truth for Node, Type, Symbol, and all AST data types.
 // Used by both the compiler (via src/ast/node.ms re-export) and macro authors (via std/meta).
 
-import { Token } from "../../src/lexer/token";
+import { Token } from "./token";
 
 // ===== TypeKind Enum =====
 
