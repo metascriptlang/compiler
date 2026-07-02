@@ -22,7 +22,7 @@ import {
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringName,
 	makeHiddenAddr,
 } from "../util";
-import { rewriteEcho } from "./debugLower";
+import { rewriteEcho, buildStructToString } from "./debugLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 import { tryLowerPromiseBuiltin, lowerNewPromise } from "../lowering/promiseLower";
 
@@ -125,12 +125,10 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	if (tk === TypeKind.String) {
 		return obj;
 	}
-	// Struct/Class → JSON stringify (same as console.log default)
+	// Struct/Class → plain JSON string (reuses console.log's struct→string path)
 	const inner = unwrapRef(objType);
 	if (inner.kind === TypeKind.Struct && inner.typeName !== "") {
-		// Use JSON.stringify which is already handled by the checker
-		// For .toString() fallback, just pass through — the caller handles it
-		return obj;
+		return buildStructToString(obj, inner, loc, ctx);
 	}
 	// Array → msArrayToString (runtime helper)
 	if (tk === TypeKind.Array) {

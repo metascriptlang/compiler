@@ -201,6 +201,21 @@ function buildStructDebugString(arg: Node, typeName: string, structType: Type | 
 	return result;
 }
 
+// Plain struct/class → string for `.toString()` — the JSON payload without the
+// debug color prefix/type label. Reuses the same json-object + stringify path
+// console.log uses, so struct toString actually yields a string (not a passthrough).
+export function buildStructToString(arg: Node, inner: Type, loc: SourceLocation, ctx: TransformContext): Node {
+	let structType = resolveJsonTargetType(inner.typeName, ctx);
+	if (structType === null && inner.typeNames !== null && inner.typeChildren !== null) {
+		structType = inner;
+	}
+	if (structType === null) return arg;
+	const objCall = buildNestedJsonObject(arg, structType, loc, ctx);
+	const strCall = makeCall(resolveDbgIdent("stringify", ctx, loc), [objCall, makeBool(false, loc)], loc);
+	strCall.nodeType = stringType();
+	return strCall;
+}
+
 export function rewriteEcho(node: Node, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;
