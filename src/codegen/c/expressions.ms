@@ -2281,6 +2281,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 			};
 		}
 		const cellName = arrCType + "RefCell";
+		ensureDrcProto(g, destroyFn);
 		ensureRefArrayCellTypeInfo(g, cellName, destroyFn);
 		const tiArg = (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
 		const valTmp = getTemp(p, arrCType);
