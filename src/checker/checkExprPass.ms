@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion } from "./types";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorExt, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn } from "./context";
 import {
@@ -4105,6 +4105,10 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	// we already see the underlying Union here.
 	if (resolvedObjType.kind === TypeKind.Union) {
 		const narrowedObjType = getFlowTypeOfReference(d.object, resolvedObjType);
+		// 1-based union variant slot when the access is pinned to a single C offset;
+		// stamped on the per-site property sym so codegen routes `.v<slot-1>.field`
+		// instead of guessing by field name (which is offset-blind).
+		let narrowedSlot = 0;
 		if (narrowedObjType !== null && narrowedObjType !== resolvedObjType
 				&& narrowedObjType.kind === TypeKind.Struct) {
 			const fieldInVariant = findFieldInVariant(narrowedObjType, d.property);
@@ -4126,8 +4130,50 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 				const narrowedSym = makeSymbol(d.property, SymbolKind.Property, fieldInVariant, false);
 				narrowedSym.state = SymbolState.Shaped;
 				inheritContainerInfo(narrowedSym, ctx, resolvedObjType.typeName);
+				narrowedSlot = duVariantIndexOfType(resolvedObjType, narrowedObjType) + 1;
+				narrowedSym.duVariantSlot = narrowedSlot;
 				node.resolvedSym = narrowedSym;
 				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, narrowedSym, fieldInVariant, SymbolKind.Property, d.property, resolvedObjType.typeName, false);
+			}
+		} else if (narrowedObjType !== null && narrowedObjType !== resolvedObjType
+				&& narrowedObjType.kind === TypeKind.Union
+				&& !duSharedFieldOffsetDiffers(narrowedObjType, d.property)) {
+			// Narrowed to a sub-union whose remaining variants lay the field at ONE
+			// offset — any of their slots in the full union is byte-correct; use the first.
+			const subIdx = findVariantByFieldName(narrowedObjType, d.property);
+			if (subIdx >= 0) {
+				const fullIdx = duVariantIndexOfType(resolvedObjType, narrowedObjType.typeChildren[subIdx]);
+				if (fullIdx >= 0) {
+					const subSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
+					subSym.state = SymbolState.Shaped;
+					inheritContainerInfo(subSym, ctx, resolvedObjType.typeName);
+					narrowedSlot = fullIdx + 1;
+					subSym.duVariantSlot = narrowedSlot;
+					node.resolvedSym = subSym;
+				}
+			}
+		}
+		// Un-narrowed access to a field that variants lay at DIFFERENT offsets has no
+		// single correct read — reject instead of silently reading another variant's
+		// bytes. Same-offset shared fields (identical type prefix) stay legal.
+		if (narrowedSlot === 0 && propType.kind !== TypeKind.Unknown
+				&& (isDiscriminatedUnion(resolvedObjType) || findSharedStringDiscriminant(resolvedObjType) !== "")
+				&& duSharedFieldOffsetDiffers(resolvedObjType, d.property)) {
+			addError(ctx, `field '${d.property}' sits at different offsets across variants of '${typeDisplayName(resolvedObjType)}' — narrow with match/if on the discriminant before accessing it`,
+				node.location.line, node.location.column);
+		}
+		// A DU-typed field must carry a per-site property sym whose symbolType is the
+		// DECLARED field type: a chained access (x.f.g where f is a DU) recovers its
+		// v<N> index space from this sym at codegen, while the node's own nodeType may
+		// be flow-narrowed to a single variant below. Scoped to DU-typed fields only —
+		// blanket syms shift analyzer/DCE aliveness (self-host link regression).
+		if (node.resolvedSym === null && propType.kind !== TypeKind.Unknown) {
+			const peeledProp = peelToStructOrUnion(propType);
+			if (peeledProp !== null && peeledProp.kind === TypeKind.Union) {
+				const unionFieldSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
+				unionFieldSym.state = SymbolState.Shaped;
+				inheritContainerInfo(unionFieldSym, ctx, resolvedObjType.typeName);
+				node.resolvedSym = unionFieldSym;
 			}
 		}
 	}
@@ -4139,8 +4185,11 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			derefNode.nodeType = resolvedObjType;
 			d.object = derefNode;
 		}
-		// Resolve property symbol: search symbol table for TypeName_propName (named types)
-		if (resolvedObjType.typeName !== "") {
+		// Resolve property symbol: search symbol table for TypeName_propName (named types).
+		// Keep a duVariantSlot-stamped sym — the table sym is SHARED across sites and
+		// must never carry (or replace) a per-site variant slot.
+		const hasVariantStamp = node.resolvedSym !== null && node.resolvedSym.duVariantSlot > 0;
+		if (resolvedObjType.typeName !== "" && !hasVariantStamp) {
 			const propSymName = resolvedObjType.typeName + "_" + d.property;
 			const propSym = lookupSymbol(ctx.table, propSymName);
 			if (propSym !== null) {

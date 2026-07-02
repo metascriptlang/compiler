@@ -692,6 +692,72 @@ export function findVariantByFieldName(unionType: Type | null, fieldName: string
 	return -1;
 }
 
+// Index of a narrowed variant within its declaring union — identity first
+// (flow narrowing returns the union's own typeChildren element), then identity
+// after peeling Ref wrappers (TS-style DU variants are Ref<interface>), then
+// typeName (variants are stamped "<Alias>.<Key>" / interface names, unique per union).
+export function duVariantIndexOfType(unionType: Type | null, variantType: Type | null): number {
+	if (unionType === null || unionType.typeChildren === null || variantType === null) return -1;
+	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
+		if (unionType.typeChildren[i] === variantType) return i;
+	}
+	const target = peelToStruct(variantType);
+	if (target === null) return -1;
+	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
+		if (peelToStruct(unionType.typeChildren[i]) === target) return i;
+	}
+	if (target.typeName === "") return -1;
+	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
+		const v = peelToStruct(unionType.typeChildren[i]);
+		if (v !== null && v.typeName === target.typeName) return i;
+	}
+	return -1;
+}
+
+// Layout name for prefix/field signatures: literal types collapse to their base
+// (a "a" vs "b" string-literal discriminant is the SAME msString layout), while
+// genuinely different widths (int16 vs int32) stay distinct.
+function duLayoutName(t: Type | null): string {
+	if (t === null) return "?";
+	return match (t.kind) {
+		TypeKind.StringLiteral => "string",
+		TypeKind.BooleanLiteral => "boolean",
+		TypeKind.EnumLiteral => t.typeName,
+		_ => typeDisplayName(t),
+	};
+}
+
+// C lays each variant's fields sequentially inside the overlapping union, so a
+// field name shared across variants reads correctly by name ONLY when every
+// declaring variant lays it out identically: same field-layout prefix before it
+// (identical prefix ⇒ identical offset, padding included) AND the same field
+// layout itself (same offset + different width still misreads). Returns true when
+// the layout signatures differ — such an access is unsound without narrowing.
+export function duSharedFieldOffsetDiffers(unionType: Type | null, fieldName: string): boolean {
+	if (unionType === null || unionType.typeChildren === null) return false;
+	let firstSig = "";
+	let found = 0;
+	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
+		const variant = peelToStruct(unionType.typeChildren[i]);
+		if (variant === null || variant.typeNames === null) continue;
+		let sig = "";
+		let hasField = false;
+		for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
+			const ft = fi < variant.typeChildren.length ? variant.typeChildren[fi] : null;
+			sig = sig + "|" + duLayoutName(ft);
+			if (variant.typeNames[fi] === fieldName) { hasField = true; break; }
+		}
+		if (!hasField) continue;
+		if (found === 0) {
+			firstSig = sig;
+		} else if (sig !== firstSig) {
+			return true;
+		}
+		found += 1;
+	}
+	return false;
+}
+
 // Find variant index by discriminant enum value name (e.g. "NumLit" or "NodeKind.NumLit").
 // typeNames layout: [discFieldName, key0, key1, ...] — keys start at index 1.
 // Matches both qualified ("Kind.A") and unqualified ("A") against stored keys.
