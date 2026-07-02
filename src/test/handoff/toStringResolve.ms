@@ -4,7 +4,7 @@
 // codegen can emit the correct C function call.
 
 import { checkSource } from "./helpers";
-import { hasErrors, getErrors } from "../../checker/context";
+import { hasErrors } from "../../checker/context";
 
 test "number.toString() resolves without error" {
 	const src = "const x: number = 42;\nconst s: string = x.toString();";

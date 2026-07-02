@@ -8,8 +8,8 @@
 import { compileToC } from "../helpers";
 
 test "null-init variable with later assignment needs type annotation" {
-	// This pattern should compile — the variable has a type annotation
-	const src = "class Foo { kind: number; }\nfunction test(): number {\n\tlet found: Foo = null;\n\tfound = new Foo(42);\n\treturn found.kind;\n}";
+	// Nullable annotation compiles (strict-null: bare Foo rejects null, Foo | null accepts it).
+	const src = "class Foo { kind: number; }\nfunction test(): number {\n\tlet found: Foo | null = null;\n\tfound = new Foo(42);\n\treturn found.kind;\n}";
 	const result = compileToC(src);
 	assert result.ok;
 	// Should NOT have void* for found

@@ -29,7 +29,7 @@ test "JSON.parse without try compiles" {
 }
 
 test "try inside Result<void, string> fn compiles" {
-	const src = "interface Person { name: string; value: number; }\nfunction hello(): Result<void, string> {\nconst me = try JSON.parse<Person>(\"{}\");\nconsole.log(me.name);\nreturn Result.ok();\n}\nhello();";
+	const src = "interface Person { name: string; value: number; }\nfunction hello(): Result<void, string> {\nconst me = try JSON.parse<Person>(\"{}\");\nconsole.log(me.name);\nreturn Result.ok(undefined);\n}\nhello();";
 	const result = compileToC(src);
 	if (!result.ok) { console.log("ERROR-with-return: " + result.error); }
 	assert result.ok;
@@ -55,7 +55,7 @@ test "try inside Result<number, string> fn compiles" {
 }
 
 test "try in nested functions with different Result types" {
-	const src = "interface Person { name: string; value: number; }\nfunction inner(): Result<number, string> {\nconst p = try JSON.parse<Person>(\"{}\");\nreturn Result.ok(p.value);\n}\nfunction outer(): Result<void, string> {\nconst n = try inner();\nconsole.log(n);\nreturn Result.ok();\n}\nouter();";
+	const src = "interface Person { name: string; value: number; }\nfunction inner(): Result<number, string> {\nconst p = try JSON.parse<Person>(\"{}\");\nreturn Result.ok(p.value);\n}\nfunction outer(): Result<void, string> {\nconst n = try inner();\nconsole.log(n);\nreturn Result.ok(undefined);\n}\nouter();";
 	const result = compileToC(src);
 	if (!result.ok) { console.log("ERROR-nested: " + result.error); }
 	assert result.ok;

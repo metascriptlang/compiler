@@ -95,13 +95,13 @@ test "int32 * literal preserves int32" {
 
 // ===== C: No coercion when both literals =====
 
-test "literal + literal stays number" {
+test "literal + literal is int32" {
 	const src = "const y = 10 + 20;";
 	const ctx = checkSource(src);
 	assert ctx !== null;
 	const sym = lookupSymbol(ctx.table, "y");
 	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Number;
+	assert sym.symbolType.kind === TypeKind.Int32;
 }
 
 // ===== D: Float literals don't coerce =====

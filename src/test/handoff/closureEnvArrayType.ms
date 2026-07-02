@@ -30,7 +30,11 @@ function envFieldType(envDecl: Node, fieldName: string): number {
 	while (i < t.typeNames.length) {
 		if (t.typeNames[i] === fieldName) {
 			if (i < t.typeChildren.length && t.typeChildren[i] !== null) {
-				return t.typeChildren[i].kind;
+				let ft = t.typeChildren[i];
+				// Arrays are reference types (Ref<Array>) after the T[]→Ref<Array> flip;
+				// unwrap to report the underlying array kind.
+				if (ft.kind === TypeKind.Ref && ft.typeReturn !== null) ft = ft.typeReturn;
+				return ft.kind;
 			}
 		}
 		i = i + 1;

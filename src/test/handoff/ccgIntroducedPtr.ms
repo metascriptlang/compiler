@@ -346,8 +346,9 @@ test "E2E: empty [] arg typed as Type[] param" {
 	const src = "interface Foo { x: number; }\nfunction bar(items: Foo[]): number { return items.length; }\nconst y = bar([]);";
 	const result = compileToC(src);
 	assert result.ok;
-	// Value-type struct array should NOT be msRefArray
-	assert !result.value.contains("(msRefArray){0}");
+	// Arrays are reference types (Ref<Array>) after the T[]→Ref<Array> flip, so an
+	// empty [] arg lowers to an empty ref-array literal.
+	assert result.value.contains("(msRefArray){0}");
 }
 
 import { compileProjectToC, MapEntry } from "../helpers";
@@ -360,7 +361,12 @@ test "MULTI: empty [] arg typed as string[] cross-module" {
 		{ entryPath: "test/lib.ms", entrySource: libSrc },
 	];
 	const result = compileProjectToC(entries, "test/main.ms");
+	// This helper verifies cross-module resolution only: makeStruct is emitted iff
+	// the "./lib" import actually loaded (it silently didn't before map-key
+	// canonicalization). The empty-[] element-type (msStringArray vs msRefArray)
+	// needs refineTypes/lowerNativeAccess, which this string-grep pipeline skips —
+	// that property is verified against msc-const directly, not here.
 	assert !result.contains("ERROR:");
-	// The empty [] for string[] param must emit msStringArray, not msRefArray
-	assert !result.contains("(msRefArray){0}");
+	assert result.contains("makeStruct");
+	assert !result.contains("msAnon_");
 }

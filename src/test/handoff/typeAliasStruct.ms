@@ -4,7 +4,7 @@
 
 import { checkSource } from "./helpers";
 import { hasErrors } from "../../checker/context";
-import { createMapProvider, loadModuleGraph } from "../../module/loader";
+import { createMapProvider, loadModuleGraph, canonicalModulePath } from "../../module/loader";
 import { checkModuleGraph, getPreludeContext } from "../../checker/orchestrator";
 import { findModule } from "../../module/graph";
 import { parseSource } from "../../parser/statements/validation";
@@ -39,7 +39,7 @@ test "cross-module as-cast with overlapping union fields" {
 	const graph = loadModuleGraph(modB, provider);
 	const registry = checkModuleGraph(graph, "");
 	const preludeCtx = getPreludeContext();
-	const mod = findModule(graph, modB);
+	const mod = findModule(graph, canonicalModulePath(modB));
 	assert mod !== null;
 	const pr = parseSource(mod.source);
 	assert pr.ok;

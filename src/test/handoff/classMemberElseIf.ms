@@ -125,7 +125,7 @@ test "as cast with type alias resolves fields" {
 	const ctx = checkSource(`
 		type FooData = { name: string };
 		interface Bar {
-			data: object;
+			data: unknown;
 		}
 		function test(b: Bar): string {
 			const d = b.data as FooData;
@@ -133,7 +133,7 @@ test "as cast with type alias resolves fields" {
 		}
 	`);
 	assert ctx !== null;
-	assert errorCount(ctx) === 0;
+	assert ctx.errors.length === 0;
 }
 
 // Test 6: Chained as-cast with union type

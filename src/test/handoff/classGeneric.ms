@@ -13,22 +13,35 @@ import { lookupSymbol } from "../../checker/symbol";
 test "checker: generic class method has this param" {
 	const ctx = checkSource("class Box<T> { value: T; get(): T { return this.value; } }");
 	assert ctx !== null;
-	const sym = lookupSymbol(ctx.table, "Box_get");
-	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Function;
-	// First param is "this" (injected by collectPass)
-	assert sym.symbolType.typeNames.length >= 1;
-	assert sym.symbolType.typeNames[0] === "this";
+	// Methods live in the extension registry keyed by (receiver, name), not as flat
+	// module symbols; codegen later lowers them to Box_get free functions.
+	let found = false;
+	for (const m of ctx.extensionRegistry.methods) {
+		if (m.receiverTypeName === "Box" && m.methodName === "get") {
+			found = true;
+			assert m.sym !== null;
+			assert m.sym.symbolType.kind === TypeKind.Function;
+			assert m.sym.symbolType.typeNames.length >= 1;
+			assert m.sym.symbolType.typeNames[0] === "this";
+		}
+	}
+	assert found;
 }
 
 test "checker: generic class method with T param has 2 params" {
 	const ctx = checkSource("class Box<T> { value: T; set(v: T): void { this.value = v; } }");
 	assert ctx !== null;
-	const sym = lookupSymbol(ctx.table, "Box_set");
-	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Function;
-	// params: [this: Box, v: T]
-	assert sym.symbolType.typeChildren.length === 2;
+	let found = false;
+	for (const m of ctx.extensionRegistry.methods) {
+		if (m.receiverTypeName === "Box" && m.methodName === "set") {
+			found = true;
+			assert m.sym !== null;
+			assert m.sym.symbolType.kind === TypeKind.Function;
+			// params: [this: Box, v: T]
+			assert m.sym.symbolType.typeChildren.length === 2;
+		}
+	}
+	assert found;
 }
 
 test "checker: non-generic class method works" {
@@ -56,7 +69,8 @@ test "E2E C: charCodeAt receiver BEFORE generics" {
 	const src = "const p = \"hello\";\nconst c = p.charCodeAt(0);";
 	const result = compileToC(src);
 	assert result.ok;
-	assert result.value.indexOf("msStringCharCodeAt(p,") >= 0;
+	// Receiver p is first arg (module-level const, so its C name is path-mangled).
+	assert result.value.indexOf("msStringCharCodeAt(p") >= 0;
 }
 
 // ===== Generic Class Instantiation =====
@@ -74,7 +88,9 @@ test "checker: generic class field type is substituted" {
 	assert sym.symbolType.kind === TypeKind.Ref;
 	const inner = sym.symbolType.typeReturn;
 	assert inner !== null;
-	assert inner.typeName === "Box__number";
+	// Checker keeps the generic name + type-arg children; name mangling (Box__number)
+	// happens in the monomorphize pass, which checkSource does not run.
+	assert inner.typeName === "Box";
 	assert inner.typeChildren.length === 1;
 	assert inner.typeChildren[0].kind === TypeKind.Number;
 }
@@ -97,16 +113,18 @@ test "E2E C: charCodeAt keeps receiver after generic class" {
 	const src = "const p = \"hello\";\nconst c = p.charCodeAt(0);";
 	const result = compileToC(src);
 	assert result.ok;
-	// Must be msStringCharCodeAt(p, 0) — NOT msStringCharCodeAt(0)
-	assert result.value.indexOf("msStringCharCodeAt(p, 0)") >= 0;
+	// Must keep receiver p as first arg — NOT msStringCharCodeAt(0). The C name of
+	// the module-level const p is path-mangled, so match the receiver prefix only.
+	assert result.value.indexOf("msStringCharCodeAt(p") >= 0;
 }
 
 test "E2E C: trim keeps receiver" {
 	const src = "const s = \"  hi  \";\nconst t = s.trim();";
 	const result = compileToC(src);
 	assert result.ok;
-	// Must have receiver: msStringTrim(s) — NOT msStringTrim()
-	assert result.value.indexOf("msStringTrim(s)") >= 0;
+	// Must keep receiver s — NOT msStringTrim(). Module-level const s is path-mangled,
+	// so match the receiver prefix only.
+	assert result.value.indexOf("msStringTrim(s") >= 0;
 }
 
 // ===== Multi-param generics =====
@@ -124,8 +142,9 @@ test "checker: two-param generic field types substituted" {
 	assert sym.symbolType.kind === TypeKind.Ref;
 	const inner = sym.symbolType.typeReturn;
 	assert inner !== null;
-	// Mangled name uses buildTypeArgKey: "string,number"
-	assert inner.typeName === "KV__string,number";
+	// Checker keeps the generic name + type-arg children; mangling to KV__string,number
+	// happens in the monomorphize pass, which checkSource does not run.
+	assert inner.typeName === "KV";
 	assert inner.typeChildren.length === 2;
 	assert inner.typeChildren[0].kind === TypeKind.String;
 	assert inner.typeChildren[1].kind === TypeKind.Number;

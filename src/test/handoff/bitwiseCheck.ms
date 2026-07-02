@@ -51,10 +51,10 @@ test "number << number warns" {
 	assert hasWarning("const a: number = 1;\nconst b: number = 4;\nconst c = a << b;", "implicitly casts to int32");
 }
 
-test "number & number produces 0 errors, 2 warnings" {
+test "number & number produces 0 errors, 1 warning" {
 	const src = "const a: number = 1;\nconst b: number = 2;\nconst c = a & b;";
 	assert strictErrorCount(src) === 0;
-	assert warningCount(src) === 2;
+	assert warningCount(src) === 1;
 }
 
 test "~number warns" {

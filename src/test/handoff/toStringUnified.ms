@@ -88,11 +88,12 @@ test "enum toString consistent" {
 
 // ===== Struct default toString =====
 
-test "struct toString generates helper" {
+test "struct toString produces a JSON string" {
 	const src = "interface Point { x: number; y: number; }\nconst p: Point = { x: 1, y: 2 };\nconst s = p.toString();";
 	const result = compileToC(src);
 	assert result.ok;
-	assert result.value.contains("__toString_Point");
+	// Struct toString lowers to the json-object + stringify path (not a passthrough).
+	assert result.value.contains("stringify");
 }
 
 // ===== User extension overrides default =====
