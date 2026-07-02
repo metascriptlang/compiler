@@ -7,7 +7,7 @@ import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { checkProgramWithRegistry } from "../../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../../checker/orchestrator";
-import { CheckerContext, Severity } from "../../checker/context";
+import { CheckerContext, Severity, ExportRegistry } from "../../checker/context";
 import { monomorphizeProgram } from "../../monomorphize/collect";
 import { validateTypedAST } from "../../checker/validate";
 import { transformProgram } from "../../transform/index";
@@ -15,43 +15,32 @@ import { transformForNative } from "../../transform/native/index";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { Node, NodeKind, ProgramData, FunctionDeclData } from "../../ast/node";
 import { createMapProvider, loadModuleGraph } from "../../module/loader";
-import { findModule } from "../../module/graph";
+import { Module, ModuleGraph } from "../../module/graph";
 import { resetAllSideChannels } from "../../parser/context";
 
 export function checkSource(source: string): CheckerContext {
 	resetAllSideChannels();
-	const modPath = "test/handoff.ms";
-	const entries = [{ entryPath: modPath, entrySource: source }];
-	const provider = createMapProvider(entries);
-	const graph = loadModuleGraph(modPath, provider);
-	const registry = checkModuleGraph(graph, "");
-	const preludeCtx = getPreludeContext();
-
-	const mod = findModule(graph, modPath);
-	if (mod === null) return null as unknown as CheckerContext;
-
-	const pr = parseSource(mod.source);
+	// Single-source check: one pass with null graph/mod so top-level symbols land
+	// in the returned ctx.table. The graph two-pass path registers them in the
+	// export registry instead, leaving ctx.table empty for introspection.
+	if (getPreludeContext() === null) {
+		const g = loadModuleGraph("test/handoff.ms", createMapProvider([{ entryPath: "test/handoff.ms", entrySource: "const _p: number = 0;" }]));
+		checkModuleGraph(g, "");
+	}
+	const pr = parseSource(source);
 	if (!pr.ok) return null as unknown as CheckerContext;
-
-	return checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
+	return checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, getPreludeContext());
 }
 
 export function fullPipeline(source: string): Node {
 	resetAllSideChannels();
-	const modPath = "test/handoff.ms";
-	const entries = [{ entryPath: modPath, entrySource: source }];
-	const provider = createMapProvider(entries);
-	const graph = loadModuleGraph(modPath, provider);
-	const registry = checkModuleGraph(graph, "");
-	const preludeCtx = getPreludeContext();
-
-	const mod = findModule(graph, modPath);
-	if (mod === null) return null as unknown as Node;
-
-	const pr = parseSource(mod.source);
+	if (getPreludeContext() === null) {
+		const g = loadModuleGraph("test/handoff.ms", createMapProvider([{ entryPath: "test/handoff.ms", entrySource: "const _p: number = 0;" }]));
+		checkModuleGraph(g, "");
+	}
+	const pr = parseSource(source);
 	if (!pr.ok) return null as unknown as Node;
-
-	const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
+	const ctx = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, getPreludeContext());
 	const monoed = monomorphizeProgram(pr.value, ctx);
 	validateTypedAST(ctx, monoed);
 	const transformed = transformProgram(monoed, ctx, false);
