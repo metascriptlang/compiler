@@ -112,7 +112,18 @@ export function compileToJS(source: string): CompileResult {
 // checkModuleGraph (2-phase) → computeAliveSet (global DCE) → per-module codegen
 export function compileProjectToC(entries: MapEntry[], entryPath: string): string {
 	resetAllSideChannels();
-	const provider = createMapProvider(entries);
+	// Map-provider keys must be canonical: loadModule canonicalizes every path and
+	// relative imports resolve to absolute, so a raw key like "src/doc.ms" never
+	// matches the "/abs/.../src/doc.ms" lookup and the module silently fails to load
+	// (its imports go unresolved, its decls get dropped). Canonicalizing here also
+	// aligns entryPath with graph.loadOrder so DCE Root 5 (entry-module exports) fires.
+	// Mirrors compileToC, which canonicalizes its single key the same way.
+	const canonEntries: MapEntry[] = [];
+	for (const e of entries) {
+		canonEntries.push({ entryPath: canonicalModulePath(e.entryPath), entrySource: e.entrySource });
+	}
+	entryPath = canonicalModulePath(entryPath);
+	const provider = createMapProvider(canonEntries);
 	const graph = loadModuleGraph(entryPath, provider);
 	if (graph.errors.length > 0) {
 		let msg = "ERROR: graph:";
@@ -179,7 +190,13 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 // Compile project to JS
 export function compileProjectToJS(entries: MapEntry[], entryPath: string): string {
 	resetAllSideChannels();
-	const provider = createMapProvider(entries);
+	// Canonicalize map keys so relative imports resolve — see compileProjectToC.
+	const canonEntries: MapEntry[] = [];
+	for (const e of entries) {
+		canonEntries.push({ entryPath: canonicalModulePath(e.entryPath), entrySource: e.entrySource });
+	}
+	entryPath = canonicalModulePath(entryPath);
+	const provider = createMapProvider(canonEntries);
 	const graph = loadModuleGraph(entryPath, provider);
 	if (graph.errors.length > 0) {
 		let msg = "ERROR: graph:";
