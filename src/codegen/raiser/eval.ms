@@ -53,6 +53,8 @@ export function evalASTFull(program: Node): RaiserContext {
 	// registry must be populated first (same as @comptime via evalComptimeBlock).
 	ensureHostTableLoaded();
 	const outer = getComptimeOuterCtx();
+	const savedOuterProgram = outer !== null ? outer.program : null as unknown as Node;
+	const savedOuterPrelude = outer !== null ? outer.preludeCtx : null as unknown as CheckerContext;
 	const hasFullOuterCtx = outer !== null
 		&& outer.registry !== null
 		&& outer.graph !== null
@@ -68,6 +70,10 @@ export function evalASTFull(program: Node): RaiserContext {
 	const ctx = createContext();
 	load(ctx, raiserMod);
 	execute(ctx);
+	if (outer !== null) {
+		outer.program = savedOuterProgram;
+		outer.preludeCtx = savedOuterPrelude;
+	}
 	return ctx;
 }
 

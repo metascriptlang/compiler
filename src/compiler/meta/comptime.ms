@@ -32,6 +32,7 @@ import { findExportsByName, ExportRegistry, CheckerContext, addError } from "../
 import { lookupModuleProgram } from "../../checker/instantiate";
 import { forEachChild } from "../../ast/visitor";
 import { isPrimitiveKind } from "../../checker/types";
+import { cloneNodeForCheck } from "../../monomorphize/clone";
 
 // --- Phase 8a POC helpers ---
 // Decides which outer top-level decls get injected into the synthetic
@@ -361,18 +362,15 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 	}
 
 	// Inject outer module-level decls + cross-module FunctionDecls so the
-	// @comptime body can reach functions across module boundaries. Bodies
-	// are injected by reference (no clone); inner check mutates shared AST
-	// — verified self-stable for happy-path symbol resolution.
-	//
-	// Known limitation: only FunctionDecl + ImportDecl injected. Cross-
-	// module type-level decls (Interface/Enum/TypeAlias) NOT injected, so
-	// nested access of imported types' fields (e.g., `r.error.kind` where
-	// IoError is in std/io/errors) returns Nil. Workaround: avoid nested
-	// access into imported error variants; restrict to `.value`/`.ok`.
-	// Full fix requires proper type walker (start from injected fn return
-	// types, walk type references, inject reached type decls) — separate
-	// initiative.
+	// @comptime body can reach functions across module boundaries. Every
+	// injected decl is CLONED (cloneNodeForCheck): evalASTFull runs
+	// check + refineTypes + transformForRaiser destructively on the
+	// synthetic Program, so real module nodes must never enter it —
+	// by-ref injection corrupted the surrounding module (silent
+	// "<object>" folds, unmangled identifiers in C). The collectors
+	// below walk the REAL nodes (their resolvedSym/type chains are
+	// needed); cloning happens only at the push into injectedStmts.
+	// See docs/NIM-REF.md §1 "CT eval / macro expansion".
 	const injectedStmts: Node[] = [];
 	const outerCtx = getComptimeOuterCtx();
 	const outerProgram = outerCtx !== null ? outerCtx.program : null as unknown as Node;
@@ -380,11 +378,11 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 		const outerData = outerProgram.data as ProgramData;
 		for (const stmt of outerData.programStmts) {
 			if (_isInjectableTopLevelDecl(stmt)) {
-				injectedStmts.push(stmt);
+				injectedStmts.push(cloneNodeForCheck(stmt));
 			}
 		}
 		const crossModule = _collectCrossModuleFunctionDecls(outerProgram, body);
-		for (const s of crossModule) { injectedStmts.push(s); }
+		for (const s of crossModule) { injectedStmts.push(cloneNodeForCheck(s)); }
 		// Phase 8c: inject type-level decls (Interface/Enum/TypeAlias) reachable
 		// from the injected fns' signatures, transitively. Required so the inner
 		// check resolves nested field access like `r.error.kind` where IoError
@@ -392,7 +390,7 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 		// eliminates 9+ "Unresolved type 'IoError'" errors that otherwise flood
 		// the inner check and break codegen for the @comptime body.
 		const crossModuleTypes = _collectCrossModuleTypeDecls(crossModule);
-		for (const s of crossModuleTypes) { injectedStmts.push(s); }
+		for (const s of crossModuleTypes) { injectedStmts.push(cloneNodeForCheck(s)); }
 	}
 
 	const allStmts: Node[] = [];
