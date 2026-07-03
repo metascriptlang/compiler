@@ -73,3 +73,44 @@ test "phase 8c: r.error.kind compiles (type-check pass on cross-module DU)" {
 	// reject the fold result).
 	assert KIND_ZERO_GUARDED >= 0;
 }
+
+// ===== Injection isolation: @comptime must never corrupt the surrounding module =====
+// Regression for the by-ref injection bug (2026-07): evalASTFull runs a
+// destructive pipeline on the synthetic Program; before the cloneNodeForCheck
+// fix, injected module decls were the REAL nodes — sibling fns using module
+// consts got string-concats folded to "<object>" and identifiers emitted
+// unmangled in C. These tests fail loud if that ever regresses.
+
+const ISO_PLAIN: string = "plain";
+const ISO_CT: string = @comptime { return "hello"; };
+
+function isoPlain(): string { return ISO_PLAIN; }
+function isoCt(): string { return ISO_CT; }
+
+function isoCtLen(): number {
+	let n = 0;
+	let i = 0;
+	while (i < ISO_CT.length) {
+		n = n + 1;
+		i = i + 1;
+	}
+	return n;
+}
+
+test "isolation: comptime const survives concat in sibling fns" {
+	assert ("p=" + isoPlain()) === "p=plain";
+	assert ("s=" + isoCt()) === "s=hello";
+}
+
+test "isolation: comptime const usable as value in loop and local" {
+	assert isoCtLen() === 5;
+	const local: string = ISO_CT;
+	assert local === "hello";
+}
+
+function isoSeed(): number { return 42; }
+const ISO_CT2: number = @comptime { return isoSeed(); };
+
+test "isolation: second comptime block still resolves outer fns" {
+	assert ISO_CT2 === 42;
+}
