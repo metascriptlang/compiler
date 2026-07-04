@@ -58,6 +58,7 @@ import { walkNode, mapChildren } from "../../transform/walker";
 import { hasGenericParams } from "../../checker/types";
 import { callMacroEvaluator, getComptimeOuterCtx } from "./callbacks";
 import { walkBodyForCallees } from "./comptime";
+import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleProgram } from "../../checker/instantiate";
 import { lookupSymbol } from "../../checker/symbol";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind } from "../../raiser/value";
@@ -1485,8 +1486,10 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		while (queue.length > 0) {
 			const decl = queue.pop();
 			const fd = decl.data as FunctionDeclData;
-			if (fd.fnBody !== null) preprocessMacroBody(fd.fnBody);
-			wrapperStmts.push(decl);
+			const declClone = cloneNodeForCheck(decl);
+			const fdClone = declClone.data as FunctionDeclData;
+			if (fdClone.fnBody !== null) preprocessMacroBody(fdClone.fnBody);
+			wrapperStmts.push(declClone);
 			// Walk THIS helper's body with ITS OWN defining module — private
 			// helpers (peelVariant in discDetect.ms) live in helper's module,
 			// not macro's module. Without per-helper module tracking, transitive
@@ -1513,16 +1516,20 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		pi = pi + 1;
 	}
 
-	// Append macro body statements with last ExprStmt → ReturnStmt
+	// Append macro body statements with last ExprStmt → ReturnStmt. Cloned:
+	// the registry body is reused by every invocation, and evalASTFull runs
+	// check + refineTypes + transformForRaiser destructively on the wrapper
+	// Program — by-ref stmts would corrupt the registry body and the helper
+	// decls' real modules (same invariant as evalComptimeBlock's inject sites).
 	const bodyData = body.data as BlockStmtData;
 	let si = 0;
 	while (si < bodyData.statements.length) {
 		const stmt = bodyData.statements[si];
 		if (si === bodyData.statements.length - 1 && stmt.kind === NodeKind.ExprStmt) {
 			const ed = stmt.data as ExprStmtData;
-			wrapperStmts.push(createNode(NodeKind.ReturnStmt, { argument: ed.expr }, synthToken(node.location)));
+			wrapperStmts.push(createNode(NodeKind.ReturnStmt, { argument: cloneNodeForCheck(ed.expr) }, synthToken(node.location)));
 		} else {
-			wrapperStmts.push(stmt);
+			wrapperStmts.push(cloneNodeForCheck(stmt));
 		}
 		si = si + 1;
 	}
