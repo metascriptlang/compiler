@@ -177,6 +177,34 @@ export const CASES: NativeCase[] = [
 		note: "FIXED in C codegen (genWhileStmt/genDoWhileStmt): loops never called pushBlock(p, true), so genBreak/genContinue found no isLoop block and emitted a bare break/continue that SKIPPED pending finally — leaking every DRC temp whose cleanup lived in a finally between the jump and the loop boundary, AND violating the try/finally contract (finally didn't run on break/continue). Root cause of the Photon WS broadcast leak: the async stepper's fast-path `if (finished) continue` skipped the per-iteration temp decref. Was the general bug; manifested here as ~32 B/iter (2M → 64MB), now flat ~2MB. Restores Nim parity (ccgstmts startBlockWith + isLoop=true). Permanent regression guard.",
 	},
 	{
+		name: "await-struct-returns",
+		file: "awaitStructReturns.ms",
+		maxRssMb: 40,
+		expectStdout: "await-struct-returns acc=1600000",
+		note: "FIXED (struct-future layout unification). A struct-valued future had TWO layouts by source and neither read path handled both (isBoxed removed Session 4 → no runtime dispatch). async fn struct return was INLINE (msFutureCreateInline + msFutureCompleteT) while actor CALL + spawn were BOXED (msSinkBoxStruct → void*); await's deferred reader (msWaitFor+msUnboxStruct = BOXED) crashed on the async INLINE layout. Fix chose BOXED as the one representation (matching the AwaitGroup void** primitive + the majority): asyncBridge now boxes async struct/tuple/generic-instance returns via msSinkBoxStruct — exactly the path arrays already used — so await's existing boxed reader handles EVERY source uniformly; String stays inline (msFutureCreateInline + msFutureReadString typed reader — a 16-byte value with a working typed path, excluded from the box). lowerWaitFor mirrors: only String → msWaitForStruct, struct/tuple/GI → boxed unbox (this also fixed a pre-existing waitFor-on-actor-struct garbage read). Zero change to the await reader, actor reply completion, AwaitGroup, or any locked cross-thread protocol. Struct carries a HEAP field (tag: string) so the fix is proven to transfer the string's DRC ownership through the box (msSinkBoxStruct memcpy+memset-move → msUnboxStruct copy-out+free-shell), not just copy POD. Paired with await-struct-actorspawn (regression guard for the actor/spawn boxed path). Invisible to test-ms (Bun JS-GC never runs the C future read).",
+	},
+	{
+		name: "await-struct-actorspawn",
+		file: "awaitStructActorSpawn.ms",
+		maxRssMb: 40,
+		expectStdout: "await-struct-actorspawn acc=2600000",
+		note: "GREEN regression guard for the struct-future-layout fix (paired with the RED await-struct-returns). `await` on a struct-with-heap-field (tag: string) return from an actor CALL and from spawn — both BOXED (msSinkBoxStruct → msMsgCompletePtr / spawn box), read by awaitLower's msWaitFor(void*)+msUnboxStruct. Locks the actor/spawn boxed path so the Amendment-F fix (boxing async struct returns) can't silently regress them — the DRC-ownership-transfer surface where a heap string double-frees or leaks if the box mishandles it. acc=2600000 (100000 × ((5+9)+(3+9))). Invisible to test-ms (Bun JS-GC never runs the C future read).",
+	},
+	{
+		name: "await-struct-in-async",
+		file: "awaitStructInAsync.ms",
+		maxRssMb: 40,
+		expectStdout: "await-struct-in-async acc=1300000",
+		note: "Regression guard for the RESUME path of the Amendment-F struct-future fix (async fn awaiting a struct-returning async fn). `const s = await inner()` INSIDE an async function is read on the stepper resume path (asyncBridge, the readFnForAwait=='' branch), which previously used msWaitForStruct (INLINE) — correct when struct futures were inline, but after Amendment-F boxes async struct returns it read the boxed void* as an inline struct → silent WRONG value (probe gave 0 not 14). Found by the /audit pass — the direct-await guards (await-struct-returns) exercised the deferred sync-await reader, NOT the async-resume reader. Fixed by routing struct/tuple/GI + array on resume through msFutureRead + msUnboxStruct (boxed), matching the completion. acc=1300000 (100000 × (4 + \"inner-tag\".length 9)) proves the struct + its heap string round-trip through the async state machine; flat RSS proves no leak. Invisible to test-ms (Bun JS-GC never runs the C future read).",
+	},
+	{
+		name: "await-struct-spawn-stored",
+		file: "awaitStructSpawnStored.ms",
+		maxRssMb: 40,
+		expectStdout: "await-struct-spawn-stored acc=380000",
+		note: "Regression guard for the STORED-spawn-future path of the Amendment-F struct-future fix (the 3rd writer). spawn(structFn) whose result is STORED (array/variable) — not directly awaited — escapes both the fused AwaitGroup path and the _spawnSlotMap slot path and goes through lowerPromiseSpawn, which still allocated an INLINE future (msFutureCreateInline + msSpawnInto memcpy) for struct-like types while Amendment-F had moved BOTH readers (await deferred + waitFor) to BOXED (msWaitFor + msUnboxStruct) → the first 8 bytes of the inline struct value were read as a heap-box pointer → SIGSEGV (probe exit 139; before Amendment-F the same combo was silent-wrong under await). Fixed at the writer: lowerPromiseSpawn now follows the shared storage contract (util.ms inlineInFuture/boxedInFuture — hoisted there as the single source of truth so no 4th site can drift): only String keeps msSpawnInto inline; struct/tuple/GI fall to msSpawn, whose worker stores the closure's heap-box pointer in the void* slot — exactly what the boxed readers expect. acc=380000 (10000 batches × 4 spawns × (n 0..3 + \"spawn-pt\".length 8)); flat RSS proves box shells are freed. Invisible to test-ms (Bun JS-GC never runs the C future read).",
+	},
+	{
 		name: "leak-map-drop",
 		file: "leakMapDrop.ms",
 		maxRssMb: 40,
@@ -365,6 +393,13 @@ export const CASES: NativeCase[] = [
 		maxRssMb: 30,
 		expectStdout: "leak-ref-array-evict done",
 		note: "FIXED in runtime/core/array.c — the three ref/string-array element-eviction paths that dropped references. (1) msRefArrayShrink (`arr.length = n`): NULL'd evicted slots without decref; the sugar (builtinLower lowerLengthAssign → msRefArraySetLen → msRefArrayShrink) injects no compensating decref, unlike index-store (`arr[i]=x`, DRC-injected decref-old) and `.pop()` (transfers ownership to the receiver). msRefArraySetLenUninit shared the gap (partial decref skipping the element's destroyFn) — now both route through the one correct shrink. (2/3) msRefArraySplice + msStringArraySplice (`arr.splice(i,k)`): memmoved the tail over the removed elements without decref/destroy — `.splice` is a real API (std/core/array, used by asyncBridge stmts.splice). All three now free each evicted element + its owned heap fields via the canonical msDecref / msStringDestroy; msRefArrayDestroy/Shrink/Splice unified on msDecref. Ownership model: the array owns its elements (push moves in, no incref), so any eviction not handing the element back must free it. Pure-MS isolation: `.length=n` shrink = 63MB @ 1M, `.pop()`/`arr[i]=x`/scalar flat at 2MB. The Raiser VM trips shrink on every script return (vmHandleRet pops the frame array via items.length=len-1) — the leak that surfaced it; invisible to test-ms (Bun JS-GC) and every prior native case (none shrank/spliced a ref array). Covers shrink (single + bulk) and middle-splice (ref + string). Was 63MB+, now flat.",
+	},
+	{
+		name: "macro-helper-isolation",
+		file: "macroHelperIsolation.ms",
+		maxRssMb: 30,
+		expectStdout: "macro-helper-isolation PASS",
+		note: "Macro-path injection isolation (expand.ms clone-at-push). Helper decls reachable from a macro body were injected into the wrapper Program by reference; evalASTFull's destructive pipeline lambda-lifted the closure-bearing helper's REAL body against the synthetic program, so after one expansion the module failed its own check with an unrenderable synthetic-location type error. Pre-fix this case does not build; the marker pins CT value (macro fold) AND runtime helper both at 42. Twin of the @comptime clone fix (comptime.ms inject sites) — the 'isolation:' lang tests cover that path, this covers the macro path natively.",
 	},
 	{
 		name: "raiser-cycle-collect",
