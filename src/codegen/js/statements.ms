@@ -266,6 +266,8 @@ export function emitSwitchCase(gen: JSGenerator, node: Node): void {
 	for (const stmt of d.caseStmts) {
 		emitNode(gen, stmt);
 	}
+	emitIndent(gen);
+	emit(gen, "break;\n");
 	gen.indentLevel = gen.indentLevel - 2;
 }
 
