@@ -14,9 +14,10 @@ import {
 	VariableDeclData, FunctionDeclData,
 	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
 	BlockStmtData, ExportDeclData, DecoratedDeclData, ExternDeclData,
-	ComptimeBlockData, ProgramData,
+	ComptimeBlockData, ProgramData, EnumDeclData,
+	InterfaceDeclData, TypeAliasDeclData,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
-	ImportDeclData, CallExprData, IdentifierData, Type,
+	ImportDeclData, CallExprData, IdentifierData, Type, TypeKind,
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram } from "../../checker/checkPass";
@@ -41,10 +42,50 @@ import { cloneNodeForCheck } from "../../monomorphize/clone";
 // evalComptimeBlock). Phase 8b refactor will replace with on-demand
 // resolution via ExportRegistry.
 
+// ImportDecls only: they let the inner check resolve imported names and type
+// annotations the body references. Module FunctionDecls are NOT blanket-
+// injected anymore — the body-seeded walker in _collectCrossModuleFunctionDecls
+// injects exactly the reachable set (same-module included via definingProgram),
+// so the inner check never sees errors from decls the eval cannot reach.
 function _isInjectableTopLevelDecl(stmt: Node): boolean {
-	if (stmt.kind === NodeKind.FunctionDecl) return true;
 	if (stmt.kind === NodeKind.ImportDecl) return true;
 	return false;
+}
+
+// Name a top-level decl exposes into module scope (for dedup against injected
+// imports — a name provided as a local decl must not ALSO arrive via import,
+// else the inner check sees a duplicate symbol / ambiguous overload).
+function _injectedDeclName(node: Node): string {
+	return match (node.kind) {
+		NodeKind.FunctionDecl => (node.data as FunctionDeclData).fnName,
+		NodeKind.ExternDecl => (node.data as ExternDeclData).externName,
+		NodeKind.EnumDecl => (node.data as EnumDeclData).enumName,
+		NodeKind.InterfaceDecl => (node.data as InterfaceDeclData).interfaceName,
+		NodeKind.StructDecl => (node.data as InterfaceDeclData).interfaceName,
+		NodeKind.TypeAliasDecl => (node.data as TypeAliasDeclData).aliasName,
+		_ => "",
+	};
+}
+
+// Return a copy of an ImportDecl with `exclude` names removed, or null if every
+// imported name is excluded (drop the import entirely).
+function _importMinusNames(importNode: Node, exclude: HashSet<string>): Node {
+	const d = importNode.data as ImportDeclData;
+	const names: string[] = [];
+	const aliases: string[] = [];
+	let ai = 0;
+	while (ai < d.importNames.length) {
+		if (!exclude.has(d.importNames[ai])) {
+			names.push(d.importNames[ai]);
+			aliases.push(ai < d.importAliases.length ? d.importAliases[ai] : d.importNames[ai]);
+		}
+		ai = ai + 1;
+	}
+	if (names.length === 0) return null as unknown as Node;
+	return createNode(NodeKind.ImportDecl, {
+		importNames: names, importAliases: aliases,
+		importSource: d.importSource, nameLocations: [],
+	}, synthToken(importNode.location));
 }
 
 // Spike 2 step 2: walk outer ImportDecls, resolve each imported name via
@@ -140,11 +181,13 @@ export function walkBodyForCallees(
 				// Try defining module's Program FIRST — catches PRIVATE helpers
 				// and `extern function` decls (parsed as FunctionDecl, not exported
 				// so registry.nameIndex misses them). Mirrors expand.ms macro path.
+				// Registry may be null (bare single-file checkProgram) — the
+				// same-module lookup still works; cross-module is best-effort.
 				let fnDecl: Node = null as unknown as Node;
 				if (definingProgram !== null) {
 					fnDecl = findFunctionDeclInProgram(definingProgram, name);
 				}
-				if (fnDecl === null) fnDecl = lookupFunctionDeclByName(registry, name);
+				if (fnDecl === null && registry !== null) fnDecl = lookupFunctionDeclByName(registry, name);
 				if (fnDecl !== null) queue.push(fnDecl);
 			}
 		}
@@ -179,7 +222,16 @@ function _collectTypeRefsFromTypeImpl(t: Type, names: HashSet<string>, visited: 
 		// Skip primitive types by TypeKind (more robust than name matching —
 		// reuses checker's canonical predicate and naturally excludes literal-
 		// typed terms like the "true"/"false" disc values of match-type DUs).
-		if (!isPrimitiveKind(t.kind)) names.add(t.typeName);
+		// Enum/EnumLiteral ARE seeded even though they're "primitive" for
+		// assignability: a DIRECT enum-member read inside the comptime body
+		// (e.g. `@comptime { return E.M as number }`) needs the EnumDecl present
+		// so the inner check can resolve `E` and rewrite `E.M` to the mangled
+		// member (setting resolvedSym); rgen then reads the ordinal self-contained
+		// from that resolvedSym. (Reads via a pre-checked helper don't need this —
+		// their resolvedSym is already set — but direct reads do.)
+		if (!isPrimitiveKind(t.kind) || t.kind === TypeKind.Enum || t.kind === TypeKind.EnumLiteral) {
+			names.add(t.typeName);
+		}
 	}
 	if (t.typeChildren !== null) {
 		for (const c of t.typeChildren) {
@@ -276,29 +328,19 @@ function _collectCrossModuleFunctionDecls(outerProgram: Node, comptimeBody: Node
 	// "object handle out of bounds: 0".
 	const decls: Node[] = [];
 	const outer = getComptimeOuterCtx();
-	if (outer === null || outer.registry === null) return decls;
-	const registry = outer.registry;
-	const outerData = outerProgram.data as ProgramData;
+	const registry = outer !== null ? outer.registry : null as unknown as ExportRegistry;
 	const visited = new HashSet<string>();
 	const queue: Node[] = [];
 
-	// Seed: directly-imported names.
-	for (const stmt of outerData.programStmts) {
-		if (stmt.kind !== NodeKind.ImportDecl) continue;
-		const imp = stmt.data as ImportDeclData;
-		for (const name of imp.importNames) {
-			if (visited.has(name)) continue;
-			visited.add(name);
-			const fnDecl = lookupFunctionDeclByName(registry, name);
-			if (fnDecl !== null) queue.push(fnDecl);
-		}
-	}
-
-	// Seed: names referenced directly inside the @comptime body. Defining
-	// program null — body lives in outer module which has its own decls
-	// injected via _isInjectableTopLevelDecl path (FunctionDecl + ImportDecl).
+	// Seed: names referenced inside the @comptime body ONLY. Seeding from the
+	// outer module's whole import list injected every imported fn plus its
+	// transitive forest — the inner check then surfaced unresolved-type errors
+	// from decls the body never touches (lightcube: IonWindowId/JsonValue/...
+	// noise from injected-but-unused std helpers). The check surface must be
+	// what the eval actually reaches. Defining program = outer module so
+	// same-module private helpers and `extern function` decls inject too.
 	if (comptimeBody !== null) {
-		walkBodyForCallees(comptimeBody, registry, null as unknown as Node, visited, queue);
+		walkBodyForCallees(comptimeBody, registry, outerProgram, visited, queue);
 	}
 
 	// Transitive: drain queue, walk each body for further callees. For each
@@ -312,12 +354,14 @@ function _collectCrossModuleFunctionDecls(outerProgram: Node, comptimeBody: Node
 		decls.push(decl);
 		if (decl.kind !== NodeKind.FunctionDecl) continue;
 		const fd = decl.data as FunctionDeclData;
-		const matches = findExportsByName(registry, fd.fnName);
-		let definingProgram: Node = null as unknown as Node;
-		for (const m of matches) {
-			if (m.definingModule === "") continue;
-			const p = lookupModuleProgram(m.definingModule);
-			if (p !== null) { definingProgram = p; break; }
+		let definingProgram: Node = outerProgram;
+		if (registry !== null) {
+			const matches = findExportsByName(registry, fd.fnName);
+			for (const m of matches) {
+				if (m.definingModule === "") continue;
+				const p = lookupModuleProgram(m.definingModule);
+				if (p !== null) { definingProgram = p; break; }
+			}
 		}
 		walkBodyForCallees(fd.fnBody, registry, definingProgram, visited, queue);
 	}
@@ -376,20 +420,23 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 	const outerProgram = outerCtx !== null ? outerCtx.program : null as unknown as Node;
 	if (outerProgram !== null && outerProgram.kind === NodeKind.Program) {
 		const outerData = outerProgram.data as ProgramData;
+		// Collect cross-module fn + type decls FIRST so outer imports can be
+		// deduped against the names we inject as local decls (Phase 8c: type
+		// decls reachable from injected fn signatures — e.g. IoError + its
+		// IoErrorKind enum — so the inner check resolves nested field access;
+		// enums must be injected too, else their member reads fold to nil).
+		const crossModule = _collectCrossModuleFunctionDecls(outerProgram, body);
+		const crossModuleTypes = _collectCrossModuleTypeDecls(crossModule);
+		const injectedNames = new HashSet<string>();
+		for (const s of crossModule) { const nm = _injectedDeclName(s); if (nm !== "") injectedNames.add(nm); }
+		for (const s of crossModuleTypes) { const nm = _injectedDeclName(s); if (nm !== "") injectedNames.add(nm); }
 		for (const stmt of outerData.programStmts) {
-			if (_isInjectableTopLevelDecl(stmt)) {
-				injectedStmts.push(cloneNodeForCheck(stmt));
+			if (stmt.kind === NodeKind.ImportDecl) {
+				const filtered = _importMinusNames(stmt, injectedNames);
+				if (filtered !== null) injectedStmts.push(cloneNodeForCheck(filtered));
 			}
 		}
-		const crossModule = _collectCrossModuleFunctionDecls(outerProgram, body);
 		for (const s of crossModule) { injectedStmts.push(cloneNodeForCheck(s)); }
-		// Phase 8c: inject type-level decls (Interface/Enum/TypeAlias) reachable
-		// from the injected fns' signatures, transitively. Required so the inner
-		// check resolves nested field access like `r.error.kind` where IoError
-		// (and its IoErrorKind enum) live in cross-module type-level decls. Walker
-		// eliminates 9+ "Unresolved type 'IoError'" errors that otherwise flood
-		// the inner check and break codegen for the @comptime body.
-		const crossModuleTypes = _collectCrossModuleTypeDecls(crossModule);
 		for (const s of crossModuleTypes) { injectedStmts.push(cloneNodeForCheck(s)); }
 	}
 

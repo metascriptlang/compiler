@@ -358,6 +358,15 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (d.name === "super") {
 				node.nodeType = resolveSuper(ctx, node); return;
 			}
+			// Enum member access is rewritten to a mangled Identifier ("E_M")
+			// whose name is deliberately never bound in scope — its resolution
+			// lives only on the inline resolvedSym. A re-check of injected
+			// comptime/macro decls (resolvedSym preserved by cloneNodeForCheck)
+			// must trust it rather than look the mangled name up and fail. A
+			// normal identifier never arrives pre-tagged EnumMember.
+			if (node.resolvedSym !== null && node.resolvedSym.symbolKind === SymbolKind.EnumMember) {
+				node.nodeType = node.resolvedSym.symbolType; return;
+			}
 			const sym = lookupSymbol(ctx.table, d.name);
 			if (sym === null) {
 					addError(ctx, `Undefined variable '${d.name}'`, node.location.line, node.location.column);

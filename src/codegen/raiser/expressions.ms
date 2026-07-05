@@ -213,6 +213,27 @@ export function compileExpr(s: RaiserCompState, node: Node): number {
 			// + member (not the mangled identifier) so it can't collide.
 			if (node.resolvedSym !== null && node.resolvedSym.symbolKind === SymbolKind.EnumMember
 				&& node.resolvedSym.symbolType !== null) {
+				// Self-contained ordinal (primary): the member's EnumLiteral carries
+				// the full enum Type on typeReturn (createEnumLiteral), whose
+				// typeChildren[i].typeFlags hold the ordinals (createEnum). Reading
+				// it here means the ordinal no longer depends on the EnumDecl being
+				// physically injected into the comptime synthetic program — fixes
+				// single-file/local enums the same way as cross-module ones.
+				const enumTy = node.resolvedSym.symbolType.typeReturn;
+				if (enumTy !== null) {
+					let ei = 0;
+					while (ei < enumTy.typeNames.length) {
+						if (enumTy.typeNames[ei] === node.resolvedSym.name) {
+							const ord = (enumTy.typeChildren !== null && ei < enumTy.typeChildren.length)
+								? enumTy.typeChildren[ei].typeFlags : ei;
+							const r0 = allocReg(s);
+							emitLoadConst(s, r0, raiserInt(ord));
+							return r0;
+						}
+						ei = ei + 1;
+					}
+				}
+				// Fallback: physically-injected EnumDecl → enumMap (legacy path).
 				const ec = findEnumConstant(s, `${node.resolvedSym.symbolType.typeName}.${node.resolvedSym.name}`);
 				if (ec >= 0) {
 					const r = allocReg(s);

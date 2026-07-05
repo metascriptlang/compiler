@@ -6,7 +6,7 @@
 // (src/checker/instantiate.ms) and the monomorphize collect pass
 // (src/monomorphize/collect.ms) can use them without a circular import.
 
-import { Node, NodeKind, NodeData, NodeFlag, makeLoc, createNodeAt, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, FunctionDeclData, ArrowFunctionData, FunctionExprData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, MacroDeclData, VariableDeclData, ReturnStmtData, ThrowStmtData, ExprStmtData, TryCatchStmtData, DeferStmtData, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchStmtData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, TypeAssertionData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, AssertStmtData, ComptimeBlockData, SpliceManyData, QuoteExprData, MacroInvocationData, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ImportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, PropertyDeclData, ExternDeclData, TypeAnnotationData, BreakStmtData, ContinueStmtData, UnreachableStmtData, BigIntLiteralData, RegexLiteralData, HiddenStdConvData, ProgramData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, NodeData, NodeFlag, makeLoc, createNodeAt, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, FunctionDeclData, ArrowFunctionData, FunctionExprData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, MacroDeclData, VariableDeclData, ReturnStmtData, ThrowStmtData, ExprStmtData, TryCatchStmtData, DeferStmtData, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchStmtData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, TypeAssertionData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, AssertStmtData, ComptimeBlockData, SpliceManyData, QuoteExprData, MacroInvocationData, SymbolKind, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ImportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, PropertyDeclData, ExternDeclData, TypeAnnotationData, BreakStmtData, ContinueStmtData, UnreachableStmtData, BigIntLiteralData, RegexLiteralData, HiddenStdConvData, ProgramData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, Type, TypeKind } from "../ast/node";
 import { isResult, getResultOkType, getResultErrType } from "../checker/types";
 
 // ===== Clone Mode =====
@@ -117,6 +117,16 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 		dst.paramLocations = src.paramLocations;
 		dst.comments = src.comments;
 		dst.typeArg = src.typeArg;
+		// Enum member access was rewritten by the checker from `E.M` (MemberExpr)
+		// to `Identifier "E_M"` whose mangled name is deliberately never bound in
+		// scope — its only resolution path is this resolvedSym. Dropping it makes
+		// a re-check (comptime/macro injected decls) see an undefined variable and
+		// rgen fold the member to nil. Preserve it (nodeType too, so the trusted
+		// re-check keeps the enum-literal type).
+		if (src.resolvedSym !== null && src.resolvedSym.symbolKind === SymbolKind.EnumMember) {
+			dst.resolvedSym = src.resolvedSym;
+			dst.nodeType = src.nodeType;
+		}
 	}
 	return dst;
 }

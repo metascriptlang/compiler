@@ -63,11 +63,11 @@ export function evalASTFull(program: Node): RaiserContext {
 	const checkerCtx = hasFullOuterCtx
 		? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
 		: checkProgram(program);
+	const ctx = createContext();
 	const txCtx = createTransformContextWithChecker(checkerCtx);
 	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
 	const transformed = transformForRaiser(refined, checkerCtx);
 	const raiserMod = generateRaiser(transformed);
-	const ctx = createContext();
 	load(ctx, raiserMod);
 	execute(ctx);
 	if (outer !== null) {
