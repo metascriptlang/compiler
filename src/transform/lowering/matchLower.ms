@@ -116,7 +116,7 @@ function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 
 // ===== MatchStmt → if-else chain =====
 
-function lowerMatchStmt(matchNode: Node, ctx: TransformContext): Node[] {
+export function lowerMatchStmt(matchNode: Node, ctx: TransformContext): Node[] {
 	const d = matchNode.data as MatchStmtData;
 	const loc = matchNode.location;
 	const matchSym = freshTempSym(ctx, "match", d.matchStmtDisc.nodeType);

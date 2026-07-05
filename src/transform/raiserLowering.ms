@@ -19,6 +19,7 @@ import { lowerSpread } from "./desugar/spreadExpand";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerResultFieldCheck } from "./desugar/resultFieldCheck";
 import { lowerMatch } from "./lowering/matchLower";
+import { lowerSwitch } from "./lowering/switchLower";
 import { lowerLambda } from "./lowering/lambdaLifting";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
@@ -38,6 +39,7 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	// LoadField on Nil → "object handle out of bounds: 0".
 	result = lowerResultConstructors(result);
 	result = lowerResultFieldCheck(result, ctx);
+	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = lowerLambda(result, ctx);
 	return result;

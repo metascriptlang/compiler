@@ -351,6 +351,14 @@ export function makeSwitchCase(tests: Node[], stmts: Node[], isDefault: boolean,
 	return createNode(NodeKind.SwitchCase, { caseTests: tests, caseStmts: stmts, isDefault }, syntheticToken(loc));
 }
 
+export function makeMatchStmt(disc: Node, cases: Node[], loc: SourceLocation): Node {
+	return createNode(NodeKind.MatchStmt, { matchStmtDisc: disc, matchStmtCases: cases }, syntheticToken(loc));
+}
+
+export function makeMatchCase(patterns: Node[], guard: Node, body: Node, loc: SourceLocation): Node {
+	return createNode(NodeKind.MatchCase, { casePatterns: patterns, caseGuard: guard, caseBody: body }, syntheticToken(loc));
+}
+
 
 // ===== Declaration Builders =====
 

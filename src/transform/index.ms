@@ -14,7 +14,8 @@
 // 12. forOfLower            — desugars for-of to while
 // 13. resultDesugar         — 1:N expansion of try expressions
 // 14. resultFieldCheck      — safety checks on $result_N.value/.error access
-// 15. matchLower            — sees simplest AST
+// 15. switchLower           — user switch → the match engine (ordinal discs pass through)
+//     matchLower            — sees simplest AST
 // 16. tailCallLower         — tail recursion → while (sees fully normalized AST)
 // 17. asyncDesugar          — await → yield, async → generator (before generatorLower)
 // 18. generatorLower        — function* → state machine returning iterator object
@@ -45,6 +46,7 @@ import { lowerForOf } from "./lowering/forOfLower";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerResultFieldCheck } from "./desugar/resultFieldCheck";
 import { lowerMatch } from "./lowering/matchLower";
+import { lowerSwitch } from "./lowering/switchLower";
 import { lowerTailCall } from "./lowering/tailCallLower";
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerGenerator } from "./lowering/generatorLower";
@@ -94,6 +96,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// resultFieldCheck wraps .value/.error in BlockStmt — invalid in C expression position.
 	// Skip for C until a StmtExpr-equivalent node (GNU statement expressions) is added.
 	if (jsBackend) { result = lowerResultFieldCheck(result, ctx); }
+	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	if (!jsBackend) { result = lowerTailCall(result, ctx); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); }
