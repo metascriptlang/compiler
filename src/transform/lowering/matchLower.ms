@@ -19,7 +19,7 @@ import { walkExpandBlocks, containsExprKind, replaceInExpr } from "../walker";
 import {
 	makeIdent, makeIdentResolved, makeTypedIdent, makeBlock, makeVarDecl, makeExprStmt, makeNull,
 	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
-	makeCall, makeNumber, makeSwitch, makeSwitchCase,
+	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType,
 } from "../util";
 import { unknownType } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -211,16 +211,7 @@ function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
 // Check if all non-wildcard/non-binding patterns are enum members or integer literals.
 // Guards are allowed — they become if-chains inside switch case bodies.
 function canUseSwitchDispatch(cases: Node[], discType: Type): boolean {
-	if (discType === null) return false;
-	// Only integer types and enums — C switch requires integer discriminant.
-	// TypeKind.Number is double in C, NOT valid for switch.
-	const k = discType.kind;
-	if (k !== TypeKind.Enum && k !== TypeKind.Int8
-		&& k !== TypeKind.Int16 && k !== TypeKind.Int32 && k !== TypeKind.Int64
-		&& k !== TypeKind.Uint8 && k !== TypeKind.Uint16 && k !== TypeKind.Uint32
-		&& k !== TypeKind.Uint64) {
-		return false;
-	}
+	if (!isCSwitchableType(discType)) return false;
 	for (let i = 0; i < cases.length; i += 1) {
 		const cd = cases[i].data as MatchCaseData;
 		if (isWildcard(cd.casePatterns)) continue;

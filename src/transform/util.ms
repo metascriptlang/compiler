@@ -25,6 +25,34 @@ export function isStructLikeType(t: Type | null): boolean {
 		|| t.kind === TypeKind.Tuple || t.kind === TypeKind.String;
 }
 
+// Single source of truth for "this discriminant may become a real C switch" —
+// C requires an integer controlling expression (Number is double, NOT valid).
+// Shared by matchLower and switchLower so the two dispatches never drift.
+export function isCSwitchableType(t: Type): boolean {
+	if (t === null) return false;
+	const k = t.kind;
+	return k === TypeKind.Enum || k === TypeKind.Int8 || k === TypeKind.Int16
+		|| k === TypeKind.Int32 || k === TypeKind.Int64 || k === TypeKind.Uint8
+		|| k === TypeKind.Uint16 || k === TypeKind.Uint32 || k === TypeKind.Uint64;
+}
+
+// Future storage contract (PARALOCK Amendment F) — single source of truth for
+// EVERY writer (asyncBridge completion/stepper/resume, lowerPromiseSpawn) and
+// reader (lowerWaitFor, awaitLower). Exactly one of these holds per type:
+//   inlineInFuture → 16-byte typed slot (msFutureCreateInline / msSpawnInto)
+//   boxedInFuture  → heap box in the void* slot (msSinkBoxStruct / msUnboxStruct)
+//   neither        → primitive bits in the void* slot
+// A writer/reader pair disagreeing on this = silent garbage or UAF; do not
+// branch on layout anywhere else.
+export function inlineInFuture(t: Type | null): boolean {
+	return t !== null && t.kind === TypeKind.String;
+}
+
+export function boxedInFuture(t: Type | null): boolean {
+	if (t === null) return false;
+	return t.kind === TypeKind.Array || (isStructLikeType(t) && t.kind !== TypeKind.String);
+}
+
 // Value-layout types — passed by-value or via NRVO out-param, NOT as void*.
 // Actor msg-kind dispatch routes these through the box/unbox path.
 //
@@ -322,6 +350,7 @@ export function makeSwitch(disc: Node, cases: Node[], loc: SourceLocation): Node
 export function makeSwitchCase(tests: Node[], stmts: Node[], isDefault: boolean, loc: SourceLocation): Node {
 	return createNode(NodeKind.SwitchCase, { caseTests: tests, caseStmts: stmts, isDefault }, syntheticToken(loc));
 }
+
 
 // ===== Declaration Builders =====
 
