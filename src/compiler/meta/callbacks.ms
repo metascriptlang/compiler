@@ -3,6 +3,7 @@
 
 import { Node } from "../../ast/node";
 import { RaiserContext } from "../../raiser/context";
+import { RaiserModule } from "../../raiser/module";
 import { CheckerContext, ExportRegistry } from "../../checker/context";
 import { Module, ModuleGraph } from "../../module/graph";
 
@@ -18,6 +19,20 @@ export function callMacroEvaluator(program: Node): RaiserContext | null {
 
 export function registerMacroEvaluator(fn: MacroEvaluatorFn): void {
 	macroEvaluatorFn = fn;
+}
+
+type MacroCompilerFn = (program: Node) => RaiserModule | null;
+
+let macroCompilerFn: MacroCompilerFn = (program: Node): RaiserModule | null => {
+	return null;
+};
+
+export function callMacroCompiler(program: Node): RaiserModule | null {
+	return macroCompilerFn(program);
+}
+
+export function registerMacroCompiler(fn: MacroCompilerFn): void {
+	macroCompilerFn = fn;
 }
 
 // ===== Comptime outer context =====

@@ -14,6 +14,7 @@ import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule } from "../../raiser/vm";
+import { RaiserModule } from "../../raiser/module";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput } from "./rgen";
 import { getComptimeOuterCtx } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
@@ -48,7 +49,7 @@ function raiserPreludeCtx(): CheckerContext {
 	return _raiserPreludeCtx;
 }
 
-export function evalASTFull(program: Node): RaiserContext {
+export function evalASTCompile(program: Node): RaiserModule {
 	// Macro bodies dispatch string/array builtins through CallHost — the host
 	// registry must be populated first (same as @comptime via evalComptimeBlock).
 	ensureHostTableLoaded();
@@ -63,22 +64,28 @@ export function evalASTFull(program: Node): RaiserContext {
 	const checkerCtx = hasFullOuterCtx
 		? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
 		: checkProgram(program);
-	const ctx = createContext();
 	const txCtx = createTransformContextWithChecker(checkerCtx);
 	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
 	const transformed = transformForRaiser(refined, checkerCtx);
 	const raiserMod = generateRaiser(transformed);
-	load(ctx, raiserMod);
-	execute(ctx);
 	if (outer !== null) {
 		outer.program = savedOuterProgram;
 		outer.preludeCtx = savedOuterPrelude;
 	}
+	return raiserMod;
+}
+
+export function evalASTFull(program: Node): RaiserContext {
+	const raiserMod = evalASTCompile(program);
+	const ctx = createContext();
+	load(ctx, raiserMod);
+	execute(ctx);
 	return ctx;
 }
 
-import { registerMacroEvaluator } from "../../compiler/meta/callbacks";
+import { registerMacroEvaluator, registerMacroCompiler } from "../../compiler/meta/callbacks";
 registerMacroEvaluator(evalASTFull);
+registerMacroCompiler(evalASTCompile);
 
 // --- Test helper ---
 

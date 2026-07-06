@@ -56,14 +56,16 @@ import {
 import { CheckerContext, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { hasGenericParams } from "../../checker/types";
-import { callMacroEvaluator, getComptimeOuterCtx } from "./callbacks";
+import { callMacroCompiler, getComptimeOuterCtx } from "./callbacks";
 import { walkBodyForCallees } from "./comptime";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleProgram } from "../../checker/instantiate";
 import { lookupSymbol } from "../../checker/symbol";
-import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind } from "../../raiser/value";
+import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
-import { valueToNode, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst } from "./bridge";
+import { RaiserVM, createVM, vmCallFunction } from "../../raiser/vm";
+import { RaiserModule } from "../../raiser/module";
+import { valueToNode, nodeToValue, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst } from "./bridge";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
 
@@ -145,20 +147,23 @@ function lowerQuoteExpr(node: Node): Node {
 //
 // Implementation strategy: build an ObjectLiteralData with kind, line, column,
 // + the kind-specific fields. Recursive for child Node fields.
+// Strip checker-inserted wrappers (HiddenDeref/HiddenAddr/HiddenStdConv/
+// HiddenSubConv) so a macro sees the source-form AST, not the C-codegen
+// details (auto-deref of class pointers, implicit numeric casts).
+function stripMacroArgWrappers(node: Node): Node {
+	let n = node;
+	while (n !== null && (n.kind === NodeKind.HiddenDeref || n.kind === NodeKind.HiddenAddr)) {
+		n = (n.data as HiddenDerefData).expr;
+	}
+	if (n !== null && (n.kind === NodeKind.HiddenStdConv || n.kind === NodeKind.HiddenSubConv)) {
+		n = (n.data as HiddenStdConvData).convExpr;
+	}
+	return n;
+}
+
 function nodeToASTLiteral(node: Node, loc: SourceLocation): Node {
 	if (node === null) return mkNull(loc);
-
-	// Strip checker-inserted wrappers (HiddenDeref/HiddenAddr/HiddenStdConv/
-	// HiddenSubConv) so macros see the source-form AST. The wrappers are a
-	// C-codegen detail — auto-deref of class pointers, implicit numeric casts.
-	// Without stripping, post-expansion re-check crashes on reconstructed
-	// HiddenDeref nodes whose .expr field wasn't serialized by addKindFields.
-	while (node !== null && (node.kind === NodeKind.HiddenDeref || node.kind === NodeKind.HiddenAddr)) {
-		node = (node.data as HiddenDerefData).expr;
-	}
-	if (node !== null && (node.kind === NodeKind.HiddenStdConv || node.kind === NodeKind.HiddenSubConv)) {
-		node = (node.data as HiddenStdConvData).convExpr;
-	}
+	node = stripMacroArgWrappers(node);
 	if (node === null) return mkNull(loc);
 
 	const keys: string[] = [];
@@ -1412,6 +1417,101 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 
 // Exported for eager inline expansion from checkExprPass.ms
 // (called when checkCallExpr detects a Macro symbol — see "Phase B+ eager")
+interface CompiledMacro {
+	vm: RaiserVM;
+	funcIdx: number;
+}
+
+// Cache keyed on CheckerContext identity so it resets per compilation.
+let _compiledMacros: HashMap<string, CompiledMacro> = new HashMap<string, CompiledMacro>();
+let _compiledMacrosCtx: CheckerContext = null as unknown as CheckerContext;
+
+function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, params: string[]): CompiledMacro {
+	if (_compiledMacrosCtx !== ctx) {
+		_compiledMacros = new HashMap<string, CompiledMacro>();
+		_compiledMacrosCtx = ctx;
+	}
+	if (_compiledMacros.has(macroName)) return _compiledMacros.get(macroName);
+
+	const loc = body.location;
+	const wrapperStmts: Node[] = [];
+
+	const outerCtxForInject = getComptimeOuterCtx();
+	if (outerCtxForInject !== null && outerCtxForInject.registry !== null) {
+		let macroDefiningProgram: Node = null as unknown as Node;
+		const macroSym = lookupSymbol(ctx.table, macroName);
+		if (macroSym !== null && macroSym.modulePath !== "") {
+			macroDefiningProgram = lookupModuleProgram(macroSym.modulePath);
+		}
+		const visited = new HashSet<string>();
+		const queue: Node[] = [];
+		walkBodyForCallees(body, outerCtxForInject.registry, macroDefiningProgram, visited, queue);
+		while (queue.length > 0) {
+			const decl = queue.pop();
+			const fd = decl.data as FunctionDeclData;
+			const declClone = cloneNodeForCheck(decl);
+			const fdClone = declClone.data as FunctionDeclData;
+			if (fdClone.fnBody !== null) preprocessMacroBody(fdClone.fnBody);
+			wrapperStmts.push(declClone);
+			let helperDefiningProgram: Node = macroDefiningProgram;
+			if (decl.resolvedSym !== null && decl.resolvedSym.modulePath !== "") {
+				const dp = lookupModuleProgram(decl.resolvedSym.modulePath);
+				if (dp !== null) helperDefiningProgram = dp;
+			}
+			walkBodyForCallees(fd.fnBody, outerCtxForInject.registry, helperDefiningProgram, visited, queue);
+		}
+	}
+
+	// Params are UNANNOTATED (fnParamTypes all "" → Unknown): args arrive through
+	// registers at invocation, not as const decls, so param types are never known.
+	const fnBodyStmts: Node[] = [];
+	const bodyData = body.data as BlockStmtData;
+	let si = 0;
+	while (si < bodyData.statements.length) {
+		const stmt = bodyData.statements[si];
+		if (si === bodyData.statements.length - 1 && stmt.kind === NodeKind.ExprStmt) {
+			const ed = stmt.data as ExprStmtData;
+			fnBodyStmts.push(createNode(NodeKind.ReturnStmt, { argument: cloneNodeForCheck(ed.expr) }, synthToken(loc)));
+		} else {
+			fnBodyStmts.push(cloneNodeForCheck(stmt));
+		}
+		si = si + 1;
+	}
+	const fnBody = createNode(NodeKind.BlockStmt, { statements: fnBodyStmts }, synthToken(loc));
+	const paramTypes: string[] = [];
+	for (const _p of params) paramTypes.push("");
+	const emptyDefaults: Node[] = [];
+	const macroFn = createNode(NodeKind.FunctionDecl, {
+		fnName: "__macroBody",
+		params: params,
+		fnParamTypes: paramTypes,
+		fnBody: fnBody,
+		fnFlags: "",
+		fnReturnType: "",
+		fnDefaults: emptyDefaults,
+		nameLocation: loc,
+	}, synthToken(loc));
+	wrapperStmts.push(macroFn);
+
+	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
+
+	const image = callMacroCompiler(program);
+	if (image === null) return null as unknown as CompiledMacro;
+
+	let funcIdx = -1;
+	let fi = 0;
+	while (fi < image.functions.length) {
+		if (image.functions[fi].name === "__macroBody") { funcIdx = fi; break; }
+		fi = fi + 1;
+	}
+	if (funcIdx < 0) return null as unknown as CompiledMacro;
+
+	const vm = createVM(image, "arena");
+	const cm: CompiledMacro = { vm, funcIdx };
+	_compiledMacros.set(macroName, cm);
+	return cm;
+}
+
 export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: int32): Node {
 	const d = node.data as MacroInvocationData;
 
@@ -1453,95 +1553,29 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		}
 	}
 
-	// Build wrapper Program:
-	//   [cross-module helper FunctionDecls reachable from macro body]
-	//   const param1 = <arg1 as ObjectLiteral>;
-	//   const param2 = <arg2 as ObjectLiteral>;
-	//   ...macro body statements... (last ExprStmt → ReturnStmt)
-	const wrapperStmts: Node[] = [];
-
-	// RAISER-CALLHOST.md Phase 8a caveat #5 resolution — macro path was the
-	// only path bypassing cross-module helper injection. @comptime had this
-	// since Phase 8b. Now macros do too, plus PRIVATE same-module helpers:
-	//   1. Lookup macro's defining module program (registerModuleProgram)
-	//   2. Walk macro body for CallExpr → identifier names
-	//   3. Resolve each name FIRST in defining module's programStmts
-	//      (catches PRIVATE helpers like peelVariant in discDetect.ms),
-	//      THEN in outer ExportRegistry (cross-module exports)
-	//   4. Apply preprocessMacroBody to each helper body so NodeKind.X /
-	//      DeclKind.X references rewrite to int literals — without this,
-	//      helper bodies fail comparisons like `n.kind === NodeKind.X`
-	//      in the macro VM (where NodeKind isn't a runtime value).
-	const outerCtxForInject = getComptimeOuterCtx();
-	if (outerCtxForInject !== null && outerCtxForInject.registry !== null) {
-		// Find macro's defining module program for private-helper lookup.
-		let macroDefiningProgram: Node = null as unknown as Node;
-		const macroSym = lookupSymbol(ctx.table, d.macroName);
-		if (macroSym !== null && macroSym.modulePath !== "") {
-			macroDefiningProgram = lookupModuleProgram(macroSym.modulePath);
-		}
-		const visited = new HashSet<string>();
-		const queue: Node[] = [];
-		walkBodyForCallees(body, outerCtxForInject.registry, macroDefiningProgram, visited, queue);
-		while (queue.length > 0) {
-			const decl = queue.pop();
-			const fd = decl.data as FunctionDeclData;
-			const declClone = cloneNodeForCheck(decl);
-			const fdClone = declClone.data as FunctionDeclData;
-			if (fdClone.fnBody !== null) preprocessMacroBody(fdClone.fnBody);
-			wrapperStmts.push(declClone);
-			// Walk THIS helper's body with ITS OWN defining module — private
-			// helpers (peelVariant in discDetect.ms) live in helper's module,
-			// not macro's module. Without per-helper module tracking, transitive
-			// private helpers in cross-module helpers stay invisible.
-			let helperDefiningProgram: Node = macroDefiningProgram;
-			if (decl.resolvedSym !== null && decl.resolvedSym.modulePath !== "") {
-				const dp = lookupModuleProgram(decl.resolvedSym.modulePath);
-				if (dp !== null) helperDefiningProgram = dp;
-			}
-			walkBodyForCallees(fd.fnBody, outerCtxForInject.registry, helperDefiningProgram, visited, queue);
-		}
-	}
-
-	let pi = 0;
-	while (pi < params.length) {
-		const argLiteral = nodeToASTLiteral(d.macroArgs[pi], node.location);
-		wrapperStmts.push(createNode(NodeKind.VariableDecl, {
-			declName: params[pi],
-			declType: "",
-			initializer: argLiteral,
-			declKind: DeclKind.Const,
-			nameLocation: node.location,
-		}, synthToken(node.location)));
-		pi = pi + 1;
-	}
-
-	// Append macro body statements with last ExprStmt → ReturnStmt. Cloned:
-	// the registry body is reused by every invocation, and evalASTFull runs
-	// check + refineTypes + transformForRaiser destructively on the wrapper
-	// Program — by-ref stmts would corrupt the registry body and the helper
-	// decls' real modules (same invariant as evalComptimeBlock's inject sites).
-	const bodyData = body.data as BlockStmtData;
-	let si = 0;
-	while (si < bodyData.statements.length) {
-		const stmt = bodyData.statements[si];
-		if (si === bodyData.statements.length - 1 && stmt.kind === NodeKind.ExprStmt) {
-			const ed = stmt.data as ExprStmtData;
-			wrapperStmts.push(createNode(NodeKind.ReturnStmt, { argument: cloneNodeForCheck(ed.expr) }, synthToken(node.location)));
-		} else {
-			wrapperStmts.push(cloneNodeForCheck(stmt));
-		}
-		si = si + 1;
-	}
-
-	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(node.location));
-
-	// Run in Raiser VM
-	let vmCtx: RaiserContext | null = callMacroEvaluator(program);
-	if (vmCtx === null) {
+	const cm = getOrCompileMacro(ctx, d.macroName, body, params);
+	if (cm === null as unknown as CompiledMacro) {
 		addError(ctx, `Macro '${d.macroName}' evaluator unavailable`, node.location.line, node.location.column);
 		return node;
 	}
+	const vm = cm.vm;
+	const marshalArgs: RaiserValue[] = [];
+	for (const arg of d.macroArgs) {
+		const av = nodeToValue(stripMacroArgWrappers(arg), vm.objectHeap, vm.arrayHeap);
+		marshalArgs.push(av);
+	}
+	const resultVal = vmCallFunction(vm, cm.funcIdx, marshalArgs);
+
+	let vmCtx: RaiserContext | null = {
+		mod: vm.mod,
+		hasModule: true,
+		lastResult: resultVal,
+		lastOutput: vm.output,
+		arrayHeap: vm.arrayHeap,
+		objectHeap: vm.objectHeap,
+		lastError: vm.error,
+		gcMode: vm.gcMode,
+	};
 
 	// Check for VM-level errors (instruction budget, division by zero, etc.)
 	if (vmCtx.lastError !== "") {
