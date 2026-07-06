@@ -185,6 +185,50 @@ function compileClassConstructor(
 	return createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.maxRegSeen);
 }
 
+// --- Incremental append into a shared image (comptime engine) ---
+// Compiles a program's FunctionDecls into an existing image + funcMap, assigning
+// each an ABSOLUTE index (base + local position) so Call/closure funcIdx resolve
+// image-wide with no relocation. Enums fold into the shared enumMap. Returns the
+// absolute index assigned to `wantFn` (-1 if not present).
+export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, program: Node, wantFn: string): number {
+	const pd = program.data as ProgramData;
+	const base = image.functions.length;
+	let wantIdx = -1;
+
+	// Pass 1: collect function names (absolute idx) + enum members.
+	let local = 0;
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
+		const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
+		if (fnNode !== null) {
+			const fd = fnNode.data as FunctionDeclData;
+			const entry: RaiserFuncEntry = { name: fd.fnName, index: base + local };
+			funcMap.items.push(entry);
+			if (fd.fnName === wantFn) wantIdx = base + local;
+			local += 1;
+		}
+		const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
+		if (enumNode !== null) {
+			const ed = enumNode.data as EnumDeclData;
+			for (let ei = 0; ei < ed.enumMembers.length; ei += 1) {
+				const val = (ed.enumValues !== null && ei < ed.enumValues.length) ? ed.enumValues[ei] : ei;
+				const eEntry: RaiserFuncEntry = { name: `${ed.enumName}.${ed.enumMembers[ei]}`, index: val };
+				enumMap.items.push(eEntry);
+			}
+		}
+	}
+
+	// Pass 2: compile bodies against the shared funcMap, append to the image.
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
+		const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
+		if (fnNode !== null) {
+			const fd = fnNode.data as FunctionDeclData;
+			const func = compileFuncBody(funcMap, enumMap, fd.fnName, fd.params, fd.fnBody, fd.params.length);
+			image.functions.push(func);
+		}
+	}
+	return wantIdx;
+}
+
 // --- Project-level compilation ---
 // Unity build: flatten all modules' functions into a single RaiserModule.
 // VM needs zero changes — Call opcode already indexes by position.
