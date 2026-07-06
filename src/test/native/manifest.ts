@@ -409,6 +409,13 @@ export const CASES: NativeCase[] = [
 		note: "Macro-path injection isolation (expand.ms clone-at-push). Helper decls reachable from a macro body were injected into the wrapper Program by reference; evalASTFull's destructive pipeline lambda-lifted the closure-bearing helper's REAL body against the synthetic program, so after one expansion the module failed its own check with an unrenderable synthetic-location type error. Pre-fix this case does not build; the marker pins CT value (macro fold) AND runtime helper both at 42. Twin of the @comptime clone fix (comptime.ms inject sites) — the 'isolation:' lang tests cover that path, this covers the macro path natively.",
 	},
 	{
+		name: "macro-arg-reuse",
+		file: "macroArgReuse.ms",
+		maxRssMb: 30,
+		expectStdout: "macro-arg-reuse PASS",
+		note: "Stage A compile-once cache + args-in-registers. A macro compiled once (getOrCompileMacro, cached on CheckerContext identity) is re-invoked with different args — dbl(5)→10, dbl(21)→42 — each arg marshalled via nodeToValue into the callee's registers and re-entered through vmCallFunction, replacing the old per-invocation const-baking (const p = <arg literal>) + full recompile. If the cache reuse were unsound the second call would reuse the first's arg; if the reused VM's heap weren't reset between calls the marshalled arg would alias stale objects. Either surfaces as a wrong number in the assertion.",
+	},
+	{
 		name: "raiser-cycle-collect",
 		file: "raiserCycleCollect.ms",
 		maxRssMb: 30,
