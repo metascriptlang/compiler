@@ -1650,3 +1650,70 @@ test "call depth overflow" {
 	assert vm.error.length > 0;
 	assert vm.halted;
 }
+
+test "vmCallFunction: trampoline call with scalar args" {
+	const code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.AddI64, 2, 0, 1),
+		raiserABC(RaiserOpcode.Ret, 2, 0, 0),
+	];
+	const consts: RaiserValue[] = [];
+	const addFn = createRaiserFunction("add", code, consts, 2, 0, 4);
+	const funcs: RaiserFunction[] = [addFn];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = createVM(mod, "arena");
+	const a1 = raiserInt(3);
+	const a2 = raiserInt(4);
+	const args: RaiserValue[] = [a1, a2];
+	const r = vmCallFunction(vm, 0, args);
+	assert r.intVal === 7;
+}
+
+test "vmCallFunction: reusable VM, different args, no recompile" {
+	const code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.AddI64, 2, 0, 1),
+		raiserABC(RaiserOpcode.Ret, 2, 0, 0),
+	];
+	const consts: RaiserValue[] = [];
+	const addFn = createRaiserFunction("add", code, consts, 2, 0, 4);
+	const funcs: RaiserFunction[] = [addFn];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = createVM(mod, "arena");
+	const x1 = raiserInt(10);
+	const x2 = raiserInt(20);
+	const argsA: RaiserValue[] = [x1, x2];
+	const rA = vmCallFunction(vm, 0, argsA);
+	assert rA.intVal === 30;
+	const y1 = raiserInt(1);
+	const y2 = raiserInt(2);
+	const argsB: RaiserValue[] = [y1, y2];
+	const rB = vmCallFunction(vm, 0, argsB);
+	assert rB.intVal === 3;
+}
+
+test "vmCallFunction: nested Call/Ret through trampoline" {
+	// func0 addOne(a): R2 = R0 + K0(1); Ret R2
+	const f0Code: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 1, 0),
+		raiserABC(RaiserOpcode.AddI64, 2, 0, 1),
+		raiserABC(RaiserOpcode.Ret, 2, 0, 0),
+	];
+	const f0Consts: RaiserValue[] = [raiserInt(1)];
+	const f0 = createRaiserFunction("addOne", f0Code, f0Consts, 1, 0, 4);
+	// func1 addTwo(a): R1 = addOne(a); R1 = addOne(R1); Ret R1
+	const f1Code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.Move, 2, 0, 0),
+		raiserABC(RaiserOpcode.Call, 1, 0, 1),
+		raiserABC(RaiserOpcode.Move, 2, 1, 0),
+		raiserABC(RaiserOpcode.Call, 1, 0, 1),
+		raiserABC(RaiserOpcode.Ret, 1, 0, 0),
+	];
+	const f1Consts: RaiserValue[] = [];
+	const f1 = createRaiserFunction("addTwo", f1Code, f1Consts, 1, 0, 8);
+	const funcs: RaiserFunction[] = [f0, f1];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = createVM(mod, "arena");
+	const a = raiserInt(5);
+	const args: RaiserValue[] = [a];
+	const r = vmCallFunction(vm, 1, args);
+	assert r.intVal === 7;
+}
