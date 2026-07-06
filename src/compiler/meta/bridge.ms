@@ -530,7 +530,7 @@ export function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: Rais
 		// === Literals ===
 		NodeKind.NumberLiteral => {
 			const d = node.data as NumberLiteralData;
-			const v = raiserFloat(d.value);
+			const v = d.isFloat ? raiserFloat(d.value) : raiserInt(d.value);
 			heapObjectSetField(objHeap, handle, "value", v);
 		},
 		NodeKind.StringLiteral => {
@@ -1735,9 +1735,21 @@ test "NumberLiteral serialization" {
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
 	assert kindVal.intVal === (NodeKind.NumberLiteral as number);
 	const numVal = heapObjectGetField(objHeap, val.intVal, "value");
-	assert numVal.floatVal === 42;
+	assert numVal.kind === RaiserValueKind.Int;
+	assert numVal.intVal === 42;
 	const lineVal = heapObjectGetField(objHeap, val.intVal, "line");
 	assert lineVal.intVal === 5;
+}
+
+test "NumberLiteral serialization — float stays float-boxed" {
+	const objHeap = createStructHeap();
+	const arrHeap = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const node = createNode(NodeKind.NumberLiteral, { value: 3.5, isFloat: true }, synthToken(loc));
+	const val = nodeToValue(node, objHeap, arrHeap);
+	const numVal = heapObjectGetField(objHeap, val.intVal, "value");
+	assert numVal.kind === RaiserValueKind.Float;
+	assert numVal.floatVal === 3.5;
 }
 
 test "StringLiteral serialization" {
