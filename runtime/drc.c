@@ -64,6 +64,7 @@ static void msCellSeqRemoveAt(msCellSeq* s, int32_t idx) {
 
 msCellSeq msRoots;
 int32_t msRootsThreshold = 128;
+int32_t msOrcTeardownDepth = 0;
 
 /* ===== ORC Diagnostics ===== */
 #ifdef MSGC_ORC_STATS
@@ -79,8 +80,10 @@ void msRegisterCycle(void* p, const msTypeInfo* type) {
 	msCell cell = { p, type };
 	msCellSeqPush(&msRoots, cell);
 
-	/* Auto-trigger collection when threshold exceeded (Standard reference implementation parity) */
-	if (msRoots.len - 128 >= msRootsThreshold) {
+	/* Auto-trigger collection when threshold exceeded (Standard reference implementation parity).
+	 * Skip while a =destroy is unwinding — a re-entrant collect there traces half-torn-down,
+	 * not-yet-nulled slots (UAF). msOrcEndTeardown runs the deferred collect once it is safe. */
+	if (msOrcTeardownDepth == 0 && msRoots.len - 128 >= msRootsThreshold) {
 		msOrcCollect();
 	}
 }

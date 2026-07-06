@@ -335,6 +335,21 @@ static inline void msOrcEnable(void) { msRootsThreshold = 0; }
 static inline void msOrcDisable(void) { msRootsThreshold = INT32_MAX; }
 static inline int32_t msOrcPrepare(void) { return msRoots.len; }
 
+/* Teardown critical section (=destroy hooks). While a destructor is unwinding, an
+ * object's fields are half-freed and its slots not yet nulled; a threshold-triggered
+ * msOrcCollect() here would markGray-trace a dangling slot → UAF. Suppress collection
+ * for the whole (possibly nested) teardown, then run one deferred collect on unwind.
+ * Mirrors the reference collector's own free-loop guard, extended to ARC scope-exit
+ * destroys (which the free-loop threshold hack does not cover). */
+extern int32_t msOrcTeardownDepth;
+static inline void msOrcBeginTeardown(void) { msOrcTeardownDepth += 1; }
+static inline void msOrcEndTeardown(void) {
+	msOrcTeardownDepth -= 1;
+	if (msOrcTeardownDepth == 0 && msRoots.len - 128 >= msRootsThreshold) {
+		msOrcCollect();
+	}
+}
+
 typedef struct {
 	msCellSeq traceStack;
 	msCellSeq toFree;
@@ -355,6 +370,8 @@ extern int32_t msFreedCyclicObjects;
 
 static inline void msOrcCollect(void) {}
 static inline void msOrcTraceRef(void* child, void* env) { (void)child; (void)env; }
+static inline void msOrcBeginTeardown(void) {}
+static inline void msOrcEndTeardown(void) {}
 
 #endif /* MSGC_ORC */
 
