@@ -56,15 +56,14 @@ import {
 import { CheckerContext, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { hasGenericParams } from "../../checker/types";
-import { callMacroCompiler, getComptimeOuterCtx } from "./callbacks";
+import { callMacroEngineCompiler, EngineMacroResult, getComptimeOuterCtx } from "./callbacks";
 import { walkBodyForCallees } from "./comptime";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleProgram } from "../../checker/instantiate";
 import { lookupSymbol } from "../../checker/symbol";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
-import { RaiserVM, createVM, vmCallFunction } from "../../raiser/vm";
-import { RaiserModule } from "../../raiser/module";
+import { RaiserVM, vmCallFunction } from "../../raiser/vm";
 import { valueToNode, nodeToValue, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst } from "./bridge";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
@@ -1495,19 +1494,10 @@ function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, p
 
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
 
-	const image = callMacroCompiler(program);
-	if (image === null) return null as unknown as CompiledMacro;
+	const result = callMacroEngineCompiler(program, ctx, "__macroBody");
+	if (result === null as unknown as EngineMacroResult || result.funcIdx < 0) return null as unknown as CompiledMacro;
 
-	let funcIdx = -1;
-	let fi = 0;
-	while (fi < image.functions.length) {
-		if (image.functions[fi].name === "__macroBody") { funcIdx = fi; break; }
-		fi = fi + 1;
-	}
-	if (funcIdx < 0) return null as unknown as CompiledMacro;
-
-	const vm = createVM(image, "arena");
-	const cm: CompiledMacro = { vm, funcIdx };
+	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx };
 	_compiledMacros.set(macroName, cm);
 	return cm;
 }
