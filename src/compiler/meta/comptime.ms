@@ -13,361 +13,21 @@ import {
 	Node, NodeKind, createNode,
 	VariableDeclData, FunctionDeclData,
 	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
-	BlockStmtData, ExportDeclData, DecoratedDeclData, ExternDeclData,
-	ComptimeBlockData, ProgramData, EnumDeclData,
-	InterfaceDeclData, TypeAliasDeclData,
+	BlockStmtData, ExportDeclData,
+	ComptimeBlockData, ProgramData,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
-	ImportDeclData, CallExprData, IdentifierData, Type, TypeKind,
+	Type,
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram } from "../../checker/checkPass";
-import { evalASTFull } from "../../codegen/raiser/eval";
+import { evalASTFull, evalProgramViaEngine } from "../../codegen/raiser/eval";
 import {
 	clearObjectHeap, clearArrayHeap, RaiserValueKind,
 } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { valueToNode, synthToken } from "./bridge";
 import { ensureHostTableLoaded } from "./hostTable";
-import { getComptimeOuterCtx } from "./callbacks";
-import { findExportsByName, ExportRegistry, CheckerContext, addError } from "../../checker/context";
-import { lookupModuleProgram } from "../../checker/instantiate";
-import { forEachChild } from "../../ast/visitor";
-import { isPrimitiveKind } from "../../checker/types";
-import { cloneNodeForCheck } from "../../monomorphize/clone";
-
-// --- Phase 8a POC helpers ---
-// Decides which outer top-level decls get injected into the synthetic
-// Program before evalASTFull. Kept narrow on purpose — extending the
-// filter widens the surface area for AST-mutation drift (see CAVEAT in
-// evalComptimeBlock). Phase 8b refactor will replace with on-demand
-// resolution via ExportRegistry.
-
-// ImportDecls only: they let the inner check resolve imported names and type
-// annotations the body references. Module FunctionDecls are NOT blanket-
-// injected anymore — the body-seeded walker in _collectCrossModuleFunctionDecls
-// injects exactly the reachable set (same-module included via definingProgram),
-// so the inner check never sees errors from decls the eval cannot reach.
-function _isInjectableTopLevelDecl(stmt: Node): boolean {
-	if (stmt.kind === NodeKind.ImportDecl) return true;
-	return false;
-}
-
-// Name a top-level decl exposes into module scope (for dedup against injected
-// imports — a name provided as a local decl must not ALSO arrive via import,
-// else the inner check sees a duplicate symbol / ambiguous overload).
-function _injectedDeclName(node: Node): string {
-	return match (node.kind) {
-		NodeKind.FunctionDecl => (node.data as FunctionDeclData).fnName,
-		NodeKind.ExternDecl => (node.data as ExternDeclData).externName,
-		NodeKind.EnumDecl => (node.data as EnumDeclData).enumName,
-		NodeKind.InterfaceDecl => (node.data as InterfaceDeclData).interfaceName,
-		NodeKind.StructDecl => (node.data as InterfaceDeclData).interfaceName,
-		NodeKind.TypeAliasDecl => (node.data as TypeAliasDeclData).aliasName,
-		_ => "",
-	};
-}
-
-// Return a copy of an ImportDecl with `exclude` names removed, or null if every
-// imported name is excluded (drop the import entirely).
-function _importMinusNames(importNode: Node, exclude: HashSet<string>): Node {
-	const d = importNode.data as ImportDeclData;
-	const names: string[] = [];
-	const aliases: string[] = [];
-	let ai = 0;
-	while (ai < d.importNames.length) {
-		if (!exclude.has(d.importNames[ai])) {
-			names.push(d.importNames[ai]);
-			aliases.push(ai < d.importAliases.length ? d.importAliases[ai] : d.importNames[ai]);
-		}
-		ai = ai + 1;
-	}
-	if (names.length === 0) return null as unknown as Node;
-	return createNode(NodeKind.ImportDecl, {
-		importNames: names, importAliases: aliases,
-		importSource: d.importSource, nameLocations: [],
-	}, synthToken(importNode.location));
-}
-
-// Spike 2 step 2: walk outer ImportDecls, resolve each imported name via
-// the outer ExportRegistry, and return the cross-module FunctionDecl AST
-// nodes so they can be injected into the synthetic Program (where Raiser
-// codegen's Pass 1 collection will register them, and Pass 2 will compile
-// their bodies into bytecode).
-//
-// Transitive deps (helpers called inside an injected fn body that aren't
-// exported) are NOT collected here yet — Phase 8b-iii.
-
-// Exported so macro path (src/compiler/meta/expand.ms) can reuse the same
-// cross-module callee resolution that @comptime uses. Macro wrapper Program
-// must include helper FunctionDecls or cross-module calls return nil
-// (RAISER-CALLHOST.md Phase 8a caveat #5).
-
-// Find a callable declaration (FunctionDecl or ExternDecl) by name in a
-// module's top-level statements. Handles bare + ExportDecl-wrapped +
-// DecoratedDecl-wrapped forms. Returns null if not found. Shared between
-// the @comptime cross-module injector (here) and the macro cross-module
-// injector (expand.ms).
-export function findFunctionDeclInProgram(program: Node, name: string): Node {
-	if (program === null || program.kind !== NodeKind.Program) return null as unknown as Node;
-	const pd = program.data as ProgramData;
-	for (const stmt of pd.programStmts) {
-		const fd = unwrapToCallableDecl(stmt, name);
-		if (fd !== null) return fd;
-	}
-	return null as unknown as Node;
-}
-
-function unwrapToCallableDecl(stmt: Node, name: string): Node {
-	if (stmt === null) return null as unknown as Node;
-	return match (stmt.kind) {
-		NodeKind.FunctionDecl => (stmt.data as FunctionDeclData).fnName === name ? stmt : null as unknown as Node,
-		NodeKind.ExternDecl => (stmt.data as ExternDeclData).externName === name ? stmt : null as unknown as Node,
-		NodeKind.ExportDecl => unwrapToCallableDecl((stmt.data as ExportDeclData).exportedDecl, name),
-		NodeKind.DecoratedDecl => unwrapToCallableDecl((stmt.data as DecoratedDeclData).decoratedNode, name),
-		_ => null as unknown as Node,
-	};
-}
-
-export function lookupFunctionDeclByName(registry: ExportRegistry, name: string): Node {
-	// Returns first callable AST decl (FunctionDecl or ExternDecl variant
-	// like `extern class`) matching `name`. `extern function` is parsed as
-	// FunctionDecl with extern flag, so the FunctionDecl branch covers it.
-	// ExternDecl is reserved for the other extern kinds (class/const/var/
-	// type/enum/interface/struct/macro — parseExternDecl).
-	//
-	// NOTE: scans ALL modules with that name. If two modules export the
-	// same name, picks first match — may pick wrong decl when names collide.
-	// Phase 8b follow-up: resolve through ModuleGraph for disambiguation.
-	// For std/* surface (no name collisions today) this is unambiguous enough.
-	//
-	// Fallback path: ExportRegistry's Phase 1 placeholder leaves declNode=null
-	// (filled in by Phase 2 buildExportInfo). When @comptime eager-folds during
-	// Phase 2 checking and the defining module's Phase 2 update hasn't run yet,
-	// declNode is still null. Recover by walking the module's registered Program
-	// AST — Program is registered during Phase 1 (orchestrator.ms), so it's
-	// always available before any @comptime in any module fires.
-	const matches = findExportsByName(registry, name);
-	for (const expInfo of matches) {
-		if (expInfo.declNode !== null && expInfo.declNode.kind === NodeKind.FunctionDecl) {
-			return expInfo.declNode;
-		}
-	}
-	for (const expInfo of matches) {
-		if (expInfo.definingModule === "") continue;
-		const prog = lookupModuleProgram(expInfo.definingModule);
-		if (prog === null) continue;
-		const fd = findFunctionDeclInProgram(prog, name);
-		if (fd !== null) return fd;
-	}
-	return null as unknown as Node;
-}
-
-// Walk a body AST recursively, find CallExpr → Identifier patterns, and
-// follow each name into the registry. Any imported FunctionDecls reached
-// transitively are added to the worklist. Cycle-safe via the visited set
-// keyed on function name.
-//
-// Exported for macro path reuse (see lookupFunctionDeclByName note).
-export function walkBodyForCallees(
-	body: Node, registry: ExportRegistry, definingProgram: Node, visited: HashSet<string>, queue: Node[],
-): void {
-	if (body === null) return;
-	if (body.kind === NodeKind.CallExpr) {
-		const c = body.data as CallExprData;
-		if (c.callee !== null && c.callee.kind === NodeKind.Identifier) {
-			const name = (c.callee.data as IdentifierData).name;
-			if (!visited.has(name)) {
-				visited.add(name);
-				// Try defining module's Program FIRST — catches PRIVATE helpers
-				// and `extern function` decls (parsed as FunctionDecl, not exported
-				// so registry.nameIndex misses them). Mirrors expand.ms macro path.
-				// Registry may be null (bare single-file checkProgram) — the
-				// same-module lookup still works; cross-module is best-effort.
-				let fnDecl: Node = null as unknown as Node;
-				if (definingProgram !== null) {
-					fnDecl = findFunctionDeclInProgram(definingProgram, name);
-				}
-				if (fnDecl === null && registry !== null) fnDecl = lookupFunctionDeclByName(registry, name);
-				if (fnDecl !== null) queue.push(fnDecl);
-			}
-		}
-	}
-	forEachChild(body, (child: Node) => {
-		walkBodyForCallees(child, registry, definingProgram, visited, queue);
-	});
-}
-
-// Phase 8c: walker that collects type-level decls (Interface/Enum/TypeAlias)
-// reachable from injected FunctionDecls' signatures. Required for the inner
-// check to resolve nested field access like `r.error.kind` where the field
-// types live in cross-module type-level declarations.
-
-function _collectTypeRefsFromType(t: Type, names: HashSet<string>): void {
-	_collectTypeRefsFromTypeImpl(t, names, new HashSet<string>());
-}
-
-// Inner walker carries a per-top-level-call visited set keyed by typeName so
-// self-referential types (e.g. interface Window { children: Window[] } or
-// Result<T, E> wrappers reached transitively) don't recurse forever through
-// typeChildren / typeReturn. Without this guard, importing parseJson into a
-// module that exports an interface with a recursive field crashes the comptime
-// VM with "Maximum call stack size exceeded" — the names HashSet alone does
-// not block recursion because the primitive-kind check skips adding (and the
-// caller pre-seeds it, so name presence does not imply "already walked").
-function _collectTypeRefsFromTypeImpl(t: Type, names: HashSet<string>, visited: HashSet<string>): void {
-	if (t === null) return;
-	if (t.typeName !== "") {
-		if (visited.has(t.typeName)) return;
-		visited.add(t.typeName);
-		// Skip primitive types by TypeKind (more robust than name matching —
-		// reuses checker's canonical predicate and naturally excludes literal-
-		// typed terms like the "true"/"false" disc values of match-type DUs).
-		// Enum/EnumLiteral ARE seeded even though they're "primitive" for
-		// assignability: a DIRECT enum-member read inside the comptime body
-		// (e.g. `@comptime { return E.M as number }`) needs the EnumDecl present
-		// so the inner check can resolve `E` and rewrite `E.M` to the mangled
-		// member (setting resolvedSym); rgen then reads the ordinal self-contained
-		// from that resolvedSym. (Reads via a pre-checked helper don't need this —
-		// their resolvedSym is already set — but direct reads do.)
-		if (!isPrimitiveKind(t.kind) || t.kind === TypeKind.Enum || t.kind === TypeKind.EnumLiteral) {
-			names.add(t.typeName);
-		}
-	}
-	if (t.typeChildren !== null) {
-		for (const c of t.typeChildren) {
-			_collectTypeRefsFromTypeImpl(c, names, visited);
-		}
-	}
-	if (t.typeReturn !== null) {
-		_collectTypeRefsFromTypeImpl(t.typeReturn, names, visited);
-	}
-}
-
-function _collectCrossModuleTypeDecls(fnDecls: Node[]): Node[] {
-	// Seed: type names referenced in injected functions' signatures.
-	// Process: for each name, look up registry → if Interface/Enum/TypeAlias,
-	//          inject. Then walk THAT type's structure to find more refs.
-	// Cycle-safe via `visited` set. Bounded by reachable type closure.
-	const decls: Node[] = [];
-	const outer = getComptimeOuterCtx();
-	if (outer === null || outer.registry === null) return decls;
-	const registry = outer.registry;
-
-	const seedNames = new HashSet<string>();
-	for (const fnDecl of fnDecls) {
-		const sym = fnDecl.resolvedSym;
-		if (sym !== null && sym.symbolType !== null) {
-			_collectTypeRefsFromType(sym.symbolType, seedNames);
-		}
-	}
-
-	const visited = new HashSet<string>();
-	const queue: string[] = [];
-	for (const name of seedNames) queue.push(name);
-
-	while (queue.length > 0) {
-		const name = queue.pop();
-		if (visited.has(name)) continue;
-		visited.add(name);
-
-		const matches = findExportsByName(registry, name);
-		for (const expInfo of matches) {
-			// Two sources for the type-level AST:
-			//   1. expInfo.declNode — populated only for safe-to-preserve kinds
-			//      (EnumDecl). Direct path used when available.
-			//   2. expInfo.symType.sym.declNode — Type.sym chain bridges to the
-			//      defining module's symbol, whose declNode still points to the
-			//      original AST. Used for Interface/TypeAlias which are NOT
-			//      preserved in expInfo.declNode (would trigger ensureShaped
-			//      cascade pollution; see buildExportInfo notes).
-			let typeDecl: Node = null as unknown as Node;
-			if (expInfo.declNode !== null
-					&& (expInfo.declNode.kind === NodeKind.InterfaceDecl
-						|| expInfo.declNode.kind === NodeKind.EnumDecl
-						|| expInfo.declNode.kind === NodeKind.TypeAliasDecl)) {
-				typeDecl = expInfo.declNode;
-			} else if (expInfo.symType !== null && expInfo.symType.sym !== null
-					&& expInfo.symType.sym.declNode !== null) {
-				const tk = expInfo.symType.sym.declNode.kind;
-				if (tk === NodeKind.InterfaceDecl || tk === NodeKind.EnumDecl
-						|| tk === NodeKind.TypeAliasDecl) {
-					typeDecl = expInfo.symType.sym.declNode;
-				}
-			}
-			if (typeDecl === null) continue;
-			decls.push(typeDecl);
-			// Walk this type's structure for transitive refs (e.g., IoError
-			// interface has field of type IoErrorKind).
-			if (expInfo.symType !== null) {
-				const moreNames = new HashSet<string>();
-				_collectTypeRefsFromType(expInfo.symType, moreNames);
-				for (const n of moreNames) {
-					if (!visited.has(n)) queue.push(n);
-				}
-			}
-			break;
-		}
-	}
-
-	return decls;
-}
-
-function _collectCrossModuleFunctionDecls(outerProgram: Node, comptimeBody: Node): Node[] {
-	// Phase 8b: walk outer ImportDecls, look up each imported name in the
-	// outer ExportRegistry, and collect the cross-module FunctionDecl AST
-	// nodes (plus transitive helpers their bodies call into) so Raiser
-	// codegen can compile them into bytecode. Requires context.ms:
-	// buildExportInfo to preserve declNode for ALL FunctionDecls.
-	//
-	// Also walks the @comptime body itself so names referenced there but not
-	// imported by the outer module (e.g. `exec("…")` inside a module that
-	// only imports unrelated symbols) still get their FunctionDecl injected.
-	// Without this seed, the checker resolves them via the full registry but
-	// Raiser codegen sees an unresolved Identifier → emits LoadConst(Nil) →
-	// CallExpr falls into compileClosureCall → LoadField on Nil →
-	// "object handle out of bounds: 0".
-	const decls: Node[] = [];
-	const outer = getComptimeOuterCtx();
-	const registry = outer !== null ? outer.registry : null as unknown as ExportRegistry;
-	const visited = new HashSet<string>();
-	const queue: Node[] = [];
-
-	// Seed: names referenced inside the @comptime body ONLY. Seeding from the
-	// outer module's whole import list injected every imported fn plus its
-	// transitive forest — the inner check then surfaced unresolved-type errors
-	// from decls the body never touches (lightcube: IonWindowId/JsonValue/...
-	// noise from injected-but-unused std helpers). The check surface must be
-	// what the eval actually reaches. Defining program = outer module so
-	// same-module private helpers and `extern function` decls inject too.
-	if (comptimeBody !== null) {
-		walkBodyForCallees(comptimeBody, registry, outerProgram, visited, queue);
-	}
-
-	// Transitive: drain queue, walk each body for further callees. For each
-	// injected FunctionDecl, look up its defining module so the body walker
-	// can resolve PRIVATE helpers and `extern function` decls (parsed as
-	// FunctionDecl, not in registry because not exported). Without this,
-	// e.g. exec() references msProcessSpawnSync which the registry doesn't
-	// surface → re-check on synthetic Program can't resolve → silent Nil.
-	while (queue.length > 0) {
-		const decl = queue.pop();
-		decls.push(decl);
-		if (decl.kind !== NodeKind.FunctionDecl) continue;
-		const fd = decl.data as FunctionDeclData;
-		let definingProgram: Node = outerProgram;
-		if (registry !== null) {
-			const matches = findExportsByName(registry, fd.fnName);
-			for (const m of matches) {
-				if (m.definingModule === "") continue;
-				const p = lookupModuleProgram(m.definingModule);
-				if (p !== null) { definingProgram = p; break; }
-			}
-		}
-		walkBodyForCallees(fd.fnBody, registry, definingProgram, visited, queue);
-	}
-
-	return decls;
-}
+import { CheckerContext, addError } from "../../checker/context";
 
 // --- Evaluate a single ComptimeBlock node ---
 // Exported so the checker can eagerly fold @comptime blocks during type
@@ -405,48 +65,30 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 		si = si + 1;
 	}
 
-	// Inject outer module-level decls + cross-module FunctionDecls so the
-	// @comptime body can reach functions across module boundaries. Every
-	// injected decl is CLONED (cloneNodeForCheck): evalASTFull runs
-	// check + refineTypes + transformForRaiser destructively on the
-	// synthetic Program, so real module nodes must never enter it —
-	// by-ref injection corrupted the surrounding module (silent
-	// "<object>" folds, unmangled identifiers in C). The collectors
-	// below walk the REAL nodes (their resolvedSym/type chains are
-	// needed); cloning happens only at the push into injectedStmts.
-	// See docs/NIM-REF.md §1 "CT eval / macro expansion".
-	const injectedStmts: Node[] = [];
-	const outerCtx = getComptimeOuterCtx();
-	const outerProgram = outerCtx !== null ? outerCtx.program : null as unknown as Node;
-	if (outerProgram !== null && outerProgram.kind === NodeKind.Program) {
-		const outerData = outerProgram.data as ProgramData;
-		// Collect cross-module fn + type decls FIRST so outer imports can be
-		// deduped against the names we inject as local decls (Phase 8c: type
-		// decls reachable from injected fn signatures — e.g. IoError + its
-		// IoErrorKind enum — so the inner check resolves nested field access;
-		// enums must be injected too, else their member reads fold to nil).
-		const crossModule = _collectCrossModuleFunctionDecls(outerProgram, body);
-		const crossModuleTypes = _collectCrossModuleTypeDecls(crossModule);
-		const injectedNames = new HashSet<string>();
-		for (const s of crossModule) { const nm = _injectedDeclName(s); if (nm !== "") injectedNames.add(nm); }
-		for (const s of crossModuleTypes) { const nm = _injectedDeclName(s); if (nm !== "") injectedNames.add(nm); }
-		for (const stmt of outerData.programStmts) {
-			if (stmt.kind === NodeKind.ImportDecl) {
-				const filtered = _importMinusNames(stmt, injectedNames);
-				if (filtered !== null) injectedStmts.push(cloneNodeForCheck(filtered));
-			}
-		}
-		for (const s of crossModule) { injectedStmts.push(cloneNodeForCheck(s)); }
-		for (const s of crossModuleTypes) { injectedStmts.push(cloneNodeForCheck(s)); }
+	// Engine path (checkerCtx present): seeds + on-demand compile via the
+	// shared comptime image (NIM-REF §1 CT-eval). Standalone fallback
+	// (no ctx, e.g. evaluateComptimeBlocks): top-level statements, body
+	// must be self-contained.
+	let ctx: RaiserContext | null;
+	if (checkerCtx !== null) {
+		const fnBody = createNode(NodeKind.BlockStmt, { statements: finalStmts }, synthToken(loc));
+		const emptyDefaults: Node[] = [];
+		const comptimeFn = createNode(NodeKind.FunctionDecl, {
+			fnName: "__comptimeBody",
+			params: [],
+			fnParamTypes: [],
+			fnBody: fnBody,
+			fnFlags: "",
+			fnReturnType: "",
+			fnDefaults: emptyDefaults,
+			nameLocation: loc,
+		}, synthToken(loc));
+		const program = createNode(NodeKind.Program, { programStmts: [comptimeFn] }, synthToken(loc));
+		ctx = evalProgramViaEngine(program, checkerCtx, "__comptimeBody");
+	} else {
+		const program = createNode(NodeKind.Program, { programStmts: finalStmts }, synthToken(loc));
+		ctx = evalASTFull(program);
 	}
-
-	const allStmts: Node[] = [];
-	for (const s of injectedStmts) { allStmts.push(s); }
-	for (const s of finalStmts) { allStmts.push(s); }
-	const program = createNode(NodeKind.Program, { programStmts: allStmts }, synthToken(loc));
-
-	// Evaluate through the Raiser VM
-	let ctx: RaiserContext | null = evalASTFull(program);
 
 	// Loud-error propagation: if the VM halted with an error (e.g. unknown
 	// host function — missing extern bridge in hostTable.ms), surface as a
@@ -650,7 +292,7 @@ test "no comptime passes through" {
 }
 
 // --- Phase 8a POC regression tests (same-file outer-scope @comptime) ---
-// These exercise the injection path in evalComptimeBlock by going through
+// These exercise the engine path in evalComptimeBlock by going through
 // the full eager-fold via checkProgram (which sets the outer-program slot).
 // Each test parses a complete module with module-level decls + a @comptime
 // block that calls those decls, then asserts the fold result is a literal.
