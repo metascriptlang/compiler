@@ -1063,6 +1063,18 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 		}
 	}
 
+	// Wrap the destroy body in the ORC teardown critical section (msOrcBeginTeardown/EndTeardown):
+	// a field decref here can register a cycle root and trigger a re-entrant collect that traces
+	// this object's already-freed, not-yet-nulled slots (UAF). The guard defers collection until
+	// the whole teardown unwinds. Destroy hooks are single-exit (no early return), so bracketing
+	// the statement list is sufficient. No-op under --gc=drc.
+	if (hook === "destroy") {
+		const wrapped: Node[] = [makeExprStmt(makeCall(makeIdent("msOrcBeginTeardown", loc), [], loc), loc)];
+		for (const it of buf.items) { wrapped.push(it); }
+		wrapped.push(makeExprStmt(makeCall(makeIdent("msOrcEndTeardown", loc), [], loc), loc));
+		buf.items = wrapped;
+	}
+
 	const suffix = hookSuffix(hook);
 
 	let fnNode: Node = null as unknown as Node;
