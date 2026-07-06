@@ -159,7 +159,37 @@ const MAX_CALL_DEPTH = 1024;
 
 export function execModule(mod: RaiserModule, gcMode: string = "arena"): RaiserVM {
 	const vm = createVM(mod, gcMode);
+	execLoop(vm);
+	return vm;
+}
 
+export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[]): RaiserValue {
+	if (funcIdx < 0 || funcIdx >= vm.mod.functions.length) {
+		vmError(vm, `vmCallFunction: function index out of bounds: ${funcIdx}`);
+		return raiserNil();
+	}
+	const callee = getModuleFunc(vm.mod, funcIdx);
+	vm.funcIdx = funcIdx;
+	vm.baseReg = 0;
+	vm.ip = 0;
+	vm.halted = false;
+	vm.error = "";
+	vm.opCount = 0;
+	vm.callStack.items.length = 0;
+	ensureSlots(vm.regs, callee.maxRegs);
+	let i = 0;
+	while (i < args.length) {
+		const slot = raiserNil();
+		copyValueInto(slot, args[i]);
+		setReg(vm, i, slot);
+		i = i + 1;
+	}
+	execLoop(vm);
+	return vm.exitValue;
+}
+
+export function execLoop(vm: RaiserVM): void {
+	const mod = vm.mod;
 	while (!vm.halted) {
 		// Budget check
 		vm.opCount = vm.opCount + 1;
@@ -361,8 +391,6 @@ export function execModule(mod: RaiserModule, gcMode: string = "arena"): RaiserV
 			vmError(vm, `Unknown opcode: ${op}`);
 		}
 	}
-
-	return vm;
 }
 
 // --- Call/Ret handlers ---
