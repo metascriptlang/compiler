@@ -56,11 +56,8 @@ import {
 import { CheckerContext, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { hasGenericParams } from "../../checker/types";
-import { callMacroEngineCompiler, EngineMacroResult, getComptimeOuterCtx } from "./callbacks";
-import { walkBodyForCallees } from "./comptime";
+import { callMacroEngineCompiler, EngineMacroResult } from "./callbacks";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
-import { lookupModuleProgram } from "../../checker/instantiate";
-import { lookupSymbol } from "../../checker/symbol";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { RaiserVM, vmCallFunction } from "../../raiser/vm";
@@ -1368,11 +1365,6 @@ function preprocessMacroBody(body: Node): void {
 	preprocessNode(body);
 }
 
-// walkBodyForMacroCallees was identical to ./comptime.walkBodyForCallees after
-// the @comptime injector adopted the defining-program-first lookup pattern.
-// Use the shared helper to keep cross-module callee discovery consistent
-// between the macro path and the @comptime path.
-
 // ===== rewriteCallExprToMacroInvocation: post-expansion macro-call detection =====
 //
 // SERIALIZE Bug 6: when a deferred macro (held by A3 defer) expands post-mono,
@@ -1434,32 +1426,6 @@ function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, p
 
 	const loc = body.location;
 	const wrapperStmts: Node[] = [];
-
-	const outerCtxForInject = getComptimeOuterCtx();
-	if (outerCtxForInject !== null && outerCtxForInject.registry !== null) {
-		let macroDefiningProgram: Node = null as unknown as Node;
-		const macroSym = lookupSymbol(ctx.table, macroName);
-		if (macroSym !== null && macroSym.modulePath !== "") {
-			macroDefiningProgram = lookupModuleProgram(macroSym.modulePath);
-		}
-		const visited = new HashSet<string>();
-		const queue: Node[] = [];
-		walkBodyForCallees(body, outerCtxForInject.registry, macroDefiningProgram, visited, queue);
-		while (queue.length > 0) {
-			const decl = queue.pop();
-			const fd = decl.data as FunctionDeclData;
-			const declClone = cloneNodeForCheck(decl);
-			const fdClone = declClone.data as FunctionDeclData;
-			if (fdClone.fnBody !== null) preprocessMacroBody(fdClone.fnBody);
-			wrapperStmts.push(declClone);
-			let helperDefiningProgram: Node = macroDefiningProgram;
-			if (decl.resolvedSym !== null && decl.resolvedSym.modulePath !== "") {
-				const dp = lookupModuleProgram(decl.resolvedSym.modulePath);
-				if (dp !== null) helperDefiningProgram = dp;
-			}
-			walkBodyForCallees(fd.fnBody, outerCtxForInject.registry, helperDefiningProgram, visited, queue);
-		}
-	}
 
 	// Params are UNANNOTATED (fnParamTypes all "" → Unknown): args arrive through
 	// registers at invocation, not as const decls, so param types are never known.

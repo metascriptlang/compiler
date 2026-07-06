@@ -17,7 +17,7 @@ import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
 	resolveFunc, isLocalString, isEnumName, findEnumConstant,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
-	markRegFloat, isRegFloat
+	markRegFloat, isRegFloat, callRaiserOnDemand
 } from "./context";
 
 // --- Float detection ---
@@ -646,7 +646,10 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 	// User function call: callee must be Identifier
 	if (d.callee.kind === NodeKind.Identifier) {
 		const calleeId = d.callee.data as IdentifierData;
-		const funcIdx = resolveFunc(s, calleeId.name);
+		let funcIdx = resolveFunc(s, calleeId.name);
+		if (funcIdx < 0 && d.callee.resolvedSym !== null) {
+			funcIdx = callRaiserOnDemand(d.callee.resolvedSym);
+		}
 		if (funcIdx >= 0) {
 			const dest = allocReg(s);
 			emitCallArgs(s, dest, d.arguments);

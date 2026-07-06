@@ -190,21 +190,24 @@ function compileClassConstructor(
 // each an ABSOLUTE index (base + local position) so Call/closure funcIdx resolve
 // image-wide with no relocation. Enums fold into the shared enumMap. Returns the
 // absolute index assigned to `wantFn` (-1 if not present).
+interface RaiserReservedSlot { idx: number; fnName: string; params: string[]; body: Node; arity: number; }
+
 export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, program: Node, wantFn: string): number {
 	const pd = program.data as ProgramData;
-	const base = image.functions.length;
 	let wantIdx = -1;
 
-	// Pass 1: collect function names (absolute idx) + enum members.
-	let local = 0;
+	const reserved: RaiserReservedSlot[] = [];
+
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
 		if (fnNode !== null) {
 			const fd = fnNode.data as FunctionDeclData;
-			const entry: RaiserFuncEntry = { name: fd.fnName, index: base + local };
+			const idx = image.functions.length;
+			image.functions.push(raiserPlaceholderFunc());
+			const entry: RaiserFuncEntry = { name: fd.fnName, index: idx };
 			funcMap.items.push(entry);
-			if (fd.fnName === wantFn) wantIdx = base + local;
-			local += 1;
+			if (fd.fnName === wantFn) wantIdx = idx;
+			reserved.push({ idx, fnName: fd.fnName, params: fd.params, body: fd.fnBody, arity: fd.params.length });
 		}
 		const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
 		if (enumNode !== null) {
@@ -217,16 +220,17 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 		}
 	}
 
-	// Pass 2: compile bodies against the shared funcMap, append to the image.
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
-		if (fnNode !== null) {
-			const fd = fnNode.data as FunctionDeclData;
-			const func = compileFuncBody(funcMap, enumMap, fd.fnName, fd.params, fd.fnBody, fd.params.length);
-			image.functions.push(func);
-		}
+	for (let i = 0; i < reserved.length; i += 1) {
+		const r = reserved[i];
+		const func = compileFuncBody(funcMap, enumMap, r.fnName, r.params, r.body, r.arity);
+		image.functions[r.idx] = func;
 	}
 	return wantIdx;
+}
+
+function raiserPlaceholderFunc(): RaiserFunction {
+	const code: RaiserInstruction[] = [raiserABC(RaiserOpcode.Halt, 0, 0, 0)];
+	return createRaiserFunction("__placeholder", code, [], 0, 0, 1);
 }
 
 // --- Project-level compilation ---

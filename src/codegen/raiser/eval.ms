@@ -2,9 +2,9 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node } from "../../ast/node";
+import { Node, Symbol, createNode, NodeKind, ProgramData } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
-import { checkProgram, checkProgramWithRegistry, buildPreludeContext } from "../../checker/checkPass";
+import { checkProgram, checkProgramWithRegistry, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext } from "../../checker/context";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
@@ -14,9 +14,14 @@ import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { RaiserInstruction, raiserABC, RaiserOpcode } from "../../raiser/bytecode";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
-import { RaiserVM, execModule, createVM } from "../../raiser/vm";
+import { RaiserVM, execModule, createVM, vmCallFunction } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
 import { RaiserFuncMap } from "./context";
+import { moduleScopeSymbols } from "../../checker/symbol";
+import { cloneNodeForCheck } from "../../monomorphize/clone";
+import { lookupModuleCtx } from "../../checker/instantiate";
+import { synthToken } from "../../compiler/meta/bridge";
+import { registerRaiserOnDemand } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
@@ -102,6 +107,7 @@ interface ComptimeEngine {
 	funcMap: RaiserFuncMap;
 	enumMap: RaiserFuncMap;
 	vm: RaiserVM;
+	seen: HashMap<string, number>;
 }
 
 let _engine: ComptimeEngine = null as unknown as ComptimeEngine;
@@ -118,7 +124,15 @@ function freshEngine(): ComptimeEngine {
 	const funcMap: RaiserFuncMap = { items: [] };
 	const enumMap: RaiserFuncMap = { items: [] };
 	const vm = createVM(image, "arena");
-	return { image, funcMap, enumMap, vm };
+	const seen: HashMap<string, number> = new HashMap<string, number>();
+	return { image, funcMap, enumMap, vm, seen };
+}
+
+function compileProgramIntoEngine(program: Node, seeds: Symbol[], wantFn: string): number {
+	registerSeedSymbols(seeds);
+	const transformed = transformForEngine(program);
+	clearSeedSymbols();
+	return appendProgramToImage(_engine.image, _engine.funcMap, _engine.enumMap, transformed, wantFn);
 }
 
 export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string): EngineMacroResult {
@@ -126,12 +140,58 @@ export function compileMacroIntoEngine(program: Node, token: CheckerContext, mac
 		_engine = freshEngine();
 		_engineToken = token;
 	}
-	const transformed = transformForEngine(program);
-	const funcIdx = appendProgramToImage(_engine.image, _engine.funcMap, _engine.enumMap, transformed, macroFnName);
+	const funcIdx = compileProgramIntoEngine(program, moduleScopeSymbols(token.table), macroFnName);
 	return { vm: _engine.vm, funcIdx };
 }
 
 registerMacroEngineCompiler(compileMacroIntoEngine);
+
+function seedCtxForSym(sym: Symbol): CheckerContext {
+	if (sym.modulePath !== "" && _engineToken !== null && sym.modulePath !== _engineToken.modulePath) {
+		const mc = lookupModuleCtx(sym.modulePath);
+		if (mc !== null) return mc;
+	}
+	if (_engineToken !== null) return _engineToken;
+	return null as unknown as CheckerContext;
+}
+
+function ensureCompiledIntoEngine(sym: Symbol): number {
+	if (_engine === null) return -1;
+	const name = sym.name;
+	if (_engine.seen.has(name)) return _engine.seen.get(name);
+	if (sym.declNode === null) return -1;
+	_engine.seen.set(name, _engine.image.functions.length);
+	const seedCtx = seedCtxForSym(sym);
+	const seeds: Symbol[] = [];
+	if (seedCtx !== null) {
+		for (const s of moduleScopeSymbols(seedCtx.table)) {
+			if (s.name !== name) seeds.push(s);
+		}
+	}
+	const clone = cloneNodeForCheck(sym.declNode);
+	const decls: Node[] = [clone];
+	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
+	return compileProgramIntoEngine(program, seeds, name);
+}
+
+registerRaiserOnDemand(ensureCompiledIntoEngine);
+
+export function evalProgramViaEngine(program: Node, token: CheckerContext, fnName: string): RaiserContext {
+	const result = compileMacroIntoEngine(program, token, fnName);
+	if (result === null as unknown as EngineMacroResult) return createContext();
+	const noArgs: RaiserValue[] = [];
+	const resultVal = vmCallFunction(result.vm, result.funcIdx, noArgs);
+	return {
+		mod: result.vm.mod,
+		hasModule: true,
+		lastResult: resultVal,
+		lastOutput: result.vm.output,
+		arrayHeap: result.vm.arrayHeap,
+		objectHeap: result.vm.objectHeap,
+		lastError: result.vm.error,
+		gcMode: result.vm.gcMode,
+	};
+}
 
 import { registerMacroEvaluator, registerMacroCompiler } from "../../compiler/meta/callbacks";
 registerMacroEvaluator(evalASTFull);

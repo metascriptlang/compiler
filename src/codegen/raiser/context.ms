@@ -6,6 +6,7 @@ import {
 	raiserABC, raiserABx, raiserAx
 } from "../../raiser/bytecode";
 import { RaiserValue, raiserInt, raiserString } from "../../raiser/value";
+import { Symbol } from "../../ast/node";
 
 // --- Locals ---
 
@@ -364,4 +365,24 @@ export function patchLoopContinues(s: RaiserCompState): void {
 	for (const patchIdx of loop.continuePatches.items) {
 		patchJumpTo(s, patchIdx, target);
 	}
+}
+
+type RaiserOnDemandFn = (sym: Symbol) => number;
+
+let _raiserOnDemandFn: RaiserOnDemandFn = (_sym: Symbol): number => {
+	return -1;
+};
+
+export function registerRaiserOnDemand(fn: RaiserOnDemandFn): void {
+	_raiserOnDemandFn = fn;
+}
+
+export function clearRaiserOnDemand(): void {
+	_raiserOnDemandFn = (_sym: Symbol): number => {
+		return -1;
+	};
+}
+
+export function callRaiserOnDemand(sym: Symbol): number {
+	return _raiserOnDemandFn(sym);
 }
