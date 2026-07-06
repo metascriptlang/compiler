@@ -6,9 +6,9 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { unknownType, charType, float64Type, voidType, nullType, createFunction, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
+import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords } from "./context";
-import { IdentCache, createIdentCache } from "./idents";
+import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/fs";
@@ -1970,6 +1970,27 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	// @passL/@link go directly to global linkState — no per-module merge needed
 }
 
+let _pendingSeedSymbols: Symbol[] = [];
+
+export function registerSeedSymbols(syms: Symbol[]): void {
+	_pendingSeedSymbols = syms;
+}
+
+export function clearSeedSymbols(): void {
+	_pendingSeedSymbols = [];
+}
+
+function drainSeedSymbols(table: SymbolTable): void {
+	if (_pendingSeedSymbols.length === 0) return;
+	for (const sym of _pendingSeedSymbols) {
+		const innerNameId = getIdentId(table.identCache, sym.name);
+		if (!table.current.symbols.has(innerNameId)) {
+			table.current.symbols.set(innerNameId, sym);
+		}
+	}
+	_pendingSeedSymbols = [];
+}
+
 // Single internal entry point for all checkProgram variants.
 function checkProgramCore(
 	program: Node,
@@ -2002,6 +2023,7 @@ function checkProgramCore(
 	}
 	defineBuiltinConstants(ctx);
 	openScope(ctx.table, ScopeKind.Module);
+	drainSeedSymbols(ctx.table);
 	runThreePasses(ctx, program);
 	collectDirectives(ctx, program);
 	stampHeaderPaths(ctx);

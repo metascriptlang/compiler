@@ -174,6 +174,19 @@ export function lookupLocal(table: SymbolTable, name: string): Symbol {
 	return null as unknown as Symbol;
 }
 
+export function moduleScopeSymbols(table: SymbolTable): Symbol[] {
+	let scope = table.current;
+	while (scope !== null && scope.scopeKind !== ScopeKind.Module) {
+		scope = scope.parent;
+	}
+	if (scope === null) return [];
+	const out: Symbol[] = [];
+	for (const sym of scope.symbols.values()) {
+		out.push(sym);
+	}
+	return out;
+}
+
 // ===== Overload Helpers =====
 
 export function hasOverloads(sym: Symbol): boolean {
