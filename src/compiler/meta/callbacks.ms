@@ -4,6 +4,7 @@
 import { Node } from "../../ast/node";
 import { RaiserContext } from "../../raiser/context";
 import { RaiserModule } from "../../raiser/module";
+import { RaiserVM } from "../../raiser/vm";
 import { CheckerContext, ExportRegistry } from "../../checker/context";
 import { Module, ModuleGraph } from "../../module/graph";
 
@@ -33,6 +34,28 @@ export function callMacroCompiler(program: Node): RaiserModule | null {
 
 export function registerMacroCompiler(fn: MacroCompilerFn): void {
 	macroCompilerFn = fn;
+}
+
+// Comptime engine: compile a macro wrapper into the ONE shared project-wide image
+// (Nim's graph.vm + PCtx.code) and return the persistent VM plus the absolute
+// funcIdx of `macroFnName`. `token` scopes the engine to one compilation.
+export interface EngineMacroResult {
+	vm: RaiserVM;
+	funcIdx: number;
+}
+
+type MacroEngineCompilerFn = (program: Node, token: CheckerContext, macroFnName: string) => EngineMacroResult | null;
+
+let macroEngineCompilerFn: MacroEngineCompilerFn = (program: Node, token: CheckerContext, macroFnName: string): EngineMacroResult | null => {
+	return null;
+};
+
+export function callMacroEngineCompiler(program: Node, token: CheckerContext, macroFnName: string): EngineMacroResult | null {
+	return macroEngineCompilerFn(program, token, macroFnName);
+}
+
+export function registerMacroEngineCompiler(fn: MacroEngineCompilerFn): void {
+	macroEngineCompilerFn = fn;
 }
 
 // ===== Comptime outer context =====

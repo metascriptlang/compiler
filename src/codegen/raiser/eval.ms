@@ -11,12 +11,14 @@ import { join } from "std/fs/path";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { refineTypes } from "../../transform/typeRefine";
 import { transformForRaiser } from "../../transform/raiserLowering";
-import { RaiserValueKind, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
+import { RaiserInstruction, raiserABC, RaiserOpcode } from "../../raiser/bytecode";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
-import { RaiserVM, execModule } from "../../raiser/vm";
-import { RaiserModule } from "../../raiser/module";
-import { generateRaiser, generateRaiserProject, RaiserModuleInput } from "./rgen";
-import { getComptimeOuterCtx } from "../../compiler/meta/callbacks";
+import { RaiserVM, execModule, createVM } from "../../raiser/vm";
+import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
+import { RaiserFuncMap } from "./context";
+import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
+import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 
 // --- Full Pipeline API ---
@@ -49,7 +51,10 @@ function raiserPreludeCtx(): CheckerContext {
 	return _raiserPreludeCtx;
 }
 
-export function evalASTCompile(program: Node): RaiserModule {
+// Check + refineTypes + transformForRaiser over a synthetic Program, ready for
+// bytecode generation. Runs the inner pipeline destructively, so the caller must
+// pass a Program whose real-module decls are CLONED (never the canonical nodes).
+function transformForEngine(program: Node): Node {
 	// Macro bodies dispatch string/array builtins through CallHost — the host
 	// registry must be populated first (same as @comptime via evalComptimeBlock).
 	ensureHostTableLoaded();
@@ -67,12 +72,15 @@ export function evalASTCompile(program: Node): RaiserModule {
 	const txCtx = createTransformContextWithChecker(checkerCtx);
 	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
 	const transformed = transformForRaiser(refined, checkerCtx);
-	const raiserMod = generateRaiser(transformed);
 	if (outer !== null) {
 		outer.program = savedOuterProgram;
 		outer.preludeCtx = savedOuterPrelude;
 	}
-	return raiserMod;
+	return transformed;
+}
+
+export function evalASTCompile(program: Node): RaiserModule {
+	return generateRaiser(transformForEngine(program));
 }
 
 export function evalASTFull(program: Node): RaiserContext {
@@ -82,6 +90,48 @@ export function evalASTFull(program: Node): RaiserContext {
 	execute(ctx);
 	return ctx;
 }
+
+// --- Comptime engine (Nim graph.vm + PCtx.code parity) ---
+// ONE image + funcMap + persistent VM for the whole compilation. Each macro
+// wrapper compiles ONCE into the shared image via appendProgramToImage (absolute
+// funcIdx, no relocation); per invocation the caller marshals args into registers
+// and re-enters through vmCallFunction. Scoped to one compilation by `token`.
+
+interface ComptimeEngine {
+	image: RaiserModule;
+	funcMap: RaiserFuncMap;
+	enumMap: RaiserFuncMap;
+	vm: RaiserVM;
+}
+
+let _engine: ComptimeEngine = null as unknown as ComptimeEngine;
+let _engineToken: CheckerContext = null as unknown as CheckerContext;
+
+function freshEngine(): ComptimeEngine {
+	// Seed with a never-called Halt entry so createVM has a valid entry frame;
+	// macro functions append at index 1+.
+	const entryCode: RaiserInstruction[] = [raiserABC(RaiserOpcode.Halt, 0, 0, 0)];
+	const entryConsts: RaiserValue[] = [];
+	const entryFn = createRaiserFunction("__engineEntry", entryCode, entryConsts, 0, 0, 2);
+	const functions: RaiserFunction[] = [entryFn];
+	const image = createRaiserModule("comptime-engine", functions, 0);
+	const funcMap: RaiserFuncMap = { items: [] };
+	const enumMap: RaiserFuncMap = { items: [] };
+	const vm = createVM(image, "arena");
+	return { image, funcMap, enumMap, vm };
+}
+
+export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string): EngineMacroResult {
+	if (_engineToken !== token) {
+		_engine = freshEngine();
+		_engineToken = token;
+	}
+	const transformed = transformForEngine(program);
+	const funcIdx = appendProgramToImage(_engine.image, _engine.funcMap, _engine.enumMap, transformed, macroFnName);
+	return { vm: _engine.vm, funcIdx };
+}
+
+registerMacroEngineCompiler(compileMacroIntoEngine);
 
 import { registerMacroEvaluator, registerMacroCompiler } from "../../compiler/meta/callbacks";
 registerMacroEvaluator(evalASTFull);
