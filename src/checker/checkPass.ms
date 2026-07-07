@@ -183,6 +183,17 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		},
 		NodeKind.ThrowStmt => {
 			const d = node.data as ThrowStmtData;
+			// Rule 92 (LANG-ASYNC): throw is banned in a fn returning Promise<Result<T,E>>
+			// — it would reject a Promise the type guarantees never rejects. Use Result.err().
+			if (ctx.currentFunction !== null && ctx.currentFunction.symbolType !== null) {
+				const ret = ctx.currentFunction.symbolType.typeReturn;
+				if (ret !== null && isAwaitable(ret)) {
+					const inner = awaitedType(ret);
+					if (inner !== null && isResult(inner)) {
+						addError(ctx, "throw is not allowed in a function returning Promise<Result<T,E>> — use Result.err(...) instead", node.location.line, node.location.column);
+					}
+				}
+			}
 			checkExpr(ctx, d.throwArg, null);
 		},
 		NodeKind.TryCatchStmt => checkTryCatch(ctx, node),
@@ -1352,6 +1363,8 @@ function exitLoopScope(ctx: CheckerContext, saved: boolean): void {
 function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as DestructuringDeclData;
 	checkExpr(ctx, d.destrInit, null);
+	const initType = d.destrInit.nodeType !== null ? d.destrInit.nodeType : unknownType();
+	defineForOfPatternBindings(ctx, d.destrPattern, initType, d.destrIsConst);
 }
 
 // ===== Check Program Body =====

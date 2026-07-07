@@ -1370,13 +1370,14 @@ export function isMaybeType(t: Type | null): boolean {
 // Whether `t | null` should wrap into Maybe<T> at the resolver. Pointers
 // (Ref/Ptr) stay as Union — codegen unwraps to a bare pointer using NULL
 // as the natural sentinel. Null itself is degenerate. Everything else
-// (struct, primitive, string) needs the `{ value, present }` wrapper
+// (struct, primitive, string, function) needs the `{ value, present }` wrapper
 // because there is no spare bit pattern for "absent". Mirrors Nim's
 // SomePointer-vs-value-type split (~/projects/nim/lib/pure/options.nim:90-99).
 export function isMaybeWrappable(t: Type | null): boolean {
 	if (t === null) return false;
 	if (t.kind === TypeKind.Null) return false;
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return false;
+	if (t.kind === TypeKind.Function) return true;
 	if (isStructType(t)) return true;
 	if (isPrimitiveKind(t.kind)) return true;
 	if (t.kind === TypeKind.String) return true;

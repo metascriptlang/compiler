@@ -32,6 +32,7 @@ static inline int _ms_access(const char* path) {
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <netinet/in.h>
 #include <netinet/tcp.h>
 #define ms_close_socket(fd) close(fd)
 #define MS_SOCKOPT_CAST

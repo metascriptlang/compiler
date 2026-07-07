@@ -12,7 +12,7 @@ import {
 	CType, CTypeKind, CMember, makeVoid, makeBool, makeChar, makeUChar,
 	makeShort, makeUShort, makeInt, makeUInt, makeLong, makeULong, makeLongLong,
 	makeULongLong, makeFloat, makeDouble, makeLongDouble, makePointer, makeArray,
-	makeFunc, makeEnum, makeStruct, makeUnion, makeMember,
+	makeFunc, makeEnum, makeStruct, makeUnion, makeMember, copyType,
 	computeStructLayout, computeUnionLayout,
 } from "./type";
 
@@ -121,6 +121,7 @@ const SPEC_UNSIGNED = 262144;
 function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 	let ty = makeInt(ctx.target);
 	let counter = 0;
+	let isConst = false;
 
 	while (isTypename(ctx)) {
 		const beforeIter = ctx.tok;
@@ -137,9 +138,10 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 			continue;
 		}
 
-		// Qualifiers — recognized but ignored
+		// Qualifiers — const is recorded (→ Borrow<T> at cimport), others ignored
 		if (s === "const" || s === "volatile" || s === "auto" || s === "register" ||
 			s === "restrict" || s === "__restrict" || s === "__restrict__" || s === "_Noreturn") {
+			if (s === "const") isConst = true;
 			advance(ctx);
 			continue;
 		}
@@ -256,6 +258,9 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 		// later real typedefs (e.g., size_t from stddef.h).
 	}
 
+	// const on the base type (e.g. `const float`) — copy before marking so a shared
+	// typedef CType isn't polluted. cimport maps a const pointee to Borrow<T>.
+	if (isConst) { ty = copyType(ty); ty.isConst = true; }
 	return ty;
 }
 

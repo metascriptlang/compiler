@@ -3,7 +3,7 @@
 // Invokes clang to compile generated C source into native binaries.
 
 import { exec, env, cmdExists, platform, ProcessError, ProcessErrorKind } from "std/process";
-import { writeFile } from "std/fs";
+import { writeFile, ensureDir } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { CliOptions } from "./options";
 import { resolveRuntimeDir } from "../utils/path";
@@ -178,6 +178,7 @@ function isCppFile(path: string): boolean {
 	if (path.endsWith(".cp"))  return true;
 	if (path.endsWith(".C"))   return true;
 	if (path.endsWith(".CPP")) return true;
+	if (path.endsWith(".mm"))  return true;
 	return false;
 }
 
@@ -406,6 +407,7 @@ function buildCompileCommand(cFile: string, outBinary: string, extraFlags: strin
 // Compile a .c file to a native binary.
 // Returns Result.ok on exit-code 0; Result.err carries gcc/clang stderr.
 export function compileC(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
+	ensureDir(dirname(outBinary));
 	const cmd = buildCompileCommand(cFile, outBinary, extraFlags, mode, ccOption, ccBinary);
 	const r = exec(cmd);
 	if (!r.ok) return Result.err(r.error);
@@ -415,6 +417,7 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 // Compile a .c file to an object file only (-c flag, no linking).
 // Returns Result.ok on exit-code 0; Result.err carries gcc/clang stderr.
 export function compileCFile(cFile: string, oFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
+	ensureDir(dirname(oFile));
 	const isCpp = isCppFile(cFile);
 	const baseCompiler = getCompilerName(ccOption, ccBinary);
 	const compiler = isCpp ? toCppCompiler(baseCompiler) : baseCompiler;
@@ -443,6 +446,7 @@ const LINK_CMD_LIMIT = 7800;
 // oFileList: space-separated list of .o file paths
 // Returns Result.ok on exit-code 0; Result.err carries linker stderr.
 export function linkObjects(oFileList: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
+	ensureDir(dirname(outBinary));
 	const baseCompiler = getCompilerName(ccOption, ccBinary);
 	// Sticky flag: any .cpp file compiled in this build → use C++ driver for
 	// the final link so libc++ / libstdc++ is pulled automatically. Pure-C
@@ -470,6 +474,7 @@ export function linkObjects(oFileList: string, outBinary: string, extraFlags: st
 // Archive object files into a static library for --app=staticlib. Remove the stale
 // archive first: `ar rcs` appends, so a leftover would keep already-dropped members.
 export function archiveStatic(oFileList: string, outArchive: string): Result<void, ProcessError> {
+	ensureDir(dirname(outArchive));
 	exec(`rm -f ${outArchive}`);
 	const r = exec(`ar rcs ${outArchive} ${oFileList}`);
 	if (!r.ok) return Result.err(r.error);

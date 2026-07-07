@@ -75,9 +75,10 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 				if (!t.base.isComplete) return "unknown";
 				return `Ptr<${t.base.tagName}>`;
 			}
-			// Other typed pointer
+			// Other typed pointer — const pointee → Borrow<T> (read-only, accepts arr[0]
+			// borrow-promotion); mutable → Ptr<T>.
 			const inner = cTypeToMs(t.base);
-			return `Ptr<${inner}>`;
+			return t.base.isConst ? `Borrow<${inner}>` : `Ptr<${inner}>`;
 		},
 		CTypeKind.Array => {
 			if (t.base === null) return "unknown";
