@@ -392,9 +392,33 @@ export function canonicalModulePath(path: string): string {
 	return normalize(join(cwd(), path));
 }
 
+function canonicalizeStdModule(path: string, stdPath: string, provider: SourceProvider): string {
+	if (stdPath.length === 0) return path;
+	let dir = dirname(path);
+	let stepsUp = 0;
+	while (dir.length > 1 && stepsUp < 6) {
+		const marker = join(dir, "std/core/system/index.ms");
+		if (provideSource(provider, marker).ok) {
+			const prefix = join(dir, "std") + "/";
+			if (path.length > prefix.length && path.slice(0, prefix.length) === prefix) {
+				const subpath = path.slice(prefix.length, path.length);
+				const candidate = join(stdPath, subpath);
+				if (provideSource(provider, candidate).ok) return candidate;
+			}
+			return path;
+		}
+		const parent = dirname(dir);
+		if (parent === dir) return path;
+		dir = parent;
+		stepsUp = stepsUp + 1;
+	}
+	return path;
+}
+
 // useConfig: 0 = bare (skip std, .ms only), 1 = full (use ResolverConfig)
 export function loadModule(graph: ModuleGraph, path: string, provider: SourceProvider, config: ResolverConfig, useConfig: number): Result<boolean, string> {
 	path = canonicalModulePath(path);
+	path = canonicalizeStdModule(path, config.stdPath, provider);
 	// Already in graph — check if still loading (circular import)
 	if (hasModule(graph, path)) {
 		const existing = findModule(graph, path);
