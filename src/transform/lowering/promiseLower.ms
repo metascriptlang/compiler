@@ -18,13 +18,14 @@
 //     / PromiseSpawn / PromiseAll / WaitFor
 //   - `new Promise(executor)` rewrite
 //
-// `isStructLikeType` lives in `../util` — shared by asyncBridge, builtinLower,
-// and promiseLower. Keeping it in any one of them would create a circular import.
+// The future storage contract (inlineInFuture / boxedInFuture) lives in `../util`
+// — shared by asyncBridge, builtinLower, and promiseLower. Keeping it in any one
+// of them would create a circular import.
 
 import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind } from "../../ast/node";
 import { isAwaitable, awaitedType } from "../../checker/types";
 import { TransformContext } from "../context";
-import { makeIdent, makeCall, makeNumber, makeNull, isStructLikeType, unboxVoidPtrToTyped } from "../util";
+import { makeIdent, makeCall, makeNumber, makeNull, inlineInFuture, unboxVoidPtrToTyped } from "../util";
 
 // ===== Type-tag dispatch =====
 
@@ -179,16 +180,17 @@ function lowerPromiseResolve(node: Node, loc: SourceLocation): Node {
 }
 
 // spawn(fn) lowering:
-// - Struct returns → msSpawnInto(msFutureCreateInline<T>(), fn). Worker memcpys the
-//   boxed result into the typed-inline fut, frees the box; downstream waitFor/await
-//   reads via msWaitForStruct (typed inline read).
-// - Primitive/void returns → msSpawn(fn) (legacy boxed path).
+// - String returns → msSpawnInto(msFutureCreateInline<T>(), fn). Worker memcpys the
+//   boxed result into the typed-inline fut, frees the box.
+// - Everything else → msSpawn(fn). The worker stores the closure's boxed void*
+//   result in the future slot: primitive bits directly, struct/tuple/GI as the
+//   heap-box pointer — matching boxedInFuture readers (msUnboxStruct).
 // Each call's nodeType is its true result type (Promise<T>). Codegen extracts T via
 // awaitedType — no more abuse of nodeType as a sizeof-hint.
 function lowerPromiseSpawn(node: Node, loc: SourceLocation): Node {
 	const cd = node.data as CallExprData;
 	const innerType = awaitedType(node.nodeType);
-	if (isStructLikeType(innerType)) {
+	if (inlineInFuture(innerType)) {
 		const futAlloc = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
 		futAlloc.nodeType = node.nodeType;  // Promise<T>
 		const spawnInto = makeCall(makeIdent("msSpawnInto", loc), [futAlloc, cd.arguments[0]], loc);
@@ -223,26 +225,16 @@ function lowerPromiseAll(node: Node, loc: SourceLocation): Node {
 }
 
 // waitFor(fut) — dispatch based on return type:
-//   void      → msWaitFor(fut)                      (block, discard result)
-//   primitive → msUnbox<T>(msWaitFor(fut))          (boxed path — spawn)
-//   struct    → msWaitForStruct(fut)                (typed inline read — async)
-//   array/ref → msUnboxStruct(msWaitFor(fut))       (boxed fallback)
-//
-// The struct branch handles async returns of 16+ byte struct values (e.g.
-// Result<msString, Error> ~40 bytes). msFutureCompleteT writes inline; the old
-// msFutureRead path cast through msFuture_ptr (8-byte void*) and misinterpreted
-// the first 8 bytes as a boxed pointer. msWaitForStruct reads at the real
-// value-field offset, preserving full sizeof(T).
+//   void            → msWaitFor(fut)                (block, discard result)
+//   inlineInFuture  → msWaitForStruct(fut)          (typed inline read — String)
+//   everything else → unboxVoidPtrToTyped(msWaitFor) (primitive bits / heap box)
 function lowerWaitFor(node: Node, loc: SourceLocation): Node {
 	const cd = node.data as CallExprData;
 	const retType = node.nodeType;
 	if (retType === null || retType.kind === TypeKind.Void) {
 		return makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
 	}
-	// Typed inline shortcut: struct futures (msFutureCreateInline) carry their
-	// value at the same offset as the typed struct cast, so msWaitForStruct
-	// avoids the heap-box round-trip msUnboxStruct would otherwise unbox.
-	if (isStructLikeType(retType)) {
+	if (inlineInFuture(retType)) {
 		const waitStruct = makeCall(makeIdent("msWaitForStruct", loc), cd.arguments, loc);
 		waitStruct.nodeType = retType;
 		return waitStruct;

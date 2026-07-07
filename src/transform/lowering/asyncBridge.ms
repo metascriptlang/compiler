@@ -85,19 +85,16 @@ function promiseTypeFor(inner: Type | null): Type {
 	return inner !== null ? createPromise(inner) : createPromise(voidType());
 }
 
-import { isStructLikeType } from "../util";
+import { isStructLikeType, inlineInFuture, boxedInFuture } from "../util";
 
-// Build the right allocation call for an async function's $retFut:
-// - struct/tuple/generic-instance → msFutureCreateInline (typed-sized)
-// - primitives and pointers → msFutureCreate (generic 16-byte slot)
-// Tags the call's nodeType with Promise<T> (the true result type of the
-// allocator) so DRC's cross-pass contract is preserved. Codegen extracts T via
-// awaitedType when emitting sizeof(msFuture_<T>).
+// $retFut allocation: String needs the 16-byte inline slot; everything else uses
+// the 8-byte generic future (boxed types store a void*). nodeType carries
+// Promise<T> so DRC's cross-pass contract holds; codegen extracts T via awaitedType.
 function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
-	if (isStructLikeType(innerType)) {
-		const call = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
-		call.nodeType = promiseTypeFor(innerType);
-		return call;
+	if (inlineInFuture(innerType)) {
+		const inlineCall = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
+		inlineCall.nodeType = promiseTypeFor(innerType);
+		return inlineCall;
 	}
 	const call = makeCall(makeIdent("msFutureCreate", loc), [], loc);
 	call.nodeType = promiseTypeFor(innerType);
@@ -165,12 +162,10 @@ function makeFutureCompleteStmts(valueExpr: Node, isVoid: boolean, promiseType: 
 			loc,
 		), loc)];
 	}
-	// Arrays: box into void* (heap-allocate), then store pointer in future.
-	// msSinkBoxStruct is a multi-statement codegen expansion — can't nest inside
-	// another call. Use separate VarDecl + complete call. The box call's result
-	// is void* (heap pointer); codegen reads T from the argument's nodeType for
-	// sizeof — nodeType on the call itself stays as its true result type.
-	if (fnReturnInner !== null && fnReturnInner.kind === TypeKind.Array) {
+	// Boxed types: msSinkBoxStruct is a multi-statement codegen expansion (can't
+	// nest in another call), so box via a separate VarDecl then complete with the
+	// void* pointer. Codegen reads sizeof(T) from the box arg's nodeType.
+	if (boxedInFuture(fnReturnInner)) {
 		const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
 		const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [valueExpr], loc);
 		boxCall.nodeType = voidPtrType;
@@ -330,22 +325,14 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 				readExpr = makeCall(makeIdent(readFn, loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
 				readExpr.nodeType = varType;
 			} else {
-				// Struct/tuple/generic-instance types spawned via
-				// msSpawnInto have their result stored inline (memcpy'd by worker,
-				// box freed). Use msWaitForStruct for typed inline read — same path
-				// as the WaitFor builtin. Array types still go through the boxed path
-				// (msFutureRead + msUnboxStruct) since they're pointers.
-				if (isStructLikeType(varType)) {
-					readExpr = makeCall(makeIdent("msWaitForStruct", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
+				// Boxed types (struct/tuple/GI/array) — read the void* then copy out via
+				// msUnboxStruct. String never reaches here (readFnForAwait handles it).
+				const rawRead = makeCall(makeIdent("msFutureRead", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
+				if (boxedInFuture(varType)) {
+					readExpr = makeCall(makeIdent("msUnboxStruct", loc), [rawRead], loc);
 					readExpr.nodeType = varType;
 				} else {
-					const rawRead = makeCall(makeIdent("msFutureRead", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
-					if (varType !== null && varType.kind === TypeKind.Array) {
-						readExpr = makeCall(makeIdent("msUnboxStruct", loc), [rawRead], loc);
-						readExpr.nodeType = varType;
-					} else {
-						readExpr = rawRead;
-					}
+					readExpr = rawRead;
 				}
 			}
 			stateStmts.push(makeExprStmt(
@@ -608,11 +595,9 @@ function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Typ
 					if (isVoid || rd.argument === null) {
 						completeCall = makeCall(makeIdent("msFutureCompleteVoid", loc),
 							[makeTypedIdent("$retFut", promiseType, loc)], loc);
-					} else if (fnReturnInner !== null && fnReturnInner.kind === TypeKind.Array) {
-						// Arrays: box into void* via separate VarDecl (msSinkBoxStruct is a
-						// multi-statement codegen expansion — nesting it corrupts the result stack).
-						// The box call's result type is void* (heap pointer); codegen reads T
-						// from the argument's nodeType for sizeof — no nodeType-as-hint abuse.
+					} else if (boxedInFuture(fnReturnInner)) {
+						// Boxed types: msSinkBoxStruct is a multi-statement expansion (nesting it
+						// corrupts the result stack), so box via a separate VarDecl.
 						const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
 						const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [rd.argument], loc);
 						boxCall.nodeType = voidPtrType;
@@ -670,29 +655,41 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// Rewrite all return statements recursively (handles if/else, while, try/catch)
 	rewriteReturns(body, retFutType, fnReturnInner);
 
-	// Prepend $retFut declaration. Read bd.statements AFTER rewriteReturns (it mutates the array).
+	// Read bd.statements AFTER rewriteReturns (it mutates the array).
 	const rewrittenStmts = bd.statements;
-	const newStmts: Node[] = [];
-	newStmts.push(retFutDecl);
+	const tryStmts: Node[] = [];
 	for (const stmt of rewrittenStmts) {
-		newStmts.push(stmt);
+		tryStmts.push(stmt);
 	}
 
 	// If no explicit return at end, add implicit void completion. No incref on
 	// $retFut — DRC's caller-side `ensureDestructionIfNeeded` (inject.ms) emits
-	// msFutureDrcDestroy, balancing the rc=0 sole-owner allocation. Nim parity:
-	// asyncmacro.nim:301-314.
+	// msFutureDrcDestroy, balancing the rc=0 sole-owner allocation.
 	if (rewrittenStmts.length === 0 || rewrittenStmts[rewrittenStmts.length - 1].kind !== NodeKind.ReturnStmt) {
 		const completeCall = makeCall(
 			makeIdent("msFutureCompleteVoid", loc),
 			[makeTypedIdent("$retFut", retFutType, loc)],
 			loc,
 		);
-		newStmts.push(makeExprStmt(completeCall, loc));
-		newStmts.push(makeReturn(makeTypedIdent("$retFut", retFutType, loc), loc));
+		tryStmts.push(makeExprStmt(completeCall, loc));
+		tryStmts.push(makeReturn(makeTypedIdent("$retFut", retFutType, loc), loc));
 	}
 
-	return makeBlock(newStmts, loc);
+	// A throw in the body must FAIL $retFut and return it — otherwise the throw
+	// escapes past the `return $retFut`, leaving the caller with an uncompleted /
+	// NULL future (→ msWaitForReady crash). Mirrors the with-await stepper catch.
+	const failCall = makeExprStmt(
+		makeCall(
+			makeIdent("msFutureFail", loc),
+			[makeTypedIdent("$retFut", retFutType, loc), makeIdent("$e", loc)],
+			loc,
+		),
+		loc,
+	);
+	const catchBody = makeBlock([failCall, makeReturn(makeTypedIdent("$retFut", retFutType, loc), loc)], loc);
+	const tryCatch = makeTryCatch(makeBlock(tryStmts, loc), "$e", catchBody, makeBlock([], loc), loc);
+
+	return makeBlock([retFutDecl, tryCatch], loc);
 }
 
 // ===== Walk: Find was-async functions and rewrite =====
