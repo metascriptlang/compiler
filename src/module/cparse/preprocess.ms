@@ -5,7 +5,7 @@
 
 import { CToken, CTokenKind, LitKind, makeEofToken } from "./token";
 import { Diagnostic, DiagSeverity, makeDiag } from "./error";
-import { TargetInfo, predefinedMacros } from "./target";
+import { TargetInfo, predefinedMacros, targetLinuxX86_64 } from "./target";
 import { tokenizeFile, convertPPTokens } from "./tokenize";
 import { readFile } from "std/fs";
 
@@ -1203,20 +1203,20 @@ export function preprocess(
 
 test "preprocess empty token stream is a no-op" {
 	const eof = makeEofToken("empty.h");
-	const r = preprocess(eof, {} as unknown as TargetInfo, []);
+	const r = preprocess(eof, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Eof;
 }
 
 test "preprocess object macro" {
 	const r0 = tokenizeFile("#define FOO 42\nFOO", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Num;
 	assert r.head.intVal === 42 as int64;
 }
 
 test "preprocess function macro" {
 	const r0 = tokenizeFile("#define ADD(a,b) a+b\nADD(1,2)", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Num;
 	assert r.head.stringVal === "1";
 	assert r.head.next.stringVal === "+";
@@ -1225,85 +1225,85 @@ test "preprocess function macro" {
 
 test "preprocess ifdef true" {
 	const r0 = tokenizeFile("#define FOO\n#ifdef FOO\n42\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Num;
 	assert r.head.intVal === 42 as int64;
 }
 
 test "preprocess ifdef false" {
 	const r0 = tokenizeFile("#ifdef FOO\n42\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Eof;
 }
 
 test "preprocess ifndef" {
 	const r0 = tokenizeFile("#ifndef FOO\n42\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Num;
 }
 
 test "preprocess if 1" {
 	const r0 = tokenizeFile("#if 1\n42\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Num;
 }
 
 test "preprocess if 0 else" {
 	const r0 = tokenizeFile("#if 0\n1\n#else\n2\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Num;
 	assert r.head.intVal === 2 as int64;
 }
 
 test "preprocess if defined" {
 	const r0 = tokenizeFile("#define X\n#if defined(X)\n42\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Num;
 	assert r.head.intVal === 42 as int64;
 }
 
 test "preprocess undef" {
 	const r0 = tokenizeFile("#define FOO 1\n#undef FOO\n#ifdef FOO\n42\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Eof;
 }
 
 test "preprocess nested ifdef" {
 	const r0 = tokenizeFile("#define A\n#ifdef A\n#ifdef B\n1\n#else\n2\n#endif\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Num;
 	assert r.head.intVal === 2 as int64;
 }
 
 test "preprocess pragma once" {
 	const r0 = tokenizeFile("#pragma once\n42", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Num;
 }
 
 test "preprocess if expression" {
 	const r0 = tokenizeFile("#if 2 + 3 == 5\n42\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Num;
 	assert r.head.intVal === 42 as int64;
 }
 
 test "preprocess elif" {
 	const r0 = tokenizeFile("#if 0\n1\n#elif 1\n2\n#else\n3\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Num;
 	assert r.head.intVal === 2 as int64;
 }
 
 test "preprocess error directive" {
 	const r0 = tokenizeFile("#error something wrong", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.diagnostics.length > 0;
 }
 
 test "preprocess macro expanding to another macro" {
 	const r0 = tokenizeFile("#define A B\n#define B 99\nA", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Num;
 	assert r.head.intVal === 99 as int64;
 }
@@ -1311,53 +1311,53 @@ test "preprocess macro expanding to another macro" {
 test "preprocess self-referential macro stops" {
 	// #define X X should not infinitely recurse (hideset prevents it)
 	const r0 = tokenizeFile("#define X X\nX", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.kind === CTokenKind.Ident;
 	assert r.head.stringVal === "X";
 }
 
 test "preprocess function macro with nested parens in arg" {
 	const r0 = tokenizeFile("#define F(x) x\nF((1+2))", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	// Should produce ( 1 + 2 ) — the parens are part of the argument
 	assert r.head.stringVal === "(";
 }
 
 test "preprocess if with bitwise expression" {
 	const r0 = tokenizeFile("#if (1 << 2) == 4\nyes\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.stringVal === "yes";
 }
 
 test "preprocess if with logical and" {
 	const r0 = tokenizeFile("#define A 1\n#define B 1\n#if defined(A) && defined(B)\nyes\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.stringVal === "yes";
 }
 
 test "preprocess if with undefined macro is 0" {
 	// Undefined identifiers in #if evaluate to 0 per C spec
 	const r0 = tokenizeFile("#if UNDEFINED_MACRO\nyes\n#else\nno\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.stringVal === "no";
 }
 
 test "preprocess __STDC__ always defined" {
 	// __STDC__ is a base predefined macro, available for any target
 	const r0 = tokenizeFile("#define __STDC__ 1\n#ifdef __STDC__\nstdc\n#else\nother\n#endif", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.stringVal === "stdc";
 }
 
 test "preprocess unterminated if produces diagnostic" {
 	const r0 = tokenizeFile("#if 1\nfoo", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.diagnostics.length > 0;
 }
 
 test "preprocess multi-token macro body" {
 	const r0 = tokenizeFile("#define DECL extern int\nDECL x;", "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	assert r.head.stringVal === "extern";
 	assert r.head.next.stringVal === "int";
 	assert r.head.next.next.stringVal === "x";
@@ -1367,7 +1367,7 @@ test "preprocess include guard pattern" {
 	// Define-then-check: #define creates the macro, second #ifdef sees it
 	const src = "#define GUARD\n#ifdef GUARD\nfirst\n#endif\n#ifndef GUARD\nsecond\n#endif";
 	const r0 = tokenizeFile(src, "test.h");
-	const r = preprocess(r0.head, {} as unknown as TargetInfo, []);
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	let foundFirst = false;
 	let foundSecond = false;
 	let tok = r.head;

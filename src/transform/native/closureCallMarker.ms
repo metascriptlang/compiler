@@ -117,7 +117,7 @@ import { makeCtx } from "../testUtil";
 
 // Helper: wrap statements in a Program node for markClosureCalls
 function wrapProgram(stmts: Node[]): Node {
-	return createNode(NodeKind.Program, { programStmts: stmts, programImports: [] }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
+	return createNode(NodeKind.Program, { programStmts: stmts }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
 }
 
 // Helper: create an ExprStmt wrapping a CallExpr, return the CallExpr's data
