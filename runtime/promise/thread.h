@@ -65,6 +65,9 @@ typedef struct msSpawnCtx {
 
 /* Forward declarations — implemented in dispatch.c */
 extern void msCompletionQueuePush(void* fut, bool isFail, void* error);
+/* Amendment G: worker-side push that does NOT incref — the owner thread already
+ * took the queue's completion ref at submit time (msSpawn / msSpawnInto). */
+extern void msCompletionQueuePushOwned(void* fut, bool isFail, void* error);
 
 static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	void* result = NULL;
@@ -106,7 +109,7 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 			((msFutureBase*)ctx->fut)->failed = true;
 			atomic_store_explicit(&((msFutureBase*)ctx->fut)->finished, true, memory_order_release);
 			msNotifyFutureComplete();
-			msCompletionQueuePush(ctx->fut, true, (void*)msCurrException);
+			msCompletionQueuePushOwned(ctx->fut, true, (void*)msCurrException);
 			msErr = false;
 			msCurrException = NULL;
 		} else if (ctx->inlineCopySize > 0 && result != NULL) {
@@ -121,7 +124,7 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 			free(result);
 			atomic_store_explicit(&((msFutureBase*)ctx->fut)->finished, true, memory_order_release);
 			msNotifyFutureComplete();
-			msCompletionQueuePush(ctx->fut, false, NULL);
+			msCompletionQueuePushOwned(ctx->fut, false, NULL);
 		} else {
 			/* Primitive path: void* result contains value bits directly
 			 * (msBoxDouble/Int32/Bool store in pointer bits, no heap alloc).
@@ -129,7 +132,7 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 			((msFuture_ptr*)ctx->fut)->value = result;
 			atomic_store_explicit(&((msFutureBase*)ctx->fut)->finished, true, memory_order_release);
 			msNotifyFutureComplete();
-			msCompletionQueuePush(ctx->fut, false, NULL);
+			msCompletionQueuePushOwned(ctx->fut, false, NULL);
 		}
 	} else {
 		/* Defensive: no completion target — clear errors to prevent stale state. */
@@ -157,6 +160,15 @@ static inline void* msSpawn(msClosure fn) {
 	if (fn.env != NULL) {
 		msIncRef(fn.env);
 	}
+#if MS_FUTURE_SUBMIT_REF
+	/* Amendment G: queue's completion ref, taken on the owner thread before the
+	 * worker can publish `finished` — paired with the dispatcher drain's
+	 * msFutureDrcDestroy. Worker completes via msCompletionQueuePushOwned.
+	 * Amendment H: mark the future crossThreadPublished so msFutureDeferredRelease
+	 * defers its decref to serialize with the drain. */
+	msIncRef(fut);
+	((msFutureBase*)fut)->crossThreadPublished = true;
+#endif
 	msPoolSubmit(&ctx);  /* copied into queue slot — ctx can go out of scope */
 	return fut;
 }
@@ -172,6 +184,10 @@ static inline void* msSpawnInto(void* fut, msClosure fn, uint32_t copySize, uint
 		.inlineCopySize = copySize, .inlineValueOffset = valueOffset,
 	};
 	if (fn.env != NULL) msIncRef(fn.env);
+#if MS_FUTURE_SUBMIT_REF
+	msIncRef(fut);  /* Amendment G: owner-side queue completion ref (see msSpawn) */
+	((msFutureBase*)fut)->crossThreadPublished = true;  /* Amendment H */
+#endif
 	msPoolSubmit(&ctx);
 	return fut;
 }

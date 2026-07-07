@@ -495,6 +495,7 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         else msPoolWakeWorker(a->schedulerID);
     }
 
+    msFutureReleaseFlush();
     return processed;
 }
 

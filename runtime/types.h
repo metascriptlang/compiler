@@ -23,10 +23,11 @@ typedef struct {
 	bool isCyclic;           /* True if type can form reference cycles */
 	msTraceProc traceFn;     /* TypeName_trace function (NULL if acyclic) */
 	msDestroyProc destroyFn; /* TypeName_destroy function (NULL if no RC fields) */
+	uint8_t flags;           /* Amendment H: MS_TYPE_FLAG_FUTURE — defer decref to dispatcher */
 } msTypeInfo;
 
-/* Convenience flags for isCyclic field */
 #define MS_ACYCLIC_FLAG false
 #define MS_CYCLIC_FLAG true
+#define MS_TYPE_FLAG_FUTURE 1  /* Object is a future — msDecref routes to msFutureDeferredRelease */
 
 #endif /* MS_TYPEINFO_H */

@@ -207,6 +207,10 @@ bool msCompletionQueueDrain(void) { return false; }
 void msCompletionQueuePush(void* fut, bool isFail, void* error) {
     msPostCompletion(fut, NULL, isFail, error);
 }
+/* Single-threaded: completes inline, no queue-side ref. Owned == Push. */
+void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
+    msPostCompletion(fut, NULL, isFail, error);
+}
 
 /* ===== Async Stepper (same as dispatchFull.c — no threading needed) ===== */
 

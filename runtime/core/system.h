@@ -98,6 +98,14 @@ extern MS_THREAD_LOCAL msException* msCurrException;
 void msClearException(void);
 void msThrow(msString msg);
 
+/* Check-and-clear the pending-exception flag. Emitted by the `try await X catch Y`
+ * lowering immediately after the await read (which sets msErr on a rejected
+ * future) to route to the catch value. */
+static inline bool msErrTake(void) {
+	if (msErr) { msErr = false; msClearException(); return true; }
+	return false;
+}
+
 /* ===== DRC Lifecycle Macros ===== */
 /* DRC passes args by value — macros access the variable directly for mutation. */
 
@@ -255,10 +263,14 @@ static inline void msStringCopy(msString* dest, msString src) {
 /* --- Ref/Ptr lifecycle (generic heap objects) --- */
 #define msIncref(p)           msIncRef(p)
 #define msDecref(p)           do { \
-	if ((p) != NULL && msDecRefIsLast(p)) { \
+	if ((p) != NULL) { \
 		const msTypeInfo* __t = msHeader(p)->type; \
-		if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(p); \
-		msDestroyAndDispose(p); \
+		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
+			msFutureDeferredRelease(p); \
+		} else if (msDecRefIsLast(p)) { \
+			if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(p); \
+			msDestroyAndDispose(p); \
+		} \
 	} \
 } while(0)
 #define msPtrWasMoved(p)      msWasMoved(p)
@@ -277,10 +289,14 @@ static inline void msStringCopy(msString* dest, msString src) {
 #ifdef MSGC_ORC
 #define msIncrefCyclic(p)     do { if ((p) != NULL) msOrcIncRef(p); } while(0)
 #define msDecrefCyclic(p)     do { \
-	if ((p) != NULL && msOrcDecRefIsLast(p)) { \
+	if ((p) != NULL) { \
 		const msTypeInfo* __t = msHeader(p)->type; \
-		if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(p); \
-		msDestroyAndDispose(p); \
+		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
+			msFutureDeferredRelease(p); \
+		} else if (msOrcDecRefIsLast(p)) { \
+			if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(p); \
+			msDestroyAndDispose(p); \
+		} \
 	} \
 } while(0)
 #else

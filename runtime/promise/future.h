@@ -74,6 +74,12 @@ typedef struct msFutureBase {
 	_Atomic(bool) finished; /* atomic: cross-thread visibility for worker await */
 	bool failed;          /* set by msFutureFail (even when error payload is NULL) */
 	bool cancelled;       /* set by msFutureCancel */
+	bool crossThreadPublished; /* Amendment H: set on owner thread at submit incref
+	                            * (msSpawn/msSpawnInto/msAwaitGroupSetDoneFut). When
+	                            * false, msFutureDeferredRelease inline-decrefs — no
+	                            * race because no drain decref can exist for a future
+	                            * that never crossed threads. When true, defer to TLS
+	                            * to serialize with the dispatcher drain. */
 	void* error;          /* error payload (may be NULL even when failed) */
 	void (*valueDestructor)(void*); /* optional: frees value on destroy (combinators) */
 	msFutureCb* callbacks;
@@ -101,6 +107,18 @@ _Static_assert(offsetof(msFutureBase, finished) == 0, "msFutureBase.finished mus
 
 #define MS_FUTURE_STRUCT(name, valtype) \
 	typedef struct name { msFutureBase base; valtype value; } name
+
+/* Amendment H: type info tag for futures so msDecref can detect them and
+ * route to msFutureDeferredRelease (deferred decref to dispatcher).
+ * destroyFn is NULL — the actual destroy (msFutureDestroyInner) is called by
+ * msFutureDrcDestroy on the dispatcher drain, not by msDecref's destroyFn path. */
+static const msTypeInfo msFutureTypeInfo = {
+	.name = "msFuture",
+	.isCyclic = false,
+	.traceFn = NULL,
+	.destroyFn = NULL,
+	.flags = MS_TYPE_FLAG_FUTURE,
+};
 
 /* Common typed futures (always available) */
 MS_FUTURE_STRUCT(msFuture_double, double);
@@ -154,13 +172,13 @@ typedef msFuture_ptr msFuture;
  */
 
 /* Allocate a typed future by exact size. */
-#define msFutureCreateT(type) ((type*)msAlloc(sizeof(type)))
+#define msFutureCreateT(type) ((type*)msAllocTyped(sizeof(type), &msFutureTypeInfo))
 
 /* Untyped create — allocates msFuture_ptr (base + void* value = 8 bytes).
  * ONLY safe for: void, double, int32, bool, pointer types.
  * NOT safe for: msString (16 bytes), struct, tuple — use msFutureCreateInline. */
 static inline void* msFutureCreate(void) {
-	return msAlloc(sizeof(msFuture_ptr));
+	return msFutureCreateT(msFuture_ptr);
 }
 
 /* Alias for combinator code clarity */

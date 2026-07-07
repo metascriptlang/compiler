@@ -5,6 +5,7 @@
  * Event loop implementation: timer heap, ring buffer callback deque, runOnce/poll/waitFor.
  */
 #include "runtime/core/system.h"  /* msIncRef/msDecref for async stepper lifecycle */
+#include <pthread.h>             /* pthread_once for lazy init */
 /* selector.h is included via dispatch.h → future.h chain, but MS_EVENT_READ may not be defined.
  * Define it here for the completion pipe registration. */
 #ifndef MS_EVENT_READ
@@ -193,6 +194,13 @@ void msCompletionQueuePush(void* fut, bool isFail, void* error) {
 	msPostCompletion(fut, NULL, isFail, error);
 }
 
+/* Windows IOCP takes no queue-side ref (the completion msg carries a raw
+ * fut pointer), so Owned == Push here — the owner-thread submit ref is
+ * gated off on Windows (MS_FUTURE_SUBMIT_REF == 0). */
+void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
+	msPostCompletion(fut, NULL, isFail, error);
+}
+
 #else
 /* POSIX: MPSC queue for cross-thread completion + wake-only self-pipe.
  * Pony parity: lock-free queue replaces pipe for data delivery (100x faster).
@@ -203,11 +211,22 @@ void msCompletionQueuePush(void* fut, bool isFail, void* error) {
 static int gWakePipe[2] = {-1, -1};           /* wake-only self-pipe (1-byte signals) */
 static msMpscQueue gCompletionQueue;           /* lock-free MPSC for future completions */
 static bool gCompletionQueueInited = false;
+static pthread_once_t gQueueOnce = PTHREAD_ONCE_INIT;
+
+static void msInitQueueOnce(void) {
+	if (gWakePipe[0] < 0) {
+		pipe(gWakePipe);
+		fcntl(gWakePipe[0], F_SETFL, O_NONBLOCK);
+	}
+	msMpscInit(&gCompletionQueue);
+	gCompletionQueueInited = true;
+}
+void msEnsureWakePipe(void);
 
 /* Push a future completion to the MPSC queue + wake the selector.
  * Called from worker threads. Dispatcher drains the queue and fires callbacks. */
 void msCompletionQueuePush(void* fut, bool isFail, void* error) {
-    if (!gCompletionQueueInited) return;  /* guard: dispatcher not yet initialized */
+    msEnsureWakePipe();
     /* Queue owns a ref while the completion message is in flight: the future can
      * finish (worker sets finished) and be freed by its owner before the drain pops
      * this message, leaving a stale replyFuture → UAF in msFutureFireCallbacks.
@@ -226,19 +245,59 @@ void msCompletionQueuePush(void* fut, bool isFail, void* error) {
     }
 }
 
+/* Same as msCompletionQueuePush but WITHOUT the internal incref: the owner
+ * thread already took the queue's in-flight ref at submit time (msSpawn /
+ * msSpawnInto / msAwaitGroupSetDoneFut), before the future could become
+ * visible-as-finished. That ordering closes the publish->push UAF window —
+ * the worker publishes `finished` then pushes, and between those an owner
+ * observing `finished` could free the future before a push-time incref ran.
+ * The submit-time ref makes the owner's msDecRefIsLast see rc>=1 (not last),
+ * so it can't free until the dispatcher drain's msFutureDrcDestroy runs. */
+void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
+    msEnsureWakePipe();
+    msMessage* msg = msMsgAlloc(/*kind=*/isFail ? -1 : 0, /*replyFut=*/fut);
+    msMsgSetPtr(msg, 0, error);
+    msMpscPush(&gCompletionQueue, msg);
+    if (gWakePipe[1] >= 0) {
+        char c = 1;
+        (void)write(gWakePipe[1], &c, 1);
+    }
+}
+
+/* Amendment H: batch release — push N deferred decrefs as a chain with one
+ * atomic exchange (msMpscPushChain). Called by msFutureReleaseFlush at batch
+ * boundaries. Each message has kind=-2 (release: decref only, no callback).
+ * The dispatcher drain processes them single-threaded, serializing with the
+ * drain decref — no race on the rc field, no atomic needed. */
+void msCompletionQueuePushReleaseBatch(void** futs, int count) {
+    if (count <= 0) return;
+    msEnsureWakePipe();
+    msMessage* first = NULL;
+    msMessage* last = NULL;
+    for (int i = 0; i < count; i++) {
+        if (futs[i] == NULL) continue;
+        msMessage* msg = msMsgAlloc(/*kind=*/-2, /*replyFut=*/futs[i]);
+        if (last != NULL) {
+            atomic_store_explicit(&last->next, msg, memory_order_relaxed);
+        } else {
+            first = msg;
+        }
+        last = msg;
+    }
+    if (first == NULL) return;
+    msMpscPushChain(&gCompletionQueue, first, last);
+    if (gWakePipe[1] >= 0) {
+        char c = 1;
+        (void)write(gWakePipe[1], &c, 1);
+    }
+}
+
 /* Ensure wake pipe + MPSC queue are initialized (called by actor init).
  * Separate from msGetDispatcher because actors may send messages before
  * any await/event-loop code runs — the wake pipe must exist for those
  * early sends to signal correctly. */
 void msEnsureWakePipe(void) {
-    if (gWakePipe[0] < 0) {
-        pipe(gWakePipe);
-        fcntl(gWakePipe[0], F_SETFL, O_NONBLOCK);
-    }
-    if (!gCompletionQueueInited) {
-        msMpscInit(&gCompletionQueue);
-        gCompletionQueueInited = true;
-    }
+    pthread_once(&gQueueOnce, msInitQueueOnce);
 }
 
 /* Get the read end of the wake pipe fd.
@@ -261,18 +320,25 @@ void msActorWakeEventLoop(void) {
 
 /* Drain all pending completions from the MPSC queue.
  * Fires callbacks on the dispatcher thread (correct thread for async steppers). */
-static bool msCompletionQueueDrain(void) {
+bool msCompletionQueueDrain(void) {
     bool didWork = false;
-    if (!gCompletionQueueInited) return false;
+    msEnsureWakePipe();
     msMessage* msg;
     while ((msg = msMpscPop(&gCompletionQueue)) != NULL) {
         void* fut = msg->replyFuture;
-        bool isFail = msg->kind < 0;
         /* Don't free msg — it's the queue's new tail/stub (Vyukov MPSC invariant).
          * It gets freed on the NEXT pop when a newer message takes its place. */
-        if (fut != NULL) {
-            if (isFail) msFutureFail(fut, msMsgGetPtr(msg, 0));
-            else msFutureFireCallbacks((msFutureBase*)fut);
+        if (msg->kind == -2) {
+            /* Amendment H: deferred release — decref only, no callback.
+             * Both this and the drain decref run on the dispatcher thread. */
+            if (fut != NULL) msFutureDrcDestroy(fut);
+        } else if (fut != NULL) {
+            /* Fire callbacks for BOTH success and failure — the worker pre-set
+             * value/error/failed/finished (Step 1), mirroring the Windows IOCP path.
+             * msFutureFail here would hit its finished-guard and strand async
+             * steppers awaiting a failed spawn (I15). Every isFail producer MUST
+             * pre-set failed/error/finished before pushing. */
+            msFutureFireCallbacks((msFutureBase*)fut);
             msFutureDrcDestroy(fut);  /* release the queue's in-flight ref (paired with push incref) */
         }
         didWork = true;
@@ -491,6 +557,11 @@ bool msRunOnce(int timeoutMs) {
 	 * Programs that don't use networking don't compile the engine. */
 
 	/* Step 6: Actor poll moved to step 1b (before selector). */
+
+	/* Amendment H: flush deferred future releases accumulated on this thread
+	 * during actor processing / async stepper execution. Pushes them as a
+	 * chain to the completion queue for the drain to process single-threaded. */
+	msFutureReleaseFlush();
 
 	return didWork;
 }

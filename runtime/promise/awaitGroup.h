@@ -54,6 +54,79 @@
 #define msYield() sched_yield()
 #endif
 
+#include "runtime/drc.h"  /* msIncRef for the Amendment-G submit-time completion ref */
+#include "runtime/promise/future.h"  /* msFutureBase + msFutureDrcDestroy for Amendment H */
+#ifndef MS_THREAD_LOCAL
+#define MS_THREAD_LOCAL _Thread_local
+#endif
+extern MS_THREAD_LOCAL bool msErr;         /* slot-failure propagation (mirror future.h) */
+extern MS_THREAD_LOCAL void* msErrPayload;
+
+/* Amendment G (PARALOCK, I16): in-flight ownership of cross-thread completion
+ * futures. On the full POSIX MPSC dispatcher the queue's completion ref is taken
+ * on the OWNER thread at submit time (msSpawn / msSpawnInto /
+ * msAwaitGroupSetDoneFut), before the future can become visible-as-finished —
+ * closing the publish->push UAF window. Windows IOCP + WASM + Emcc complete
+ * inline / take no queue-side ref, so the ref is compiled out and PushOwned
+ * degenerates to Push there. */
+#if !defined(_WIN32) && !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
+#define MS_FUTURE_SUBMIT_REF 1
+#else
+#define MS_FUTURE_SUBMIT_REF 0
+#endif
+
+/* Amendment H (PARALOCK, I17): Deferred decref — serialize future rc to the
+ * dispatcher. Instead of decref-ing a Promise<T> inline at scope exit (which
+ * races with the dispatcher's drain decref on the same non-atomic rc), the
+ * DRC analyzer emits msFutureDeferredRelease for future types. The owner thread
+ * accumulates fut pointers in TLS; at batch boundaries (msActorProcess end,
+ * msRunOnce end, pool worker post-task), msFutureReleaseFlush pushes all
+ * pending entries to the completion queue as a chain (one atomic exchange).
+ * The dispatcher processes both drain decref and deferred release on its own
+ * thread — serialized, no race, no atomic rc needed.
+ *
+ * Pony ORCA precedent: cross-actor RC deltas ship as ACTORMSG_ACQUIRE/RELEASE
+ * messages on the owner's MPSC queue. MS's analog: one chain-push carries N
+ * release messages, amortizing the MPSC push cost over the existing 64-msg
+ * actor batch. */
+
+#if MS_FUTURE_SUBMIT_REF
+
+#define MS_FUTURE_RELEASE_CAP 64
+
+extern void msCompletionQueuePushReleaseBatch(void** futs, int count);
+
+extern _Thread_local void* msFutureReleaseBuf[MS_FUTURE_RELEASE_CAP];
+extern _Thread_local int msFutureReleaseCount;
+
+static inline void msFutureDeferredRelease(void* fut) {
+	if (fut == NULL) return;
+	if (!((msFutureBase*)fut)->crossThreadPublished) {
+		msFutureDrcDestroy(fut);
+		return;
+	}
+	if (msFutureReleaseCount >= MS_FUTURE_RELEASE_CAP) {
+		msCompletionQueuePushReleaseBatch(msFutureReleaseBuf, msFutureReleaseCount);
+		msFutureReleaseCount = 0;
+	}
+	msFutureReleaseBuf[msFutureReleaseCount++] = fut;
+}
+static inline void msFutureReleaseFlush(void) {
+	if (msFutureReleaseCount > 0) {
+		msCompletionQueuePushReleaseBatch(msFutureReleaseBuf, msFutureReleaseCount);
+		msFutureReleaseCount = 0;
+	}
+}
+
+#else
+
+static inline void msFutureDeferredRelease(void* fut) {
+	if (fut != NULL) msFutureDrcDestroy(fut);
+}
+static inline void msFutureReleaseFlush(void) {}
+
+#endif
+
 /* ===== Types ===== */
 
 typedef struct msAwaitGroup {
@@ -172,7 +245,18 @@ static inline bool msAwaitGroupTimedOut(msAwaitGroup* g) {
 /* Phase 4b: set the done future for async cooperative group await.
  * Called by transform-generated code before submitting tasks. */
 static inline void msAwaitGroupSetDoneFut(msAwaitGroup* g, void* fut) {
-	if (g != NULL) atomic_store_explicit(&g->doneFut, fut, memory_order_release);
+	if (g != NULL) {
+#if MS_FUTURE_SUBMIT_REF
+		/* Amendment G: take the queue's completion ref on the owner thread now,
+		 * before any worker can publish doneFut as finished. Paired with the
+		 * dispatcher drain's msFutureDrcDestroy; finishSlot pushes via PushOwned. */
+		if (fut != NULL) {
+			msIncRef(fut);
+			((msFutureBase*)fut)->crossThreadPublished = true;
+		}
+#endif
+		atomic_store_explicit(&g->doneFut, fut, memory_order_release);
+	}
 }
 
 /* Phase 3: Fast-path cancellation check for spawn safe points.
@@ -234,7 +318,11 @@ static inline void msAwaitSlotWait(void* sp) {
 }
 
 static inline void* msAwaitSlotResult(void* sp) {
-    return ((msAwaitSlot*)sp)->result;
+    msAwaitSlot* s = (msAwaitSlot*)sp;
+    if (atomic_load_explicit(&s->failed, memory_order_acquire)) {
+        msErr = true; msErrPayload = s->error; return NULL;
+    }
+    return s->result;
 }
 
 #endif /* MS_AWAITGROUP_H */

@@ -30,6 +30,7 @@ extern int64_t msMonoTimeMs(void);
  * Worker sets finished directly (for blocking waiters), then pushes to
  * the completion queue so callbacks fire on the dispatcher thread. */
 extern void msCompletionQueuePush(void* fut, bool isFail, void* error);
+extern void msCompletionQueuePushOwned(void* fut, bool isFail, void* error);
 extern void msNotifyFutureComplete(void);
 /* Minimal forward declaration: msFutureBase.finished is the first field (_Atomic(bool)).
  * We only need to set it from finishSlot without pulling in all of future.h.
@@ -124,7 +125,7 @@ static void finishSlot(msAwaitGroup* g) {
 		if (df != NULL) {
 			atomic_store_explicit(&((msFutureBaseMinimal*)df)->finished, true, memory_order_release);
 			msNotifyFutureComplete();
-			msCompletionQueuePush(df, false, NULL);
+			msCompletionQueuePushOwned(df, false, NULL);
 		}
 		/* Signal that the last worker has fully exited finishSlot.
 		 * msAwaitGroupFree must wait for this before freeing the group,
@@ -293,6 +294,15 @@ void msAwaitGroupCancel(msAwaitGroup* g) {
 #define MS_SLOT_POOL_SIZE 64
 static _Thread_local msAwaitSlot msSlotPool[MS_SLOT_POOL_SIZE];
 static _Thread_local int32_t msSlotPoolIdx = 0;
+
+/* Amendment H: TLS definitions for deferred future release. MUST be defined
+ * here (not static in the header) so all TUs share the same per-thread state —
+ * a static _Thread_local in a header gives each TU its own copy, breaking
+ * the cross-TU "test program msDecref → pool.c msFutureReleaseFlush at exit"
+ * flow. Pony parity: msMsgPools uses the same extern-in-header + define-in-.c
+ * pattern (mailbox.h:76, defined in actor.c). */
+_Thread_local void* msFutureReleaseBuf[MS_FUTURE_RELEASE_CAP];
+_Thread_local int msFutureReleaseCount = 0;
 
 void* msAwaitSlotCreate(int32_t n) {
 	msAwaitSlot* s;

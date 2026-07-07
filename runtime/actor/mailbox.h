@@ -224,27 +224,47 @@ static inline void msMpscDestroy(msMpscQueue* q) {
  * Returns true if queue was empty (caller should wake scheduler).
  */
 static inline bool msMpscPush(msMpscQueue* q, msMessage* msg) {
-    atomic_store_explicit(&msg->next, NULL, memory_order_relaxed);
+	atomic_store_explicit(&msg->next, NULL, memory_order_relaxed);
 
-    /* Release fence: ensure msg fields are visible before linking */
-    atomic_thread_fence(memory_order_release);
+	/* Release fence: ensure msg fields are visible before linking */
+	atomic_thread_fence(memory_order_release);
 
-    /* Swap head atomically */
-    msMessage* prev = atomic_exchange_explicit(&q->head, msg, memory_order_relaxed);
+	/* Swap head atomically. acq_rel pairs producer-producer: prev owner's
+	 * writes (msg init, pool slab calloc, etc.) are visible to the next producer
+	 * that pops this msg off head via exchange. Relaxed here (Pony's choice)
+	 * would require ANNOTATE_HAPPENS_BEFORE for TSan visibility; acq_rel is
+	 * free on aarch64 (swpal vs swpl, same cycles) and x86 (xchg is seq_cst
+	 * regardless), and gives correct happens-before without annotations. */
+	msMessage* prev = atomic_exchange_explicit(&q->head, msg, memory_order_acq_rel);
 
-    /* Check if queue was empty (LSB tag) */
-    bool wasEmpty = ((uintptr_t)prev & 1) != 0;
-    prev = (msMessage*)((uintptr_t)prev & ~(uintptr_t)1);
+	/* Check if queue was empty (LSB tag) */
+	bool wasEmpty = ((uintptr_t)prev & 1) != 0;
+	prev = (msMessage*)((uintptr_t)prev & ~(uintptr_t)1);
 
-    /* Link previous head to new message.
-     * Must be release (not relaxed) so the consumer's acquire load on
-     * tail->next sees this store when processing on a different thread.
-     * Relaxed would cause the consumer to see stale NULL — thinking the
-     * mailbox is empty when messages exist (observed at >1000 messages
-     * when pool workers steal the actor from a different core). */
-    atomic_store_explicit(&prev->next, msg, memory_order_release);
+	/* Link previous head to new message.
+	 * Must be release (not relaxed) so the consumer's acquire load on
+	 * tail->next sees this store when processing on a different thread.
+	 * Relaxed would cause the consumer to see stale NULL — thinking the
+	 * mailbox is empty when messages exist (observed at >1000 messages
+	 * when pool workers steal the actor from a different core). */
+	atomic_store_explicit(&prev->next, msg, memory_order_release);
 
-    return wasEmpty;
+	return wasEmpty;
+}
+
+/* Push a pre-linked chain of messages [first..last] with one atomic exchange.
+ * Amendment H: used by deferred-decref batch flush — amortizes the MPSC push
+ * cost (~15 cycles) over N release messages. The intermediate links (first->next
+ * ... last-1->next) must already be set by the caller; this function sets
+ * last->next = NULL, fence, exchange, then links prev->next = first. */
+static inline bool msMpscPushChain(msMpscQueue* q, msMessage* first, msMessage* last) {
+	atomic_store_explicit(&last->next, NULL, memory_order_relaxed);
+	atomic_thread_fence(memory_order_release);
+	msMessage* prev = atomic_exchange_explicit(&q->head, last, memory_order_acq_rel);
+	bool wasEmpty = ((uintptr_t)prev & 1) != 0;
+	prev = (msMessage*)((uintptr_t)prev & ~(uintptr_t)1);
+	atomic_store_explicit(&prev->next, first, memory_order_release);
+	return wasEmpty;
 }
 
 /*

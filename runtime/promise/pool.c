@@ -136,6 +136,11 @@ static void* msPoolWorkerLoop(void* arg) {
 		/* Check shutdown with empty queue — exit cleanly */
 		if (pool->shutdown && pool->head == pool->tail) {
 			MS_UNLOCK(pool);
+			/* Amendment H: final TLS flush before worker exit — any deferred
+			 * releases accumulated during the last task must be pushed to the
+			 * MPSC queue so msPoolShutdown's final drain can process them.
+			 * Without this, the entries leak (LSan catches it on Linux). */
+			msFutureReleaseFlush();
 			break;
 		}
 		/* Dequeue spawn task if available — copy struct out (Malebolgia: zero alloc) */
@@ -168,6 +173,7 @@ static void* msPoolWorkerLoop(void* arg) {
 			pool->busyCount--;
 			atomic_fetch_sub_explicit(&msPoolBusyCount, 1, memory_order_relaxed);
 			MS_UNLOCK(pool);
+			msFutureReleaseFlush();
 		}
 
 		/* Poll local actors (opportunistic between spawn tasks).
@@ -414,6 +420,17 @@ void msPoolShutdown(void) {
 	}
 	pthread_cond_destroy(&gPool->space);
 #endif
+
+	/* Amendment H: after workers have exited (each flushed its TLS on the way
+	 * out above), flush the dispatcher/main thread's TLS and run a final drain
+	 * so any deferred releases still queued are processed before the process
+	 * exits. Without this, deferred releases produced after the last msRunOnce
+	 * (e.g. array destroy at end of the last loop iteration) leak. LSan on
+	 * Linux catches this; macOS ASAN has no LSan by default so it's invisible
+	 * there. */
+	msFutureReleaseFlush();
+	extern bool msCompletionQueueDrain(void);
+	while (msCompletionQueueDrain()) {}
 
 	free(gPool);
 	gPool = NULL;
