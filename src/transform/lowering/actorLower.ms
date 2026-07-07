@@ -193,7 +193,9 @@ function buildSendProxy(kind: number, params: string[], paramTypes: Type[], ctx:
 	msgDecl.nodeType = voidType();
 	const stmts: Node[] = [msgDecl];
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
-	const actorPtr = makeCall(makeIdent("msActorFromPid", loc), [makeMember(makeIdent("this", loc), "pid", loc)], loc);
+	const thisPid = makeMember(makeIdent("this", loc), "pid", loc);
+	thisPid.nodeType = getSysType(TypeKind.Int64);
+	const actorPtr = makeCall(makeIdent("msActorFromPid", loc), [thisPid], loc);
 	const sendCall = makeCall(makeIdent("msActorSend", loc), [actorPtr, makeIdentResolved(msgSym, loc)], loc);
 	stmts.push(makeExprStmt(sendCall, loc));
 	return makeBlock(stmts, loc);
@@ -233,7 +235,9 @@ function buildCallProxy(kind: number, params: string[], paramTypes: Type[], retT
 	msgDecl.nodeType = voidType();
 	const stmts: Node[] = [futDecl, msgDecl];
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
-	const actorPtr2 = makeCall(makeIdent("msActorFromPid", loc), [makeMember(makeIdent("this", loc), "pid", loc)], loc);
+	const thisPid2 = makeMember(makeIdent("this", loc), "pid", loc);
+	thisPid2.nodeType = getSysType(TypeKind.Int64);
+	const actorPtr2 = makeCall(makeIdent("msActorFromPid", loc), [thisPid2], loc);
 	const sendCall = makeCall(makeIdent("msActorSend", loc), [actorPtr2, makeIdentResolved(msgSym, loc)], loc);
 	stmts.push(makeExprStmt(sendCall, loc));
 	const retFut = makeReturn(makeIdentResolved(futSym, loc), loc);
@@ -347,8 +351,10 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 				replyFutArg = makeIdent("_replyFut", loc);
 			}
 			// Derive msActor* from _self.pid, pass reply future for R1 stop
+			const selfPid = makeMember(makeIdent("_self", loc), "pid", loc);
+			selfPid.nodeType = getSysType(TypeKind.Int64);
 			const actorPtr = makeCall(makeIdent("msActorFromPid", loc), [
-				makeMember(makeIdent("_self", loc), "pid", loc),
+				selfPid,
 			], loc);
 			bodyStmts.push(makeExprStmt(
 				makeCall(makeIdent("msActorSuspend", loc), [actorPtr, makeIdent("_implFut", loc), replyFutArg], loc), loc));
@@ -852,16 +858,21 @@ function generateActorWiring(varName: string, varSym: Symbol, actorName: string,
 			? makeIdentResolved(varSym, loc)
 			: makeIdent(varName, loc);
 	};
+	const pidMember = function(): Node {
+		const m = makeMember(varRef(), "pid", loc);
+		m.nodeType = getSysType(TypeKind.Int64);
+		return m;
+	};
 	const createCall = makeCall(makeIdent("msActorCreatePid", loc), [
 		varRef(),
 		dispatchRef,
 	], loc);
 	const assignActor = makeBinary(
-		makeMember(varRef(), "pid", loc),
+		pidMember(),
 		"=", createCall, loc
 	);
 	result.push(makeExprStmt(assignActor, loc));
-	const pidRef = makeMember(varRef(), "pid", loc);
+	const pidRef = pidMember();
 	const registerCall = makeCall(makeIdent("msActorRegister", loc), [
 		makeCall(makeIdent("msActorFromPid", loc), [pidRef], loc),
 	], loc);
@@ -872,7 +883,7 @@ function generateActorWiring(varName: string, varSym: Symbol, actorName: string,
 	result.push(makeExprStmt(increfCall, loc));
 	const wi = findWireInfo(wireInfos, actorName);
 	if (wi !== null && wi.hasOnTerminate) {
-		const pidRef2 = makeMember(varRef(), "pid", loc);
+		const pidRef2 = pidMember();
 		const setTermCall = makeCall(makeIdent("msActorSetOnTerminate", loc), [
 			makeCall(makeIdent("msActorFromPid", loc), [pidRef2], loc),
 			makeIdent(actorName + "_onTerminate_impl", loc),
@@ -880,7 +891,7 @@ function generateActorWiring(varName: string, varSym: Symbol, actorName: string,
 		result.push(makeExprStmt(setTermCall, loc));
 	}
 	if (wi !== null && wi.hasSysMsg) {
-		const pidRef3 = makeMember(varRef(), "pid", loc);
+		const pidRef3 = pidMember();
 		const setSysCall = makeCall(makeIdent("msActorSetSystemMsgHandler", loc), [
 			makeCall(makeIdent("msActorFromPid", loc), [pidRef3], loc),
 			makeIdent(actorName + "_systemMsg_impl", loc),
@@ -889,7 +900,7 @@ function generateActorWiring(varName: string, varSym: Symbol, actorName: string,
 	}
 	if (wi !== null && wi.hasTrapExits) {
 		const trapCall = makeCall(makeIdent("msActorTrapExits", loc), [
-			makeMember(varRef(), "pid", loc),
+			pidMember(),
 			makeNumber(1, loc),
 		], loc);
 		result.push(makeExprStmt(trapCall, loc));
