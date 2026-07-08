@@ -117,7 +117,7 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection, tar
 	// Resolve stdPath from project root.
 	const root = resolveRuntimeDir();
 	const stdPath = root != "" ? join(root, "std") : "std";
-	const config = createDefaultConfig(backend, stdPath);
+	const config = createDefaultConfig(backend, stdPath, targetOs);
 	// Override with build.ms settings if provided
 	if (resolve.extensions.length > 0) {
 		config.extensions = resolve.extensions;

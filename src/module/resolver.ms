@@ -49,10 +49,20 @@ export function backendExtension(backend: Backend): string {
 
 // ===== Default Config Constructor =====
 
-export function createDefaultConfig(backend: Backend, stdPath: string): ResolverConfig {
+export function createDefaultConfig(backend: Backend, stdPath: string, targetOs: string = ""): ResolverConfig {
 	const ext = backendExtension(backend);
 	const extensions: string[] = [];
+	// Backend extension stays at index 0 — consumers (e.g. checkModuleGraph) read
+	// extensions[0] as the backend's canonical extension.
 	extensions.push(ext);
+	// OS-specific variant (e.g. `foo.linux.ms`) shadows `foo.ms` for native targets —
+	// the same idea as `.wms` shadowing `.ms` for the web backend, but on the OS axis.
+	// Sits before `.ms` so `gpu.linux.ms` wins over `gpu.ms`. Lets one import path
+	// (`./foo`) carry per-OS impls (native units, link flags). Skipped for the Wasm
+	// backend, where `.wms` already owns the platform split.
+	if (targetOs !== "" && backend !== Backend.Wasm) {
+		extensions.push("." + targetOs + ".ms");
+	}
 	// WASM is still C backend — fall back to .cms if no .wms override exists
 	if (backend == Backend.Wasm) { extensions.push(".cms"); }
 	extensions.push(".ms");
