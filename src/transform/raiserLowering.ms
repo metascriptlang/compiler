@@ -21,9 +21,11 @@ import { lowerResultFieldCheck } from "./desugar/resultFieldCheck";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
 import { lowerLambda } from "./lowering/lambdaLifting";
+import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
+	ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
 	let result = lowerDefer(program, ctx);
 	result = lowerConstFold(result, ctx);
 	result = lowerOptionalChain(result, ctx);
@@ -42,5 +44,6 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = lowerLambda(result, ctx);
+	result = lowerExtensionMethod(result, ctx);
 	return result;
 }
