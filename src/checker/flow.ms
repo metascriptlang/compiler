@@ -356,6 +356,10 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode): FlowType {
 	// final result under its key on exit. This memoizes expensive sub-walks
 	// within a single query.
 	let sharedFlow: FlowNode = null as unknown as FlowNode;
+	// Linear condition narrowings collected while walking the antecedent chain,
+	// applied post-order after the loop. Converts a deep if/else/&&/|| spine from
+	// O(n) call-stack (the old getTypeAtFlowCondition recursion) to O(n) heap.
+	const pending: FlowNode[] = [];
 	while (true) {
 		if (current === null) {
 			result = flowType(state.declaredType, false);
@@ -371,7 +375,10 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode): FlowType {
 				result = cached;
 				break;
 			}
-			sharedFlow = current;
+			// Only stake a cache claim on a clean walk (no pending narrowings
+			// above this node) — otherwise the committed type would wrongly
+			// include narrowings that belong above the shared node.
+			if (pending.length === 0) sharedFlow = current;
 		}
 		if ((flags & FlowFlags.Unreachable) !== 0) {
 			// Dead code — no narrowing, return declared type.
@@ -406,18 +413,36 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode): FlowType {
 			continue;
 		}
 		if ((flags & (FlowFlags.TrueCondition | FlowFlags.FalseCondition)) !== 0) {
-			result = getTypeAtFlowCondition(state, current);
-			break;
+			// Linear (single-antecedent) narrowing — collect and keep walking
+			// iteratively instead of recursing, so deep condition chains don't
+			// grow the call stack. Drained post-loop below.
+			pending.push(current);
+			current = current.antecedent;
+			continue;
 		}
 		if ((flags & FlowFlags.SwitchClause) !== 0) {
 			result = getTypeAtSwitchClause(state, current);
 			break;
 		}
 		if ((flags & FlowFlags.BranchLabel) !== 0) {
+			// Single-antecedent branch label is not a real merge — walk through
+			// it iteratively (mirrors TS getTypeAtFlowNode) so a long chain of
+			// sequential `if`s doesn't grow the call stack. Real merges (2+
+			// antecedents) still recurse into getTypeAtBranchLabel.
+			if (current.antecedents !== null && current.antecedents.next === null) {
+				current = current.antecedents.flow;
+				continue;
+			}
 			result = getTypeAtBranchLabel(state, current);
 			break;
 		}
 		if ((flags & FlowFlags.LoopLabel) !== 0) {
+			// Single-antecedent loop label (no back-edge) is likewise a
+			// pass-through — iterate instead of entering the fixed-point.
+			if (current.antecedents !== null && current.antecedents.next === null) {
+				current = current.antecedents.flow;
+				continue;
+			}
 			// Phase 3: fixed-point via per-query loop stack.
 			result = getTypeAtFlowLoopLabel(state, current);
 			break;
@@ -429,6 +454,17 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode): FlowType {
 		}
 		// Unknown flow kind — walk up to avoid getting stuck.
 		current = current.antecedent;
+	}
+	// Drain collected condition narrowings post-order (outermost applied first,
+	// innermost last) — the exact unwind order of the former
+	// getTypeAtFlowCondition recursion, but on the heap.
+	let pi = pending.length - 1;
+	while (pi >= 0) {
+		const cnode = pending[pi];
+		const assumeTrue = (cnode.flags & FlowFlags.TrueCondition) !== 0;
+		const narrowed = narrowType(result.t, cnode.node, state.reference, assumeTrue);
+		result = flowType(narrowed, result.incomplete);
+		pi = pi - 1;
 	}
 	// Commit shared-flow cache entry if we staked a claim on entry.
 	if (sharedFlow !== null) {
@@ -456,15 +492,6 @@ function cacheSharedFlow(state: FlowState, flow: FlowNode, ft: FlowType): void {
 		}
 	}
 	state.sharedFlows.push({ flow: flow, ft: ft });
-}
-
-// ===== Condition narrowing =====
-
-function getTypeAtFlowCondition(state: FlowState, flow: FlowNode): FlowType {
-	const parent = getTypeAtFlowNode(state, flow.antecedent);
-	const assumeTrue = (flow.flags & FlowFlags.TrueCondition) !== 0;
-	const narrowed = narrowType(parent.t, flow.node, state.reference, assumeTrue);
-	return flowType(narrowed, parent.incomplete);
 }
 
 // ===== Switch clause narrowing =====
