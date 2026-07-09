@@ -416,6 +416,27 @@ export const CASES: NativeCase[] = [
 		note: "Stage A compile-once cache + args-in-registers. A macro compiled once (getOrCompileMacro, cached on CheckerContext identity) is re-invoked with different args — dbl(5)→10, dbl(21)→42 — each arg marshalled via nodeToValue into the callee's registers and re-entered through vmCallFunction, replacing the old per-invocation const-baking (const p = <arg literal>) + full recompile. If the cache reuse were unsound the second call would reuse the first's arg; if the reused VM's heap weren't reset between calls the marshalled arg would alias stale objects. Either surfaces as a wrong number in the assertion.",
 	},
 	{
+		name: "strlit-union-field",
+		file: "stringLitUnionField.ms",
+		maxRssMb: 30,
+		expectStdout: "strlit-union-field acc=700001",
+		note: "String-literal-union interface fields (the yoga FlexStyle shape). Bug 1: pure strlit-union field (aliased/inline) classified RcKind.Named → <Alias>Destroy/<Alias>Copy prototypes for a type codegen represents as msString (genUnionType) → C compile error 'unknown type name'. Fix: classifyType Union arm routes isAllStringLiteralUnion through the String classification (msStringDecref family). Bug 2: `strlit-union | null` — createUnion flattens to [Lit, Lit, Null] so resolveAnnotation's 2-member Maybe detection misses it → codegen builds a real msUnion_* struct while expression sites emit msString ops → C type mismatch. Fix: isMaybeWrappable accepts StringLiteral + all-strlit unions (they are msString at runtime, no spare null bit → Maybe wrapper), maybeCacheKey gets a structural key for anonymous strlit unions. Churn loop guards the DRC side: field init/copy/scope-destroy of msString-repr values stays flat.",
+	},
+	{
+		name: "generic-ext-protocol",
+		file: "genericExtProtocol.ms",
+		maxRssMb: 30,
+		expectStdout: "generic-ext-protocol PASS",
+		note: "Cross-module convention protocol through a generic (the yoga layoutPass<T> shape): generic in module A calls extension methods on T defined only in the instantiating module B. instantiateGenericFunction re-checks the cloned body via pickBodyCtx (defining module's ctx) whose per-module extensionRegistry lacked B's extensions → member call unresolved → raw generic emitted with T=void* → C compile error; the unresolved call's unknown return also cascaded the recursion into walkTree<unknown>. Fix: inject the instantiating ctx's extensions into the body-check registry for the re-check duration, then truncate (Nim mixin semantics; mirrors injectConcreteTypeSyms/removeInjectedSyms in the same function). Two instantiations (Panel, Widget) assert per-type dispatch.",
+	},
+	{
+		name: "generic-narrowing",
+		file: "genericNarrowing.ms",
+		maxRssMb: 30,
+		expectStdout: "generic-narrowing PASS",
+		note: "Early-return null narrowing inside a monomorphized generic body. monoCloneNode creates nodes via createNodeAt (flowNode=null everywhere), so flow-graph narrowing queries in the instantiation body re-check silently fell back to declared types: `if (cur === null) return 0;` did not narrow the fall-through path (then-branch narrowing uses the checker guard stack and still worked, masking the gap) -> 'got Ptr | null, expected Ptr'. Fix: bindFunctionFlow(clone) rebuilds the flow graph for the cloned body before callCheckFunctionBody (instantiate.ms, both the function and class-ctor paths).",
+	},
+	{
 		name: "raiser-cycle-collect",
 		file: "raiserCycleCollect.ms",
 		maxRssMb: 30,
