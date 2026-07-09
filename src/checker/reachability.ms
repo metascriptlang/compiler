@@ -398,17 +398,27 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 		for (const stmt of d.programStmts) {
 			if (stmt === null) continue;
 
+			// Unwrap DecoratedDecl (module-level @passC/@passL/... wrap the next
+			// decl) so name/kind roots below see the real decl — matchDeclName
+			// already unwraps; the root scan must too or a decorated `main` is
+			// invisible and the whole entry module goes dead.
+			let bare = stmt;
+			if (bare.kind === NodeKind.DecoratedDecl) {
+				const ddw = bare.data as DecoratedDeclData;
+				if (ddw.decoratedNode !== null) bare = ddw.decoratedNode;
+			}
+
 			// Root 1: main() in entry module
-			if (modulePath === entryPath && stmt.kind === NodeKind.FunctionDecl) {
-				const fd = stmt.data as FunctionDeclData;
+			if (modulePath === entryPath && bare.kind === NodeKind.FunctionDecl) {
+				const fd = bare.data as FunctionDeclData;
 				if (fd.fnName === "main") {
 					markAndWalk(modulePath, "main");
 					continue;
 				}
 			}
 			// Also check exported main under ExportDecl
-			if (modulePath === entryPath && stmt.kind === NodeKind.ExportDecl) {
-				const ed = stmt.data as ExportDeclData;
+			if (modulePath === entryPath && bare.kind === NodeKind.ExportDecl) {
+				const ed = bare.data as ExportDeclData;
 				if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.FunctionDecl) {
 					const fd = ed.exportedDecl.data as FunctionDeclData;
 					if (fd.fnName === "main") {
@@ -422,50 +432,50 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 			// Must match isDeclAlive exemptions in codegen/c/declarations.ms exactly:
 			// $prefix (lambda lifting), =prefix (operators), __prefix (builtinLower),
 			// DRC lifecycle suffixes, generic instantiations (__ in middle of name).
-			if (stmt.kind === NodeKind.FunctionDecl) {
-				const fd2 = stmt.data as FunctionDeclData;
+			if (bare.kind === NodeKind.FunctionDecl) {
+				const fd2 = bare.data as FunctionDeclData;
 				const fn = fd2.fnName;
 				if (fn.length > 0 && (fn.slice(0, 1) === "$" || fn.slice(0, 1) === "=")) {
-					walkBody(stmt, modulePath, importMap);
+					walkBody(bare, modulePath, importMap);
 					continue;
 				}
 				if (fn.length > 1 && fn.slice(0, 2) === "__") {
-					walkBody(stmt, modulePath, importMap);
+					walkBody(bare, modulePath, importMap);
 					continue;
 				}
 				// Generic instantiations: name contains __ after position 0 (e.g., hash__number)
 				if (fn.indexOf("__", 0) > 0) {
 					markAndWalk(modulePath, fn);
-					walkBody(stmt, modulePath, importMap);
+					walkBody(bare, modulePath, importMap);
 					continue;
 				}
 			}
 
 			// Root 3: TestDecl nodes — in test mode (all modules) or entry module (build mode).
 			// Entry module test blocks are wrapped in main() by codegen, so they're always roots.
-			if (stmt.kind === NodeKind.TestDecl && (isTest || modulePath === entryPath)) {
-				walkBody(stmt, modulePath, importMap);
+			if (bare.kind === NodeKind.TestDecl && (isTest || modulePath === entryPath)) {
+				walkBody(bare, modulePath, importMap);
 				continue;
 			}
 
 			// Root 4: Top-level statements (side-effecting init code in Init000).
 			// Unwrap ExportDecl — `export const argv = buildArgv()` is an ExportDecl
 			// wrapping a VariableDecl. The inner VariableDecl is side-effecting (init code).
-			let initStmt = stmt;
-			if (stmt.kind === NodeKind.ExportDecl) {
-				const ed = stmt.data as ExportDeclData;
+			let initStmt = bare;
+			if (bare.kind === NodeKind.ExportDecl) {
+				const ed = bare.data as ExportDeclData;
 				if (ed.exportedDecl !== null) initStmt = ed.exportedDecl;
 			}
 			if (isTopLevelStatement(initStmt)) {
-				walkBody(stmt, modulePath, importMap);
+				walkBody(bare, modulePath, importMap);
 				continue;
 			}
 
 			// Root 5: Exported declarations in ENTRY MODULE only.
 			// Dependency module exports are NOT roots (reference parity: only sfExportc/sfCompilerProc).
 			// They become alive through transitive tracing from main() or top-level statements.
-			if (modulePath === entryPath && isExportedDecl(stmt)) {
-				const name = getDeclName(stmt);
+			if (modulePath === entryPath && isExportedDecl(bare)) {
+				const name = getDeclName(bare);
 				if (name !== "") {
 					markAndWalk(modulePath, name);
 				}
