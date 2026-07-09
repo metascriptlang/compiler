@@ -497,3 +497,71 @@ function main(): void {
 	const c = compileToC(src);
 	assert c.ok;
 }
+
+// ===== V2: cross-module generic protocols (mixin) — docs/PROTOCOLS.md Part II =====
+
+test "E2E C: generic protocol cross-module — caller extensions visible in instantiation" {
+	const entries = [
+		{ entryPath: "src/lib.ms", entrySource: `
+			export function describeAll<T>(x: T): string {
+				return x.protoTag();
+			}
+		` },
+		{ entryPath: "src/main.ms", entrySource: `
+			import { describeAll } from "./lib";
+			interface Gadget { name: string; }
+			export function protoTag(this g: Gadget): string { return "gadget:" + g.name; }
+			function main(): void {
+				const g: Gadget = { name: "a" };
+				console.log(describeAll(g));
+			}
+		` },
+	];
+	const cCode = compileProjectToC(entries, "src/main.ms");
+	assert !cCode.contains("ERROR:");
+}
+
+test "E2E C: generic protocol conflict — defining + caller extension with same receiver errors" {
+	const entries = [
+		{ entryPath: "src/lib.ms", entrySource: `
+			export interface Gadget { name: string; }
+			export function protoTag(this g: Gadget): string { return "lib"; }
+			export function describeAll<T>(x: T): string {
+				return x.protoTag();
+			}
+		` },
+		{ entryPath: "src/main.ms", entrySource: `
+			import { Gadget, describeAll } from "./lib";
+			export function protoTag(this g: Gadget): string { return "main"; }
+			function main(): void {
+				const g: Gadget = { name: "a" };
+				console.log(describeAll(g));
+			}
+		` },
+	];
+	const cCode = compileProjectToC(entries, "src/main.ms");
+	assert cCode.contains("ERROR:");
+	assert cCode.contains("Ambiguous");
+}
+
+test "E2E C: generic protocol private extension — check-time error with instantiation note" {
+	const entries = [
+		{ entryPath: "src/lib.ms", entrySource: `
+			export function describeAll<T>(x: T): string {
+				return x.protoTag();
+			}
+		` },
+		{ entryPath: "src/main.ms", entrySource: `
+			import { describeAll } from "./lib";
+			interface Gadget { name: string; }
+			function protoTag(this g: Gadget): string { return "private"; }
+			function main(): void {
+				const g: Gadget = { name: "a" };
+				console.log(describeAll(g));
+			}
+		` },
+	];
+	const cCode = compileProjectToC(entries, "src/main.ms");
+	assert cCode.contains("ERROR:");
+	assert cCode.contains("in instantiation of");
+}
