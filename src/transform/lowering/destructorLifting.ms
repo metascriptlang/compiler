@@ -663,7 +663,11 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.Union => {
-			if (fieldType.typeName !== "") {
+			// Pure strlit union is msString-backed (see isTaggedUnion below) —
+			// same ops as a String field, never named tagged-union hooks.
+			if (isStringLike(fieldType)) {
+				stringOp(hook, xf, yf, fieldName, buf, loc);
+			} else if (fieldType.typeName !== "") {
 				if (hook !== "trace" || isCyclicType(fieldType, lctx, visited)) {
 					// Field-recursion is a CONSUMER path — skip TypeInfo emission.
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, false, lctx, loc);

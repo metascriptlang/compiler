@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, tupleTypeName } from "../checker/types";
+import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
@@ -238,8 +238,18 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			// when the original allocation is destroyed.
 			const refInner = unwrapRefNullUnion(t);
 			if (refInner !== null) {
+				// Ptr<T> | null shares the bare-pointer C repr with Ref<T> | null,
+				// but Ptr is UNMANAGED — incref/decref on a raw pointer (e.g. a
+				// C-library allocation with no ms header) corrupts memory.
+				if (refInner.kind === TypeKind.Ptr) return noRcInfo();
 				if (refInner.sym !== null && refInner.sym.symbolKind === SymbolKind.Actor) return noRcInfo();
 				return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
+			}
+			// Pure string-literal union — msString at runtime (genUnionType), so the
+			// String ops apply; the Named path would fabricate <Alias>{Destroy,Copy}
+			// hooks for a typedef that never exists.
+			if (isAllStringLiteralUnion(t)) {
+				return makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false);
 			}
 			if (t.typeName !== "" && hasAsgnFlag(t)) {
 				return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "Destroy", t.typeName + "Copy", t.typeName + "WasMoved", t.typeName + "Sink", false);
@@ -277,6 +287,21 @@ export function isFreshExpr(kind: NodeKind): boolean {
 }
 
 // ===== Tests =====
+test "Ptr | null → None (raw pointer, never refcounted)" {
+	const ctx = createTransformContext();
+	const info = classifyType(createUnion([createPtr(voidType()), nullType()]), ctx);
+	assert info.rcKind === RcKind.None;
+	assert !info.needsCleanup;
+}
+
+test "pure strlit union → String ops (msString repr)" {
+	const ctx = createTransformContext();
+	const u = createUnion([createStringLiteral("column"), createStringLiteral("row")]);
+	const info = classifyType(u, ctx);
+	assert info.rcKind === RcKind.String;
+	assert info.destroyFn === "msStringDecref";
+}
+
 test "number → None" {
 	const ctx = createTransformContext();
 	const info = classifyType(numberType(), ctx);

@@ -301,6 +301,23 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 				return createMaybeType(members[1]);
 			}
 		}
+		// Flat nullable strlit union (`"a" | "b" | null`): once createUnion
+		// flattens, the Maybe shape is unrecoverable — catch it here.
+		if (members.length > 2) {
+			let sawNull = false;
+			const nonNull: Type[] = [];
+			for (const m of members) {
+				if (m !== null && m.kind === TypeKind.Null) { sawNull = true; }
+				else if (m !== null) { nonNull.push(m); }
+			}
+			if (sawNull && nonNull.length >= 2) {
+				let allLit = true;
+				for (const m of nonNull) {
+					if (m.kind !== TypeKind.StringLiteral) { allLit = false; }
+				}
+				if (allLit) return createMaybeType(createUnion(nonNull));
+			}
+		}
 		if (members.length > 0) return createUnion(members);
 	}
 

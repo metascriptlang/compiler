@@ -965,8 +965,28 @@ const _maybeCacheNames: string[] = [];
 // generic instances) have a non-empty typeName — use it. Primitives created via
 // createPrimitive() have typeName === "" — disambiguate via TypeKind ordinal so
 // Maybe<int32> ≠ Maybe<float64> ≠ Maybe<string> etc.
+function identSafeKey(s: string): string {
+	let out = "";
+	let i = 0;
+	while (i < s.length) {
+		const b = s.byteAt(i);
+		const alnum = (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || (b >= "0".code && b <= "9".code);
+		if (alnum) out = out + s.charAt(i);
+		i += 1;
+	}
+	return out + s.length.toString();
+}
+
 function maybeCacheKey(inner: Type): string {
+	if (inner.kind === TypeKind.StringLiteral) return "sl_" + identSafeKey(inner.typeName);
 	if (inner.typeName !== "") return inner.typeName;
+	if (isAllStringLiteralUnion(inner)) {
+		let key = "slu";
+		for (const c of inner.typeChildren) {
+			if (c !== null) key = key + "_" + identSafeKey(c.typeName);
+		}
+		return key;
+	}
 	return "p" + (inner.kind as number);
 }
 
@@ -1381,6 +1401,8 @@ export function isMaybeWrappable(t: Type | null): boolean {
 	if (isStructType(t)) return true;
 	if (isPrimitiveKind(t.kind)) return true;
 	if (t.kind === TypeKind.String) return true;
+	if (t.kind === TypeKind.StringLiteral) return true;
+	if (isAllStringLiteralUnion(t)) return true;
 	return false;
 }
 
