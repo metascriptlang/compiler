@@ -68,6 +68,7 @@ extern void msCompletionQueuePush(void* fut, bool isFail, void* error);
 /* Amendment G: worker-side push that does NOT incref — the owner thread already
  * took the queue's completion ref at submit time (msSpawn / msSpawnInto). */
 extern void msCompletionQueuePushOwned(void* fut, bool isFail, void* error);
+extern void msCompletionQueuePushEnvRelease(void* env);
 
 static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	void* result = NULL;
@@ -139,11 +140,14 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 		if (msErr) { msErr = false; msCurrException = NULL; }
 	}
 
-	/* Release worker's ownership of the env.
+	/* Release worker's ownership of the env via deferred MPSC push.
 	 * Skip for slotGroup path — fused await guarantees env alive through wait,
-	 * and msSpawnSlotSubmit didn't incref (no extra ownership to release). */
+	 * and msSpawnSlotSubmit didn't incref (no extra ownership to release).
+	 * Amendment H: push env to the completion queue (kind=-3) instead of
+	 * inline msDecref. The dispatcher drain processes it single-threaded,
+	 * avoiding cross-thread rc races on the env's non-atomic rc field. */
 	if (ctx->slotGroup == NULL && ctx->env != NULL) {
-		msDecref(ctx->env);
+		msCompletionQueuePushEnvRelease(ctx->env);
 	}
 	/* No free — ctx is a local copy from the queue slot (Malebolgia: zero alloc) */
 }
@@ -183,7 +187,7 @@ static inline void* msSpawnInto(void* fut, msClosure fn, uint32_t copySize, uint
 		.fn = (void*)fn.fn, .env = fn.env, .fut = fut,
 		.inlineCopySize = copySize, .inlineValueOffset = valueOffset,
 	};
-	if (fn.env != NULL) msIncRef(fn.env);
+	if (fn.env != NULL) msAtomicIncRef(fn.env);
 #if MS_FUTURE_SUBMIT_REF
 	msIncRef(fut);  /* Amendment G: owner-side queue completion ref (see msSpawn) */
 	((msFutureBase*)fut)->crossThreadPublished = true;  /* Amendment H */

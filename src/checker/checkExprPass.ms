@@ -3555,6 +3555,22 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 // Each extension's fnType includes the receiver as param[0]; strip it before scoring.
 function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
 	argTypes: Type[], objType: Type | null, methodName: string, callNode: Node): Type {
+	// Receiver specificity: scoring strips the receiver param, so `this string`
+	// and `this unknown` would otherwise tie into ambiguity. A catch-all
+	// `this unknown` receiver only participates when no concrete-receiver
+	// candidate matched (or the object itself is unknown).
+	if (objType !== null && objType.kind !== TypeKind.Unknown && exts.length > 1) {
+		const specific: ExtensionMethod[] = [];
+		for (const e of exts) {
+			const ft = getExtFnType(e);
+			if (!e.isStatic && ft.kind === TypeKind.Function && ft.typeChildren.length > 0
+					&& ft.typeChildren[0] !== null && ft.typeChildren[0].kind === TypeKind.Unknown) {
+				continue;
+			}
+			specific.push(e);
+		}
+		if (specific.length > 0 && specific.length < exts.length) { exts = specific; }
+	}
 	// Dedup handled at registration (registerExtension rejects duplicate syms).
 	// Build candidate list: getExtFnType for authoritative type, stripReceiverParam for scoring.
 	const candidates: Type[] = [];

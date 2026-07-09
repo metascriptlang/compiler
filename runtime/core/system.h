@@ -404,6 +404,20 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
    race means memory may already be corrupt, so unwinding past it is unsafe). */
 _Noreturn void msMapFatal(msString msg);
 
+/* Reference-identity hash for Map<unknown, _> keys (JS Map / Java Object.hashCode parity).
+   XOR-folds the 64-bit address to 32 bits, then applies Knuth multiplicative hash
+   to match hashNumber's distribution. Map's `key === key` equality provides the
+   matching pointer comparison. */
+static inline int64_t msPtrHash(const void* p) {
+	uint64_t a = (uint64_t)(uintptr_t)p;
+	uint32_t folded = (uint32_t)((a >> 32) ^ (a & 0xFFFFFFFFULL));
+	if (folded == 0) return 314159265;
+	int64_t h = (int64_t)folded * (int64_t)2654435761LL;
+	h &= 0xFFFFFFFFLL;
+	if (h == 0) return 314159265;
+	return h;
+}
+
 /* ===== Bounds-Checked Array Access ===== */
 /* GCC statement expression returning lvalue via dereferenced-pointer trick.
    Works with any MS_ARRAY(T) typedef. Supports both reads and writes. */
