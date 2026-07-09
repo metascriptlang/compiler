@@ -430,6 +430,13 @@ export const CASES: NativeCase[] = [
 		note: "Cross-module convention protocol through a generic (the yoga layoutPass<T> shape): generic in module A calls extension methods on T defined only in the instantiating module B. instantiateGenericFunction re-checks the cloned body via pickBodyCtx (defining module's ctx) whose per-module extensionRegistry lacked B's extensions → member call unresolved → raw generic emitted with T=void* → C compile error; the unresolved call's unknown return also cascaded the recursion into walkTree<unknown>. Fix: inject the instantiating ctx's extensions into the body-check registry for the re-check duration, then truncate (Nim mixin semantics; mirrors injectConcreteTypeSyms/removeInjectedSyms in the same function). Two instantiations (Panel, Widget) assert per-type dispatch.",
 	},
 	{
+		name: "ext-receiver-specificity",
+		file: "extReceiverSpecificity.ms",
+		maxRssMb: 30,
+		expectStdout: "ext-receiver-specificity PASS",
+		note: "Extension overload receiver specificity: concrete receiver (this string) beats catch-all (this unknown); catch-all still serves types with no concrete overload, incl. through generic instantiation (describe<T>). Scoring in resolveExtensionOverloadCall strips the receiver param, so both overloads tie into 'Ambiguous call' without the specificity pre-filter -- historically swallowed inside instantiation body-checks and emitted as argument-less C calls (the Map.get key.hash() bug when std added hash(this unknown)).",
+	},
+	{
 		name: "generic-narrowing",
 		file: "genericNarrowing.ms",
 		maxRssMb: 30,
