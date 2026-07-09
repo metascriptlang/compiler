@@ -6,14 +6,15 @@
 
 import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType } from "./types";
+import { instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, addError } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { getIdentId } from "./idents";
+import { bindFunctionFlow } from "../binder/index";
 
 // ===== Global Instance Collection =====
 // Module-level pending list — all instantiated ASTs go here.
@@ -215,6 +216,46 @@ function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
 	}
 }
 
+// Nim `mixin` semantics for convention protocols (docs/PROTOCOLS.md Part II):
+// the instantiating module's extensions are visible while the generic body is
+// re-checked in the defining module's ctx, then removed. Exported only — the
+// instance is emitted in the defining module's TU, so a private extension
+// would resolve here but fail at link; skipping it surfaces a check-time
+// "no member" error with the instantiation note instead.
+function injectCallerExtensions(bodyCtx: CheckerContext, ctx: CheckerContext): number {
+	if (bodyCtx === ctx) return -1;
+	if (bodyCtx.extensionRegistry === null || ctx.extensionRegistry === null) return -1;
+	const preCount = bodyCtx.extensionRegistry.methods.length;
+	for (const m of ctx.extensionRegistry.methods) {
+		// Drop only KNOWN-private extensions of the instantiating module itself.
+		// Import-derived entries are exported by construction but their local
+		// sym view does NOT carry the Exported flag — discriminate by the sym's
+		// defining modulePath instead of the flag alone.
+		if (m.sym !== null
+				&& (m.sym.modulePath === "" || m.sym.modulePath === ctx.modulePath)
+				&& !hasFlag(m.sym, SymbolFlag.Exported)) {
+			continue;
+		}
+		registerExtension(bodyCtx.extensionRegistry, m);
+	}
+	return preCount;
+}
+
+function truncateCallerExtensions(bodyCtx: CheckerContext, preCount: number): void {
+	if (preCount < 0) return;
+	bodyCtx.extensionRegistry.methods.length = preCount;
+}
+
+function displayTypeArgs(types: Type[]): string {
+	if (types.length === 0) return "";
+	let s = "<";
+	for (let i = 0; i < types.length; i += 1) {
+		if (i > 0) s = s + ", ";
+		s = s + typeDisplayName(types[i]);
+	}
+	return s + ">";
+}
+
 
 // Unwrap ExportDecl/DecoratedDecl to get the inner FunctionDecl. For class
 // methods (static OR instance) synthesize an equivalent FunctionDecl from the
@@ -353,7 +394,7 @@ export function replaceTypeVars(node: Node, paramNames: string[], concreteTypes:
 
 // ===== On-Demand Instantiation =====
 
-export function instantiateGenericFunction(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): Symbol {
+export function instantiateGenericFunction(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol {
 	if (ctx.genericInstDepth > 50) return null as unknown as Symbol;
 
 	// Extern/ImportC generic functions are handled by the C runtime (nativeName binding).
@@ -362,9 +403,13 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	if (sym.nativeName !== "") return null as unknown as Symbol;
 
 	// Reference parity: refuse to instantiate if any type arg
-	// is still unresolved (GenericParam, Unknown). Only concrete types produce valid C.
+	// is still a GenericParam (inference didn't complete). Unknown is allowed
+	// through because `unknown` is a real user-facing concrete type (TS parity:
+	// type-erased handles like `type HostNode = unknown`), represented as void*
+	// in C. Blocking Unknown here forced callers to fall back to a wrong cached
+	// instance — see nullableFunction.ms regression coverage.
 	for (const ct of concreteTypes) {
-		if (ct === null || ct.kind === TypeKind.GenericParam || ct.kind === TypeKind.Unknown) {
+		if (ct === null || ct.kind === TypeKind.GenericParam) {
 			return null as unknown as Symbol;
 		}
 	}
@@ -454,14 +499,21 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		for (const ct of dedup.types) {
 			injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
 		}
+		const extPreCount = injectCallerExtensions(bodyCtx, ctx);
+		const errBefore = bodyCtx.errors.length;
 		// Strip stale HiddenDeref/resolvedSym from the clone so re-check regenerates them
 		// against concrete types — a class-method body already checked once (this: Class<T>
 		// is a Ref) otherwise keeps its deref and the re-check stacks a second one.
 		clearCheckerState(cd.fnBody);
+		bindFunctionFlow(cloned, cd.fnBody);
 		callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
+		if (bodyCtx !== ctx && bodyCtx.errors.length > errBefore) {
+			addError(ctx, "in instantiation of '" + sym.name + displayTypeArgs(dedup.types) + "': " + bodyCtx.errors[errBefore].message, callLoc.line, callLoc.column);
+		}
 		bodyCtx.modulePath = savedModulePath;
 		// Clean up injected symbols to avoid polluting prelude scope
 		removeInjectedSyms(bodyCtx, injectedSyms);
+		truncateCallerExtensions(bodyCtx, extPreCount);
 	}
 
 	// Push to global pending list — reliable regardless of context save/restore.
@@ -570,11 +622,13 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		const savedModulePath = bodyCtx.modulePath;
 		bodyCtx.modulePath = classSym.modulePath !== "" ? classSym.modulePath : ctx.modulePath;
 		clearCheckerState(clonedBody);
+		bindFunctionFlow(clonedBody, clonedBody);
 		// Inject concrete type symbols (parity with instantiateGenericFunction).
 		const injectedSyms: Symbol[] = [];
 		for (const ct of dedup.types) {
 			injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
 		}
+		const extPreCount = injectCallerExtensions(bodyCtx, ctx);
 		// Replicate checkPass.ms:264-284: prepend `this` with concrete class type
 		const ctorParams: string[] = ["this"];
 		for (const p of fnParams) { ctorParams.push(p); }
@@ -586,6 +640,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
 		bodyCtx.modulePath = savedModulePath;
 		removeInjectedSyms(bodyCtx, injectedSyms);
+		truncateCallerExtensions(bodyCtx, extPreCount);
 	}
 
 	// Store constructor type + defaults for cross-module default-fill lookup.
@@ -608,4 +663,4 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 }
 
 // Register callback at module load time
-registerInstantiateGeneric((sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): Symbol => { return instantiateGenericFunction(sym, paramNames, concreteTypes, ctx); });
+registerInstantiateGeneric((sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol => { return instantiateGenericFunction(sym, paramNames, concreteTypes, ctx, callLoc); });

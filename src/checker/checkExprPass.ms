@@ -3198,7 +3198,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		}
 	}
 
-	const instSym = callInstantiateGeneric(sym, eb.names, eb.types, ctx);
+	const instSym = callInstantiateGeneric(sym, eb.names, eb.types, ctx, node.location);
 	if (instSym === null) return null as unknown as Type;
 
 	node.resolvedSym = instSym;
@@ -4321,7 +4321,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 				// discovered bindings and point the call at the mono'd symbol (mirrors the
 				// extension-method instantiation path below).
 				if (eb.names.length > 0 && classMethSym.builtinKind === "" && classMethSym.declNode !== null) {
-					const instSym = callInstantiateGeneric(classMethSym, eb.names, eb.types, ctx);
+					const instSym = callInstantiateGeneric(classMethSym, eb.names, eb.types, ctx, node.location);
 					if (instSym !== null) {
 						ensureShaped(instSym, ctx);
 						node.resolvedSym = instSym;
@@ -4423,7 +4423,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 						// On-demand instantiation (generateInstance pattern)
 						// Clone the generic function, substitute types, register specialized version
 						if (ext.sym !== null && ext.sym.declNode !== null && ext.sym.builtinKind === "") {
-							const instSym = callInstantiateGeneric(ext.sym, eb.names, eb.types, ctx);
+							const instSym = callInstantiateGeneric(ext.sym, eb.names, eb.types, ctx, node.location);
 							if (instSym !== null) {
 								node.resolvedSym = instSym;
 							}
