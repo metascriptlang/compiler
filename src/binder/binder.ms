@@ -177,6 +177,15 @@ export function bindFlowGraph(program: Node): void {
 	}
 }
 
+// Bind one function body in isolation. Monomorphized clones are created with
+// flowNode=null everywhere (createNodeAt), so narrowing queries in the
+// instantiation body re-check silently fall back to declared types unless the
+// clone gets its own flow graph.
+export function bindFunctionFlow(container: Node, body: Node): void {
+	const state = createBinderState();
+	bindContainer(state, container, body);
+}
+
 // Bind a nested function body. Saves and restores binder state so nested
 // control flow does not leak out of the function.
 function bindContainer(state: BinderState, container: Node, body: Node): void {

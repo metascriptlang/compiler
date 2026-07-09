@@ -5,4 +5,4 @@
 // ArrayAccess) gets a `flowNode` attached, which the checker queries via
 // src/checker/flow.ms to compute narrowed types at each program point.
 
-export { bindFlowGraph, BinderState } from "./binder";
+export { bindFlowGraph, bindFunctionFlow, BinderState } from "./binder";
