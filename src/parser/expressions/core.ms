@@ -2,7 +2,7 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseExpression()
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, NodeData, Expression, createNode, QuoteExprData, BlockStmtData } from "../../ast/node";
+import { Node, NodeKind, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, TypeAssertionData } from "../../ast/node";
 import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, addExplicitTypeArg, collectTokenText, stampEnd } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, isIdentLike } from "../util";
@@ -334,10 +334,25 @@ function parsePrimary(state: ParserState): ExprResult {
 		return Result.ok(createNode(NodeKind.Identifier, { name: token.value }, token));
 	}
 
-	// typeof / void / delete prefix operators
+	// typeof / void / delete prefix operators. Operand = postfix chain but no
+	// binary op (99 > max binary prec 65): `typeof s.width === "x"` parses as
+	// `(typeof (s.width)) === "x"`, `delete obj.prop` reaches the member.
 	if (token.kind === TokenKind.Typeof || token.kind === TokenKind.Void || token.kind === TokenKind.Delete) {
 		advance(state);
-		const operand = try parsePrimary(state);
+		const operand = try parseExprWithPrec(state, 99);
+		// The postfix pass consumes `as` unconditionally, but TS binds it outside
+		// the prefix op: `typeof x as T` = `(typeof x) as T`. Rewrap the innermost
+		// assertion's expression with the prefix op.
+		if (operand.kind === NodeKind.TypeAssertion) {
+			let cur = operand;
+			while (true) {
+				const ad = cur.data as TypeAssertionData;
+				if (ad.asExpr !== null && ad.asExpr.kind === NodeKind.TypeAssertion) { cur = ad.asExpr; continue; }
+				ad.asExpr = createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: ad.asExpr }, token);
+				break;
+			}
+			return Result.ok(operand);
+		}
 		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand }, token));
 	}
 
@@ -648,6 +663,31 @@ test "unary ! op" { assert exprOp("!x") === "!"; }
 test "pre++ op" { assert exprOp("++x") === "++"; }
 
 test "typeof op" { assert exprOp("typeof x") === "typeof"; }
+
+test "typeof member operand stops before binary" {
+	assert binLeftKind("typeof s.width === \"string\"") === NodeKind.UnaryExpr;
+}
+
+test "typeof operand is full member chain" {
+	const n = exprNode("typeof s.width");
+	assert n.kind === NodeKind.UnaryExpr;
+	const d = n.data as UnaryExprData;
+	assert d.operand.kind === NodeKind.MemberExpr;
+}
+
+test "delete operand reaches member" {
+	const n = exprNode("delete obj.prop");
+	assert n.kind === NodeKind.UnaryExpr;
+	const d = n.data as UnaryExprData;
+	assert d.operand.kind === NodeKind.MemberExpr;
+}
+
+test "typeof x as T binds as outside" {
+	const n = exprNode("typeof x as string");
+	assert n.kind === NodeKind.TypeAssertion;
+	const d = n.data as TypeAssertionData;
+	assert d.asExpr.kind === NodeKind.UnaryExpr;
+}
 // Precedence tree shape
 test "* tighter than +" { assert binLeftKind("a + b * c") === NodeKind.Identifier; }
 
