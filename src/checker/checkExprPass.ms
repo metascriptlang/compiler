@@ -248,6 +248,22 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.nodeType = expectedType; return;
 			} else if (expectedType !== null && expectedType.kind === TypeKind.Number) {
 				node.nodeType = numberType(); return;
+			} else if (expectedType !== null && expectedType.kind === TypeKind.Union) {
+				// Mirror the StringLiteral/BooleanLiteral arms below: a numeric
+				// member of the expected union types the literal, so `width: 400.0`
+				// fits `float32 | string | null` (first numeric member wins).
+				for (const child of expectedType.typeChildren) {
+					if (child === null) continue;
+					if (isIntegerType(child) && literalFitsInType(node, child)) {
+						node.nodeType = child; return;
+					}
+					if (child.kind === TypeKind.Float64 || child.kind === TypeKind.Float32
+						|| child.kind === TypeKind.Number) {
+						node.nodeType = child; return;
+					}
+				}
+				if (isNodeIntLit(node)) { node.nodeType = int32Type(); return; }
+				node.nodeType = float64Type(); return;
 			} else {
 				// Default inference: integer literals → int32, float literals → float64
 				if (isNodeIntLit(node)) { node.nodeType = int32Type(); return; }
