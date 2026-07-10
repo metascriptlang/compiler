@@ -8,6 +8,7 @@ import { Diagnostic, DiagSeverity, makeDiag } from "./error";
 import { TargetInfo, predefinedMacros, targetLinuxX86_64 } from "./target";
 import { tokenizeFile, convertPPTokens } from "./tokenize";
 import { readFile } from "std/fs";
+import { dirname } from "std/fs/path";
 
 export interface PreprocessResult {
 	head: CToken;
@@ -923,11 +924,19 @@ function detectIncludeGuard(tokens: CToken): string {
 	return guard;
 }
 
-function includeFile(filename: string, tok: CToken, ctx: PPContext): CToken {
+function includeFile(filename: string, tok: CToken, ctx: PPContext, includerDir: string = ""): CToken {
 	// #pragma once check
 	if (ctx.pragmaOnce.has(filename)) return tok;
 
-	const resolved = searchIncludePaths(filename, ctx);
+	// Quoted includes ("x.h") search the including file's directory first
+	// (chibicc/C semantics) — sibling headers must resolve without the
+	// consumer adding their directory to the include paths.
+	let resolved = "";
+	if (includerDir !== "") {
+		const sibling = includerDir + "/" + filename;
+		if (tryReadFile(sibling) !== "") resolved = sibling;
+	}
+	if (resolved === "") resolved = searchIncludePaths(filename, ctx);
 	if (resolved === "") {
 		ctx.diags.push(makeDiag(DiagSeverity.Error, tok.file, tok.line, tok.col,
 			`'${filename}' file not found`));
@@ -995,7 +1004,8 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 			const filename = fnParts[0];
 			const rest = skipLine(dir.next);
 			if (filename !== "") {
-				const included = includeFile(filename, rest, ctx);
+				const includerDir = dir.next.kind === CTokenKind.Str ? dirname(dir.file) : "";
+				const included = includeFile(filename, rest, ctx, includerDir);
 				tok = included;
 			} else {
 				ctx.diags.push(makeDiag(DiagSeverity.Error, dir.file, dir.line, dir.col, "expected filename"));
