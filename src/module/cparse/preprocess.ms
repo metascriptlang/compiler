@@ -126,7 +126,10 @@ function copyLine(ctx: PPContext, tok: CToken): CToken[] {
 		cur = c;
 	}
 	cur.next = newEof(ctx, tok);
-	return [head.next, tok.next]; // [copied line head, rest of stream]
+	// When the line runs to EOF, tok IS the EOF token and tok.next is null —
+	// return the EOF itself so callers always get a walkable token.
+	const rest = tok.kind === CTokenKind.Eof ? tok : tok.next;
+	return [head.next, rest]; // [copied line head, rest of stream]
 }
 
 // Join token texts with spaces.
@@ -1221,6 +1224,18 @@ test "preprocess function macro" {
 	assert r.head.stringVal === "1";
 	assert r.head.next.stringVal === "+";
 	assert r.head.next.next.stringVal === "2";
+}
+
+test "preprocess object macro definition ending file without newline" {
+	const r0 = tokenizeFile("#define FOO 42", "test.h");
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
+	assert r.head.kind === CTokenKind.Eof;
+}
+
+test "preprocess function-like macro definition ending file without newline" {
+	const r0 = tokenizeFile("#define ADD(a,b) a+b", "test.h");
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
+	assert r.head.kind === CTokenKind.Eof;
 }
 
 test "preprocess ifdef true" {
