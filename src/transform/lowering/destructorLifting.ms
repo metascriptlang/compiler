@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName } from "../../checker/types";
+import { isPrimitiveKind, isNumeric, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
@@ -675,6 +675,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 						namedObjOp(hook, fieldType.typeName, xf, yf, buf, loc);
 					}
 				}
+			} else if (isPrimitiveOnlyUnion(fieldType)) {
+				primitiveUnionOp(hook, fieldType, xf, yf, buf, loc);
 			}
 		},
 		TypeKind.Distinct => {
@@ -684,6 +686,93 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		},
 		_ => { defaultOp(hook, xf, yf, buf, loc); },
 	};
+}
+
+// --- Anonymous primitive-union hooks (float32 | string, tagged struct) ---
+// Payload lives as raw C members in `union { float v0; msString v1; }` + `_tag`.
+// POD members blit with the struct assign; the (single) msString member gets
+// rc ops gated on `_tag`. Union slots hold GARBAGE bits for inactive members —
+// every string op must be tag-guarded or it reads a float as a pointer.
+
+function primitiveUnionStringIdx(t: Type): number {
+	let i = 0;
+	while (i < t.typeChildren.length) {
+		const m = t.typeChildren[i];
+		if (m !== null && (m.kind === TypeKind.String || m.kind === TypeKind.StringLiteral)) return i;
+		i += 1;
+	}
+	return -1;
+}
+
+function isPrimitiveOnlyUnion(t: Type): boolean {
+	if (t.typeChildren === null || t.typeChildren.length === 0) return false;
+	let strs = 0;
+	let i = 0;
+	while (i < t.typeChildren.length) {
+		const m = t.typeChildren[i];
+		if (m === null) return false;
+		if (m.kind === TypeKind.String || m.kind === TypeKind.StringLiteral) {
+			strs += 1;
+		} else if (m.kind !== TypeKind.Boolean && m.kind !== TypeKind.BooleanLiteral
+			&& m.kind !== TypeKind.Null && !isNumeric(m)) {
+			return false;
+		}
+		i += 1;
+	}
+	return strs <= 1;
+}
+
+function unionTagIs(n: Node, idx: number, loc: SourceLocation): Node {
+	return makeBinary(makeMember(clonePath(n, loc), "_tag", loc), "===", makeNumber(idx, loc), loc);
+}
+
+function primitiveUnionOp(hook: string, u: Type, xf: Node, yf: Node, buf: NodeBuf, loc: SourceLocation): void {
+	const sIdx = primitiveUnionStringIdx(u);
+	if (sIdx < 0) {
+		defaultOp(hook, xf, yf, buf, loc);
+		return;
+	}
+	const vName = `v${sIdx}`;
+	const px = makeMember(clonePath(xf, loc), vName, loc);
+	const py = makeMember(clonePath(yf, loc), vName, loc);
+	if (hook === "destroy") {
+		const b = newBuf();
+		genCall("msStringDecref", "destroy", px, py, b, loc);
+		buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(b.items, loc), makeNull(loc), loc));
+		return;
+	}
+	if (hook === "wasMoved") {
+		const b = newBuf();
+		genCall("msStringWasMoved", "destroy", px, py, b, loc);
+		buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(b.items, loc), makeNull(loc), loc));
+		return;
+	}
+	if (hook === "sink") {
+		const b = newBuf();
+		genCall("msStringDecref", "destroy", px, py, b, loc);
+		buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(b.items, loc), makeNull(loc), loc));
+		defaultOp(hook, clonePath(xf, loc), clonePath(yf, loc), buf, loc);
+		return;
+	}
+	if (hook === "copy") {
+		// dest string, src string  → msStringCopy (releases old, dups new)
+		const ssBuf = newBuf();
+		genCopyRef("msStringCopy", px, py, vName, ssBuf, loc);
+		// dest string, src pod     → release old string, blit
+		const spBuf = newBuf();
+		genCall("msStringDecref", "destroy", clonePath(px, loc), py, spBuf, loc);
+		defaultOp("copy", clonePath(xf, loc), clonePath(yf, loc), spBuf, loc);
+		const xStr = makeIf(unionTagIs(yf, sIdx, loc), makeBlock(ssBuf.items, loc), makeBlock(spBuf.items, loc), loc);
+		// dest pod → blit, then bump the shared string when src was active
+		const incBuf = newBuf();
+		genCall("msStringIncref", "destroy", clonePath(px, loc), py, incBuf, loc);
+		const podBuf = newBuf();
+		defaultOp("copy", clonePath(xf, loc), clonePath(yf, loc), podBuf, loc);
+		podBuf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(incBuf.items, loc), makeNull(loc), loc));
+		buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock([xStr], loc), makeBlock(podBuf.items, loc), loc));
+		return;
+	}
+	// trace: primitive unions hold no traced refs.
 }
 
 // A tagged (match-type) DU emits `struct { _tag; union{...} }` — its variants peel to
