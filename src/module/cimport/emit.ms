@@ -170,7 +170,7 @@ function emitTypedef(obj: Obj, prefix: string): string {
 
 // ===== Main Entry Point =====
 
-export function translateCHeader(source: string, importedNames: string[], withExport: boolean = false, headerPath: string = "header.h", includePaths: string[] = [], outDiags: Diagnostic[] = null as unknown as Diagnostic[]): string {
+export function translateCHeader(source: string, importedNames: string[], withExport: boolean = false, headerPath: string = "header.h", includePaths: string[] = [], outDiags: Diagnostic[] = null as unknown as Diagnostic[], emittedNames: HashSet<string> = null as unknown as HashSet<string>): string {
 	const prefix = withExport ? "export " : "";
 	const parsed = parseHeader(source, headerPath, { target: defaultHostTarget(), includePaths, extraDefines: [] });
 	if (outDiags !== null) {
@@ -219,6 +219,11 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 	let result = "";
 	for (const obj of parsed.objs) {
 		if (!wantedNames.has(obj.name)) continue;
+		// Cross-import-site dedup: a name already emitted by an earlier import
+		// in the same module (shared typedefs between sibling headers) must not
+		// re-emit — the checker rejects program-wide duplicate extern decls.
+		if (emittedNames !== null && obj.name !== "" && emittedNames.has(obj.name)) continue;
+		const lenBefore = result.length;
 
 		match (obj.kind) {
 			ObjKind.Function => {
@@ -244,6 +249,9 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 			},
 			_ => {},
 		};
+		if (emittedNames !== null && obj.name !== "" && result.length > lenBefore) {
+			emittedNames.add(obj.name);
+		}
 	}
 
 	return result;

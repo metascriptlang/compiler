@@ -100,6 +100,7 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 	let result = source;
 	let searchPos = 0;
 	let insertedLines = 0;
+	const emittedHeaderDecls = new HashSet<string>();
 	while (searchPos < result.length) {
 		// Find next import or re-export statement referencing a .h file
 		let importIdx = result.indexOf("import ", searchPos);
@@ -189,7 +190,7 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 			? [builtinInclude, compilerRoot, headerDir]
 			: [builtinInclude, headerDir];
 		const headerDiags: Diagnostic[] = [];
-		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags);
+		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags, emittedHeaderDecls);
 		if (outErrors !== null && headerDiags.length > 0) {
 			const importLine = countLinesBefore(result, importIdx) - insertedLines;
 			for (const hd of headerDiags) {
