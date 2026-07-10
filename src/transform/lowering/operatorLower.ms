@@ -255,9 +255,13 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 
 	// 3. Null comparisons — check BEFORE typeName guard since null has typeName=""
 	// reference parity: objects can't be nil (reference comparisons, reference core)
+	// EQUALITY ops only: `x = null` is an assignment — rewriting it into a
+	// present-check would silently DROP the store (nullableLower wraps the
+	// null for Maybe assignment instead).
+	const isNullEqOp = opName === "==" || opName === "===" || opName === "!=" || opName === "!==";
 	const hasNullLeft = isNullExpr(d.left);
 	const hasNullRight = isNullExpr(d.right);
-	if (hasNullLeft || hasNullRight) {
+	if (isNullEqOp && (hasNullLeft || hasNullRight)) {
 		const valueType = hasNullLeft ? resolveType(ctx, d.right) : leftType;
 		if (valueType !== null && isValueObject(valueType)) {
 			return makeBool(isNotEqual, loc);
