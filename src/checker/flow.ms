@@ -19,7 +19,7 @@ import {
 	createUnion, unknownType, nullType, neverType,
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
-	isMaybeType, unwrapMaybeType,
+	isMaybeType, unwrapMaybeType, isNumeric,
 } from "./types";
 import { typeRelation, TypeRelation } from "./compat";
 
@@ -1182,7 +1182,7 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 		if (t.typeChildren !== null) {
 			for (const v of t.typeChildren) {
 				if (v === null) continue;
-				const isMatch = v.kind === targetKind;
+				const isMatch = typeofStringMatches(v, d.value);
 				if (isMatch) matchVariant = v;
 				if (isMatch === assumeTrue) remaining.push(v);
 			}
@@ -1192,11 +1192,20 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 		return createUnion(remaining);
 	}
 	// For non-union types: if the kind matches, keep/drop based on assumeTrue.
-	const matches = t.kind === targetKind;
+	const matches = typeofStringMatches(t, d.value);
 	if (assumeTrue) {
 		return matches ? t : unknownType();
 	}
 	return matches ? unknownType() : t;
+}
+
+// Family match for `typeof` narrowing: "number" covers every numeric kind —
+// float32/int32/... are all "number" at runtime; same for string/boolean literals.
+function typeofStringMatches(v: Type, s: string): boolean {
+	if (s === "string") return v.kind === TypeKind.String || v.kind === TypeKind.StringLiteral;
+	if (s === "number") return isNumeric(v);
+	if (s === "boolean") return v.kind === TypeKind.Boolean || v.kind === TypeKind.BooleanLiteral;
+	return false;
 }
 
 // Map a `typeof` result string to the corresponding TypeKind. Phase 2 handles
