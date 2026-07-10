@@ -153,6 +153,13 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 		if (specifier.startsWith("./") || specifier.startsWith("../")) {
 			const moduleDir = dirname(modulePath);
 			headerPath = moduleDir + "/" + specifier.slice(specifier.startsWith("./") ? 2 : 0, specifier.length);
+		} else if (!isAbsolute(specifier)) {
+			// Bare specifier ("lib/x.h"): module-relative first so the build does
+			// not depend on the invocation CWD; std's bare paths (resolved via the
+			// CWD/compiler-root chain below) miss here and keep their behavior.
+			const moduleDir = dirname(modulePath);
+			const moduleRel = moduleDir + "/" + specifier;
+			if (provideSource(provider, moduleRel).ok) headerPath = moduleRel;
 		}
 
 		// Read the .h file. Try as-is first (works when CWD is project root). If that
@@ -183,12 +190,14 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 
 		// Generate extern declarations from C header
 		// Include paths: builtin C headers (stdint.h etc.) + header's own directory
+		// + its parent so `#include <libname/foo.h>` inside the lib resolves.
 		const headerDir = dirname(headerPath);
+		const headerParentDir = dirname(headerDir);
 		const compilerRoot = resolveRuntimeDir();
 		const builtinInclude = compilerRoot !== "" ? compilerRoot + "/src/module/cparse/include" : "src/module/cparse/include";
 		const includePaths = compilerRoot !== ""
-			? [builtinInclude, compilerRoot, headerDir]
-			: [builtinInclude, headerDir];
+			? [builtinInclude, compilerRoot, headerDir, headerParentDir]
+			: [builtinInclude, headerDir, headerParentDir];
 		const headerDiags: Diagnostic[] = [];
 		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags, emittedHeaderDecls);
 		if (outErrors !== null && headerDiags.length > 0) {
@@ -619,6 +628,15 @@ test "inlineHeaderImports surfaces unreadable .h as Error instead of silent skip
 	assert errs[0].severity === ErrorSeverity.Error;
 	assert errs[0].message.indexOf("missing.h") >= 0;
 	assert errs[0].line === 1;
+}
+
+test "inlineHeaderImports resolves bare .h specifier module-relative (CWD-independent)" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/tmp/msbarespec/lib/api.h", "int bareOk(void);\n"));
+	const provider = createMapProvider(entries);
+	const src = "import { bareOk } from " + "\"lib/api.h\";\n";
+	const inlined = inlineHeaderImports(src, "/tmp/msbarespec/main.ms", provider);
+	assert inlined.indexOf("extern function bareOk") >= 0;
 }
 
 test "A imports B chain" {
