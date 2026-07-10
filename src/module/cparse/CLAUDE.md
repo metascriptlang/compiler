@@ -299,6 +299,13 @@ When you're porting and want to find something in chibicc:
 
 ## Concurrency architecture
 
+> **STATUS (2026-07): not shipped — actors removed.** The parallel orchestration
+> below (`HeaderCache` / `DiagnosticSink` / `bindHeaders`) was deleted
+> (`cimport/cache.ms`, `cimport/sink.ms`); it was blocked on the Promise.all
+> stdlib generic refactor and single-header sync parses are fast enough.
+> `cimport/index.ms parseHeader` is the shipped path. Kept as design reference
+> should header volume ever warrant reviving it.
+
 This module is designed from day one to leverage MetaScript's concurrency
 primitives (`spawn()`, `actor {}`). See `docs/LANG-ASYNC.md`.
 

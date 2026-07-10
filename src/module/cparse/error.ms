@@ -25,7 +25,7 @@ export function makeDiag(
 	return { severity, file, line, col, message };
 }
 
-// Comparator for sort-by-source-order. Used by DiagnosticSink actor flush.
+// Comparator for sort-by-source-order.
 export function cmpDiag(a: Diagnostic, b: Diagnostic): number {
 	if (a.file < b.file) return -1;
 	if (a.file > b.file) return 1;
