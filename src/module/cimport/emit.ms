@@ -3,12 +3,11 @@
 // Walks the parsed Obj[] from the cparse library and emits MetaScript
 // extern declarations.
 
-import { tokenizeFile } from "../cparse/tokenize";
-import { preprocess } from "../cparse/preprocess";
-import { parseTranslationUnit } from "../cparse/parse";
 import { Obj, ObjKind } from "../cparse/obj";
 import { CType, CTypeKind } from "../cparse/type";
 import { defaultHostTarget } from "../cparse/target";
+import { Diagnostic } from "../cparse/error";
+import { parseHeader } from "./index";
 
 // ===== C Type → MetaScript Type Mapping =====
 
@@ -169,12 +168,12 @@ function emitTypedef(obj: Obj, prefix: string): string {
 
 // ===== Main Entry Point =====
 
-export function translateCHeader(source: string, importedNames: string[], withExport: boolean = false, headerPath: string = "header.h", includePaths: string[] = []): string {
+export function translateCHeader(source: string, importedNames: string[], withExport: boolean = false, headerPath: string = "header.h", includePaths: string[] = [], outDiags: Diagnostic[] = null as unknown as Diagnostic[]): string {
 	const prefix = withExport ? "export " : "";
-	const target = defaultHostTarget();
-	const tokens = tokenizeFile(source, headerPath);
-	const pp = preprocess(tokens.head, target, includePaths);
-	const parsed = parseTranslationUnit(pp.head, target);
+	const parsed = parseHeader(source, headerPath, { target: defaultHostTarget(), includePaths, extraDefines: [] });
+	if (outDiags !== null) {
+		for (const d of parsed.diagnostics) outDiags.push(d);
+	}
 
 	const filterAll = importedNames.length === 0;
 
@@ -316,6 +315,21 @@ test "emit typedef enum" {
 test "emit extern variable" {
 	const ms = translateCHeader("extern int counter;", [], false);
 	assert ms.indexOf("extern const counter: int32") >= 0;
+}
+
+test "brace initializer does not derail declaration parse" {
+	const diags: Diagnostic[] = [];
+	const ms = translateCHeader("static const int arr[] = {32, 64, 96};\nint after(void);", ["after"], false, "init.h", [], diags);
+	assert ms.indexOf("extern function after") >= 0;
+	assert diags.length === 0;
+}
+
+test "designated initializer and _Static_assert skip clean" {
+	const diags: Diagnostic[] = [];
+	const src = "typedef struct T { int a; } T;\n_Static_assert(1 == 1, \"ok\");\nstatic const T t = { .a = 1 };\nint after2(void);";
+	const ms = translateCHeader(src, ["after2"], false, "init2.h", [], diags);
+	assert ms.indexOf("extern function after2") >= 0;
+	assert diags.length === 0;
 }
 
 test "emit pointer types" {

@@ -17,7 +17,7 @@
 
 import {
 	Module, ModuleGraph, ModuleState, createModuleGraph, createModule, createImportEntry,
-	findModule, hasModule, addModule, pushImportStack, popImportStack, createModuleError, ErrorSeverity,
+	findModule, hasModule, addModule, pushImportStack, popImportStack, createModuleError, ModuleError, ErrorSeverity,
 } from "./graph";
 import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig } from "./resolver";
 import { lex } from "../lexer/lexer";
@@ -27,6 +27,7 @@ import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../ast/node";
 import { readFile } from "std/fs";
 import { translateCHeader } from "./cimport/emit";
+import { Diagnostic, DiagSeverity } from "./cparse/error";
 import { resolveRuntimeDir } from "../utils/path";
 import { isAbsolute, dirname, join, normalize } from "std/fs/path";
 import { cwd } from "std/process";
@@ -95,9 +96,10 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 // collectImport treats .h sources as a special case: it skips ExportRegistry
 // lookup and symbol creation because the inlined extern decls below define
 // the symbols locally in the current module's scope.
-export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean = false): string {
+export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean = false, outErrors: ModuleError[] = null as unknown as ModuleError[]): string {
 	let result = source;
 	let searchPos = 0;
+	let insertedLines = 0;
 	while (searchPos < result.length) {
 		// Find next import or re-export statement referencing a .h file
 		let importIdx = result.indexOf("import ", searchPos);
@@ -162,7 +164,14 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 			const root = resolveRuntimeDir();
 			if (root !== "") headerSource = provideSource(provider, `${root}/${headerPath}`);
 		}
-		if (!headerSource.ok) { searchPos = importIdx + 7; continue; }
+		if (!headerSource.ok) {
+			if (outErrors !== null) {
+				const missLine = countLinesBefore(result, importIdx) - insertedLines;
+				outErrors.push(createModuleError(`cannot read C header '${specifier}' (resolved '${headerPath}')`, missLine, 1, ErrorSeverity.Error));
+			}
+			searchPos = importIdx + 7;
+			continue;
+		}
 
 		// Parse specifier list once — used for both name filtering and re-export generation
 		const specs = parseSpecItems(stmt, braceOpen, braceClose);
@@ -179,7 +188,15 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 		const includePaths = compilerRoot !== ""
 			? [builtinInclude, compilerRoot, headerDir]
 			: [builtinInclude, headerDir];
-		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths);
+		const headerDiags: Diagnostic[] = [];
+		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags);
+		if (outErrors !== null && headerDiags.length > 0) {
+			const importLine = countLinesBefore(result, importIdx) - insertedLines;
+			for (const hd of headerDiags) {
+				const sev = hd.severity === DiagSeverity.Error ? ErrorSeverity.Error : ErrorSeverity.Warning;
+				outErrors.push(createModuleError(`C header ${hd.file}:${hd.line}:${hd.col}: ${hd.message}`, importLine, 1, sev));
+			}
+		}
 
 		// Auto-compile companion .c file if it exists (e.g., native.h → native.c).
 		// Apply the same compiler-root fallback as the .h lookup above — when building
@@ -224,8 +241,21 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 		const sep = compactReplacement ? " " : "\n";
 		result = result.slice(0, insertPos) + sep + replacement + result.slice(insertPos, result.length);
 		searchPos = insertPos + sep.length + replacement.length;
+		if (!compactReplacement) {
+			insertedLines = insertedLines + countLinesBefore(replacement, replacement.length);
+		}
 	}
 	return result;
+}
+
+// Line number (1-based) of the character at endPos, counting inserted text —
+// callers subtract their own insertion count to recover original-source lines.
+function countLinesBefore(text: string, endPos: number): number {
+	let n = 1;
+	for (let i = 0; i < endPos; i += 1) {
+		if (text.charCodeAt(i) === "\n".code) n = n + 1;
+	}
+	return n;
 }
 
 // Parse "{ A, B as C }" into original names and alias pairs.
@@ -326,7 +356,9 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 
 	// Inline .h imports: replace `import { ... } from "*.h"` with extern declarations.
 	// reference parity: importc declarations live inline in the consuming module, no separate module.
-	mod.source = inlineHeaderImports(mod.source, path, provider);
+	const headerErrors: ModuleError[] = [];
+	mod.source = inlineHeaderImports(mod.source, path, provider, false, headerErrors);
+	for (const he of headerErrors) mod.errors.push(he);
 
 	// Parse with recovery — always get partial AST, errors in state.errors
 	const lr = lex(mod.source);
@@ -560,6 +592,32 @@ test "single file graph" {
 	assert mod !== null;
 	assert mod.state === ModuleState.Ready;
 	assert mod.source === "const x = 1;";
+}
+
+test "inlineHeaderImports surfaces missing-include diagnostics with .ms import line" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/tmp/msdiagtest/bad.h", "#include <nope/nada.h>\nint diagOk(void);\n"));
+	const provider = createMapProvider(entries);
+	const src = "// lead line\nimport { diagOk } from " + "\"./bad.h\";\n";
+	const errs: ModuleError[] = [];
+	const inlined = inlineHeaderImports(src, "/tmp/msdiagtest/main.ms", provider, false, errs);
+	assert inlined.indexOf("extern function diagOk") >= 0;
+	assert errs.length > 0;
+	assert errs[0].message.indexOf("nada.h") >= 0;
+	assert errs[0].message.indexOf("file not found") >= 0;
+	assert errs[0].line === 2;
+}
+
+test "inlineHeaderImports surfaces unreadable .h as Error instead of silent skip" {
+	const provider = createMapProvider([]);
+	const src = "import { ghost } from " + "\"./missing.h\";\n";
+	const errs: ModuleError[] = [];
+	const inlined = inlineHeaderImports(src, "/tmp/msmissing/main.ms", provider, false, errs);
+	assert inlined.indexOf("extern function ghost") < 0;
+	assert errs.length === 1;
+	assert errs[0].severity === ErrorSeverity.Error;
+	assert errs[0].message.indexOf("missing.h") >= 0;
+	assert errs[0].line === 1;
 }
 
 test "A imports B chain" {

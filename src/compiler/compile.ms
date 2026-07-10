@@ -243,15 +243,17 @@ function exitOnFatalCheckerErrors(ctx: CheckerContext, modPath: string, source: 
 	exit(1);
 }
 
-// Report per-module errors and exit if any found.
+// Report per-module ERRORS and exit if any found. Warning-severity entries
+// (e.g. surfaced C-header diagnostics) are left for reportModuleErrors to
+// render once — rendering them here too would double-print, and exiting on
+// them would turn every warning fatal.
 function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 	let hasErr = false;
 	for (const mod of graph.modules) {
-		if (mod.errors.length > 0) {
+		for (const e of mod.errors) {
+			if (e.severity !== ErrorSeverity.Error) continue;
 			hasErr = true;
-			for (const e of mod.errors) {
-				renderModuleError(mod.path, mod.source, e);
-			}
+			renderModuleError(mod.path, mod.source, e);
 		}
 	}
 	if (hasErr) exit(1);
@@ -917,7 +919,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const programByPath: HashMap<string, Node> = new HashMap<string, Node>();
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod === null) {
+			console.log(`${error("error")}: internal: module '${modPath}' is in loadOrder but missing from the graph — its code will be skipped`);
+			continue;
+		}
 		const _tp0 = performance.now();
 		const program = parseOrExit(mod.source, modPath);
 		tParse = tParse + (performance.now() - _tp0);
