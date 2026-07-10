@@ -49,6 +49,18 @@ if [ "$SYNC_BINARY" = "1" ]; then
 	fi
 fi
 
+# Builtin C header stubs for import-from-.h — loader resolves them at
+# <compiler-root>/src/module/cparse/include, so the installed tree must
+# mirror that exact path or every .h import warns "stdint.h not found".
+if [ "$CHECK" = "1" ]; then
+	changes=$(rsync $RSYNC_FLAGS "$SRC/src/module/cparse/include/" "$DEST/src/module/cparse/include/" 2>/dev/null | wc -l | tr -d ' ')
+	echo "src/module/cparse/include/: $changes file(s) would change"
+else
+	mkdir -p "$DEST/src/module/cparse/include"
+	rsync $RSYNC_FLAGS "$SRC/src/module/cparse/include/" "$DEST/src/module/cparse/include/" >/dev/null 2>&1
+	echo "synced src/module/cparse/include/ → $DEST/src/module/cparse/include/"
+fi
+
 # std/ and runtime/ are deployed as-is (mirror source).
 for tree in std runtime; do
 	if [ "$CHECK" = "1" ]; then
