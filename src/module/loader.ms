@@ -287,6 +287,38 @@ function parseSpecItems(stmt: string, braceOpen: number, braceClose: number): Sp
 	return items;
 }
 
+// Prefix `export ` onto every occurrence of `marker` that ends at an
+// identifier boundary. `extern function YGNodeNew` must NOT match inside
+// `extern function YGNodeNewWithConfig` — a naive split/join exportizes the
+// longer name's line too, and the longer name's own pass then produces
+// `export export`. Returns "" when no boundary-valid occurrence exists.
+function exportizeAtIdentBoundary(text: string, marker: string): string {
+	let out = "";
+	let pos = 0;
+	let hit = false;
+	while (true) {
+		const idx = text.indexOf(marker, pos);
+		if (idx < 0) {
+			out = out + text.slice(pos, text.length);
+			break;
+		}
+		const after = idx + marker.length;
+		const ch = after < text.length ? text.charCodeAt(after) : 0;
+		const isIdentChar = (ch >= "A".code && ch <= "Z".code) || (ch >= "a".code && ch <= "z".code)
+			|| (ch >= "0".code && ch <= "9".code) || ch === "_".code;
+		out = out + text.slice(pos, idx);
+		if (isIdentChar) {
+			out = out + marker;
+		} else {
+			out = out + "export " + marker;
+			hit = true;
+		}
+		pos = after;
+	}
+	if (!hit) return "";
+	return out;
+}
+
 // Build re-export replacement: inline externs + aliased export declarations.
 function buildReexportReplacement(translated: string, specs: SpecItem[], headerPath: string, compileDirective: string): string {
 	let reexportDecls = "";
@@ -316,8 +348,9 @@ function buildReexportReplacement(translated: string, specs: SpecItem[], headerP
 			const kinds = ["function", "interface", "struct", "enum", "type"];
 			for (const k of kinds) {
 				const marker = `extern ${k} ${spec.origName}`;
-				if (exportTranslated.indexOf(marker) >= 0) {
-					exportTranslated = exportTranslated.split(marker).join(`export extern ${k} ${spec.origName}`);
+				const replaced = exportizeAtIdentBoundary(exportTranslated, marker);
+				if (replaced !== "") {
+					exportTranslated = replaced;
 					break;
 				}
 			}
@@ -637,6 +670,17 @@ test "inlineHeaderImports resolves bare .h specifier module-relative (CWD-indepe
 	const src = "import { bareOk } from " + "\"lib/api.h\";\n";
 	const inlined = inlineHeaderImports(src, "/tmp/msbarespec/main.ms", provider);
 	assert inlined.indexOf("extern function bareOk") >= 0;
+}
+
+test "re-export from .h with prefix-colliding names does not double-export" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/tmp/msprefix/api.h", "int fooBar(void);\nint fooBarBaz(void);\n"));
+	const provider = createMapProvider(entries);
+	const src = "export { fooBar, fooBarBaz } from " + "\"./api.h\";\n";
+	const inlined = inlineHeaderImports(src, "/tmp/msprefix/main.ms", provider);
+	assert inlined.indexOf("export extern function fooBar(") >= 0;
+	assert inlined.indexOf("export extern function fooBarBaz(") >= 0;
+	assert inlined.indexOf("export export") < 0;
 }
 
 test "A imports B chain" {
