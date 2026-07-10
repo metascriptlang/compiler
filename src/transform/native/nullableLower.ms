@@ -9,8 +9,8 @@
 //   4. Value wrapping (decl): const x: T|null = tok → const x = { value: tok, present: true }
 //   5. Value wrapping (assign): x = tok → x = { value: tok, present: true }
 
-import { Node, NodeKind, SourceLocation, MemberExprData, VariableDeclData, BinaryExprData, Type } from "../../ast/node";
-import { isStructType, isMaybeType, getProperty } from "../../checker/types";
+import { Node, NodeKind, SourceLocation, MemberExprData, VariableDeclData, BinaryExprData, Type, TypeKind } from "../../ast/node";
+import { isStructType, isMaybeType, isStringLike, getProperty } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeBool, makeNull, makeTypedObjectLiteral } from "../util";
@@ -46,6 +46,38 @@ export function wrapMaybeValue(init: Node, maybeType: Type, loc: SourceLocation)
 		maybeType, loc);
 }
 
+// Payload nodeType for a synthesized .value access: when the Maybe payload is
+// a primitive union (float32 | string), the C storage is the tagged union —
+// downstream lowering (as-cast extraction, typeof tag-switch) must see the
+// union, not the flow-narrowed member.
+function maybePayloadType(maybeT: Type | null, narrowed: Type): Type {
+	if (maybeT === null || maybeT.typeReturn === null) return narrowed;
+	// Tagged primitive unions only — all-strlit payloads are msString-carried
+	// and keep the narrowed type (identity at the C level).
+	if (maybeT.typeReturn.kind === TypeKind.Union && !isStringLike(maybeT.typeReturn)) return maybeT.typeReturn;
+	return narrowed;
+}
+
+// Storage Maybe type of a slot expression (local via resolvedSym, struct
+// field via the object's declared field type) — flow narrowing never changes
+// these, unlike nodeType.
+function maybeSlotType(n: Node): Type | null {
+	if (n === null) return null;
+	if (n.kind === NodeKind.Identifier && n.resolvedSym !== null
+		&& isMaybeType(n.resolvedSym.symbolType)) {
+		return n.resolvedSym.symbolType;
+	}
+	if (n.kind === NodeKind.MemberExpr) {
+		const d = n.data as MemberExprData;
+		if (d.object !== null && d.object.nodeType !== null
+			&& d.property !== "value" && d.property !== "present") {
+			const ft = getProperty(d.object.nodeType, d.property);
+			if (isMaybeType(ft)) return ft;
+		}
+	}
+	return null;
+}
+
 // ===== Main Entry Point =====
 
 export function lowerNullable(program: Node, ctx: TransformContext): Node {
@@ -63,7 +95,7 @@ function lowerNullableNode(node: Node): Node {
 		&& isMaybeType(node.resolvedSym.symbolType)
 		&& node.nodeType !== null && !isMaybeType(node.nodeType)) {
 		const member = makeMember(node, "value", loc);
-		member.nodeType = node.nodeType;
+		member.nodeType = maybePayloadType(node.resolvedSym.symbolType, node.nodeType);
 		return member;
 	}
 
@@ -83,7 +115,7 @@ function lowerNullableNode(node: Node): Node {
 			const fieldType = getProperty(d.object.nodeType, d.property);
 			if (isMaybeType(fieldType)) {
 				const member = makeMember(node, "value", loc);
-				member.nodeType = node.nodeType;
+				member.nodeType = maybePayloadType(fieldType, node.nodeType);
 				return member;
 			}
 		}
@@ -117,13 +149,28 @@ function lowerNullableNode(node: Node): Node {
 		}
 	}
 
-	// 5. Assignment wrapping: Maybe var assigned non-Maybe value
+	// 5. Assignment wrapping: Maybe slot assigned non-Maybe value
 	//    x = tok → x = { value: tok, present: true }
+	//    Bottom-up walk order means a flow-narrowed LHS was ALREADY rewritten
+	//    to `slot.value` by rules 1/1b — assignment targets the SLOT, so peel
+	//    that rewrite back before wrapping the RHS.
 	if (node.kind === NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		if (d.operator === "=" && d.left.resolvedSym !== null
-			&& isMaybeType(d.left.resolvedSym.symbolType)) {
-			d.right = wrapMaybeValue(d.right, d.left.resolvedSym.symbolType, loc);
+		if (d.operator === "=") {
+			if (d.left.kind === NodeKind.MemberExpr) {
+				const ld = d.left.data as MemberExprData;
+				if (ld.property === "value" && ld.object !== null) {
+					const slotT = maybeSlotType(ld.object);
+					if (slotT !== null) {
+						d.left = ld.object;
+						d.left.nodeType = slotT;
+					}
+				}
+			}
+			const mt = maybeSlotType(d.left);
+			if (mt !== null) {
+				d.right = wrapMaybeValue(d.right, mt, loc);
+			}
 		}
 	}
 
