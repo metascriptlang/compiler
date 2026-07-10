@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createArc, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant } from "./types";
+import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createArc, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -301,8 +301,11 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 				return createMaybeType(members[1]);
 			}
 		}
-		// Flat nullable strlit union (`"a" | "b" | null`): once createUnion
-		// flattens, the Maybe shape is unrecoverable — catch it here.
+		// Flat nullable primitive union (`"a" | "b" | null`, `float32 | string | null`):
+		// once createUnion flattens, the Maybe shape is unrecoverable — catch it
+		// here. The null-free residue rides Maybe's present/value machinery (single
+		// msString carrier for strlits, tagged union for mixed primitives).
+		// Ref/Struct members keep the plain-union path.
 		if (members.length > 2) {
 			let sawNull = false;
 			const nonNull: Type[] = [];
@@ -311,11 +314,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 				else if (m !== null) { nonNull.push(m); }
 			}
 			if (sawNull && nonNull.length >= 2) {
-				let allLit = true;
+				let allPrim = true;
 				for (const m of nonNull) {
-					if (m.kind !== TypeKind.StringLiteral) { allLit = false; }
+					if (m.kind !== TypeKind.StringLiteral && m.kind !== TypeKind.String
+						&& m.kind !== TypeKind.Boolean && m.kind !== TypeKind.BooleanLiteral
+						&& !isNumeric(m)) { allPrim = false; }
 				}
-				if (allLit) return createMaybeType(createUnion(nonNull));
+				if (allPrim) return createMaybeType(createUnion(nonNull));
 			}
 		}
 		if (members.length > 0) return createUnion(members);
