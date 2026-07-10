@@ -61,17 +61,19 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 			return "int32";
 		},
 		CTypeKind.Ptr => {
-			if (t.base === null) return "unknown";
-			// void* → unknown (opaque pointer)
-			if (t.base.kind === CTypeKind.Void) return "unknown";
+			if (t.base === null) return "Ptr<void>";
+			// void* → Ptr<void>: raw ABI pointer. NOT `unknown` — unknown is the
+			// boxed dynamic type, so an FFI handle typed unknown gets boxed on
+			// module-boundary crossings and C receives a garbage pointer.
+			if (t.base.kind === CTypeKind.Void) return "Ptr<void>";
 			// char* → cstring
 			if (t.base.kind === CTypeKind.Char) return "cstring";
 			// const char* → cstring (base is Char regardless of const)
 			// Function pointer → closure type
 			if (t.base.kind === CTypeKind.Func) return emitFuncType(t.base);
-			// Struct pointer → Ptr<StructName> (or unknown if opaque)
+			// Struct pointer → Ptr<StructName>, opaque (incomplete) → Ptr<void>
 			if (t.base.kind === CTypeKind.Struct && t.base.tagName !== "") {
-				if (!t.base.isComplete) return "unknown";
+				if (!t.base.isComplete) return "Ptr<void>";
 				return `Ptr<${t.base.tagName}>`;
 			}
 			// Other typed pointer — const pointee → Borrow<T> (read-only, accepts arr[0]
@@ -334,8 +336,14 @@ test "designated initializer and _Static_assert skip clean" {
 
 test "emit pointer types" {
 	const ms = translateCHeader("extern void *handle;\nextern const char *name;", [], false);
-	assert ms.indexOf("handle: unknown") >= 0;
+	assert ms.indexOf("handle: Ptr<void>") >= 0;
 	assert ms.indexOf("name: cstring") >= 0;
+}
+
+test "opaque struct-pointer typedef maps to Ptr<void> not unknown" {
+	const ms = translateCHeader("typedef struct Opaque* OpaqueRef;\nOpaqueRef makeIt(void);", [], false);
+	assert ms.indexOf("OpaqueRef = Ptr<void>") >= 0;
+	assert ms.indexOf("unknown") < 0;
 }
 
 test "emit with name filter" {
