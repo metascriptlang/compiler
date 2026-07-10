@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, isFloatType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, awaitedType, unwrapRefNullUnion, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType } from "../../checker/types";
+import { isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, awaitedType, unwrapRefNullUnion, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -1264,6 +1264,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		const operand = peekResult(ctx, cc, 0);
 		truncResults(ctx, cc);
 		const d = node.data as UnaryExprData;
+		if (d.unaryOp === "typeof") {
+			ctx.results.push(genTypeofExpr(g, d.operand, operand));
+			return;
+		}
 		ctx.results.push(`(${d.unaryOp}${operand})`);
 		return;
 	}
@@ -1948,7 +1952,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					// This avoids void* → value-type errors for self-referential pointer fields
 					// where the C field is T* but the MS type is T (e.g. Type.typeReturn).
 					if (d.properties[i].kind !== NodeKind.NullLiteral) {
-						emitStmtsLine(p, `${tmpName}${access}${mangleFieldName(d.keys[i])} = ${val};`);
+						let assignVal = val;
+						const fieldU = litFieldPrimitiveUnion(node, d.keys[i]);
+						if (fieldU !== null) {
+							const mIdx = primitiveUnionMemberIdx(fieldU, d.properties[i].nodeType);
+							if (mIdx >= 0) assignVal = wrapPrimitiveUnion(g, fieldU, mIdx, val);
+						}
+						emitStmtsLine(p, `${tmpName}${access}${mangleFieldName(d.keys[i])} = ${assignVal};`);
 					}
 					i += 1;
 				}
@@ -2021,6 +2031,101 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 	// Fallback
 	truncResults(ctx, cc);
 	ctx.results.push(`/* unsupported expression: resolve kind=${kind.toString()} */`);
+}
+
+// ===== Primitive-union lowering (float32 | string payloads) =====
+
+// Member index in a primitive union for a value of type vt, matched by runtime
+// family (every numeric kind is one "number" member at runtime).
+function primitiveUnionMemberIdx(u: Type, vt: Type | null): number {
+	if (vt === null || u.typeChildren === null) return -1;
+	let i = 0;
+	while (i < u.typeChildren.length) {
+		const m = u.typeChildren[i];
+		if (m !== null) {
+			if (isNumeric(m) && isNumeric(vt)) return i;
+			if ((m.kind === TypeKind.String || m.kind === TypeKind.StringLiteral)
+				&& (vt.kind === TypeKind.String || vt.kind === TypeKind.StringLiteral)) return i;
+			if (m.kind === TypeKind.Boolean
+				&& (vt.kind === TypeKind.Boolean || vt.kind === TypeKind.BooleanLiteral)) return i;
+		}
+		i += 1;
+	}
+	return -1;
+}
+
+// Wrap a C value expression into a tagged primitive-union compound literal.
+// Numeric payloads get an explicit cast (float64 literal → float member).
+function wrapPrimitiveUnion(g: CGen, u: Type, idx: number, valC: string): string {
+	const unionName = getTypeDesc(g, u);
+	const member = u.typeChildren[idx];
+	let payload = valC;
+	if (member !== null && isNumeric(member)) {
+		payload = `(${getTypeDesc(g, member)})(${valC})`;
+	}
+	return `(${unionName}){ ._tag = ${idx}, .v${idx} = ${payload} }`;
+}
+
+// Declared union type of an object-literal field, or null when the field is
+// not primitive-union-typed. All-strlit unions are msString-carried (no _tag)
+// — they must NOT wrap.
+function litFieldPrimitiveUnion(node: Node, key: string): Type | null {
+	if (node.nodeType === null) return null;
+	const ft = getProperty(node.nodeType, key);
+	if (ft !== null && ft.kind === TypeKind.Union && !isStringLike(ft)) return ft;
+	return null;
+}
+
+// typeof runtime lowering. Primitive unions dispatch on _tag; Maybe adds a
+// present-gate (typeof null === "object", TS parity); everything else folds to
+// a constant from the static type.
+function genTypeofExpr(g: CGen, opNode: Node, opC: string): string {
+	const t = opNode !== null ? opNode.nodeType : null;
+	// All-strlit unions are msString-carried — no _tag to switch on.
+	if (t !== null && t.kind === TypeKind.Union && !isStringLike(t)
+		&& t.typeChildren !== null && t.typeChildren.length > 0) {
+		return typeofTagSwitch(g, t, opC);
+	}
+	if (t !== null && isMaybeType(t) && t.typeReturn !== null) {
+		const inner = t.typeReturn;
+		const innerExpr = inner.kind === TypeKind.Union && !isStringLike(inner)
+				&& inner.typeChildren !== null && inner.typeChildren.length > 0
+			? typeofTagSwitch(g, inner, `(${opC}).value`)
+			: typeofConst(g, inner);
+		return `((${opC}).present ? ${innerExpr} : ${typeofStr(g, "object")})`;
+	}
+	return typeofConst(g, t);
+}
+
+function typeofTagSwitch(g: CGen, u: Type, valC: string): string {
+	let out = "";
+	let close = 0;
+	let i = 0;
+	while (i < u.typeChildren.length) {
+		const m = u.typeChildren[i];
+		if (i === u.typeChildren.length - 1) {
+			out = out + typeofConst(g, m);
+		} else {
+			out = out + `((${valC})._tag == ${i} ? ${typeofConst(g, m)} : `;
+			close += 1;
+		}
+		i += 1;
+	}
+	while (close > 0) { out = out + ")"; close -= 1; }
+	return out;
+}
+
+function typeofConst(g: CGen, t: Type | null): string {
+	if (t === null) return typeofStr(g, "object");
+	if (isNumeric(t)) return typeofStr(g, "number");
+	if (t.kind === TypeKind.String || t.kind === TypeKind.StringLiteral) return typeofStr(g, "string");
+	if (t.kind === TypeKind.Boolean || t.kind === TypeKind.BooleanLiteral) return typeofStr(g, "boolean");
+	if (t.kind === TypeKind.Function) return typeofStr(g, "function");
+	return typeofStr(g, "object");
+}
+
+function typeofStr(g: CGen, s: string): string {
+	return msStringPoolRef(internString(g.stringPool, s), cStringByteLen(s));
 }
 
 // ===== genClosureCall — Standard reference parity (closure calling convention) =====
