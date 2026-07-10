@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct, hasDestructor, getAttachedOp, tupleTypeName } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct, hasDestructor, getAttachedOp, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
@@ -867,6 +867,15 @@ function genObjectType(g: CGen, t: Type): string {
 // Each variant Object type in typeChildren gets its own named struct.
 // The `as` cast maps to .vN member access at the codegen level.
 
+// Union variants that are not object-shaped: the tagged-union payload is the
+// raw C type itself (float32 | string), not a per-variant struct.
+function isPrimitiveVariant(v: Type | null): boolean {
+	if (v === null) return false;
+	if (v.kind === TypeKind.Null || v.kind === TypeKind.String || v.kind === TypeKind.StringLiteral
+		|| v.kind === TypeKind.Boolean || v.kind === TypeKind.BooleanLiteral) return true;
+	return isNumeric(v);
+}
+
 function genUnionType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 
@@ -911,6 +920,15 @@ function genUnionType(g: CGen, t: Type): string {
 	const canonicalNames: string[] = [];
 	let vi = 0;
 	while (vi < t.typeChildren.length) {
+		// Primitive/string variants (float32 | string) carry the raw C type as
+		// payload — no per-variant struct typedef. Null is tag-only ("").
+		const rawVariant = t.typeChildren[vi];
+		if (isPrimitiveVariant(rawVariant)) {
+			canonicalNames.push(rawVariant.kind === TypeKind.Null ? "" : getTypeDesc(g, rawVariant));
+			allFieldTypes.push([]);
+			vi += 1;
+			continue;
+		}
 		// Peel Ref/Ptr — interface variants are Ref<Struct> in the C backend.
 		// Without peel, variant.typeNames is empty and the variant struct emits
 		// no fields, breaking discriminated unions of named interfaces.
@@ -996,9 +1014,10 @@ function genUnionType(g: CGen, t: Type): string {
 	b.indent += 1;
 	vi = 0;
 	while (vi < t.typeChildren.length) {
-		// Use canonical name — duplicate variants share the same typedef
+		// Use canonical name — duplicate variants share the same typedef.
+		// "" = tag-only variant (Null): no payload member.
 		const memberType = canonicalNames[vi];
-		addLine(b, `${memberType} v${vi};`);
+		if (memberType !== "") addLine(b, `${memberType} v${vi};`);
 		vi += 1;
 	}
 	b.indent -= 1;
