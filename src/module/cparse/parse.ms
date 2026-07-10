@@ -687,6 +687,21 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 			skipFunctionBody(ctx);
 			continue;
 		}
+		// C11 _Static_assert(expr, "msg"); — value-level only, no declaration.
+		if (eq(ctx, "_Static_assert") || eq(ctx, "static_assert")) {
+			advance(ctx);
+			if (eq(ctx, "(")) {
+				advance(ctx);
+				let pdepth = 1;
+				while (!isEnd(ctx) && pdepth > 0) {
+					if (eq(ctx, "(")) pdepth = pdepth + 1;
+					if (eq(ctx, ")")) pdepth = pdepth - 1;
+					advance(ctx);
+				}
+			}
+			if (eq(ctx, ";")) advance(ctx);
+			continue;
+		}
 		// Statement keywords (return, if, while, for, switch, do, goto, break,
 		// continue, case, default) mean we're inside a function body that wasn't
 		// caught by skipFunctionBody. Skip to next } at depth 0.
@@ -793,9 +808,13 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 			});
 		}
 
-		// Skip initializer: = expr
+		// Skip initializer: = expr. Brace-match aggregate initializers
+		// ({1, 2} / { .a = 1 }) so their internal commas don't end the scan.
 		if (consume(ctx, "=")) {
-			while (!isEnd(ctx) && !eq(ctx, ";") && !eq(ctx, ",")) advance(ctx);
+			while (!isEnd(ctx) && !eq(ctx, ";") && !eq(ctx, ",")) {
+				if (eq(ctx, "{")) skipFunctionBody(ctx);
+				else advance(ctx);
+			}
 		}
 
 		// If we hit { instead of ;, it's a function body we didn't recognize — skip it
