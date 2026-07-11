@@ -10,7 +10,7 @@
 //   5. Value wrapping (assign): x = tok → x = { value: tok, present: true }
 
 import { Node, NodeKind, SourceLocation, MemberExprData, VariableDeclData, BinaryExprData, Type, TypeKind } from "../../ast/node";
-import { isStructType, isMaybeType, isStringLike, getProperty } from "../../checker/types";
+import { isStructType, isMaybeType, isTagCarriedUnion, getProperty } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeBool, makeNull, makeTypedObjectLiteral } from "../util";
@@ -54,7 +54,7 @@ function maybePayloadType(maybeT: Type | null, narrowed: Type): Type {
 	if (maybeT === null || maybeT.typeReturn === null) return narrowed;
 	// Tagged primitive unions only — all-strlit payloads are msString-carried
 	// and keep the narrowed type (identity at the C level).
-	if (maybeT.typeReturn.kind === TypeKind.Union && !isStringLike(maybeT.typeReturn)) return maybeT.typeReturn;
+	if (isTagCarriedUnion(maybeT.typeReturn)) return maybeT.typeReturn;
 	return narrowed;
 }
 

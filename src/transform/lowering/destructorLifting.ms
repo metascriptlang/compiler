@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { isPrimitiveKind, isNumeric, setAttachedOp, unwrapRef, unwrapRefNullUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName } from "../../checker/types";
+import { isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
@@ -720,13 +720,8 @@ function isPrimitiveOnlyUnion(t: Type): boolean {
 	let i = 0;
 	while (i < t.typeChildren.length) {
 		const m = t.typeChildren[i];
-		if (m === null) return false;
-		if (m.kind === TypeKind.String || m.kind === TypeKind.StringLiteral) {
-			strs += 1;
-		} else if (m.kind !== TypeKind.Boolean && m.kind !== TypeKind.BooleanLiteral
-			&& m.kind !== TypeKind.Null && !isNumeric(m)) {
-			return false;
-		}
+		if (!isPrimitiveUnionMember(m)) return false;
+		if (m !== null && (m.kind === TypeKind.String || m.kind === TypeKind.StringLiteral)) strs += 1;
 		i += 1;
 	}
 	return strs <= 1;
@@ -734,6 +729,12 @@ function isPrimitiveOnlyUnion(t: Type): boolean {
 
 function unionTagIs(n: Node, idx: number, loc: SourceLocation): Node {
 	return makeBinary(makeMember(clonePath(n, loc), "_tag", loc), "===", makeNumber(idx, loc), loc);
+}
+
+function tagGuardedStringCall(fnName: string, xf: Node, px: Node, py: Node, sIdx: number, buf: NodeBuf, loc: SourceLocation): void {
+	const b = newBuf();
+	genCall(fnName, "destroy", px, py, b, loc);
+	buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(b.items, loc), makeNull(loc), loc));
 }
 
 function primitiveUnionOp(hook: string, u: Type, xf: Node, yf: Node, buf: NodeBuf, loc: SourceLocation): void {
@@ -746,21 +747,15 @@ function primitiveUnionOp(hook: string, u: Type, xf: Node, yf: Node, buf: NodeBu
 	const px = makeMember(clonePath(xf, loc), vName, loc);
 	const py = makeMember(clonePath(yf, loc), vName, loc);
 	if (hook === "destroy") {
-		const b = newBuf();
-		genCall("msStringDecref", "destroy", px, py, b, loc);
-		buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(b.items, loc), makeNull(loc), loc));
+		tagGuardedStringCall("msStringDecref", xf, px, py, sIdx, buf, loc);
 		return;
 	}
 	if (hook === "wasMoved") {
-		const b = newBuf();
-		genCall("msStringWasMoved", "destroy", px, py, b, loc);
-		buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(b.items, loc), makeNull(loc), loc));
+		tagGuardedStringCall("msStringWasMoved", xf, px, py, sIdx, buf, loc);
 		return;
 	}
 	if (hook === "sink") {
-		const b = newBuf();
-		genCall("msStringDecref", "destroy", px, py, b, loc);
-		buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(b.items, loc), makeNull(loc), loc));
+		tagGuardedStringCall("msStringDecref", xf, px, py, sIdx, buf, loc);
 		defaultOp(hook, clonePath(xf, loc), clonePath(yf, loc), buf, loc);
 		return;
 	}

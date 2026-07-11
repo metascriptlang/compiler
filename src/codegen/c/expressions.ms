@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, awaitedType, unwrapRefNullUnion, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType } from "../../checker/types";
+import { isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -2072,7 +2072,7 @@ function wrapPrimitiveUnion(g: CGen, u: Type, idx: number, valC: string): string
 function litFieldPrimitiveUnion(node: Node, key: string): Type | null {
 	if (node.nodeType === null) return null;
 	const ft = getProperty(node.nodeType, key);
-	if (ft !== null && ft.kind === TypeKind.Union && !isStringLike(ft)) return ft;
+	if (isTagCarriedUnion(ft)) return ft;
 	return null;
 }
 
@@ -2082,14 +2082,12 @@ function litFieldPrimitiveUnion(node: Node, key: string): Type | null {
 function genTypeofExpr(g: CGen, opNode: Node, opC: string): string {
 	const t = opNode !== null ? opNode.nodeType : null;
 	// All-strlit unions are msString-carried — no _tag to switch on.
-	if (t !== null && t.kind === TypeKind.Union && !isStringLike(t)
-		&& t.typeChildren !== null && t.typeChildren.length > 0) {
+	if (isTagCarriedUnion(t)) {
 		return typeofTagSwitch(g, t, opC);
 	}
 	if (t !== null && isMaybeType(t) && t.typeReturn !== null) {
 		const inner = t.typeReturn;
-		const innerExpr = inner.kind === TypeKind.Union && !isStringLike(inner)
-				&& inner.typeChildren !== null && inner.typeChildren.length > 0
+		const innerExpr = isTagCarriedUnion(inner)
 			? typeofTagSwitch(g, inner, `(${opC}).value`)
 			: typeofConst(g, inner);
 		return `((${opC}).present ? ${innerExpr} : ${typeofStr(g, "object")})`;

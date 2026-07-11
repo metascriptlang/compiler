@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct, hasDestructor, getAttachedOp, tupleTypeName } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct, hasDestructor, getAttachedOp, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
@@ -867,15 +867,6 @@ function genObjectType(g: CGen, t: Type): string {
 // Each variant Object type in typeChildren gets its own named struct.
 // The `as` cast maps to .vN member access at the codegen level.
 
-// Union variants that are not object-shaped: the tagged-union payload is the
-// raw C type itself (float32 | string), not a per-variant struct.
-function isPrimitiveVariant(v: Type | null): boolean {
-	if (v === null) return false;
-	if (v.kind === TypeKind.Null || v.kind === TypeKind.String || v.kind === TypeKind.StringLiteral
-		|| v.kind === TypeKind.Boolean || v.kind === TypeKind.BooleanLiteral) return true;
-	return isNumeric(v);
-}
-
 function genUnionType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 
@@ -923,7 +914,7 @@ function genUnionType(g: CGen, t: Type): string {
 		// Primitive/string variants (float32 | string) carry the raw C type as
 		// payload — no per-variant struct typedef. Null is tag-only ("").
 		const rawVariant = t.typeChildren[vi];
-		if (isPrimitiveVariant(rawVariant)) {
+		if (isPrimitiveUnionMember(rawVariant)) {
 			canonicalNames.push(rawVariant.kind === TypeKind.Null ? "" : getTypeDesc(g, rawVariant));
 			allFieldTypes.push([]);
 			vi += 1;

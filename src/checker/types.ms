@@ -422,6 +422,9 @@ export enum PeelFlag {
 export const PEEL_ALIAS: int32 = 1;
 export const PEEL_DISTINCT: int32 = 2;
 export const PEEL_ALL: int32 = 3;
+// Maximum peel depth — guards against malformed cyclic/deeply-nested types.
+// 8 covers any realistic chain (Ref<GI<Ref<GI<...>>>> is already 4 levels).
+const PEEL_MAX_DEPTH = 8;
 
 // Universal peeler: strip transparent wrappers per the mask.
 // Does NOT peel GenericInstance — for shape queries, GenericInstance IS the answer
@@ -430,8 +433,12 @@ export const PEEL_ALL: int32 = 3;
 export function peelThrough(t: Type, mask: int32): Type | null {
 	if (t === null) return null;
 	let cur = t;
+	let _g = 0;
 	// Fixed-point loop — keep peeling until no layer matches the mask.
-	while (true) {
+	// Bounded by PEEL_MAX_DEPTH: a cyclic Alias/Distinct chain never reaches a
+	// fixpoint (next always differs from cur), so an unbounded loop would spin.
+	while (_g < PEEL_MAX_DEPTH) {
+		_g = _g + 1;
 		let next: Type = cur;
 		if (cur.kind === TypeKind.Alias && (mask & PEEL_ALIAS) !== 0
 			&& cur.typeReturn !== null) {
@@ -444,6 +451,7 @@ export function peelThrough(t: Type, mask: int32): Type | null {
 		if (next === cur) return cur;
 		cur = next;
 	}
+	return cur;
 }
 
 // isAwaitable — the canonical "can we await this?" question.
@@ -783,9 +791,6 @@ export function findVariantByDiscriminant(unionType: Type | null, enumValue: str
 //   - be present on every variant
 //   - have a distinct StringLiteral type in each variant (so we can disambiguate)
 // Returns the field name, or "" if no such field exists.
-// Maximum peel depth — guards against malformed cyclic/deeply-nested types.
-// 8 covers any realistic chain (Ref<GI<Ref<GI<...>>>> is already 4 levels).
-const PEEL_MAX_DEPTH = 8;
 
 // Preference order: first matching field encountered in variant 0.
 // Peel Ref/Ptr wrapper to reach the underlying Struct so variant field walks
@@ -1283,6 +1288,24 @@ export function isStringLike(t: Type | null): boolean {
 export function isFloatType(t: Type | null): boolean {
 	if (t === null) return false;
 	return t.kind === TypeKind.Float32 || t.kind === TypeKind.Float64;
+}
+
+// Single source of truth for what may live inside a primitive union
+// (`float32 | string`): the tagged-struct lowering only knows how to carry
+// these as raw C payload members.
+export function isPrimitiveUnionMember(m: Type | null): boolean {
+	if (m === null) return false;
+	if (m.kind === TypeKind.Null || m.kind === TypeKind.String || m.kind === TypeKind.StringLiteral
+		|| m.kind === TypeKind.Boolean || m.kind === TypeKind.BooleanLiteral) return true;
+	return isNumeric(m);
+}
+
+// True for unions lowered to `{ _tag; union {...} }` in C. All-strlit unions
+// are msString-carried (no _tag) and must never take this path.
+export function isTagCarriedUnion(t: Type | null): boolean {
+	if (t === null || t.kind !== TypeKind.Union) return false;
+	if (t.typeChildren === null || t.typeChildren.length === 0) return false;
+	return !isStringLike(t);
 }
 
 // ===== Min Arity (Default Parameters) =====
@@ -2173,22 +2196,33 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 // kind's spelling.
 export function typeNameOf(t: Type | null): string {
 	if (t === null) return "";
-	// Reference parity: ownership modifiers are transparent — unwrap before naming
-	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent) {
-		if (t.typeReturn !== null) return typeNameOf(t.typeReturn);
-		return "";
+	// Reference parity: ownership modifiers are transparent — unwrap before naming.
+	// Bounded peel loop (not self-recursion): a malformed cyclic wrapper alias
+	// whose typeReturn points back at itself would spin forever once tailCallLower
+	// rewrites the self-tail-call into while(true). Mirrors the PEEL_MAX_DEPTH peelers.
+	let cur: Type = t;
+	let prefix = "";
+	let _g = 0;
+	while (cur !== null && _g < PEEL_MAX_DEPTH) {
+		_g = _g + 1;
+		if (cur.kind === TypeKind.Sink || cur.kind === TypeKind.Lent) {
+			if (cur.typeReturn !== null) { cur = cur.typeReturn; continue; }
+			return prefix;
+		}
+		if (cur.kind === TypeKind.Var) {
+			if (cur.typeReturn !== null) { prefix = prefix + "out "; cur = cur.typeReturn; continue; }
+			return prefix + "out";
+		}
+		if (cur.kind === TypeKind.Ref || cur.kind === TypeKind.Ptr) {
+			if (cur.typeReturn !== null) { cur = cur.typeReturn; continue; }
+			return prefix;
+		}
+		break;
 	}
-	if (t.kind === TypeKind.Var) {
-		if (t.typeReturn !== null) return "out " + typeNameOf(t.typeReturn);
-		return "out";
-	}
-	if (t.kind === TypeKind.Struct) return t.typeName;
-	if (t.kind === TypeKind.GenericInstance) return t.typeName;  // "Map" for receiver matching
-	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
-		if (t.typeReturn !== null) return typeNameOf(t.typeReturn);
-		return "";
-	}
-	return match (t.kind) {
+	const t2: Type = cur;
+	if (t2.kind === TypeKind.Struct) return prefix + t2.typeName;
+	if (t2.kind === TypeKind.GenericInstance) return prefix + t2.typeName;  // "Map" for receiver matching
+	return prefix + match (t2.kind) {
 		TypeKind.String => "string",
 		TypeKind.Number => "number",
 		TypeKind.Boolean => "boolean",
@@ -2209,26 +2243,26 @@ export function typeNameOf(t: Type | null): string {
 		TypeKind.Borrow => "Borrow",
 		TypeKind.Tuple => "Tuple",
 		TypeKind.CString => "cstring",
-		TypeKind.StringLiteral => "\"" + t.typeName + "\"",
-		TypeKind.EnumLiteral => t.typeName + "." + (t.typeNames.length > 0 ? t.typeNames[0] : ""),
-		// Result and Promise are now GenericInstance — handled above via t.typeName
-		TypeKind.Enum => t.typeName,
-		TypeKind.TypeReference => t.typeName,
-		TypeKind.Distinct => t.typeName,
+		TypeKind.StringLiteral => "\"" + t2.typeName + "\"",
+		TypeKind.EnumLiteral => t2.typeName + "." + (t2.typeNames.length > 0 ? t2.typeNames[0] : ""),
+		// Result and Promise are now GenericInstance — handled above via t2.typeName
+		TypeKind.Enum => t2.typeName,
+		TypeKind.TypeReference => t2.typeName,
+		TypeKind.Distinct => t2.typeName,
 		TypeKind.Union => {
 			// Display string literal unions as "north" | "south".
 			// Children are rendered for display, so use typeDisplayName so a
 			// `null` member shows as "null" instead of an empty segment that
 			// would produce "string |  | int32".
-			if (t.typeChildren.length > 0) {
+			if (t2.typeChildren.length > 0) {
 				let display = "";
-				for (const child of t.typeChildren) {
+				for (const child of t2.typeChildren) {
 					if (display !== "") display = display + " | ";
 					display = display + typeDisplayName(child);
 				}
-				return display;
+				return prefix + display;
 			}
-			return t.typeName;
+			return prefix + t2.typeName;
 		},
 		_ => "",
 	};
@@ -2271,17 +2305,24 @@ export function typeDisplayName(t: Type | null): string {
 // (Sink/Lent/Var/Distinct/Ref/Ptr) and GenericInstance → base class, mirroring
 // typeNameOf's unwrap policy so `sink m: Map<K,V>` still registers as IndexableMap.
 export function getBuiltinKind(t: Type | null): string {
-	if (t === null) return "";
-	if (t.sym !== null && t.sym.builtinKind !== "") return t.sym.builtinKind;
-	if (t.kind === TypeKind.GenericInstance && t.typeExtra !== null) {
-		return getBuiltinKind(t.typeExtra);
-	}
-	// Transparent wrappers — unwrap to inner type before looking up the tag.
-	if ((t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr
-			|| t.kind === TypeKind.Sink || t.kind === TypeKind.Lent
-			|| t.kind === TypeKind.Var || t.kind === TypeKind.Distinct)
-			&& t.typeReturn !== null) {
-		return getBuiltinKind(t.typeReturn);
+	let cur: Type | null = t;
+	let _g = 0;
+	while (cur !== null && _g < PEEL_MAX_DEPTH) {
+		_g = _g + 1;
+		if (cur.sym !== null && cur.sym.builtinKind !== "") return cur.sym.builtinKind;
+		if (cur.kind === TypeKind.GenericInstance && cur.typeExtra !== null) {
+			cur = cur.typeExtra;
+			continue;
+		}
+		// Transparent wrappers — unwrap to inner type before looking up the tag.
+		if ((cur.kind === TypeKind.Ref || cur.kind === TypeKind.Ptr
+				|| cur.kind === TypeKind.Sink || cur.kind === TypeKind.Lent
+				|| cur.kind === TypeKind.Var || cur.kind === TypeKind.Distinct)
+				&& cur.typeReturn !== null) {
+			cur = cur.typeReturn;
+			continue;
+		}
+		break;
 	}
 	return "";
 }
