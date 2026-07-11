@@ -1,8 +1,8 @@
 // Token utilities for the MetaScript lexer.
 // TokenKind + Token live in std/meta/token (std must never import src).
 
-export * from "../../std/meta/token";
-import { TokenKind, Token } from "../../std/meta/token";
+export * from "std/meta/token";
+import { TokenKind, Token } from "std/meta/token";
 
 export function createToken(kind: TokenKind, tokenValue: string, lineNum: number): Token {
 	return { kind, value: tokenValue, line: lineNum, column: 0, rawValue: "" };
