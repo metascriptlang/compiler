@@ -2444,7 +2444,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		if (ctx.extensionRegistry !== null) {
 			const me = d.callee.data as MemberExprData;
 			const objType = me.object.nodeType;
-			if (objType !== null && objType.kind !== TypeKind.Unknown) {
+			if (objType !== null) {
 				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
 				let filtered = filterExtsByReceiverType(allByName, objType);
 				// Type-level access (e.g., Buffer.method()) — only static extensions apply.

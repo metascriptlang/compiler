@@ -549,6 +549,9 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	if (fnType.kind !== TypeKind.Function) return false;
 	if (fnType.typeChildren.length === 0) return false;
 	const receiverType = fnType.typeChildren[0];
+	// Erased object (unknown) binds only the unknown catch-all, never a concrete
+	// overload — Nim parity: an unresolved receiver isn't matchable by a concrete param.
+	if (objType.kind === TypeKind.Unknown) return receiverType.kind === TypeKind.Unknown;
 	// Unknown receiver: match any (conservative — unresolved type)
 	if (receiverType.kind === TypeKind.Unknown) return true;
 	// Array methods are Ref-agnostic: T[] (Ref<Array>) and Vec<T> (value Array) share
