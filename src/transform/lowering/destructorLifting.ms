@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { isPrimitiveKind, isNumeric, setAttachedOp, unwrapRef, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName } from "../../checker/types";
+import { isPrimitiveKind, isNumeric, setAttachedOp, unwrapRef, unwrapRefNullUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
@@ -663,6 +663,16 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.Union => {
+			const refInner = unwrapRefNullUnion(fieldType);
+			if (refInner !== null) {
+				if (refInner.kind === TypeKind.Ptr || (refInner.sym !== null && refInner.sym.symbolKind === SymbolKind.Actor)) {
+					defaultOp(hook, xf, yf, buf, loc);
+				} else {
+					const cyclic = isCyclicType(fieldType, lctx, visited);
+					refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), buf, loc);
+				}
+				return;
+			}
 			// Pure strlit union is msString-backed (see isTaggedUnion below) —
 			// same ops as a String field, never named tagged-union hooks.
 			if (isStringLike(fieldType)) {
