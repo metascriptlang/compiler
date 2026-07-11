@@ -166,14 +166,7 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 		if (s === "_Alignas") {
 			advance(ctx);
 			expect(ctx, "(");
-			// Skip expression or typename
-			let depth = 1;
-			while (!isEnd(ctx) && depth > 0) {
-				if (eq(ctx, "(")) depth = depth + 1;
-				if (eq(ctx, ")")) depth = depth - 1;
-				if (depth > 0) advance(ctx);
-			}
-			if (eq(ctx, ")")) advance(ctx);
+			skipParens(ctx, 1);
 			continue;
 		}
 
@@ -264,6 +257,18 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 	return ty;
 }
 
+// ===== Balanced-paren skipping =====
+
+// Cursor ends just past the closing `)` that balances `startDepth` opens.
+function skipParens(ctx: ParseCtx, startDepth: number): void {
+	let depth = startDepth;
+	while (!isEnd(ctx) && depth > 0) {
+		if (eq(ctx, "(")) depth = depth + 1;
+		if (eq(ctx, ")")) depth = depth - 1;
+		advance(ctx);
+	}
+}
+
 // ===== Skip __attribute__((...)) =====
 
 function skipAttribute(ctx: ParseCtx): void {
@@ -272,13 +277,7 @@ function skipAttribute(ctx: ParseCtx): void {
 	advance(ctx); // skip (
 	if (!eq(ctx, "(")) return;
 	advance(ctx); // skip (
-	let depth = 2;
-	while (!isEnd(ctx) && depth > 0) {
-		if (eq(ctx, "(")) depth = depth + 1;
-		if (eq(ctx, ")")) depth = depth - 1;
-		if (depth > 0) advance(ctx);
-	}
-	if (eq(ctx, ")")) advance(ctx);
+	skipParens(ctx, 2);
 }
 
 // ===== Pointers =====
@@ -461,13 +460,7 @@ function skipDeclarator(ctx: ParseCtx): void {
 	}
 	if (eq(ctx, "(")) {
 		advance(ctx);
-		let depth = 1;
-		while (!isEnd(ctx) && depth > 0) {
-			if (eq(ctx, "(")) depth = depth + 1;
-			if (eq(ctx, ")")) depth = depth - 1;
-			if (depth > 0) advance(ctx);
-		}
-		if (eq(ctx, ")")) advance(ctx);
+		skipParens(ctx, 1);
 	} else if (eq(ctx, "[")) {
 		advance(ctx);
 		while (!isEnd(ctx) && !eq(ctx, "]")) advance(ctx);
@@ -692,12 +685,7 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 			advance(ctx);
 			if (eq(ctx, "(")) {
 				advance(ctx);
-				let pdepth = 1;
-				while (!isEnd(ctx) && pdepth > 0) {
-					if (eq(ctx, "(")) pdepth = pdepth + 1;
-					if (eq(ctx, ")")) pdepth = pdepth - 1;
-					advance(ctx);
-				}
+				skipParens(ctx, 1);
 			}
 			if (eq(ctx, ";")) advance(ctx);
 			continue;
