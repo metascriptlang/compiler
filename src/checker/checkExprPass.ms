@@ -4039,12 +4039,15 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	// reference: skip pointer types → lookup field → make dereference
 	const needsDeref = isPointerInC(objType, ctx);
 	let resolvedObjType = objType;
-	if (needsDeref && objType.typeReturn !== null) {
-		resolvedObjType = objType.typeReturn;
-		// Ptr<Ref<T>>: unwrap both layers to reach the underlying Struct.
-		// Ptr wraps Ref for class pointer fields — a single HiddenDeref dereferences both.
-		if (resolvedObjType.kind === TypeKind.Ref && resolvedObjType.typeReturn !== null) {
-			resolvedObjType = resolvedObjType.typeReturn;
+	if (needsDeref) {
+		if (objType.typeReturn !== null) {
+			resolvedObjType = objType.typeReturn;
+			if (resolvedObjType.kind === TypeKind.Ref && resolvedObjType.typeReturn !== null) {
+				resolvedObjType = resolvedObjType.typeReturn;
+			}
+		} else {
+			const peeled = peelToStructOrUnion(objType);
+			if (peeled !== null) resolvedObjType = peeled;
 		}
 	}
 	// Generic match-type alias: peel GenericInstance through typeReturn/typeExtra
@@ -4227,7 +4230,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	}
 	if (propType.kind !== TypeKind.Unknown) {
 		// reference parity: insert HiddenDeref AFTER field resolution succeeds
-		if (needsDeref) {
+		if (needsDeref && d.object.kind !== NodeKind.HiddenDeref) {
 			const tok = createToken(TokenKind.Ident, "", node.location.line);
 			const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
 			derefNode.nodeType = resolvedObjType;

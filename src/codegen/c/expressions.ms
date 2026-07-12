@@ -1497,6 +1497,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				}
 			}
 		}
+		if (walkObj !== d.object) {
+			objIsPtr = false;
+		}
 		if (objIsPtr) {
 			ctx.results.push(`${obj}->${field}`);
 		} else {
