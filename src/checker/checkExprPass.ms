@@ -802,7 +802,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& ctx.initTracker.leftPartOfAsgn === 0) {
 				const loc = node.location;
 				const memberTok = createToken(TokenKind.Ident, "", loc.line);
-				const memberData: MemberExprData = { object: d.array, property: "get", isOptional: false };
+				const memberData: NodeData = { object: d.array, property: "get", isOptional: false };
 				const memberNode = createNode(NodeKind.MemberExpr, memberData, memberTok);
 				const callArgs: Node[] = [];
 				callArgs.push(d.index);
@@ -1832,7 +1832,7 @@ function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType: Type,
 // inferred type.
 function rewriteAsMethodCall(ctx: CheckerContext, node: Node, receiver: Node, methodName: string, args: Node[]): Type {
 	const tok = createToken(TokenKind.Ident, "", node.location.line);
-	const member: MemberExprData = { object: receiver, property: methodName, isOptional: false };
+	const member: NodeData = { object: receiver, property: methodName, isOptional: false };
 	const memberNode = createNode(NodeKind.MemberExpr, member, tok);
 	node.kind = NodeKind.CallExpr;
 	node.data = {
