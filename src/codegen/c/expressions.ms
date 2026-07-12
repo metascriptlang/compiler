@@ -23,6 +23,28 @@ import { useHeader } from "./context";
 import { GcMode } from "../../checker/context";
 import { lookupCtorDefaults } from "../../checker/instantiate";
 
+// Constructor parameter types for a class symbol, reachable cross-module.
+// Same-module the class symbol carries its ClassDecl directly; imported symbols
+// do not (ClassDecl AST is intentionally not propagated through ExportedSymInfo,
+// to avoid polluting the importer's type registry), but the Type.sym chain
+// bridges to the defining module's decl — the same bridge used for InterfaceDecl.
+function crossModuleCtorParamTypes(sym: Symbol): Type[] {
+	if (sym === null) return null as unknown as Type[];
+	let dn = sym.declNode;
+	if ((dn === null || dn.kind !== NodeKind.ClassDecl) && sym.symbolType !== null && sym.symbolType.sym !== null) {
+		dn = sym.symbolType.sym.declNode;
+	}
+	if (dn === null || dn.kind !== NodeKind.ClassDecl) return null as unknown as Type[];
+	const body = (dn.data as ClassDeclData).classBody;
+	for (const member of body) {
+		if (member.kind === NodeKind.ConstructorDecl && member.nodeType !== null
+				&& member.nodeType.kind === TypeKind.Function) {
+			return member.nodeType.typeChildren;
+		}
+	}
+	return null as unknown as Type[];
+}
+
 // Build a msAllocTyped/msAllocTypedUninit call expression. Under --gc=manual,
 // TypeInfo is not emitted so we pass NULL; otherwise we reference the type's
 // TypeInfo global.
@@ -961,14 +983,18 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
 			const initName = cName + "_init";
 			const ctorEntry = lookupCtorDefaults(cName + "_new");
+			let ctorChildren: Type[] = null as unknown as Type[];
+			if (ctorEntry !== null && ctorEntry.fnType !== null) {
+				ctorChildren = ctorEntry.fnType.typeChildren;
+			} else {
+				ctorChildren = crossModuleCtorParamTypes(d.newCallee.resolvedSym);
+			}
 			const ctorProtoKey = "proto:" + initName;
-			if (ctorEntry !== null && ctorEntry.fnType !== null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
+			if (ctorChildren !== null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
 				nameSetAdd(g.declaredProcs, ctorProtoKey);
 				let ctorProtoParams = `${cName}* this`;
-				if (ctorEntry.fnType.typeChildren !== null) {
-					for (let cpi = 0; cpi < ctorEntry.fnType.typeChildren.length; cpi += 1) {
-						ctorProtoParams = ctorProtoParams + ", " + getTypeDesc(g, ctorEntry.fnType.typeChildren[cpi]);
-					}
+				for (let cpi = 0; cpi < ctorChildren.length; cpi += 1) {
+					ctorProtoParams = ctorProtoParams + ", " + getTypeDesc(g, ctorChildren[cpi]);
 				}
 				addLine(sec(g, CSection.ProcHeaders), `void ${initName}(${ctorProtoParams});`);
 			}
@@ -1682,10 +1708,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				}
 				return;
 			}
-		}
-		if (hd.expr.kind === NodeKind.Identifier && isIndirectParam(p, (hd.expr.data as IdentifierData).name)) {
-			ctx.results.push(inner);
-			return;
 		}
 		ctx.results.push(`(*${inner})`);
 		return;
