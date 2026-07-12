@@ -49,7 +49,7 @@ export function compileToC(source: string): CompileResult {
 	// loadModule canonicalizes the entry path to absolute (loader.ms:393) —
 	// findModule uses string equality, so we must canonicalize here too.
 	const modPath = canonicalModulePath("test/e2e.ms");
-	const entries = [{ entryPath: modPath, entrySource: source }];
+	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph(modPath, provider);
 
@@ -86,7 +86,7 @@ export function compileToC(source: string): CompileResult {
 export function compileToJS(source: string): CompileResult {
 	resetAllSideChannels();
 	const modPath = canonicalModulePath("test/e2e.ms");
-	const entries = [{ entryPath: modPath, entrySource: source }];
+	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph(modPath, provider);
 
@@ -103,7 +103,7 @@ export function compileToJS(source: string): CompileResult {
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 
 	const transformed = transformProgram(pr.value, checkerCtx, true);
-	return Result.ok(generateJS(transformed));
+	return Result.ok(generateJS(transformed, []));
 }
 
 // ===== Project compilation (multiple source files with imports) =====
@@ -227,7 +227,7 @@ export function compileProjectToJS(entries: MapEntry[], entryPath: string): stri
 		}
 
 		const transformed = transformProgram(pr.value, ctx, true);
-		combined = combined + generateJS(transformed);
+		combined = combined + generateJS(transformed, []);
 	}
 
 	return combined;
