@@ -4045,9 +4045,6 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			if (resolvedObjType.kind === TypeKind.Ref && resolvedObjType.typeReturn !== null) {
 				resolvedObjType = resolvedObjType.typeReturn;
 			}
-		} else {
-			const peeled = peelToStructOrUnion(objType);
-			if (peeled !== null) resolvedObjType = peeled;
 		}
 	}
 	// Generic match-type alias: peel GenericInstance through typeReturn/typeExtra
