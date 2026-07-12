@@ -1683,6 +1683,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				return;
 			}
 		}
+		if (hd.expr.kind === NodeKind.Identifier && isIndirectParam(p, (hd.expr.data as IdentifierData).name)) {
+			ctx.results.push(inner);
+			return;
+		}
 		ctx.results.push(`(*${inner})`);
 		return;
 	}
