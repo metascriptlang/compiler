@@ -1728,6 +1728,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${inner}})`);
 				return;
 			}
+			ctx.results.push(inner);
+			return;
 		}
 		ctx.results.push(`((${targetC})(${inner}))`);
 		return;
