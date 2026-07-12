@@ -847,6 +847,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 			} else if (arrType.kind === TypeKind.String) {
 				accessType = stringType();
+			} else if (arrType.kind === TypeKind.Tuple && d.index.kind === NodeKind.NumberLiteral
+					&& arrType.typeChildren !== null) {
+				const idx = (d.index.data as NumberLiteralData).value;
+				accessType = (idx >= 0 && idx < arrType.typeChildren.length)
+					? arrType.typeChildren[idx] : unknownType();
 			} else {
 				accessType = getElementType(arrType);
 			}
