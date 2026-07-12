@@ -258,6 +258,11 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	if (source.kind === target.kind) return false;
 	// Numeric widening/narrowing: int32→number, float32→number, etc.
 	if (isNumeric(source) && isNumeric(target)) return true;
+	// Variant struct → discriminated union: different C layouts require
+	// proper construction (tag + variant slot), not a raw cast.
+	if (target.kind === TypeKind.Union && target.typeChildren !== null && source.kind === TypeKind.Struct) {
+		return true;
+	}
 	// Array/SizedArray/String to Span coercion requires struct initializer
 	if (target.kind === TypeKind.Span) {
 		if (source.kind === TypeKind.Array || source.kind === TypeKind.SizedArray) return true;

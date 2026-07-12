@@ -1713,6 +1713,22 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`*((${targetC}*)&(${inner}))`);
 			return;
 		}
+		// Variant struct → discriminated union: construct with tag + variant slot.
+		// C layouts differ (variant = small struct, union = tagged union with all
+		// variant slots) — a raw cast silently misaligns fields.
+		if (d.convType.kind === TypeKind.Union && d.convType.typeChildren !== null) {
+			const srcType = d.convExpr.nodeType;
+			let vi = 0;
+			for (const child of d.convType.typeChildren) {
+				if (srcType !== null && srcType.kind === TypeKind.Struct && child.kind === TypeKind.Struct
+					&& child.typeName === srcType.typeName) break;
+				vi += 1;
+			}
+			if (vi < d.convType.typeChildren.length) {
+				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${inner}})`);
+				return;
+			}
+		}
 		ctx.results.push(`((${targetC})(${inner}))`);
 		return;
 	}
