@@ -31,7 +31,7 @@ import {
 } from "../util";
 import { createPtr, createRef, unknownType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 import {
 	DetectionState, createDetectionState, detectPass,
 	detectionGetCaptures, detectionGetCapturedIdents,
@@ -1072,7 +1072,7 @@ function drainPendingRewrites(state: LiftState, pendingBefore: number, result: N
 	}
 }
 
-function walkLiftStmtList(stmts: Node[], state: LiftState): Node[] {
+function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean): Node[] {
 	const result: Node[] = [];
 	let si = 0;
 	while (si < stmts.length) {
@@ -1121,7 +1121,11 @@ function walkLiftStmtList(stmts: Node[], state: LiftState): Node[] {
 				stmts[si] = makeExprStmt(makeAssign(lhs, init, stmtLoc), stmtLoc);
 			}
 		}
-		result.push(stmts[si]);
+		if (!isTopLevel && stmts[si].kind === NodeKind.FunctionDecl) {
+			state.liftedFunctions.push(stmts[si]);
+		} else {
+			result.push(stmts[si]);
+		}
 		si += 1;
 	}
 	return result;
@@ -1137,7 +1141,7 @@ function walkLift(node: Node, state: LiftState): void {
 			const savedHoisted = state.hoistedEnvDecls;
 			state.currentStmts = d.programStmts;
 			state.hoistedEnvDecls = [];
-			d.programStmts = walkLiftStmtList(d.programStmts, state);
+			d.programStmts = walkLiftStmtList(d.programStmts, state, true);
 			d.programStmts = prependHoistedEnvDecls(state.hoistedEnvDecls, d.programStmts);
 			state.hoistedEnvDecls = savedHoisted;
 			state.currentStmts = savedStmts;
@@ -1148,7 +1152,7 @@ function walkLift(node: Node, state: LiftState): void {
 			const savedStmts = state.currentStmts;
 			const savedIdx = state.currentStmtIdx;
 			state.currentStmts = d.statements;
-			d.statements = walkLiftStmtList(d.statements, state);
+			d.statements = walkLiftStmtList(d.statements, state, false);
 			state.currentStmts = savedStmts;
 			state.currentStmtIdx = savedIdx;
 		},
@@ -1661,6 +1665,16 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 test "no closures passthrough" { assert stmtCountAfter("const x = 1;", lowerLambda) === 1; }
 
 test "function without capture unchanged" { assert firstStmtKindAfter("function foo(x) { return x; }", lowerLambda) === NodeKind.FunctionDecl; }
+
+test "nested function hoisted to top level" {
+	const result = parseInput("function outer() { function f() { return 1; } f(); }");
+	if (!result.ok) { assert false; return; }
+	const lowered = lowerLambda(result.value, makeCtx());
+	const stmts = getStmts(lowered);
+	assert stmts.length === 2;
+	assert stmts[0].kind === NodeKind.FunctionDecl;
+	assert stmts[1].kind === NodeKind.FunctionDecl;
+}
 
 test "non-capturing arrow lifted" {
 	// Arrow lifted to module-level FunctionDecl + original VariableDecl = 2 stmts

@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { unknownType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
@@ -39,7 +39,15 @@ function collectDecl(ctx: CheckerContext, node: Node): void {
 			const gSym = lookupLocal(ctx.table, (node.data as VariableDeclData).declName);
 			if (gSym !== null) setFlag(gSym, SymbolFlag.Global);
 		},
-		NodeKind.TestDecl => {},
+		NodeKind.TestDecl => {
+			const td = node.data as TestDeclData;
+			if (td.testBody !== null && td.testBody.kind === NodeKind.BlockStmt) {
+				const bd = td.testBody.data as BlockStmtData;
+				for (const stmt of bd.statements) {
+					collectDecl(ctx, stmt);
+				}
+			}
+		},
 		_ => {},
 	};
 }
@@ -87,7 +95,15 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 			const gSym2 = lookupLocal(ctx.table, (node.data as VariableDeclData).declName);
 			if (gSym2 !== null) setFlag(gSym2, SymbolFlag.Global);
 		},
-		NodeKind.TestDecl => {},
+		NodeKind.TestDecl => {
+			const td = node.data as TestDeclData;
+			if (td.testBody !== null && td.testBody.kind === NodeKind.BlockStmt) {
+				const bd = td.testBody.data as BlockStmtData;
+				for (const stmt of bd.statements) {
+					collectDeclLocal(ctx, stmt);
+				}
+			}
+		},
 		_ => {},
 	};
 }
