@@ -526,7 +526,7 @@ function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: Nod
 		buf.items.push(makeExprStmt(makeAssign(xf, yf, loc), loc));
 		return;
 	}
-	const name = hook === "wasMoved" ? "msObjectWasMoved" : typeName + hookSuffix(hook);
+	const name = typeName + hookSuffix(hook);
 	// Named-type hooks expect pointers — wrap in HiddenAddr
 	const ax = makeHiddenAddr(xf, loc);
 	if (hook === "destroy" || hook === "wasMoved") {
