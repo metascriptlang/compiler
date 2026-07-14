@@ -9,7 +9,7 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { isSinkType, createPrimitive, isAwaitable } from "../checker/types";
 import { lookupSymbol, lookupLocal, hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
@@ -160,6 +160,13 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		// (injectdestructors.nim:1028). A fresh RC call under a conv still produces an owned
 		// value; the conv's NodeFlag.Cursor only marks the RESULT as a borrow, not the inner call.
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => processConvWrapper(node, dctx, mode),
+		// `!x` / `-x` / `~x` (UnaryExpr) — transparent for ownership like the wrappers above:
+		// the operator consumes the operand's VALUE, but a fresh RC call nested inside the
+		// operand still produces an owned temp that needs capture. Without this case the walk
+		// hits `_ => node` and STOPS at the operator, so e.g. `if (!f(g()))` never reaches the
+		// owned `g()` → its temp leaks. Nim never hits this: `not` is nkPrefix ∈ nkCallKinds, so
+		// it flows through the same per-arg recursion as any call (p(arg, normal) + ensureDestruction).
+		NodeKind.UnaryExpr => processUnaryWrapper(node, dctx, mode),
 		_ => node,
 	};
 	// ONE place (Reference parity: Nim's p() calls ensureDestruction from the central processor in
@@ -188,6 +195,12 @@ function processAssertionWrapper(node: Node, dctx: DrcContext, mode: DrcMode): N
 function processConvWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cv = node.data as HiddenStdConvData;
 	cv.convExpr = processNode(cv.convExpr, dctx, mode);
+	return node;
+}
+
+function processUnaryWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
+	const u = node.data as UnaryExprData;
+	u.operand = processNode(u.operand, dctx, mode);
 	return node;
 }
 
