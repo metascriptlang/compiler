@@ -44,7 +44,7 @@ function collectDecl(ctx: CheckerContext, node: Node): void {
 			if (td.testBody !== null && td.testBody.kind === NodeKind.BlockStmt) {
 				const bd = td.testBody.data as BlockStmtData;
 				for (const stmt of bd.statements) {
-					collectDecl(ctx, stmt);
+					if (stmt.kind === NodeKind.FunctionDecl) collectDecl(ctx, stmt);
 				}
 			}
 		},
@@ -100,7 +100,7 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 			if (td.testBody !== null && td.testBody.kind === NodeKind.BlockStmt) {
 				const bd = td.testBody.data as BlockStmtData;
 				for (const stmt of bd.statements) {
-					collectDeclLocal(ctx, stmt);
+					if (stmt.kind === NodeKind.FunctionDecl) collectDeclLocal(ctx, stmt);
 				}
 			}
 		},
