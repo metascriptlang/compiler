@@ -43,6 +43,10 @@ if [ "$SYNC_BINARY" = "1" ]; then
 	if [ "$CHECK" = "1" ]; then
 		echo "would: cp $SRC/msc → $DEST/bin/msc"
 	else
+		# rm before cp: overwriting the binary in place reuses the inode, and
+		# macOS AMFI still holds the old cdhash for it → new content fails
+		# signature validation → SIGKILL on first run. A fresh inode avoids it.
+		rm -f "$DEST/bin/msc"
 		cp "$SRC/msc" "$DEST/bin/msc"
 		chmod +x "$DEST/bin/msc"
 		echo "synced binary → $DEST/bin/msc"
