@@ -2,7 +2,8 @@
 //
 // Each scope (function, block, loop) tracks:
 //   - varsToCleanup: variables needing =destroy at scope exit
-//   - wasMoved: variables whose ownership was transferred (skip destroy)
+//   - wasMoved: expr-level wasMoved calls (finally, before destroys) + var-level move
+//     bookkeeping — destroys are UNCONDITIONAL; moved vars are zeroed inline at the move site
 //   - needsTry: whether scope needs try/finally wrapping for cleanup
 //
 // Arrays passed by pointer — bare T[] types (wrappers removed).
@@ -32,11 +33,16 @@ export class MovedVar {
 	exprNode: Node;        // pre-built wasMoved call node (null for variable-level moves)
 }
 
+export class BorrowRead {
+	readName: string;      // variable name read inline (Normal mode) in the current statement
+	readNode: Node;        // the identifier node — rewritten in place if the var moves later
+}
+
 // ===== DRC Scope =====
 
 export interface DrcScope {
 	varsToCleanup: VarInfo[];     // variables needing cleanup at scope exit
-	wasMoved: MovedVar[];         // moved vars + expr-level wasMoved calls
+	wasMoved: MovedVar[];         // expr-level wasMoved calls (emitted in finally) + var-level move bookkeeping
 	preStmts: Node[];             // stmts to flush before current statement (per-scope isolation, reference parity)
 	pendingStmts: Node[];         // stmts to flush after current statement (per-scope isolation, reference parity)
 	needsTry: boolean;            // does this scope need try/finally wrapping?
@@ -65,6 +71,8 @@ export interface DrcContext {
 	cfgCache: CfgCache;             // CFG cache per variable — Phase C
 	currentFuncBody: Node;          // current function body for CFG building — Phase C
 	currentFuncName: string;        // current function name — for DRC hook detection
+	stmtBorrowReads: BorrowRead[];  // Normal-mode inline reads of RC vars in the current statement
+	                                // — retro-hoisted to borrow temps if the var moves later in it
 	skipAwaitableCapture: boolean;  // set ONLY while walking a non-RC binding/cond initializer:
 	                                // ensureDestruction must not capture a future there (the
 	                                // await/spawn lowering's stepper owns it — PARALOCK). The
@@ -86,6 +94,7 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		cfgCache: createCfgCache(),
 		currentFuncBody: null as unknown as Node,
 		currentFuncName: "",
+		stmtBorrowReads: [],
 		skipAwaitableCapture: false,
 	};
 }
@@ -162,7 +171,8 @@ export function wasMovedInScope(scope: DrcScope, varName: string): boolean {
 	return false;
 }
 
-// Record move in the scope that actually tracks the variable (for return cleanup)
+// Record move bookkeeping in the scope that tracks the variable — read only by
+// varMovedInContext (the self-consume assignment gates); cleanup destroys unconditionally.
 export function recordMoveInContext(dctx: DrcContext, varName: string): void {
 	let i = dctx.scopes.length;
 	while (i > 0) {

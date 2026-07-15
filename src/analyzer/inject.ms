@@ -22,7 +22,7 @@ import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify"
 import {
 	DrcContext, DrcScope, noSym,
 	createDrcContext, pushScope, popScope, currentScope, scopeDepth,
-	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, varMovedInContext, clearMoveInContext, findVarInfo, findVarInfoInContext, findVarInfoInFunction,
+	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, varMovedInContext, clearMoveInContext, findVarInfo, findVarInfoInContext, findVarInfoInFunction, BorrowRead,
 	setNeedsTryToLoop, setNeedsTryAll, addPending, hasPending, clearPendingForVar,
 	addPre,
 	pushOuterStmts, popOuterStmts,
@@ -400,6 +400,50 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 	return makeIdentResolved(tmpSym, loc);
 }
 
+// The pre-hoisted zero in destructiveMoveVar reorders against same-statement reads
+// that stay inline (Nim's zero sits inline at the occurrence via nkStmtListExpr).
+// Re-sequence: capture each earlier inline read into a plain borrow temp — its
+// preStmt lands before the zero — and rewrite the read node in place.
+function retroHoistStmtReads(srcName: string, fallbackType: Type, dctx: DrcContext): void {
+	const remaining: BorrowRead[] = [];
+	for (const r of dctx.stmtBorrowReads) {
+		if (r.readName !== srcName) {
+			remaining.push(r);
+			continue;
+		}
+		const loc = r.readNode.location;
+		const readType = r.readNode.nodeType !== null ? r.readNode.nodeType : fallbackType;
+		const bSym = freshTempSym(dctx.ctx, "pborrow", readType);
+		const init = makeIdentResolved(r.readNode.resolvedSym, loc);
+		init.nodeType = readType;
+		const decl = makeVarDecl(bSym.name, init, DeclKind.Const, loc);
+		decl.nodeType = readType;
+		decl.resolvedSym = bSym;
+		addPre(dctx, decl);
+		r.readNode.resolvedSym = bSym;
+		(r.readNode.data as IdentifierData).name = bSym.name;
+	}
+	dctx.stmtBorrowReads = remaining;
+}
+
+// Nim `destructiveMoveVar` via §3 hoisting (no nkStmtListExpr): pre-statements
+// `const $move_N = src; wasMoved(src)`, yield `$move_N`. The blit captures the value
+// before the zero, so a same-statement destroy-old of src sees NULL → runtime no-op.
+function destructiveMoveVar(srcExpr: Node, rcInfo: RcInfo, dctx: DrcContext): Node {
+	const loc = srcExpr.location;
+	const srcName = (srcExpr.data as IdentifierData).name;
+	retroHoistStmtReads(srcName, srcExpr.nodeType, dctx);
+	const tmpSym = freshTempSym(dctx.ctx, "move", srcExpr.nodeType);
+	setFlag(tmpSym, SymbolFlag.SinkTemp);
+	const tmpName = tmpSym.name;
+	const tmpDecl = makeVarDecl(tmpName, srcExpr, DeclKind.Const, loc);
+	if (srcExpr.nodeType !== null) tmpDecl.nodeType = srcExpr.nodeType;
+	tmpDecl.resolvedSym = tmpSym;
+	addPre(dctx, tmpDecl);
+	addPre(dctx, makeWasMovedCall(srcName, rcInfo, loc, srcExpr.resolvedSym));
+	return makeIdentResolved(tmpSym, loc);
+}
+
 function processMember(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const md = node.data as MemberExprData;
 	md.object = processNode(md.object, dctx, DrcMode.Normal);
@@ -514,9 +558,9 @@ function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const md = node.data as MoveExprData;
 	md.moveArg = processNode(md.moveArg, dctx, DrcMode.Consumed);
-	// Emit wasMoved on the source so scope cleanup zeros it before destroy.
-	// For identifiers: recordMoveInContext marks the var as moved (skip destroy, emit wasMoved in finally).
-	// For member/array: recordMoveExpr stores wasMoved call node in scope (emitted in finally before destroy).
+	// Identifiers: the Consumed walk above already blit+zeroed via destructiveMoveVar;
+	// recordMoveInContext stays as bookkeeping for the self-consume assignment gates.
+	// Fields/elements: recordMoveExpr defers wasMoved to the finally, before the container destroy.
 	const moveType = md.moveArg.nodeType;
 	if (moveType !== null) {
 		const rcInfo = classifyType(moveType, dctx.ctx);
@@ -574,20 +618,32 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const elseProcessed = processBranchAssign(tmpName, tmpSym, resultType, cd.ternaryAlternate, dctx, loc);
 	popScope(dctx);
 	addPre(dctx, makeIf(cd.ternaryCondition, makeBlock(thenProcessed, loc), makeBlock(elseProcessed, loc), loc));
-	// Reference parity: $cond temp is consumed by enclosing expression (object literal field,
-	// call arg, etc.) in SinkArg/Consumed mode. Mark moved so scope cleanup won't double-free.
-	// Safe: $cond is single-use — created here, consumed once by caller.
+	// $cond is single-use, consumed by the enclosing expression in SinkArg/Consumed mode.
+	// Move it out through destructiveMoveVar: blit to $move + wasMoved($cond) as pre-stmts,
+	// so the unconditional scope-exit destroy of $cond no-ops (Nim Rule-3; pre-stmts flush
+	// before the consuming statement, so the return position is covered too).
 	if (mode === DrcMode.SinkArg || mode === DrcMode.Consumed) {
-		recordMove(dctx, tmpName);
+		if (rcInfo.needsCleanup && rcInfo.wasMovedFn !== "") {
+			const condRef = makeIdentResolved(tmpSym, loc);
+			condRef.nodeType = resultType;
+			return destructiveMoveVar(condRef, rcInfo, dctx);
+		}
 	}
 	return makeIdentResolved(tmpSym, loc);
 }
 
+// Mid-statement lowering: branch reads land in preStmts and run BEFORE any later
+// move's zero — safe as-is, must NOT be retro-hoisted (a rewrite is use-before-assign).
+// The enclosing statement's stmtBorrowReads must survive the nested clear: save/restore.
 function processBranchAssign(tmpName: string, tmpSym: Symbol, resultType: Type, branchExpr: Node, dctx: DrcContext, loc: SourceLocation): Node[] {
 	const lhs = makeIdentResolved(tmpSym, loc);
 	lhs.nodeType = resultType;
 	const assign = makeExprStmt(makeAssign(lhs, branchExpr, loc), loc);
-	return processStmtList([assign], dctx, loc);
+	const savedReads = dctx.stmtBorrowReads;
+	dctx.stmtBorrowReads = [];
+	const processed = processStmtList([assign], dctx, loc);
+	dctx.stmtBorrowReads = savedReads;
+	return processed;
 }
 
 function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
@@ -631,37 +687,30 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// Reference parity: SinkArg mode — passCopyToSink or destructive move
 	// Used for object literal fields, array literal elements (reference: ObjectLiteral sinkArg)
 	if (mode === DrcMode.SinkArg) {
-		const loc = node.location;
 		if (isLastReadSafe(sym, node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
-			// Last read: destructiveMoveVar — blit + wasMoved
 			if (rcInfo.wasMovedFn !== "") {
-				addPending(dctx, makeWasMovedCall(d.name, rcInfo, loc, sym));
+				return destructiveMoveVar(node, rcInfo, dctx);
 			}
-			recordMoveInContext(dctx, d.name);
 			return node;
-		} else {
-			// Not last read: passCopyToSink — copy into fresh temp, return temp.
-			// Reference never generates self-copy (=copy(x, x)).
-			return passCopyToSink(node, dctx);
 		}
+		return passCopyToSink(node, dctx);
 	}
 
 	// Consumed mode: in-place move or copy (for call args, assignment RHS)
 	if (mode === DrcMode.Consumed) {
-		const loc = node.location;
 		if (isLastReadSafe(sym, node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
 			if (rcInfo.wasMovedFn !== "") {
-				addPending(dctx, makeWasMovedCall(d.name, rcInfo, loc, sym));
+				return destructiveMoveVar(node, rcInfo, dctx);
 			}
-			recordMoveInContext(dctx, d.name);
-		} else {
-			// Reference parity: passCopyToSink — copy into fresh temp, return temp.
-			// Self-copy (=copy(x, x)) is wrong for sink params: the sink takes ownership
-			// of the value, then scope-exit destroys x, double-freeing the shared data.
-			return passCopyToSink(node, dctx);
+			return node;
 		}
+		return passCopyToSink(node, dctx);
 	}
 
+	if (mode === DrcMode.Normal) {
+		const br: BorrowRead = { readName: d.name, readNode: node };
+		dctx.stmtBorrowReads.push(br);
+	}
 	return node;
 }
 
@@ -1091,8 +1140,12 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 				elseLhs.nodeType = dest.nodeType;
 				const thenAssign = makeExprStmt(makeAssign(thenLhs, cd.ternaryConsequent, loc), loc);
 				const elseAssign = makeExprStmt(makeAssign(elseLhs, cd.ternaryAlternate, loc), loc);
+				const savedReads = dctx.stmtBorrowReads;
+				dctx.stmtBorrowReads = [];
 				const thenProcessed = processStmtList([thenAssign], dctx, loc);
+				dctx.stmtBorrowReads = [];
 				const elseProcessed = processStmtList([elseAssign], dctx, loc);
+				dctx.stmtBorrowReads = savedReads;
 				return makeIf(cd.ternaryCondition, makeBlock(thenProcessed, loc), makeBlock(elseProcessed, loc), loc);
 			}
 			return genCopy(stmt, dest, destName, destSym, rhs, rcInfo, flags, dctx, loc);
@@ -1164,33 +1217,20 @@ function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmt
 
 function generateCleanup(scope: DrcScope, excludeNames: NameSet, loc: SourceLocation): Node[] {
 	const result: Node[] = [];
-
-	// Step 1: wasMoved calls for moved variables and expressions
 	for (const mv of scope.wasMoved) {
-		if (mv.varName !== "" ) {
-			// Variable-level: move x
-			const vi = findVarInfo(scope, mv.varName);
-			if (vi !== null && !vi.isCursor && vi.rcInfo.wasMovedFn !== "") {
-				result.push(makeWasMovedCall(mv.varName, vi.rcInfo, loc, vi.sym));
-			}
-		} else if (mv.exprNode !== null) {
-			// Expression-level: move obj.field, move arr[i]
+		if (mv.varName === "" && mv.exprNode !== null) {
 			result.push(mv.exprNode);
 		}
 	}
-
-	// Step 2: destroy in LIFO order
 	let i = scope.varsToCleanup.length;
 	while (i > 0) {
 		i -= 1;
 		const vi = scope.varsToCleanup[i];
 		if (vi.isCursor) continue;
 		if (excludeNames !== null && nameSetContains(excludeNames, vi.varName)) continue;
-		if (wasMovedInScope(scope, vi.varName)) continue;
 		if (vi.rcInfo.destroyFn === "") continue;
 		result.push(makeDestroyCall(vi.varName, vi.rcInfo, loc, vi.sym));
 	}
-
 	return result;
 }
 
@@ -1346,6 +1386,7 @@ function processBlockBody(body: Node, dctx: DrcContext, isLoop: boolean, isFunct
 function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	if (stmt === null) return stmt;
 	const sloc = stmt.location;
+	dctx.stmtBorrowReads = [];
 
 	// Push outer context for cross-scope last-read analysis
 	pushOuterStmts(dctx, stmts, idx + 1, false);
@@ -2091,6 +2132,9 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 		// incref'd them at creation). Returning one directly transfers that ownership
 		// to the caller — emitReturnWithIncref would cascade into a double-incref.
 		if (name.startsWith("$borrow_")) return false;
+		// $move_N temps from destructiveMoveVar hold an owned value moved out of a
+		// function-local — returning one transfers ownership to the caller, no incref.
+		if (name.startsWith("$move_")) return false;
 		// Cursor variables (for-of bindings, $-prefix borrows): borrowed references.
 		// Returning a cursor creates a new reference — must incref.
 		// Reference parity: the reference incref's at the assignment site inside the function;
@@ -2102,7 +2146,7 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 			}
 		}
 		const vi = findVarInfoInFunction(dctx, name);
-		if (vi !== null) return false;  // function-local var — ownership transferred via markReturnedVarsMoved
+		if (vi !== null) return false;  // function-local var — moved out via destructiveMoveVar at the return
 		// Not a local var (parameter or global) — check if RC pointer type
 		if (expr.nodeType !== null) {
 			const rc = sinkClassify(expr.nodeType, dctx.ctx);
@@ -2177,7 +2221,6 @@ function emitReturnWithIncref(arg: Node, dctx: DrcContext, loc: SourceLocation):
 	const increfFn = rc.copyFn !== "" ? rc.copyFn : "msIncref";
 	const incref = makeExprStmt(
 		makeCall(makeIdent(increfFn, loc), [makeIdentResolved(retSym, loc)], loc), loc);
-	markReturnedVarsMoved(arg, dctx);
 	const retStmt = makeReturn(makeIdentResolved(retSym, loc), loc);
 	return makeBlock([tmpDecl, incref, retStmt], loc);
 }
@@ -2220,7 +2263,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 			}
 		}
 		// Non-local identifier return: globals/module vars need deep copy too.
-		// Function-local vars are handled by markReturnedVarsMoved (ownership transfer).
+		// Function-local vars are moved out by destructiveMoveVar in the Consumed walk.
 		// Non-local variables (globals, module-level, outer function) are borrowed —
 		// caller's destroy would free the shared data, causing double-free.
 		// Gate on ORIGINAL identifier name so a fresh borrow temp introduced by
@@ -2236,97 +2279,10 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 				// Ref types handled by needsReturnIncref above
 			}
 		}
-		// Mark returned identifiers as moved in their owning scopes.
-		// This prevents double-free: the finally block will emit wasMoved instead of destroy.
-		markReturnedVarsMoved(d.argument, dctx);
-
-		// Clear pending wasMoved for returned identifiers.
-		// processNode(Consumed) adds wasMoved to pendingStmts, but return is a move —
-		// the value is bitcopied to the return slot first, then finally handles wasMoved.
-		// Without this, wasMoved fires BEFORE return, zeroing the value.
-		// Reference: genSink with IsReturn flag → raw assignment only, no inline wasMoved.
-		clearPendingForReturnedVars(d.argument, dctx);
 	}
 
+
 	return stmt;
-}
-
-// Mark identifiers in a return expression as moved in their owning scope,
-// so the scope's finally block emits wasMoved (zero) instead of destroy.
-function markReturnedVarsMoved(node: Node, dctx: DrcContext): void {
-	if (node === null) return;
-
-	match (node.kind) {
-		NodeKind.Identifier => {
-			const name = (node.data as IdentifierData).name;
-			const vi = findVarInfoInContext(dctx, name);
-			if (vi !== null && vi.rcInfo.needsCleanup && !vi.isCursor) {
-				recordMoveInContext(dctx, name);
-			}
-		},
-		NodeKind.MoveExpr => {
-			markReturnedVarsMoved((node.data as MoveExprData).moveArg, dctx);
-		},
-		NodeKind.BinaryExpr => {
-			const bd = node.data as BinaryExprData;
-			markReturnedVarsMoved(bd.left, dctx);
-			markReturnedVarsMoved(bd.right, dctx);
-		},
-		NodeKind.MemberExpr | NodeKind.ArrayAccess => {
-			// `return obj.field` / `return arr[i]` extracts a value from the container
-			// — it does NOT transfer ownership of the container. The container must be
-			// destroyed at scope-exit (its destroyFn handles the field/element cleanup)
-			// and the extracted value gets the standard incref-for-return treatment.
-			// Walking the object/array here was a pre-existing bug: it marked the
-			// container moved → scope-exit emitted wasMoved instead of destroy →
-			// container memory + all its RC-tracked fields leaked. Visible in any
-			// `return localObj.refField`, `return localArr[i]`, and async fn bodies
-			// where the lowered `return env.$retFut` triggered the same path.
-		},
-		NodeKind.CallExpr => {
-			// Only walk callee — args are handled by processCall's per-arg sink/borrow
-			// detection. Recursively marking ALL args as moved is wrong: for borrow
-			// params (e.g. msStringConcatArr) the value's heap stays caller-owned, so
-			// the scope must emit destroy at cleanup, not wasMoved. processIdentifier
-			// in Consumed/SinkArg mode (used only for sink args) already records
-			// moves for the args that genuinely transfer ownership.
-			markReturnedVarsMoved((node.data as CallExprData).callee, dctx);
-		},
-		// CRITICAL: nested function bodies are scope stops. A returned closure
-		// captures outer vars via its env — those vars must NOT be marked moved
-		// in the enclosing scope, or wasMoved will zero the env after capture.
-		// Post-transform lambdaLifting usually erases these, but the walker's
-		// correctness must not depend on that.
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
-		// Default: descend via canonical walker so new expression kinds wrapping
-		// identifiers (e.g. future cast/conversion forms) are covered automatically.
-		// Safe because the explicit Identifier arm is the only emitter and the
-		// function-boundary branch above fires before this.
-		_ => { forEachChild(node, (child: Node): void => { markReturnedVarsMoved(child, dctx); }); },
-	};
-}
-
-// Clear pending wasMoved for identifiers in a return expression.
-// processIdentifier(Consumed) queues wasMoved, but for return the value is moved to
-// the return slot — wasMoved belongs in the finally block, not inline before return.
-function clearPendingForReturnedVars(node: Node, dctx: DrcContext): void {
-	if (node === null) return;
-	match (node.kind) {
-		NodeKind.Identifier => {
-			clearPendingForVar(dctx, (node.data as IdentifierData).name);
-		},
-		NodeKind.MoveExpr => {
-			clearPendingForReturnedVars((node.data as MoveExprData).moveArg, dctx);
-		},
-		// Same invariant as markReturnedVarsMoved: nested function bodies are
-		// scope stops. Captured vars in a returned closure must not have their
-		// pending wasMoved cleared by the outer return.
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
-		// Default: descend via canonical walker so new expression kinds wrapping
-		// identifiers are covered automatically. Safe because only the Identifier
-		// arm mutates state and function bodies are skipped above.
-		_ => { forEachChild(node, (child: Node): void => { clearPendingForReturnedVars(child, dctx); }); },
-	};
 }
 
 // ===== Function Declaration =====
