@@ -450,6 +450,20 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 		const od = exprNode.data as ObjectLiteralData;
 		if (od.keys !== null && od.keys.length > 0) {
 			const unionName = getTypeDesc(g, paramType);
+			// The literal's final nodeType (overload winner) beats the checker stamp:
+			// the stamp can predate overload resolution and pick a same-key SUPERSET
+			// case, while the emitted _litN_ temp is typed by nodeType — a stamp
+			// mismatch here emits an illegal cross-case struct cast.
+			if (exprNode.nodeType !== null && exprNode.nodeType.kind === TypeKind.Struct) {
+				const litCName = getTypeDesc(g, exprNode.nodeType);
+				let ni = 0;
+				while (ni < paramType.typeChildren.length) {
+					if (getTypeDesc(g, paramType.typeChildren[ni]) === litCName) {
+						return emitTaggedUnionWrapAddr(p, unionName, ni, "", snippet, false);
+					}
+					ni = ni + 1;
+				}
+			}
 			// Use checker-stamped variant index
 			const stamped = ((exprNode.flags >> 16) & 65535) as int32;
 			let varIdx = stamped > 0 ? stamped - 1 : -1;
