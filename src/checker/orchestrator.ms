@@ -13,7 +13,6 @@ import { ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../mo
 import { runThreePasses, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude } from "./checkPass";
 import { collectTopLevelLocal } from "./collectPass";
 import { registerModuleCtx, registerModuleProgram } from "./instantiate";
-import { inferOwnership } from "./ownershipInference";
 import { lex } from "../lexer/lexer";
 import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
@@ -191,9 +190,6 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		// private helpers and locally-visible types). Pairs with the
 		// registerModuleCtx call in checkProgram for single-file mode.
 		registerModuleCtx(ctx.modulePath, ctx);
-
-		// Ownership Inference (for cross-module consumption)
-		inferOwnership(ctx, pr.value);
 
 		// Copy structured errors to module (preserves line/col/severity)
 		for (const err of ctx.errors) {

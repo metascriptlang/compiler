@@ -28,7 +28,6 @@ import { getGenericDecl } from "../parser/context";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference } from "./flow";
-import { inferOwnership } from "./ownershipInference";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr, checkEnumExhaustiveness, checkDuplicatePatterns, fitNode, estimateExprEndCol } from "./checkExprPass";
@@ -2041,7 +2040,6 @@ function checkProgramCore(
 	collectDirectives(ctx, program);
 	stampHeaderPaths(ctx);
 	stampJsModulePaths(ctx);
-	inferOwnership(ctx, program);
 	analyzeParamMutations(ctx, program);
 	sgSortRecords(ctx.symRecords);
 	// Register this module's ctx so later cross-module generic instantiation can
