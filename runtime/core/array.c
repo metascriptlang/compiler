@@ -655,6 +655,32 @@ void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
 	arr->len -= deleteCount;
 }
 
+/* splice(start, deleteCount, item): delete deleteCount then insert item.
+ * The array owns a ref to each element (delete decrefs), so insert increfs. */
+void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
+	if (start < 0) start = 0;
+	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
+		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
+		for (int64_t i = start; i < start + deleteCount; i++) msDecref(arr->p->data[i]);
+		int64_t remaining = arr->len - start - deleteCount;
+		if (remaining > 0) {
+			memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));
+		}
+		arr->len -= deleteCount;
+	}
+	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+		arr->p = (msRefPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(void*));
+	}
+	if (start > arr->len) start = arr->len;
+	int64_t tail = arr->len - start;
+	if (tail > 0) {
+		memmove(arr->p->data + start + 1, arr->p->data + start, tail * sizeof(void*));
+	}
+	if (item != NULL) msIncref(item);
+	arr->p->data[start] = item;
+	arr->len += 1;
+}
+
 /* ===== Closure Array =====
  * Per-element destroy: decref env (function pointer is untracked). The env's
  * own typeInfo handles deeper field cleanup via msDecref's virtual dispatch.

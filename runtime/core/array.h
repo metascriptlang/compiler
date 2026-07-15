@@ -166,6 +166,7 @@ void msRefArraySetLen(msRefArray* arr, int64_t newLen);
 int64_t msRefArrayCapacity(msRefArray* arr);
 void msRefArraySetLenUninit(msRefArray* arr, int64_t newLen);
 void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount);
+void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item);
 void msNumberArraySplice(msNumberArray* arr, int64_t start, int64_t deleteCount);
 void msStringArraySplice(msStringArray* arr, int64_t start, int64_t deleteCount);
 

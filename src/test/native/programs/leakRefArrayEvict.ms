@@ -42,12 +42,27 @@ function churnSpliceStr(): void {
 	xs.splice(2, 10);
 }
 
+// Insert-form splice(start, deleteCount, item): the array acquires a ref to the
+// inserted element (borrow arg + internal incref), so a double-incref would grow
+// RSS here — evicting everything must return to flat.
+function churnSpliceInsert(): void {
+	const stack: Frame[] = [];
+	let k = 0;
+	while (k < 8) { stack.push({ name: bigName("f"), depth: k }); k = k + 1; }
+	const a: Frame = { name: bigName("g"), depth: 99 };
+	stack.splice(2, 0, a);
+	const b: Frame = { name: bigName("h"), depth: 77 };
+	stack.splice(1, 1, b);
+	stack.length = 0;
+}
+
 function main(): void {
 	let i = 0;
 	while (i < 200000) {
 		churnShrink();
 		churnSpliceRef();
 		churnSpliceStr();
+		churnSpliceInsert();
 		i = i + 1;
 	}
 	console.log("leak-ref-array-evict done");

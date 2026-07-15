@@ -17,3 +17,4 @@ export extern function sort<T>(this arr: T[]): void from "#.sort()";
 export extern function fill<T>(this arr: T[], value: T): void from "#.fill(#)";
 export extern function join<T>(this arr: T[], sep: string): string from "#.join(#)";
 export extern function splice<T>(this arr: T[], start: number, deleteCount: number): void from "#.splice(#, #)";
+export extern function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void from "#.splice(#, #, #)";
