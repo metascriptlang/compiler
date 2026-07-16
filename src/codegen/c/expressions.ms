@@ -454,7 +454,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 			// the stamp can predate overload resolution and pick a same-key SUPERSET
 			// case, while the emitted _litN_ temp is typed by nodeType — a stamp
 			// mismatch here emits an illegal cross-case struct cast.
-			if (exprNode.nodeType !== null && exprNode.nodeType.kind === TypeKind.Struct) {
+			if (exprNode.nodeType !== null && exprNode.nodeType.kind === TypeKind.Struct && paramType.typeChildren !== null) {
 				const litCName = getTypeDesc(g, exprNode.nodeType);
 				let ni = 0;
 				while (ni < paramType.typeChildren.length) {
