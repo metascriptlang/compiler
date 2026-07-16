@@ -178,7 +178,7 @@ For each block:
 | **B** | Cursor inference | `inferCursors(body)` wired into `processFuncBodyWithParams`, `isCursorVar` check in `processVarDecl` | inject.ms, cursors.ms |
 | **C** | CFG-based last-read | `isLastReadCfgCached` uses Mohnen graph-free CFG from cfg.ms, with per-function cache | inject.ms, cfg.ms, scope.ms |
 | **D** | First-write optimization | `isInitialized` flag on VarInfo, `markUninitialized` for `let x;`, first assignment skips destroy | inject.ms, scope.ms |
-| **E** | Sink parameter forwarding | SymbolFlag.Lent skip at call sites, sink-as-cursor for return-only params, CFG handles move detection | inject.ms (verified) |
+| **E** | Parameter ownership | Params are borrows registered as cursors — no sink params since inference removal (ea38c2a); consumed positions are the hardcoded runtime sinks (msArrayPush, msFutureCompleteT) | inject.ms |
 | **F** | Closure capture DRC | Last-use captures wrapped in MoveExpr | lambdaLifting.ms, util.ms |
 | **G** | Generator/async awareness | `isGeneratorBody` detects state pattern, forces `needsTry=false` to skip redundant try/finally | inject.ms |
 

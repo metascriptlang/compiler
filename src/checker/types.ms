@@ -1532,31 +1532,10 @@ export function propagateToOwner(parent: Type, child: Type): void {
 	}
 }
 
-// ===== Ownership Modifiers (Reference parity: sink and lent modifiers) =====
-// Sink/Lent wrap the inner param type. Standard reference: `proc foo(x: sink T)` → param type is a sink modifier wrapping T.
-// skipModifier unwraps one level, following standard reference patterns.
-
-export function wrapSink(inner: Type): Type {
-	const t = emptyType();
-	t.kind = TypeKind.Sink;
-	t.typeReturn = inner;
-	return t;
-}
-
-export function wrapLent(inner: Type): Type {
-	const t = emptyType();
-	t.kind = TypeKind.Lent;
-	t.typeReturn = inner;
-	return t;
-}
-
-export function isSinkType(t: Type | null): boolean {
-	return t !== null && t.kind === TypeKind.Sink;
-}
-
-export function isLentType(t: Type): boolean {
-	return t !== null && t.kind === TypeKind.Lent;
-}
+// ===== Ownership Modifiers =====
+// TypeKind.Sink/Lent have no producer since sink inference was removed (ea38c2a);
+// the see-through arms stay for a future explicit `sink T`. skipModifier also
+// unwraps Var, which is still constructed.
 
 export function skipModifier(t: Type | null): Type | null {
 	if (t === null) return t;

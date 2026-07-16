@@ -154,18 +154,6 @@ function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 	return noRcInfo();
 }
 
-// ===== Ownership Helpers =====
-
-export function isSinkParam(sym: Symbol): boolean {
-	if (sym === null) return false;
-	return hasFlag(sym, SymbolFlag.Sink);
-}
-
-export function isLentParam(sym: Symbol): boolean {
-	if (sym === null) return false;
-	return hasFlag(sym, SymbolFlag.Lent);
-}
-
 // ===== Main Classification Entry Point =====
 
 export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {

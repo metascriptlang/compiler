@@ -67,8 +67,8 @@ export function isAnalysableFieldAccess(orig: Node, isCursorFn: (name: string) =
 				if (sym === null) return false;
 				// Not global (module-level)
 				if (hasFlag(sym, SymbolFlag.Global)) return false;
-				// If parameter, must be sink
-				if (sym.symbolKind === SymbolKind.Parameter && !hasFlag(sym, SymbolFlag.Sink)) return false;
+				// Params are borrows — not movable
+				if (sym.symbolKind === SymbolKind.Parameter) return false;
 				// Not a cursor (borrow)
 				if (isCursorFn(sym.name)) return false;
 				return true;

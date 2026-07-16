@@ -11,8 +11,8 @@
 
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { isSinkType, createPrimitive, isAwaitable } from "../checker/types";
-import { lookupSymbol, lookupLocal, hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
+import { createPrimitive, isAwaitable } from "../checker/types";
+import { lookupSymbol, hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
@@ -266,17 +266,9 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cd = node.data as CallExprData;
 	// Recurse on callee
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
-	// Implementation parity: only sink params get Consumed mode, borrowed params get Normal.
-	// Use resolvedSym to find callee's function type signature.
-	// Fallback chain for synthetic calls emitted post-check: Ident may lack resolvedSym
-	// on both the CallExpr node and its callee. If the Ident name matches a declared MS
-	// function (e.g. an `extern function foo(...)` in a prelude), look it up so the
-	// parameter annotations (sink, ownership modifiers inferred by ownershipInference)
-	// reach DRC. Synthetic intrinsics emitted only by transforms — like msFutureCompleteT
-	// — have no MS declaration (MS has no explicit `sink T` syntax; sink is inferred
-	// from body), so their sink positions are hardcoded below.
+	// MS function params are borrows (Nim default — no sink params, ea38c2a).
+	// The only consumed argument positions are the hardcoded runtime sinks below.
 	const sym = node.resolvedSym;
-	const fnType = (sym !== null && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Function) ? sym.symbolType : null;
 
 	// Reference parity: seq.add(y: sink T) — push takes ownership of its argument.
 	// After extension method lowering, push is a direct call with nativeName containing "ArrayPush".
@@ -305,9 +297,6 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
-		if (fnType !== null && i < fnType.typeChildren.length && isSinkType(fnType.typeChildren[i])) {
-			argMode = DrcMode.Consumed;
-		}
 		// Push value arg (index 1, after receiver) is sink
 		if (isArrayPush && i === 1) argMode = DrcMode.Consumed;
 		// future/actor-reply completion value arg (index 1, after the future) is sink
@@ -975,16 +964,7 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 	return match (rhs.kind) {
 		// Fresh values → sink (ownership transfer, no copy needed)
 		NodeKind.CallExpr => {
-			const preStmts = processCallArgs(rhs, idx, stmts, dctx, loc);
 			if ((flags & MOC_IS_DECL) !== 0) {
-				// Push call-arg sink temps to the scope's preStmts buffer so
-				// processStmtList emits them BEFORE the VarDecl. Wrapping in a
-				// BlockStmt would break module-level const decls: codegen's
-				// genTopLevelStmt only routes raw VariableDecl to genGlobalVar,
-				// so a wrapped BlockStmt fell through to the local-stmt path,
-				// turning module globals into Init000 locals (undefined-symbol
-				// link errors on cross-function references).
-				for (const p of preStmts) { addPre(dctx, p); }
 				return stmt;
 			}
 			// Non-IsDecl dispatch by rcInfo kind:
@@ -1034,7 +1014,6 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 				const opCall = makeExprStmt(
 					makeCall(makeIdent(opFn, loc), [destArg, srcArg], loc), loc);
 				const hoisted: Node[] = [];
-				for (const p of preStmts) hoisted.push(p);
 				hoisted.push(callTmpDecl);
 				hoisted.push(opCall);
 				if (useSink && rcInfo.wasMovedFn !== "") {
@@ -1047,17 +1026,7 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 			// emitReturnWithIncref bumps rc on `return identifier` of Ref params,
 			// balancing rc accounting so save→assign→destroy is safe for aliased
 			// passthrough — no caller-side defensive incref needed.
-			const sinkResult = genSink(stmt, dest, destName, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
-			if (preStmts.length === 0) return sinkResult;
-			const wrapped: Node[] = [];
-			for (const p of preStmts) { wrapped.push(p); }
-			if (sinkResult.kind === NodeKind.BlockStmt) {
-				const sd = sinkResult.data as BlockStmtData;
-				for (const s of sd.statements) { wrapped.push(s); }
-			} else {
-				wrapped.push(sinkResult);
-			}
-			return makeBlock(wrapped, loc);
+			return genSink(stmt, dest, destName, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
 		},
 		NodeKind.NewExpr | NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.StringLiteral |
 		NodeKind.NumberLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral |
@@ -1494,10 +1463,9 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 	// Reference parity (sfGlobal): module-level variables live for the entire program.
 	// wasMoved would zero them for all callers. Never move globals.
 	if (hasFlag(sym, SymbolFlag.Global)) return false;
-	// Borrowed params (non-sink) must never be moved — caller owns the value.
-	// Moving a by-value param only zeroes the local copy while the caller still
-	// holds (and will decref) its own copy, causing use-after-free.
-	if (sym.symbolKind === SymbolKind.Parameter && !hasFlag(sym, SymbolFlag.Sink)) return false;
+	// Params are borrows — never move them: the caller owns the value and
+	// will still destroy its own copy (use-after-free otherwise).
+	if (sym.symbolKind === SymbolKind.Parameter) return false;
 	// Reference parity: cursor variables are borrows — never move them.
 	// isLastRead(n, c, s) and not (n.kind == Identifier and isCursor(n))
 	// Cursor vars (for-of bindings, $-prefixed temps) don't own the data;
@@ -1526,7 +1494,7 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 
 function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcContext): boolean {
 	if (node === null) return false;
-	// Gate: must be analysable field access (local, not global, not cursor, sink if param)
+	// Gate: must be analysable field access (local, not global, not cursor, not param)
 	if (!isAnalysableFieldAccess(node, (name: string): boolean => {
 		const vi = findVarInfoInContext(dctx, name);
 		return vi !== null && vi.isCursor;
@@ -1534,7 +1502,7 @@ function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcCo
 	const rootSym = getRootSym(node);
 	if (rootSym === null) return false;
 	// Standard safety checks (same as isLastReadSafe)
-	if (rootSym.symbolKind === SymbolKind.Parameter && !hasFlag(rootSym, SymbolFlag.Sink)) return false;
+	if (rootSym.symbolKind === SymbolKind.Parameter) return false;
 	const vi = findVarInfoInContext(dctx, rootSym.name);
 	if (vi !== null && vi.isCursor) return false;
 	if (nameSetContains(dctx.finallyProtectedVars, rootSym.name)) return false;
@@ -1546,91 +1514,6 @@ function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcCo
 }
 
 // ===== Conditional Expression Init =====
-
-// ===== Call Argument RC Processing =====
-// When passing RC variables to function params (sink semantics), emit copies or moves.
-// Returns pre-statements (incref calls) to insert before the call.
-// Post-call wasMoved calls go via addPending.
-
-function processCallArgs(callExpr: Node, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node[] {
-	const pre: Node[] = [];
-	if (dctx.ctx.checkerCtx === null) return pre;
-	const cd = callExpr.data as CallExprData;
-
-	// Demand-driven: use resolvedSym commitment from Phase 2
-	const sym = callExpr.resolvedSym;
-	if (sym === null || sym.symbolType === null) return pre;
-	const fnType = sym.symbolType;
-	if (fnType.kind !== TypeKind.Function) return pre;
-
-	for (let ai = 0; ai < cd.arguments.length && ai < fnType.typeChildren.length; ai += 1) {
-		const arg = cd.arguments[ai];
-
-		// Implementation parity: arguments are already processed by processCall (via processNode).
-// Reference walker processes args once in the universal handler.
-
-		// Reference parity: default = borrow (no wrapper). Only sink modifier means ownership transfer.
-		let isLent = true;
-		if (ai < fnType.typeChildren.length && isSinkType(fnType.typeChildren[ai])) {
-			isLent = false;
-		}
-		if (ai < fnType.typeNames.length) {
-			const pName = fnType.typeNames[ai];
-			if (pName === "this" || (ai === 0 && pName === "self")) isLent = true;
-		}
-
-		// Special case: Nested calls in sink positions need extraction to temps
-		// if they weren't already handled, to prevent RC leaks from discarded returns.
-		if (!isLent && arg !== null && arg.kind === NodeKind.CallExpr) {
-			const nestedRc = classifyNestedCallReturn(arg, dctx);
-			if (nestedRc.needsCleanup) {
-				const sinkType = getCallReturnType(arg, dctx) !== null ? getCallReturnType(arg, dctx) : arg.nodeType;
-				const sinkSym = freshTempSym(dctx.ctx, "sink", sinkType);
-				const tmpName = sinkSym.name;
-				const sinkDecl = makeVarDecl(tmpName, cd.arguments[ai], DeclKind.Const, loc);
-				if (sinkType !== null) sinkDecl.nodeType = sinkType;
-				sinkDecl.resolvedSym = sinkSym;
-				pre.push(sinkDecl);
-				registerVar(dctx, tmpName, nestedRc, false, sinkSym);
-				cd.arguments[ai] = makeIdentResolved(sinkSym, loc);
-			}
-		}
-	}
-	return pre;
-}
-
-// Resolve the call's function symbol. Prefers the checker-resolved winner
-// (callee.resolvedSym) to get the correct overload for extension methods like
-// `slice` that have multiple type-dispatched definitions; falls back to a
-// name-based lookup only when resolvedSym isn't set.
-function resolveCallSym(callExpr: Node, dctx: DrcContext): Symbol {
-	const cd = callExpr.data as CallExprData;
-	if (cd.callee.kind !== NodeKind.Identifier) return null as unknown as Symbol;
-	const resolved = cd.callee.resolvedSym;
-	if (resolved !== null) return resolved;
-	if (dctx.ctx.checkerCtx === null) return null as unknown as Symbol;
-	const calleeName = (cd.callee.data as IdentifierData).name;
-	return lookupSymbol(dctx.ctx.checkerCtx.table, calleeName);
-}
-
-// Classify the return type of a nested call expression
-function classifyNestedCallReturn(callExpr: Node, dctx: DrcContext): RcInfo {
-	if (dctx.ctx.checkerCtx === null) return noRcInfo();
-	const sym = resolveCallSym(callExpr, dctx);
-	if (sym === null || sym.symbolType === null) return noRcInfo();
-	if (sym.symbolType.kind !== TypeKind.Function) return noRcInfo();
-	if (sym.symbolType.typeReturn === null) return noRcInfo();
-	return classifyType(sym.symbolType.typeReturn, dctx.ctx);
-}
-
-// Get the return Type of a nested call expression (Blocker 27: typed sinks)
-function getCallReturnType(callExpr: Node, dctx: DrcContext): Type | null {
-	if (dctx.ctx.checkerCtx === null) return null;
-	const sym = resolveCallSym(callExpr, dctx);
-	if (sym === null || sym.symbolType === null) return null;
-	if (sym.symbolType.kind !== TypeKind.Function) return null;
-	return sym.symbolType.typeReturn;
-}
 
 // ===== Literal Field/Element RC Processing =====
 // NOTE: emitLiteralFieldCopies / emitArrayElementCopies removed.
@@ -1647,144 +1530,18 @@ function isEnvParam(name: string): boolean {
 	return name.slice(0, 6) === "__envP";
 }
 
-// ===== Sink Parameter Inference =====
-// A parameter is a sink candidate if it's only used in return positions.
-// Returns true if paramName appears ONLY as a direct return argument (consumed),
-// never read in other contexts (no copy needed).
-
-function isParamSinkCandidate(paramName: string, body: Node): boolean {
-	if (body === null) return false;
-	if (body.kind !== NodeKind.BlockStmt) return false;
-	const bd = body.data as BlockStmtData;
-	// Count: total refs and return-only refs
-	let totalRefs = 0;
-	let returnRefs = 0;
-	countParamUsage(paramName, bd.statements, totalRefs, returnRefs);
-	// Workaround: can't use out params, so re-implement inline
-	const counts = countParamUsageInline(paramName, bd.statements);
-	// Sink if: at least 1 use AND all uses are return-only
-	return counts.total > 0 && counts.total === counts.returns;
-}
-
-interface UsageCounts {
-	total: number;
-	returns: number;
-}
-
-function countParamUsageInline(paramName: string, stmts: Node[]): UsageCounts {
-	let total = 0;
-	let returns = 0;
-	let i = 0;
-	while (i < stmts.length) {
-		const s = stmts[i];
-		if (s.kind === NodeKind.ReturnStmt) {
-			const rd = s.data as ReturnStmtData;
-			if (rd.argument !== null && rd.argument.kind === NodeKind.Identifier) {
-				const id = rd.argument.data as IdentifierData;
-				if (id.name === paramName) {
-					total = total + 1;
-					returns = returns + 1;
-				}
-			} else if (rd.argument !== null && nodeRefsParam(rd.argument, paramName)) {
-				// Used in return but not as direct identifier (e.g., return f(param))
-				total = total + countRefsInNode(rd.argument, paramName);
-			}
-		} else {
-			// Any other statement: count all refs
-			total = total + countRefsInNode(s, paramName);
-		}
-		i = i + 1;
-	}
-	return { total, returns };
-}
-
-function countRefsInNode(node: Node, paramName: string): number {
-	if (node === null) return 0;
-
-	return match (node.kind) {
-		NodeKind.Identifier => {
-			const id = node.data as IdentifierData;
-			if (id.name === paramName) { return 1; } else { return 0; }
-		},
-		NodeKind.BinaryExpr => {
-			const bd = node.data as BinaryExprData;
-			return countRefsInNode(bd.left, paramName) + countRefsInNode(bd.right, paramName);
-		},
-		NodeKind.CallExpr => {
-			const cd = node.data as CallExprData;
-			let count = countRefsInNode(cd.callee, paramName);
-			for (const arg of cd.arguments) {
-				count = count + countRefsInNode(arg, paramName);
-			}
-			return count;
-		},
-		NodeKind.ExprStmt => countRefsInNode((node.data as ExprStmtData).expr, paramName),
-		NodeKind.VariableDecl => {
-			const vd = node.data as VariableDeclData;
-			if (vd.initializer !== null) { return countRefsInNode(vd.initializer, paramName); } else { return 0; }
-		},
-		NodeKind.IfStmt => {
-			const id = node.data as IfStmtData;
-			return countRefsInNode(id.condition, paramName)
-				+ countRefsInNode(id.consequent, paramName)
-				+ countRefsInNode(id.alternate, paramName);
-		},
-		NodeKind.BlockStmt => {
-			let count = 0;
-			for (const s of (node.data as BlockStmtData).statements) {
-				count = count + countRefsInNode(s, paramName);
-			}
-			return count;
-		},
-		NodeKind.MemberExpr => countRefsInNode((node.data as MemberExprData).object, paramName),
-		_ => 0,
-	};
-}
-
-function nodeRefsParam(node: Node, paramName: string): boolean {
-	return countRefsInNode(node, paramName) > 0;
-}
-
-// Unused — kept for signature compatibility with plan
-function countParamUsage(paramName: string, stmts: Node[], total: number, returns: number): void {}
-
 function registerFuncParams(paramNames: string[], paramTypes: Type[], dctx: DrcContext, loc: SourceLocation, body: Node): void {
 	if (dctx.ctx.checkerCtx === null) return;
 	for (let pi = 0; pi < paramNames.length && pi < paramTypes.length; pi += 1) {
 		const pName = paramNames[pi];
 		// Skip closure env params (item 11) — they're managed by msClosure infrastructure
 		if (!isEnvParam(pName)) {
-			// Sink<T> signature wrapper (checker return-only inference): peel it for
-			// CLASSIFICATION only. Without the peel, classifyType sees the wrapper as
-			// non-RC and the param is never registered — reassignments then bail out of
-			// processAssignment with no RC treatment at all (tailCallLower param rebinds
-			// emitted raw: source share never materialized → use-after-free once the
-			// iteration scope destroyed it). Ownership stays with the CALLER (cursor):
-			// processCallArgs registers sink-arg temps for caller cleanup and
-			// needsReturnIncref balances `return p` — flipping to callee-owned cleanup
-			// double-frees against both. Sink ONLY — peeling Lent/Var here would flip
-			// cursor field-access analysis on for nearly every read-only param in one
-			// step (untested blast radius). Full sink/lent ownership transfer is the
-			// fresh-vs-borrow ownership project, not this registration.
-			let pType = paramTypes[pi];
-			if (pType !== null && pType.kind === TypeKind.Sink && pType.typeReturn !== null) {
-				pType = pType.typeReturn;
-			}
-			const pRcInfo = classifyType(pType, dctx.ctx);
+			const pRcInfo = classifyType(paramTypes[pi], dctx.ctx);
 			if (pRcInfo.needsCleanup) {
-				// Implementation parity: regular params are BORROWED (cursor=true, no cleanup).
-				// Only sink params (SymbolFlag.Sink) take ownership and need cleanup at exit.
-				// The caller owns the value; if the function needs to keep it, the
-				// assignment point handles the copy (not the param registration).
-				let isCursor = true;
-
-				// Only non-cursor if explicitly SymbolFlag.Sink (takes ownership)
-				const pSym = lookupLocal(dctx.ctx.checkerCtx.table, pName);
-				if (pSym !== null && hasFlag(pSym, SymbolFlag.Sink)) {
-					isCursor = false;
-				}
-
-				registerVar(dctx, pName, pRcInfo, isCursor, noSym);
+				// Params are borrows registered as cursors (Nim default — no sink
+				// params, ea38c2a): the caller owns the value; stores inside the
+				// callee copy at the assignment point.
+				registerVar(dctx, pName, pRcInfo, true, noSym);
 			}
 		}
 	}
@@ -2525,21 +2282,6 @@ test "isEnvParam detects __envP" {
 	assert !isEnvParam("env");
 }
 
-test "isParamSinkCandidate detects return-only" {
-	// Build: { return s; } — s only used as return arg → sink
-	const body = makeBlock([makeReturn(makeIdent("s", testLoc()), testLoc())], testLoc());
-	assert isParamSinkCandidate("s", body);
-}
-
-test "isParamSinkCandidate rejects used param" {
-	// Build: { const x = s; return x; } — s used in var init → not sink
-	const body = makeBlock([
-		makeVarDecl("x", makeIdent("s", testLoc()), DeclKind.Const, testLoc()),
-		makeReturn(makeIdent("x", testLoc()), testLoc()),
-	], testLoc());
-	assert !isParamSinkCandidate("s", body);
-}
-
 test "recordMoveInContext finds correct scope" {
 	const dctx = testDrcContext("const x = 1;");
 	const rcStr = testStringRc();
@@ -2579,32 +2321,6 @@ test "number type needs no cleanup" {
 		const rc = classifyType(numSym.symbolType, dctx.ctx);
 		assert !rc.needsCleanup;
 	}
-}
-
-test "classifyNestedCallReturn non-identifier callee returns noRcInfo" {
-	const dctx = testDrcContext("function foo(): string { return \"\"; }");
-	const loc = testLoc();
-	const memberCallee = makeMember(makeIdent("obj", loc), "method", loc);
-	const call = makeCall(memberCallee, [], loc);
-	const rc = classifyNestedCallReturn(call, dctx);
-	assert !rc.needsCleanup;
-}
-
-test "classifyNestedCallReturn known function returns rcInfo" {
-	const dctx = testDrcContext("function getString(): string { return \"\"; }");
-	const loc = testLoc();
-	const call = makeCall(makeIdent("getString", loc), [], loc);
-	const rc = classifyNestedCallReturn(call, dctx);
-	assert rc.needsCleanup;
-	assert rc.rcKind === RcKind.String;
-}
-
-test "classifyNestedCallReturn unknown function returns noRcInfo" {
-	const dctx = testDrcContext("const x = 1;");
-	const loc = testLoc();
-	const call = makeCall(makeIdent("unknownFn", loc), [], loc);
-	const rc = classifyNestedCallReturn(call, dctx);
-	assert !rc.needsCleanup;
 }
 
 test "stmtCanThrow detects user call in ExprStmt" {
@@ -2908,14 +2624,6 @@ test "sink param: return-only param is cursor (skip cleanup)" {
 		// Verify function is recognized
 		assert fnSym.symbolType.kind === TypeKind.Function;
 	}
-}
-
-test "Reference parity: Sink/Lent type wrappers replace typeChildrenFlags" {
-	// Standard reference: sink modifiers wrap param types for ownership transfer
-	// Standard reference: lent modifiers wrap param types for borrowing
-	// isSinkType checks TypeKind.Sink, skipModifier unwraps
-	assert TypeKind.Sink !== TypeKind.Lent;
-	assert isSinkType(null) === false;
 }
 
 test "isGeneratorBody: detects $state pattern" {

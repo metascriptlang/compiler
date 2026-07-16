@@ -1310,10 +1310,6 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		if (paramLocs !== null && i < paramLocs.length && paramLocs[i] !== null) {
 			paramSym.location = paramLocs[i];
 		}
-		// Receiver is implicitly LENT (borrowed)
-		if (param === "this" || (i === 0 && param === "self")) {
-			setFlag(paramSym, SymbolFlag.Lent);
-		}
 		defineSymbol(ctx.table, paramSym);
 		// Ref parity: params are implicitly initialized
 		markInitialized(ctx.initTracker, param);

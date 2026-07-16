@@ -357,7 +357,6 @@ export function typeRelation(formal: Type | null, actual: Type | null): TypeRela
 function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelation {
 	if (formal === null || actual === null) return TypeRelation.None;
 	// Ownership modifiers (Sink/Lent) are transparent — unwrap before comparison.
-	// inferOwnership wraps sink params in TypeKind.Sink; overload scoring must see through.
 	if (formal.kind === TypeKind.Sink || formal.kind === TypeKind.Lent) {
 		if (formal.typeReturn !== null) formal = formal.typeReturn;
 	}
