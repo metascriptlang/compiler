@@ -447,6 +447,10 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 	// wrap in a full union with tag. This handles _litN_ temps from ObjectLiteral emission.
 	// Use paramType for union detection when nodeType is null (parser-created nodes).
 	if (paramType !== null && paramType.kind === TypeKind.Union && exprNode !== null && exprNode.kind === NodeKind.ObjectLiteral) {
+		// Union-typed literal ⇒ ObjectLiteral emission already wrapped the snippet into the full union
+		if (exprNode.nodeType !== null && exprNode.nodeType.kind === TypeKind.Union) {
+			return "&" + snippet;
+		}
 		const od = exprNode.data as ObjectLiteralData;
 		if (od.keys !== null && od.keys.length > 0) {
 			const unionName = getTypeDesc(g, paramType);
