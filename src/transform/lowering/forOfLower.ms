@@ -119,7 +119,15 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		const iterSym = freshTempSym(ctx, "iter", iterType !== null ? iterType : unknownType());
 		const iterDecl = makeVarDecl(iterSym.name, d.forOfIterable, DeclKind.Const, loc);
 		iterDecl.resolvedSym = iterSym;
-		iterDecl.flags = iterDecl.flags | NodeFlag.Cursor;
+		// A fresh owned value (call result / array literal) has no other owner, so the
+		// temp must own+destroy it (like `const t = f(); for..of t`). Cursor here would
+		// skip destroy and leak the array every iteration. Aliasing rvalues (conditional,
+		// type-assertion of an lvalue) stay Cursor to avoid double-free.
+		const producesFreshOwned = d.forOfIterable.kind === NodeKind.CallExpr
+			|| d.forOfIterable.kind === NodeKind.ArrayLiteral;
+		if (!producesFreshOwned) {
+			iterDecl.flags = iterDecl.flags | NodeFlag.Cursor;
+		}
 		preamble.push(iterDecl);
 		iterExpr = makeIdentResolved(iterSym, loc);
 	}
