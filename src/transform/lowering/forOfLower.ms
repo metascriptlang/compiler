@@ -165,6 +165,9 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		// Propagate element type for nativeLower (tuple → member access)
 		if (elemArrType !== null && elemArrType.typeReturn !== null) {
 			elemDecl.nodeType = elemArrType.typeReturn;
+			// Untyped access + Maybe-carried element makes codegen re-wrap the already
+			// wrapped element (lit.value = Maybe struct — clang error)
+			elemAccess.nodeType = elemArrType.typeReturn;
 		}
 		whileStmts.push(elemDecl);
 		const bindings = expandArrayPattern(d.forOfPattern, makeIdentResolved(elemSym, loc), itemDk, loc);
@@ -186,6 +189,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		// generated C and break DRC hook resolution.
 		if (elemArrType !== null && elemArrType.typeReturn !== null) {
 			itemDecl.nodeType = elemArrType.typeReturn;
+			itemAccess.nodeType = elemArrType.typeReturn;
 		}
 		whileStmts.push(itemDecl);
 	}
