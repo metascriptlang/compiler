@@ -4,10 +4,11 @@
 // Must run AFTER optionalChain so obj?.prop ?? fallback is already lowered.
 // Note: evaluates LHS twice for complex expressions (same limitation as reference).
 
-import { Node, NodeKind, BinaryExprData } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, TypeKind } from "../../ast/node";
+import { isMaybeType, unwrapMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeNull, makeBinary, makeConditional } from "../util";
+import { makeNull, makeBinary, makeConditional, makeMember } from "../util";
 import { firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -26,6 +27,21 @@ function lowerNullishNode(node: Node): Node {
 	const loc = node.location;
 	// x ?? y → x !== null ? x : y
 	const cond = makeBinary(d.left, "!==", makeNull(loc), loc);
+
+	// Value-carried nullable (Maybe struct in C): when the fallback is non-null the
+	// result type is the UNWRAPPED T, so the then-arm must read x.value — raw x would
+	// mix carrier and payload in the C ternary (and JS backend strips .value back to x).
+	// Nullable fallback keeps both arms in the carrier — no rewrite.
+	const lt = d.left.nodeType;
+	const rt = d.right.nodeType;
+	if (lt !== null && isMaybeType(lt)
+		&& rt !== null && rt.kind !== TypeKind.Null && !isMaybeType(rt)) {
+		const val = makeMember(d.left, "value", loc);
+		val.nodeType = unwrapMaybeType(lt);
+		const c = makeConditional(cond, val, d.right, loc);
+		c.nodeType = val.nodeType;
+		return c;
+	}
 	return makeConditional(cond, d.left, d.right, loc);
 }
 
