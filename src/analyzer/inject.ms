@@ -536,8 +536,11 @@ function processArrayLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node 
 
 function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const nd = node.data as NewExprData;
+	// Ctor params are borrows like every other param (Nim default — no sink params,
+	// ea38c2a); `new T(x)` lowers to T_init(this, x) = a plain call. Consumed here
+	// orphaned every fresh/moved arg: caller relinquished, callee copied (+1 leak).
 	for (let i = 0; i < nd.newArguments.length; i += 1) {
-		nd.newArguments[i] = processNode(nd.newArguments[i], dctx, DrcMode.Consumed);
+		nd.newArguments[i] = processNode(nd.newArguments[i], dctx, DrcMode.Normal);
 	}
 	// `new T(...)` produces a fresh owned heap object; the fresh-owned capture (Normal mode →
 	// ensureDestruction) is consolidated in processNode.
