@@ -171,7 +171,8 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			// reachable; Malebolgia parity: concurrency primitives bypass GC entirely.
 			if (t.sym !== null && t.sym.symbolKind === SymbolKind.Actor) return noRcInfo();
 			if (isAtomicRef(t)) return makeRcInfo(RcKind.Ref, "", "msAtomicDecref", "msAtomicIncref", "msPtrWasMoved", "", false);
-			return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
+			// cyclic ops unregister from the ORC rootset BEFORE the destructor runs (liftdestructors.nim:748)
+			return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
 		},
 		TypeKind.GenericInstance => {
 			// Awaitables (`Promise<T>`, plain or affine) are Ref-shaped heap allocs
@@ -231,7 +232,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				// C-library allocation with no ms header) corrupts memory.
 				if (refInner.kind === TypeKind.Ptr) return noRcInfo();
 				if (refInner.sym !== null && refInner.sym.symbolKind === SymbolKind.Actor) return noRcInfo();
-				return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
+				return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
 			}
 			// Pure string-literal union — msString at runtime (genUnionType), so the
 			// String ops apply; the Named path would fabricate <Alias>{Destroy,Copy}
@@ -400,7 +401,7 @@ test "ref → Ref" {
 	const t = createPrimitive(TypeKind.Ref);
 	const info = classifyType(t, ctx);
 	assert info.rcKind === RcKind.Ref;
-	assert info.destroyFn === "msDecref";
+	assert info.destroyFn === "msDecrefCyclic";
 }
 
 test "ptr → None (unmanaged)" {

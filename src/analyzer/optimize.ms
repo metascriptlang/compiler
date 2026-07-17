@@ -34,6 +34,7 @@ function isWasMovedFn(name: string): boolean {
 function isDestroyFn(name: string): boolean {
 	return name === "msStringDecref"
 		|| name === "msDecref"
+		|| name === "msDecrefCyclic"
 		|| name === "msArrayDestroy"
 		|| name === "msArrayStringDestroy"
 		|| name === "msArrayRefDestroy"
