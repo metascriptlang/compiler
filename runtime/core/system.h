@@ -304,6 +304,15 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msDecrefCyclic(p)     msDecref(p)
 #endif
 
+/* --- Cyclic ref =copy: incref new, assign, decref old AFTER assign (Nim attachedAsgn
+ * isCyclic order — old's destroy may collect; dest must already hold the new value) --- */
+#define msRefCopyCyclic(d, s) do { \
+	void* __rcold = (void*)(d); \
+	msIncrefCyclic(s); \
+	(d) = (s); \
+	msDecrefCyclic(__rcold); \
+} while(0)
+
 /* --- Closure lifecycle --- */
 #define msClosureDestroy(c)   do { if ((c).env != NULL) { msDecref((c).env); } (c).fn = NULL; (c).env = NULL; } while(0)
 #define msClosureCopy(c)      do { if ((c).env != NULL) msIncRef((c).env); } while(0)

@@ -318,6 +318,13 @@ function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: 
 			[makeHiddenAddr(clonePath(x, loc), loc), clonePath(y, loc)], loc), loc));
 		return;
 	}
+	// Cyclic refs: Nim attachedAsgn isCyclic order (liftdestructors.nim:768-775) —
+	// incref new, assign, decref old last, so a collect triggered by the old value's
+	// destroy never traces a dest still pointing at the dying object.
+	if (increfFn === "msIncrefCyclic") {
+		genCall("msRefCopyCyclic", "copy", clonePath(x, loc), clonePath(y, loc), buf, loc);
+		return;
+	}
 	// Unary incref types: decref old, assign, incref new
 	const decrefFn = increfFn === "msIncref" ? "msDecref"
 		: increfFn === "msAtomicIncref" ? "msAtomicDecref"
@@ -921,8 +928,28 @@ function generateUnionArms(hook: string, typeName: string, objType: Type, p1: st
 		return;
 	}
 
-	// For copy: assign dest._tag = src._tag first
-	if (!isUnary) emitTagCopy(buf, p1, p2, loc);
+	// reference parity: =copy for case objects (liftdestructors.nim fillBodyObjT) —
+	// blob = dest (snapshot old branch), wasMoved(dest) (whole-object zero: field copies
+	// release old dest bits, which are foreign-variant garbage on unswitched memory),
+	// copy tag + fields, destroy blob LAST (destroy-first frees src reachable through
+	// dest's old branch).
+	if (hook === "copy") {
+		const ctr = lctx.tempCounter;
+		lctx.tempCounter = ctr + 1;
+		const blobName = "$blob_" + ctr.toString();
+		const blobInit = makeIdent(p1, loc);
+		blobInit.nodeType = objType;
+		buf.items.push(makeVarDecl(blobName, blobInit, DeclKind.Let, loc));
+		const zeroDest = makeIdent(p1, loc);
+		zeroDest.nodeType = objType;
+		buf.items.push(makeExprStmt(makeAssign(zeroDest, makeNull(loc), loc), loc));
+		emitTagCopy(buf, p1, p2, loc);
+		const copyChain = buildVariantDispatch("copy", typeName, objType, p1, p2, false, lctx, loc);
+		if (copyChain !== null) buf.items.push(copyChain);
+		buf.items.push(makeExprStmt(makeCall(makeIdent(typeName + "Destroy", loc),
+			[makeHiddenAddr(makeIdent(blobName, loc), loc)], loc), loc));
+		return;
+	}
 
 	// Build if/else chain dispatching on _tag via per-variant helpers
 	const chain = buildVariantDispatch(hook, typeName, objType, p1, p2, isUnary, lctx, loc);
