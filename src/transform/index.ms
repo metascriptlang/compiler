@@ -37,6 +37,7 @@ import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
 import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
+import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerStringTruthiness } from "./coercion/stringTruthiness";
 import { lowerDestructuring } from "./desugar/destructuringLower";
 import { lowerSpread } from "./desugar/spreadExpand";
@@ -84,6 +85,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerStringConcatFlatten(result, ctx);
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
+	result = materializeMaybeReads(result, ctx);
 	result = lowerStringTruthiness(result, ctx);
 	result = lowerRestParams(result, ctx);
 	result = lowerDestructuring(result, ctx);
