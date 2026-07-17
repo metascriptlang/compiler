@@ -687,6 +687,10 @@ function genGlobalVar(g: CGen, node: Node): void {
 	}
 
 	const cType = getTypeDesc(g, node.nodeType);
+	// Symbols without a modulePath (DRC/transform temps hoisted to top level) mangle to a
+	// bare name that repeats across modules (per-module tempCounter) — static linkage is
+	// what makes them collision-free; nothing outside this module can reference them.
+	const staticPfx = (node.resolvedSym === null || node.resolvedSym.modulePath === "") ? "static " : "";
 	// Literal initializers → fold to C global initializer. This makes the global
 	// READY at program load time instead of waiting for Init000 dispatch order.
 	// Critical for things like `const INITIAL_CAPACITY: int32 = 32;` — if left to
@@ -701,19 +705,19 @@ function genGlobalVar(g: CGen, node: Node): void {
 			const castedLit = (node.nodeType !== null && isIntegerType(node.nodeType))
 				? `(${cType})${litStr}`
 				: litStr;
-			addLine(sec(g, CSection.GlobalVars), `${cType} ${varName} = ${castedLit};`);
+			addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = ${castedLit};`);
 			nameSetAdd(g.declaredGlobals, varName);
 			return;
 		}
 		if (init.kind === NodeKind.BooleanLiteral) {
 			const bd = init.data as BooleanLiteralData;
-			addLine(sec(g, CSection.GlobalVars), `${cType} ${varName} = ${cBoolLiteral(bd.boolValue)};`);
+			addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = ${cBoolLiteral(bd.boolValue)};`);
 			nameSetAdd(g.declaredGlobals, varName);
 			return;
 		}
 	}
 	// Always emit uninitialized declaration to GlobalVars
-	addLine(sec(g, CSection.GlobalVars), `${cType} ${varName};`);
+	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName};`);
 	// Track the mangled name (must match what cross-module extern emission
 	// produces) so dedup works across decl + extern paths.
 	nameSetAdd(g.declaredGlobals, varName);
