@@ -56,6 +56,8 @@ export function isDrcLifecycleName(name: string): boolean {
 	// Generated tuple hooks are DRC hooks despite the ms prefix; without this the blanket
 	// ms→false below would DCE them, leaving an undefined symbol at link.
 	if (drcBase.length > 8 && drcBase.slice(0, 8) === "msTuple_") return true;
+	// Generated anon-struct hooks (msAnon_<hash>Copy/Sink/…) — same landmine as msTuple_.
+	if (drcBase.length > 7 && drcBase.slice(0, 7) === "msAnon_") return true;
 	// Other ms* hooks are runtime-provided (single-level array families, msArray, msString…).
 	if (name.length > 2 && name.byteAt(0) === "m".code && name.byteAt(1) === "s".code) return false;
 	// DRC hooks otherwise start with a type name (PascalCase). User functions like
