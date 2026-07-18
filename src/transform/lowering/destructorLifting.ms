@@ -310,7 +310,7 @@ function genCall(name: string, hook: string, x: Node, y: Node, buf: NodeBuf, loc
 }
 
 // Copy-ref pattern: for 2-arg copy functions (msStringCopy), emit =copy(&dest, src) directly.
-// For unary incref (msIncref, msClosureCopy), emit decref-old + assign + incref-new.
+// For unary incref (msIncref, msClosureCopy), emit incref-new + decref-old + assign.
 function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: NodeBuf, loc: SourceLocation): void {
 	// Reference parity: msStringCopy is 2-arg =copy(&dest, src) — handles destroy-old internally
 	if (increfFn === "msStringCopy") {
@@ -325,18 +325,20 @@ function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: 
 		genCall("msRefCopyCyclic", "copy", clonePath(x, loc), clonePath(y, loc), buf, loc);
 		return;
 	}
-	// Unary incref types: decref old, assign, incref new
+	// Unary incref types: Nim attachedAsgn non-cyclic order (liftdestructors.nim:776-779,
+	// bug #15753) — incref new FIRST so an rc==1 alias of dest's old value survives
+	// the decref; then decref old, then assign.
 	const decrefFn = increfFn === "msIncref" ? "msDecref"
 		: increfFn === "msAtomicIncref" ? "msAtomicDecref"
 		: increfFn === "msClosureCopy" ? "msClosureDestroy"
 		: increfFn === "msClosureIncref" ? "msClosureDecref"
 		: increfFn === "msMapIncref" ? "msMapDecref"
 		: "";
+	buf.items.push(makeExprStmt(makeCall(makeIdent(increfFn, loc), [clonePath(y, loc)], loc), loc));
 	if (decrefFn !== "") {
 		buf.items.push(makeExprStmt(makeCall(makeIdent(decrefFn, loc), [clonePath(x, loc)], loc), loc));
 	}
 	buf.items.push(makeExprStmt(makeAssign(clonePath(x, loc), clonePath(y, loc), loc), loc));
-	buf.items.push(makeExprStmt(makeCall(makeIdent(increfFn, loc), [clonePath(x, loc)], loc), loc));
 }
 
 // Inline sink: destroy old value + raw assign (eliminates per-field function call)
