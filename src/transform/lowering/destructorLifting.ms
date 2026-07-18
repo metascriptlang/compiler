@@ -21,7 +21,7 @@
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 //   TypeInfo   TypeName_typeInfo                  — msTypeInfo for ORC runtime
 
-import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName } from "../../checker/types";
@@ -2275,4 +2275,31 @@ test "eq NOT generated for interface" {
 
 test "eq NOT generated for class" {
 	assert !hasGeneratedFn("class Obj { x: number; }", "ObjEq");
+}
+
+// Self-assign guard operand shape. Class hooks: params are Ref pointers, no ident
+// auto-deref — bare ident compare (HiddenAddr there compared the param SLOTS:
+// &dest == &src, always false). Value hooks: Var<T> ident reads auto-deref to
+// (*dest) — HiddenAddr collapses &(*p) back to p.
+function copyGuardOperandKind(input: string, copyFnName: string): NodeKind {
+	const prog = liftWithChecker(input);
+	const pd = prog.data as ProgramData;
+	for (const stmt of pd.programStmts) {
+		if (stmt.kind !== NodeKind.FunctionDecl) continue;
+		const d = stmt.data as FunctionDeclData;
+		if (d.fnName !== copyFnName) continue;
+		const body = d.fnBody.data as BlockStmtData;
+		const guard = body.statements[0].data as IfStmtData;
+		const cond = guard.condition.data as BinaryExprData;
+		return cond.left.kind;
+	}
+	return NodeKind.FunctionDecl;
+}
+
+test "class copy guard compares param idents not param slots" {
+	assert copyGuardOperandKind("interface Wrap { data: string; }", "WrapCopy") === NodeKind.Identifier;
+}
+
+test "value copy guard keeps HiddenAddr pointer compare" {
+	assert copyGuardOperandKind("struct SWrap { data: string; }", "SWrapCopy") === NodeKind.HiddenAddr;
 }
