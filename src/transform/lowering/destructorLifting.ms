@@ -1119,10 +1119,15 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 		_ => "src",
 	};
 
-	// Self-assignment guard for binary hooks (copy, sink).
+	// Self-assignment guard for binary hooks (copy, sink). Class hooks: params are
+	// Ref (already pointers, no ident auto-deref) — compare idents; HiddenAddr there
+	// compared the PARAM SLOTS (&dest == &src, always false). Value hooks: params are
+	// Var<T>, ident reads auto-deref to (*dest) — HiddenAddr collapses back to `dest`.
 	if (!isUnary && !isTrace) {
+		const g1 = classType !== null ? makeIdent(p1, loc) : makeHiddenAddr(makeIdent(p1, loc), loc);
+		const g2 = classType !== null ? makeIdent(p2, loc) : makeHiddenAddr(makeIdent(p2, loc), loc);
 		buf.items.push(makeIf(
-			makeBinary(makeHiddenAddr(makeIdent(p1, loc), loc), "===", makeHiddenAddr(makeIdent(p2, loc), loc), loc),
+			makeBinary(g1, "===", g2, loc),
 			makeBlock([makeReturn(null as unknown as Node, loc)], loc),
 			null as unknown as Node,
 			loc
