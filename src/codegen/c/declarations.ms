@@ -235,8 +235,6 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 		const mutBits: int32 = sym !== null ? sym.mutatedParams : 0;
 		for (let pi = 0; pi < d.params.length; pi += 1) {
 			p.params.push(d.params[pi]);
-			// Reference parity (scopeMangledParam): reserve param name in sigConflicts
-			// so local VarDecls with the same name get unique suffixes.
 			scopeMangledParam(p, safeName(d.params[pi]));
 			const isMutated = (mutBits & (1 << (pi as int32))) !== 0;
 			const bodyPromote = pi < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(fnType.typeChildren[pi]) : shouldIndirectParam(fnType.typeChildren[pi], isMutated));

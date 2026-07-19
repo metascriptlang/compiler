@@ -1711,8 +1711,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 	if (kind === NodeKind.HiddenDeref) {
 		const inner = peekResult(ctx, cc, 0);
 		truncResults(ctx, cc);
-		// Ref array access returns void* — cast to typed pointer before deref
-		// Reference parity: explicit dereference of a typed location
 		const hd = node.data as ExprStmtData;
 		if (isRefArrayAccessCall(hd.expr) && hd.expr.nodeType !== null) {
 			const elemDesc = getTypeDesc(g, hd.expr.nodeType);
