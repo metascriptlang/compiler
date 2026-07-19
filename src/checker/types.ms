@@ -1203,6 +1203,19 @@ export function booleanType(): Type { return getSysType(TypeKind.Boolean); }
 export function voidType(): Type { return getSysType(TypeKind.Void); }
 export function nullType(): Type { return getSysType(TypeKind.Null); }
 export function unknownType(): Type { return getSysType(TypeKind.Unknown); }
+
+// Annotation-written `unknown` — strict top type. A FRESH Type (not the shared
+// pending-inference singleton) stamped UserUnknown so conversion sites can
+// enforce the void*-repr rules only on user-declared unknowns.
+export function userUnknownType(): Type {
+	const t = createPrimitive(TypeKind.Unknown);
+	t.typeFlags = TypeFlag.UserUnknown as int32;
+	return t;
+}
+
+export function isUserUnknown(t: Type | null): boolean {
+	return t !== null && t.kind === TypeKind.Unknown && (t.typeFlags & TypeFlag.UserUnknown) !== 0;
+}
 export function neverType(): Type { return getSysType(TypeKind.Never); }
 export function errorType(): Type { return getSysType(TypeKind.Error); }
 export function charType(): Type { return getSysType(TypeKind.Char); }
@@ -1458,6 +1471,8 @@ export function isMaybeWrappable(t: Type | null): boolean {
 	if (t === null) return false;
 	if (t.kind === TypeKind.Null) return false;
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return false;
+	// unknown is void* in C — pointer branch of the SomePointer split, same as Ref/Ptr
+	if (t.kind === TypeKind.Unknown) return false;
 	if (t.kind === TypeKind.Function) return true;
 	if (isStructType(t)) return true;
 	if (isPrimitiveKind(t.kind)) return true;
@@ -1472,6 +1487,23 @@ export function unwrapMaybeType(t: Type): Type {
 	return inner !== null ? inner : t;
 }
 
+// C-repr query for `unknown` (void*) interop: kinds already living in a
+// pointer-sized slot. Value-shaped kinds (string/struct/closure/numeric) have
+// no lossless void* form — implicit flows and reinterpret casts must error
+// (Nim parity: typeRel tyPointer accepts only nil/ptr/proc/cstring —
+// sigmatch.nim:1602). GenericParam/Error/Never defer to instantiation recheck.
+export function isPointerShapedForUnknown(t: Type | null): boolean {
+	if (t === null) return true;
+	const inner = skipModifier(t);
+	if (inner === null) return true;
+	if (inner.kind === TypeKind.Union) return unwrapRefNullUnion(inner) !== null;
+	return match (inner.kind) {
+		TypeKind.Unknown | TypeKind.Null | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow
+			| TypeKind.CString | TypeKind.GenericParam | TypeKind.Error | TypeKind.Never => true,
+		_ => false,
+	};
+}
+
 // unwrapRef — unwrap Ref<T> or Ptr<T> to get inner type (reference: skip pointer types).
 // Caller passes a non-null Type (or pre-narrowed value); typeReturn for Ref/Ptr
 // is guaranteed non-null by createRef/createPtr, so the result is non-null.
@@ -1483,17 +1515,18 @@ export function unwrapRef(t: Type): Type {
 	return t;
 }
 
-// If t is Union(Ref<T>, Null) or Union(Ptr<T>, Null), return the Ref/Ptr member.
-// Otherwise return null. Used by codegen to collapse nullable-ref unions to bare
-// pointer types (the null pointer is the natural sentinel — no Maybe wrapper needed).
+// If t is Union(Ref<T>, Null), Union(Ptr<T>, Null) or Union(unknown, Null),
+// return the pointer-shaped member. Otherwise return null. Used by codegen to
+// collapse nullable-pointer unions to bare pointer types (the null pointer is
+// the natural sentinel — no Maybe wrapper needed).
 export function unwrapRefNullUnion(t: Type): Type | null {
 	if (t === null || t.kind !== TypeKind.Union) return null;
 	if (t.typeChildren === null || t.typeChildren.length !== 2) return null;
 	const a = t.typeChildren[0];
 	const b = t.typeChildren[1];
 	if (a === null || b === null) return null;
-	if ((a.kind === TypeKind.Ref || a.kind === TypeKind.Ptr) && b.kind === TypeKind.Null) return a;
-	if ((b.kind === TypeKind.Ref || b.kind === TypeKind.Ptr) && a.kind === TypeKind.Null) return b;
+	if ((a.kind === TypeKind.Ref || a.kind === TypeKind.Ptr || a.kind === TypeKind.Unknown) && b.kind === TypeKind.Null) return a;
+	if ((b.kind === TypeKind.Ref || b.kind === TypeKind.Ptr || b.kind === TypeKind.Unknown) && a.kind === TypeKind.Null) return b;
 	return null;
 }
 
