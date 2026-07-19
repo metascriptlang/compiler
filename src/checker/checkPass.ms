@@ -1,7 +1,7 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { unknownType, charType, float64Type, voidType, nullType, createFunction, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
@@ -145,12 +145,52 @@ function detectLoopReuse(ctx: CheckerContext, outerKeys: string[], bodyStartStat
 	}
 }
 
+// Nim parity (lambdalifting.nim): a statement-position function decl is a
+// closure candidate like a lambda — rebind as `const name = function-expr` so
+// capture detection/lifting reuse the FunctionExpr path (decl-before-use).
+function rewriteNestedFunctionDecl(ctx: CheckerContext, node: Node): void {
+	const d = node.data as FunctionDeclData;
+	for (const def of d.fnDefaults) {
+		if (def !== null) {
+			addError(ctx, "nested function '" + d.fnName + "' cannot have default parameters — use an arrow or hoist to module level", d.nameLocation.line, d.nameLocation.column);
+			break;
+		}
+	}
+	const fnExpr = createNodeAt(NodeKind.FunctionExpr, { funcExprParams: d.params, funcExprParamTypes: d.fnParamTypes, funcExprBody: d.fnBody, funcExprFlags: d.fnFlags, funcExprReturnType: d.fnReturnType }, node.location);
+	// Synthesize the fn-type annotation so checkVariableDecl's self-ref
+	// pre-registration fires (it requires a declared type) — recursion parity.
+	let fnAnnot = "";
+	let allTyped = true;
+	for (const pt of d.fnParamTypes) {
+		if (pt === "") { allTyped = false; break; }
+	}
+	if (allTyped) {
+		let parts = "";
+		let pi = 0;
+		while (pi < d.params.length) {
+			if (pi > 0) parts = parts + ", ";
+			parts = parts + d.params[pi] + ": " + d.fnParamTypes[pi];
+			pi = pi + 1;
+		}
+		fnAnnot = "(" + parts + ") => " + (d.fnReturnType !== "" ? d.fnReturnType : "void");
+	}
+	node.kind = NodeKind.VariableDecl;
+	node.data = { declName: d.fnName, declType: fnAnnot, initializer: fnExpr, declKind: DeclKind.Const, nameLocation: d.nameLocation };
+}
+
 // ===== Statement Checker =====
 
 export function checkStmt(ctx: CheckerContext, node: Node): void {
 	match (node.kind) {
 		NodeKind.VariableDecl => checkVariableDecl(ctx, node),
-		NodeKind.FunctionDecl => checkFunctionDecl(ctx, node),
+		NodeKind.FunctionDecl => {
+			if (ctx.currentFunction !== null) {
+				rewriteNestedFunctionDecl(ctx, node);
+				checkVariableDecl(ctx, node);
+			} else {
+				checkFunctionDecl(ctx, node);
+			}
+		},
 		NodeKind.ClassDecl => checkClassDecl(ctx, node),
 		NodeKind.ActorDecl => checkActorDecl(ctx, node),
 		NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.EnumDecl | NodeKind.TypeAliasDecl |
