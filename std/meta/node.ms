@@ -57,6 +57,7 @@ export enum TypeFlag {
 	HasInheritedFields = 256,    // bit 8 — class has flattened parent fields (suppresses DRC parent-call)
 	Substituting = 1048576,      // bit 20 (high to avoid SizedArray size collision)
 	IsAtomic = 2097152,          // bit 21 (high, like Substituting — Arc<T> atomic-rc marker on a Ref; never on SizedArray size / Function minArity)
+	DuVariant = 4194304,         // bit 22 (high, same rule) — INLINE (nameless) union-variant payload struct; lifecycle owned by the DU machinery, analyzer defers (classify → no RC)
 }
 
 // ===== Attached Lifecycle Ops =====

@@ -536,7 +536,45 @@ export function createUnion(types: Type[]): Type {
 	t.kind = TypeKind.Union;
 	t.typeChildren = seen;
 	for (const ut of flat) { propagateToOwner(t, ut); }
+	stampInlineDuVariants(seen);
 	return t;
+}
+
+// DU-variant identity (Nim attachedOps-by-ItemId analog for structural types):
+// an INLINE (nameless) struct variant exists only as its union's payload — its
+// C storage and lifecycle belong to the DU machinery (<Union>_vN carriers), so
+// the analyzer must defer (classify → no RC). Named-alias variants keep their
+// own identity and sound named-hook path; do NOT flag them (they double as
+// standalone user value types). Separate function on purpose: inlining this
+// loop into createUnion hangs the v0.2.24 analyzer on the enlarged var graph.
+function stampInlineDuVariants(seen: Type[]): void {
+	for (const v of seen) {
+		if (v.kind === TypeKind.Struct && v.typeName === "") {
+			const nf: int32 = v.typeFlags | (TypeFlag.DuVariant as int32);
+			v.typeFlags = nf;
+			duRegAdd(_duVariantRegistry, v);
+		}
+	}
+}
+
+// Registered inline-variant payload types, in registration order. The flag on the
+// object is NOT enough downstream: eager per-module imports and exploratory literal
+// checks mint structurally-equal COPIES that never pass through createUnion. The
+// analyzer resolves identity for those by STRUCTURAL HASH over this registry
+// (classify.ms) — the MS-native analog of Nim's single-world ItemId, given the
+// intentional per-module type worlds (NIM-REF Import-resolution row).
+// NameSet-shaped on purpose: module-scope state must be a struct mutated through
+// free functions taking it as a param — a method call directly on a module-level
+// array emits broken C (`->push` on msRefArray, moduleless-sym family).
+interface DuVariantRegistry {
+	items: Type[];
+}
+let _duVariantRegistry: DuVariantRegistry = { items: [] };
+function duRegAdd(reg: DuVariantRegistry, v: Type): void {
+	reg.items.push(v);
+}
+export function duVariantRegistry(): Type[] {
+	return _duVariantRegistry.items;
 }
 
 // Find which union variant contains ALL the given field names (and optionally types).
@@ -1632,6 +1670,11 @@ function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
 	const result = createStruct(t.typeName, newNames, newFieldTypes, isStructType(t));
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
+	// createStruct recomputes HasAsgn from substituted children; DuVariant is an
+	// identity bit (set at createUnion) that must survive the rebuild or mono'd
+	// generic-union payloads lose their DU ownership marker.
+	const withDu: int32 = result.typeFlags | (t.typeFlags & (TypeFlag.DuVariant as int32));
+	result.typeFlags = withDu;
 	return result;
 }
 
