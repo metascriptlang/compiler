@@ -46,6 +46,16 @@ function isGeneratedMsTupleHook(name: string): boolean {
 	return base.length > 8 && base.slice(0, 8) === "msTuple_";
 }
 
+// Generated anon-struct hook (msAnon_<hash>{Destroy,Copy,Sink,WasMoved}) — same
+// discrimination as msTuple_: runtime ms* families never carry a "_<hash>" segment.
+function isGeneratedMsAnonHook(name: string): boolean {
+	if (!(name.length > 2 && name.byteAt(0) === "m".code && name.byteAt(1) === "s".code)) return false;
+	const suffix = findSuffix(name, DRC_SUFFIXES);
+	if (suffix === "") return false;
+	const base = name.slice(0, name.length - suffix.length);
+	return base.length > 7 && base.slice(0, 7) === "msAnon_";
+}
+
 export function isDrcLifecycleName(name: string): boolean {
 	const suffix = findSuffix(name, DRC_SUFFIXES);
 	if (suffix === "") return false;
@@ -76,12 +86,20 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 	// value-array walkers (msNumberArrayArrayDestroy …) or tuple hooks (msTuple_<hash>Destroy …),
 	// which are emitted by destructorLifting and need a forward proto.
 	if (callee.length > 2 && callee.byteAt(0) === "m".code && callee.byteAt(1) === "s".code
-		&& !isGeneratedMsArrayHook(callee) && !isGeneratedMsTupleHook(callee)) return;
+		&& !isGeneratedMsArrayHook(callee) && !isGeneratedMsTupleHook(callee)
+		&& !isGeneratedMsAnonHook(callee)) return;
 	if (nameSetHas(g.declaredProcs, callee)) return;
 	nameSetAdd(g.declaredProcs, callee);
 
 	// Extract type name prefix: "TypeNameDestroy" → "TypeName"
 	const typeName = callee.slice(0, callee.length - suffix.length);
+	// Anon-struct hooks: the full typedef block only exists in TUs where
+	// getTypeDesc ran for the type — a consumer TU referencing just the hook
+	// needs an opaque forward so `msAnon_X*` in the proto is a known type
+	// (identical typedef redeclaration is legal C11).
+	if (isGeneratedMsAnonHook(callee)) {
+		addLine(sec(g, CSection.ProcHeaders), `typedef struct ${typeName} ${typeName};`);
+	}
 	const isSeqHook = typeName.endsWith("Array");
 
 	const proto = match (suffix) {
