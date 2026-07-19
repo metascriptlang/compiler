@@ -13,8 +13,10 @@
 //   writeJsonBuildInstructions   → writeProjectCache
 //   BuildCache                   → project cache file (key=value format)
 
-import { exec, env, platform } from "std/process";
+import { exec, env, platform, argv } from "std/process";
 import { exists, readFile, writeFile, rename, copyFile, fileSize, remove, readDir } from "std/fs";
+import { join } from "std/fs/path";
+import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { ensureDir } from "./io";
 import { getCompilerName, modeFlags } from "./cc";
 import { djb2, fingerprint, hashToHex } from "std/hash";
@@ -33,6 +35,61 @@ function hashFile(path: string): string {
 	return `${hashContent(src)}:${src.byteLength}`;
 }
 
+// ===== Toolchain Stamp =====
+
+// Identity of the compiling toolchain beyond VERSION: content hash of the msc
+// binary plus every file under the resolved runtime/ tree. VERSION only moves
+// on release, but WIP trees change codegen and runtime/*.h while reporting the
+// same version — two such builds must never share cache entries (locally or in
+// the global content-addressed cache), and an on-disk runtime header edit must
+// invalidate .o files even when their generated C is byte-identical.
+let _toolchainStamp = "";
+
+// readDir order is filesystem-dependent; the stamp must be stable across runs.
+function collectFilesSorted(dir: string, prefix: string, outPaths: string[]): void {
+	const entries = readDir(dir);
+	let i = 1;
+	while (i < entries.length) {
+		const key = entries[i];
+		let j = i - 1;
+		while (j >= 0 && entries[j] > key) {
+			entries[j + 1] = entries[j];
+			j = j - 1;
+		}
+		entries[j + 1] = key;
+		i = i + 1;
+	}
+	for (const e of entries) {
+		if (e.length === 0) continue;
+		if (e.charAt(e.length - 1) === "/") {
+			const name = e.slice(0, e.length - 1);
+			collectFilesSorted(join(dir, name), `${prefix}${name}/`, outPaths);
+		} else {
+			outPaths.push(`${prefix}${e}`);
+		}
+	}
+}
+
+// Memoized; initCache computes it once on the main thread so parallel compile
+// workers only ever read the settled value.
+export function toolchainStamp(): string {
+	if (_toolchainStamp !== "") return _toolchainStamp;
+	let acc = hashFile(resolveArgv0(argv[0]));
+	const root = resolveRuntimeDir();
+	if (root !== "") {
+		const rtDir = join(root, "runtime");
+		if (exists(rtDir)) {
+			const files: string[] = [];
+			collectFilesSorted(rtDir, "", files);
+			for (const f of files) {
+				acc = `${acc}\n${f}:${hashFile(join(rtDir, f))}`;
+			}
+		}
+	}
+	_toolchainStamp = hashContent(acc);
+	return _toolchainStamp;
+}
+
 // ===== Cache State =====
 
 let _cacheDir = "";
@@ -45,6 +102,7 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 	_cacheDir = `out/${modeDir}/.cache`;
 	ensureDir(_cacheDir);
 	_forceRebuild = forceRebuild;
+	toolchainStamp();
 }
 
 function getCacheDir(): string {
@@ -105,7 +163,7 @@ export function fullCompileCmd(ccOption: number, mode: number, extraFlags: strin
 // (avoids any shared module-state read-after-write races).
 export function computeFingerprint(srcPath: string, compileCmd: string): string {
 	const src = try readFile(srcPath) catch "";
-	return `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}:${platform}`;
+	return `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}:${platform}:${toolchainStamp()}`;
 }
 
 // ===== Global Content-Addressed Cache =====
@@ -286,7 +344,7 @@ function getCompilerHash(ccOption: number): string {
 }
 
 function buildCmdFingerprint(ccOption: number, mode: number, compileFlags: string): string {
-	return `${getCompilerHash(ccOption)}:${mode}:${compileFlags}`;
+	return `${getCompilerHash(ccOption)}:${mode}:${compileFlags}:${toolchainStamp()}`;
 }
 
 // Prefix constants for cache line parsing — avoids magic offset numbers.
@@ -432,11 +490,18 @@ export function stableCFile(modPath: string): string {
 	return `${getCacheDir()}/${sanitizePath(modPath)}.c`;
 }
 
+// Module compile fingerprint. Exported so the parallel compile path can
+// precompute it at gather time instead of holding every module's C text
+// alive until the post-join fingerprint write.
+export function moduleCompileFp(cCode: string, compileCmd: string): string {
+	return `${hashContent(cCode)}:${compileCmd}:${toolchainStamp()}`;
+}
+
 // Check if generated C code matches cached version. If match, .o is up to date.
 export function isCCodeCached(modPath: string, cCode: string, compileCmd: string): boolean {
 	const oFile = stableOFile(modPath);
 	const fpFile = oFile + ".cfp";
-	const fp = `${hashContent(cCode)}:${compileCmd}`;
+	const fp = moduleCompileFp(cCode, compileCmd);
 	if (_forceRebuild) {
 		tryRemoveFile(oFile);
 		return false;
@@ -468,7 +533,11 @@ export function writeCSource(modPath: string, cCode: string): void {
 // writing it on failure causes future runs to false-claim cache hit and try
 // to link a partial/empty .o.
 export function writeCompileFingerprint(modPath: string, cCode: string, compileCmd: string): void {
-	const fp = `${hashContent(cCode)}:${compileCmd}`;
+	writeCompileFingerprintFp(modPath, moduleCompileFp(cCode, compileCmd));
+}
+
+// Precomputed-fp variant for the parallel compile path (fp from moduleCompileFp).
+export function writeCompileFingerprintFp(modPath: string, fp: string): void {
 	writeFile(stableOFile(modPath) + ".cfp", fp);
 }
 
@@ -561,6 +630,13 @@ test "bug6: writeCSource alone does not produce a cache hit" {
 	assert !exists(stableOFile(modPath) + ".cfp");
 	assert !isCCodeCached(modPath, "int main(){return 0;}", "cc -O0");
 	bug6_clearArtifacts(modPath);
+}
+
+test "toolchain stamp folds into module and external fingerprints" {
+	const stamp = toolchainStamp();
+	assert stamp.length > 0;
+	assert moduleCompileFp("int main(){}", "cc -O2").indexOf(stamp, 0) >= 0;
+	assert toolchainStamp() === stamp;
 }
 
 test "bug6: writeCompileFingerprint after writeCSource produces a cache hit" {

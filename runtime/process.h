@@ -22,6 +22,14 @@
 #include <sys/wait.h>
 #include <errno.h>
 #include <string.h>
+#include <spawn.h>
+#if defined(__APPLE__)
+#include <crt_externs.h>
+#define MS_SPAWN_ENVIRON (*_NSGetEnviron())
+#else
+extern char **environ;
+#define MS_SPAWN_ENVIRON environ
+#endif
 #endif
 
 #ifdef __cplusplus
@@ -209,7 +217,7 @@ static inline double msProcessFileExists(msString path) {
 /**
  * Execute a binary directly (no shell). Returns its exit code, or -1 on spawn failure.
  *
- * - POSIX: fork + execvp; inherits stdio by default.
+ * - POSIX: posix_spawnp; inherits stdio by default.
  * - Windows: CreateProcessA with inherited stdio; forward-slash paths accepted
  *   (CreateProcess normalizes internally). Bypasses cmd.exe entirely — no
  *   "argument-switch misparse" for paths like `out/debug/hello.exe`.
@@ -344,20 +352,14 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 	}
 	argv[argc + 1] = NULL;
 
-	pid_t pid = fork();
-	if (pid < 0) {
-		for (int64_t j = 1; j <= argc; j++) free(argv[j]);
-		free(argv);
-		return -1.0;
-	}
-	if (pid == 0) {
-		/* Child — replace image. Stdio is inherited by default. */
-		execvp(pathStr, argv);
-		_exit(127);  /* exec failed */
-	}
-	/* Parent */
+	/* posix_spawnp, not fork(): fork from a large parent copies its page tables
+	 * (sys-time heavy) and concurrent forks serialize on the parent's vm map
+	 * lock, capping the parallel compile pool near 2 effective cores. */
+	pid_t pid = 0;
+	int spawnErr = posix_spawnp(&pid, pathStr, NULL, NULL, argv, MS_SPAWN_ENVIRON);
 	for (int64_t j = 1; j <= argc; j++) free(argv[j]);
 	free(argv);
+	if (spawnErr != 0) return -1.0;
 	int status = 0;
 	if (waitpid(pid, &status, 0) < 0) return -1.0;
 	if (WIFEXITED(status)) return (double)WEXITSTATUS(status);
@@ -373,8 +375,8 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 // msFsLastErrno in runtime/fs/posix.c. MS wrapper reads stdout return value
 // then queries getters for additional metadata before building Result/Error.
 //
-// POSIX: pipe() × 2 + fork() + dup2() + execvp("/bin/sh", "-c", cmd) +
-//        read loops + waitpid(). Stderr captured separately from stdout.
+// POSIX: pipe() × 2 + posix_spawn("/bin/sh", "-c", cmd) with dup2 file
+//        actions + read loops + waitpid(). Stderr captured separately.
 // Windows: CreatePipe() × 2 + CreateProcess() + ReadFile loops +
 //          WaitForSingleObject + GetExitCodeProcess.
 //
@@ -387,11 +389,13 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 // outputs are tiny so this is not hit in practice. Upgrade to select()/poll()
 // when a deadlock case appears.
 
-static int32_t _msProcSpawnExitCode = 0;
-static int32_t _msProcSpawnSignal = 0;
-static msString _msProcSpawnStderr = MS_EMPTY_STRING;
-static int32_t _msProcSpawnOk = 0;  /* 1 if spawn succeeded, 0 otherwise */
-static int32_t _msProcSpawnPipeOk = 1;  /* 0 if a pipe read/setup failed mid-flight */
+/* Thread-local: exec() runs concurrently on pool workers (parallel @compile /
+ * module compile); shared globals would cross-attribute exit codes between jobs. */
+static _Thread_local int32_t _msProcSpawnExitCode = 0;
+static _Thread_local int32_t _msProcSpawnSignal = 0;
+static _Thread_local msString _msProcSpawnStderr = MS_EMPTY_STRING;
+static _Thread_local int32_t _msProcSpawnOk = 0;  /* 1 if spawn succeeded, 0 otherwise */
+static _Thread_local int32_t _msProcSpawnPipeOk = 1;  /* 0 if a pipe read/setup failed mid-flight */
 
 static inline int32_t msProcSpawnGetExitCode(void) { return _msProcSpawnExitCode; }
 static inline int32_t msProcSpawnGetSignal(void) { return _msProcSpawnSignal; }
@@ -551,24 +555,32 @@ static inline msString msProcessSpawnSync(msString command) {
 		return MS_EMPTY_STRING;
 	}
 
-	pid_t pid = fork();
-	if (pid < 0) {
+	/* posix_spawn, not fork() — see msProcessExecFile. Shell exec keeps
+	 * pipes/redirects/glob in the command string working. */
+	posix_spawn_file_actions_t fa;
+	if (posix_spawn_file_actions_init(&fa) != 0) {
 		close(outPipe[0]); close(outPipe[1]);
 		close(errPipe[0]); close(errPipe[1]);
 		return MS_EMPTY_STRING;
 	}
-
-	if (pid == 0) {
-		/* Child: rewire stdio, exec via shell so the command string can use
-		 * pipes/redirects/glob normally. */
-		close(outPipe[0]);
-		close(errPipe[0]);
-		dup2(outPipe[1], STDOUT_FILENO);
-		dup2(errPipe[1], STDERR_FILENO);
-		close(outPipe[1]);
-		close(errPipe[1]);
-		execl("/bin/sh", "sh", "-c", cmd, (char*)NULL);
-		_exit(127);  /* exec failed */
+	posix_spawn_file_actions_addclose(&fa, outPipe[0]);
+	posix_spawn_file_actions_addclose(&fa, errPipe[0]);
+	posix_spawn_file_actions_adddup2(&fa, outPipe[1], STDOUT_FILENO);
+	posix_spawn_file_actions_adddup2(&fa, errPipe[1], STDERR_FILENO);
+	posix_spawn_file_actions_addclose(&fa, outPipe[1]);
+	posix_spawn_file_actions_addclose(&fa, errPipe[1]);
+	char* shArgv[4];
+	shArgv[0] = (char*)"sh";
+	shArgv[1] = (char*)"-c";
+	shArgv[2] = (char*)cmd;
+	shArgv[3] = NULL;
+	pid_t pid = 0;
+	int spawnErr = posix_spawn(&pid, "/bin/sh", &fa, NULL, shArgv, MS_SPAWN_ENVIRON);
+	posix_spawn_file_actions_destroy(&fa);
+	if (spawnErr != 0) {
+		close(outPipe[0]); close(outPipe[1]);
+		close(errPipe[0]); close(errPipe[1]);
+		return MS_EMPTY_STRING;
 	}
 
 	/* Parent */
