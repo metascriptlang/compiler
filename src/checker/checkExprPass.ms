@@ -1372,9 +1372,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			} else {
 				node.nodeType = targetType;
 			}
-			if (targetType.kind === TypeKind.Unknown && isUserUnknown(targetType) && srcType !== null && !isPointerShapedForUnknown(srcType)) {
-				addError(ctx, "cannot reinterpret value type " + typeDisplayName(srcType) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", asLoc.line, asLoc.column);
-			} else if (srcType !== null && srcType.kind === TypeKind.Unknown && isUserUnknown(srcType)
+			if (srcType !== null && srcType.kind === TypeKind.Unknown && isUserUnknown(srcType)
 				&& targetType.kind !== TypeKind.Unknown && !isPointerShapedForUnknown(targetType)) {
 				addError(ctx, "cannot cast unknown to value type " + typeDisplayName(targetType) + " — no void* representation to reinterpret", asLoc.line, asLoc.column);
 			}
@@ -1902,8 +1900,20 @@ function deriveCallBindings(
 export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
 	if (formal === null || exprType === null) return expr;
 	if (formal.kind === TypeKind.Unknown) {
-		if (isUserUnknown(formal) && !isPointerShapedForUnknown(exprType)) {
-			addError(ctx, "cannot pass value type " + typeDisplayName(exprType) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", expr.location.line, expr.location.column);
+		if (isUserUnknown(formal)) {
+			let srcT = exprType;
+			let probe = expr;
+			while (probe.kind === NodeKind.TypeAssertion) {
+				probe = (probe.data as TypeAssertionData).asExpr;
+				if (probe !== null && probe.nodeType !== null) srcT = probe.nodeType;
+			}
+			// Explicit cast chains reinterpret pointer-SIZED scalars (Nim isCastable,
+			// semexprs.nim:320: dstSize >= srcSize / integral); fat values stay illegal.
+			const castReinterpretOk = probe !== expr && srcT !== null
+				&& (isIntegerType(srcT) || srcT.kind === TypeKind.Boolean || srcT.kind === TypeKind.Char || srcT.kind === TypeKind.Enum);
+			if (!isPointerShapedForUnknown(srcT) && !castReinterpretOk) {
+				addError(ctx, "cannot pass value type " + typeDisplayName(srcT) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", expr.location.line, expr.location.column);
+			}
 		}
 		return expr;
 	}
@@ -2792,8 +2802,18 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				continue;
 			}
 			if (argTypes[pi] === null || argTypes[pi] === null) continue;
-			if (paramType.kind === TypeKind.Unknown && isUserUnknown(paramType) && !isPointerShapedForUnknown(argTypes[pi])) {
-				addError(ctx, "Argument " + String(pi) + ": cannot pass value type " + typeDisplayName(argTypes[pi]) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", node.location.line, node.location.column);
+			if (paramType.kind === TypeKind.Unknown && isUserUnknown(paramType)) {
+				let argSrcT = argTypes[pi];
+				let argProbe = d.arguments[pi];
+				while (argProbe.kind === NodeKind.TypeAssertion) {
+					argProbe = (argProbe.data as TypeAssertionData).asExpr;
+					if (argProbe !== null && argProbe.nodeType !== null) argSrcT = argProbe.nodeType;
+				}
+				const argCastOk = argProbe !== d.arguments[pi] && argSrcT !== null
+					&& (isIntegerType(argSrcT) || argSrcT.kind === TypeKind.Boolean || argSrcT.kind === TypeKind.Char || argSrcT.kind === TypeKind.Enum);
+				if (!isPointerShapedForUnknown(argSrcT) && !argCastOk) {
+					addError(ctx, "Argument " + String(pi) + ": cannot pass value type " + typeDisplayName(argSrcT) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", node.location.line, node.location.column);
+				}
 			} else if (argTypes[pi].kind === TypeKind.Unknown && isUserUnknown(argTypes[pi]) && paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam) {
 				const collapsedParam = paramType.kind === TypeKind.Union ? unwrapRefNullUnion(paramType) : null;
 				if (collapsedParam === null || collapsedParam.kind !== TypeKind.Unknown) {
