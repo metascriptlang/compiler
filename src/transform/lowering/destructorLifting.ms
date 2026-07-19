@@ -1974,6 +1974,14 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 			if (node.nodeType.kind === TypeKind.Struct && node.nodeType.typeName !== ""
 				&& node.nodeType.typeName.indexOf(".") < 0) {
 				ensureHooks(node.nodeType.typeName, node.nodeType, null as unknown as Type, false, lctx, node.location);
+			} else if (node.nodeType.kind === TypeKind.Struct && node.nodeType.typeName === ""
+				&& node.nodeType.typeNames.length > 0
+				&& (node.nodeType.typeFlags & (TypeFlag.DuVariant as int32)) === 0) {
+				// Nameless anon structs: classify OWNS these now (msAnon_<hash> hooks) —
+				// generate their defs here or the analyzer's destroy/copy calls become
+				// undefined symbols. DU-variant payloads excluded (classify defers them
+				// to the DU machinery; a stray unstamped copy just makes a dead def).
+				ensureHooks(anonTypeName(node.nodeType), node.nodeType, null as unknown as Type, false, lctx, node.location);
 			} else if (node.nodeType.kind === TypeKind.Ref && node.nodeType.typeReturn !== null
 				&& node.nodeType.typeReturn.kind === TypeKind.Struct && node.nodeType.typeReturn.typeName !== "") {
 				// Monomorphized class/interface: unwrap Ref, pass Ref as refType for HiddenDeref.
