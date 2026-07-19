@@ -8,7 +8,7 @@ import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isRe
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
-import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet } from "./context";
@@ -330,7 +330,10 @@ export function isPointerType(t: Type): boolean {
 	// Union(Ref<T>, Null) collapses to T* in C — same C representation as Ref<T>.
 	if (inner.kind === TypeKind.Union && unwrapRefNullUnion(inner) !== null) return true;
 	return match (inner.kind) {
-		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Unknown => true,
+		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => true,
+		// user `unknown` is void*; PENDING-inference Unknown must stay non-pointer
+		// or arg shims deref/addr pending-typed scalar exprs (types.ms:1805 trap)
+		TypeKind.Unknown => (inner.typeFlags & TypeFlag.UserUnknown) !== 0,
 		_ => false,
 	};
 }
