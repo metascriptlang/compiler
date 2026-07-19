@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion } from "./types";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUserUnknown } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorExt, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn } from "./context";
 import {
@@ -1372,6 +1372,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			} else {
 				node.nodeType = targetType;
 			}
+			if (targetType.kind === TypeKind.Unknown && isUserUnknown(targetType) && srcType !== null && !isPointerShapedForUnknown(srcType)) {
+				addError(ctx, "cannot reinterpret value type " + typeDisplayName(srcType) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", asLoc.line, asLoc.column);
+			} else if (srcType !== null && srcType.kind === TypeKind.Unknown && isUserUnknown(srcType)
+				&& targetType.kind !== TypeKind.Unknown && !isPointerShapedForUnknown(targetType)) {
+				addError(ctx, "cannot cast unknown to value type " + typeDisplayName(targetType) + " — no void* representation to reinterpret", asLoc.line, asLoc.column);
+			}
 			node.nodeType = node.nodeType; return;
 		},
 		NodeKind.SpreadExpr => {
@@ -1895,7 +1901,21 @@ function deriveCallBindings(
 
 export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
 	if (formal === null || exprType === null) return expr;
-	if (formal.kind === TypeKind.Unknown || exprType.kind === TypeKind.Unknown) return expr;
+	if (formal.kind === TypeKind.Unknown) {
+		if (isUserUnknown(formal) && !isPointerShapedForUnknown(exprType)) {
+			addError(ctx, "cannot pass value type " + typeDisplayName(exprType) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", expr.location.line, expr.location.column);
+		}
+		return expr;
+	}
+	if (exprType.kind === TypeKind.Unknown) {
+		const collapsed = formal.kind === TypeKind.Union ? unwrapRefNullUnion(formal) : null;
+		const unknownFamilyFormal = formal.kind === TypeKind.GenericParam
+			|| (collapsed !== null && collapsed.kind === TypeKind.Unknown);
+		if (isUserUnknown(exprType) && !unknownFamilyFormal) {
+			addError(ctx, "unknown is not assignable to " + typeDisplayName(formal) + " — narrow with an explicit cast", expr.location.line, expr.location.column);
+		}
+		return expr;
+	}
 	// Direct function → closure auto-wrap (Reference parity: nkHiddenSubConv → nkClosure).
 	// When a named function (CcDefault) flows into a closure-typed slot (CcClosure),
 	// wrap as `{fn: expr, env: null}` ObjectLiteral with NodeFlag.Closure.
@@ -2772,6 +2792,14 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				continue;
 			}
 			if (argTypes[pi] === null || argTypes[pi] === null) continue;
+			if (paramType.kind === TypeKind.Unknown && isUserUnknown(paramType) && !isPointerShapedForUnknown(argTypes[pi])) {
+				addError(ctx, "Argument " + String(pi) + ": cannot pass value type " + typeDisplayName(argTypes[pi]) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", node.location.line, node.location.column);
+			} else if (argTypes[pi].kind === TypeKind.Unknown && isUserUnknown(argTypes[pi]) && paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam) {
+				const collapsedParam = paramType.kind === TypeKind.Union ? unwrapRefNullUnion(paramType) : null;
+				if (collapsedParam === null || collapsedParam.kind !== TypeKind.Unknown) {
+					addError(ctx, "Argument " + String(pi) + ": unknown is not assignable to " + typeDisplayName(paramType) + " — narrow with an explicit cast", node.location.line, node.location.column);
+				}
+			}
 			if (paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
 				&& paramType.kind !== TypeKind.Function
 				&& argTypes[pi].kind !== TypeKind.Unknown && argTypes[pi].kind !== TypeKind.Error
