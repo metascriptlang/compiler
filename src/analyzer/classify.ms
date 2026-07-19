@@ -5,11 +5,12 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName } from "../checker/types";
+import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
-import { TransformContext, createTransformContext } from "../transform/context";
-import { NodeKind, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { TransformContext, createTransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
+import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { mangleMonoName } from "../monomorphize/registry";
+import { anonTypeName, isAnonTypeName } from "../codegen/c/types";
 
 // ===== RC Classification Kind =====
 
@@ -142,14 +143,42 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 
 // ===== Sub-classifiers for complex arms =====
 
+// Structural-hash view of the DU-variant registry (checker/types stampInlineDuVariants).
+// The flag alone misses structurally-equal COPIES (eager per-module imports,
+// exploratory literal types) that never pass through createUnion — the hash is
+// copy-immune. Lazily ingests new registrations; registry only grows.
+let _duHashes: NameSet = null as unknown as NameSet;
+let _duHashCursor: number = 0;
+function isDuVariantHashName(name: string): boolean {
+	if (_duHashes === null) _duHashes = createNameSet();
+	const reg = duVariantRegistry();
+	while (_duHashCursor < reg.length) {
+		nameSetAdd(_duHashes, anonTypeName(reg[_duHashCursor]));
+		_duHashCursor = _duHashCursor + 1;
+	}
+	return nameSetContains(_duHashes, name);
+}
+
 function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 	// Objects are always value types now — Ref<Object> is handled by TypeKind.Ref arm
-	if (t.typeName !== "") {
+	// INLINE union-variant payloads (DuVariant, stamped at createUnion): C storage is
+	// the DU machinery's <Union>_vN carrier — msAnon hooks would name a type that
+	// doesn't exist in that TU. The machinery owns their lifecycle; defer.
+	if ((t.typeFlags & (TypeFlag.DuVariant as int32)) !== 0) return noRcInfo();
+	// Anon structs (typeName "" or checker "__anon" pseudo-name) are named msAnon_<hash>
+	// by codegen (anonTypeName); destructorLifting's field recursion generates their
+	// hooks under that name — resolve identically here (same recipe as fillBody's
+	// Struct arm) or anon-struct locals classify as unmanaged: no init copy, no scope
+	// destroy, while field stores still release old values (UAF + leak).
+	const resolvedName = (t.typeName !== "" && !isAnonTypeName(t.typeName))
+		? t.typeName
+		: (t.typeNames.length > 0 ? anonTypeName(t) : "");
+	if (resolvedName.startsWith("msAnon_") && isDuVariantHashName(resolvedName)) return noRcInfo();
+	if (resolvedName !== "") {
 		// Reference parity: hasAsgnFlag checks propagated flag (set at type creation)
 		if (hasAsgnFlag(t)) {
-			return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "Destroy", t.typeName + "Copy", t.typeName + "WasMoved", t.typeName + "Sink", false);
+			return makeRcInfo(RcKind.Named, resolvedName, resolvedName + "Destroy", resolvedName + "Copy", resolvedName + "WasMoved", resolvedName + "Sink", false);
 		}
-		return noRcInfo();
 	}
 	return noRcInfo();
 }
@@ -424,3 +453,34 @@ test "identifier is NOT fresh" { assert !isFreshExpr(NodeKind.Identifier); }
 test "member access is NOT fresh" { assert !isFreshExpr(NodeKind.MemberExpr); }
 
 test "binary expr is NOT fresh" { assert !isFreshExpr(NodeKind.BinaryExpr); }
+
+// DU-variant identity: inline (nameless) union payloads defer to the DU machinery;
+// standalone anon structs are owned via msAnon hooks; structurally-equal COPIES of a
+// registered variant defer via the structural-hash registry. Distinct field names per
+// test — the registry is process-global and keys by structural hash.
+test "nameless anon struct with RC field → owned msAnon hooks" {
+	const ctx = createTransformContext();
+	const info = classifyType(createStruct("", ["solo"], [stringType()], false), ctx);
+	assert info.rcKind === RcKind.Named;
+	assert info.needsCleanup;
+	assert info.typeName.startsWith("msAnon_");
+}
+
+test "DuVariant-flagged payload defers to the DU machinery" {
+	const ctx = createTransformContext();
+	const v = createStruct("", ["vpay"], [stringType()], false);
+	createUnion([v, numberType()]);
+	assert (v.typeFlags & (TypeFlag.DuVariant as int32)) !== 0;
+	const info = classifyType(v, ctx);
+	assert !info.needsCleanup;
+}
+
+test "structurally-equal copy of a registered variant defers via hash registry" {
+	const ctx = createTransformContext();
+	const original = createStruct("", ["vpay2"], [stringType()], false);
+	createUnion([original, numberType()]);
+	const copy = createStruct("", ["vpay2"], [stringType()], false);
+	assert (copy.typeFlags & (TypeFlag.DuVariant as int32)) === 0;
+	const info = classifyType(copy, ctx);
+	assert !info.needsCleanup;
+}
