@@ -501,8 +501,12 @@ function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node
 	// a borrow (no incref) → the pair's scope-exit msClosureDestroy decrefs an env it doesn't own →
 	// double-free with the env-var's own lifecycle (lambda-lifting). The Function type alone is NOT
 	// isRefConstr, so the flag is what keeps the env a COPY.
+	// Anon structs included since they became OWNED values (DuVariant/(d') work):
+	// an owned literal whose fields only BORROW over-releases at its destroy — the
+	// capture of an inner fresh value (new Boxed in a field) and the literal's own
+	// destroy both released the same +1 (finding #4, holderonly ASan UAF).
 	const isRefConstr = t === null || t.kind === TypeKind.Ref
-		|| (t.kind === TypeKind.Struct && t.typeName !== "")
+		|| t.kind === TypeKind.Struct
 		|| t.kind === TypeKind.GenericInstance
 		|| t.kind === TypeKind.Union
 		|| (node.flags & NodeFlag.Closure) !== 0;
