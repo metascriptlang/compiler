@@ -36,7 +36,7 @@ export function findProjectRoot(entryFile: string = ""): string {
 // Resolve bare argv[0] (e.g. "msc") to full path by searching $PATH.
 // Cross-platform: accepts both "/" and "\" as separators; detects PATH list
 // delimiter (";" on Windows, ":" on Unix) by inspection.
-function resolveArgv0(arg0: string): string {
+export function resolveArgv0(arg0: string): string {
 	// Already a path (has any separator or drive-letter prefix) — pass through
 	let i = 0;
 	while (i < arg0.length) {
