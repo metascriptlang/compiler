@@ -330,7 +330,7 @@ export function isPointerType(t: Type): boolean {
 	// Union(Ref<T>, Null) collapses to T* in C — same C representation as Ref<T>.
 	if (inner.kind === TypeKind.Union && unwrapRefNullUnion(inner) !== null) return true;
 	return match (inner.kind) {
-		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => true,
+		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Unknown => true,
 		_ => false,
 	};
 }

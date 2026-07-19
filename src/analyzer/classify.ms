@@ -260,6 +260,9 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				// but Ptr is UNMANAGED — incref/decref on a raw pointer (e.g. a
 				// C-library allocation with no ms header) corrupts memory.
 				if (refInner.kind === TypeKind.Ptr) return noRcInfo();
+				// unknown | null: same bare-void* repr; unknown is a non-owning view
+				// (Nim parity: `pointer` is RC-inert) and may hold foreign handles.
+				if (refInner.kind === TypeKind.Unknown) return noRcInfo();
 				if (refInner.sym !== null && refInner.sym.symbolKind === SymbolKind.Actor) return noRcInfo();
 				return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
 			}
