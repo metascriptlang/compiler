@@ -1508,7 +1508,18 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 
 function resolveVariable(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
-	if (d.declType !== "") return;
+	if (d.declType !== "") {
+		// Annotated module var: bind the type in Pass 2. Pass 3 checks bodies in
+		// SOURCE ORDER, so a function body above the declaration would otherwise
+		// see Unknown — silent miscompile (method lowering misses, raw `->name` C)
+		// instead of the 3-pass order-independence the checker guarantees.
+		// Mirrors resolveExtern below; Shaping machinery handles forward aliases.
+		const sym = lookupSymbol(ctx.table, d.declName);
+		if (sym !== null && sym.symbolType.kind === TypeKind.Unknown) {
+			sym.symbolType = resolveAnnotation(d.declType, ctx, node.location.line, node.location.column);
+		}
+		return;
+	}
 	// No annotation: for const object literals, infer struct type from field names.
 	// This gives cross-module exports a meaningful type (not unknown) for LSP hover/completion.
 	// Full inference happens in Pass 3; this is a lightweight early approximation.
