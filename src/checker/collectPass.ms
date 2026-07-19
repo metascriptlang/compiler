@@ -39,15 +39,6 @@ function collectDecl(ctx: CheckerContext, node: Node): void {
 			const gSym = lookupLocal(ctx.table, (node.data as VariableDeclData).declName);
 			if (gSym !== null) setFlag(gSym, SymbolFlag.Global);
 		},
-		NodeKind.TestDecl => {
-			const td = node.data as TestDeclData;
-			if (td.testBody !== null && td.testBody.kind === NodeKind.BlockStmt) {
-				const bd = td.testBody.data as BlockStmtData;
-				for (const stmt of bd.statements) {
-					if (stmt.kind === NodeKind.FunctionDecl) collectDecl(ctx, stmt);
-				}
-			}
-		},
 		_ => {},
 	};
 }
@@ -94,15 +85,6 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 			collectVariable(ctx, node);
 			const gSym2 = lookupLocal(ctx.table, (node.data as VariableDeclData).declName);
 			if (gSym2 !== null) setFlag(gSym2, SymbolFlag.Global);
-		},
-		NodeKind.TestDecl => {
-			const td = node.data as TestDeclData;
-			if (td.testBody !== null && td.testBody.kind === NodeKind.BlockStmt) {
-				const bd = td.testBody.data as BlockStmtData;
-				for (const stmt of bd.statements) {
-					if (stmt.kind === NodeKind.FunctionDecl) collectDeclLocal(ctx, stmt);
-				}
-			}
 		},
 		_ => {},
 	};
