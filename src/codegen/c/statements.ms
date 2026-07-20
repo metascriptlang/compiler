@@ -787,6 +787,18 @@ function genUnreachableStmt(g: CGen, p: CProc, node: Node): void {
 function genAssertStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as AssertStmtData;
 	const cond = genExpr(g, p, d.assertExpr);
+
+	if (d.assertMessageExpr !== null) {
+		const msgExpr = genExpr(g, p, d.assertMessageExpr);
+		// __am is not decref'd: msTestCheckFail keeps the pointer, read by the dispatcher after return.
+		if (g.isTestBuild) {
+			emitStmtsLine(p, `if (!(${cond})) { msString __am = ${msgExpr}; msTestCheckFail(__am.p ? __am.p->data : "", __FILE__, __LINE__); return; }`);
+		} else {
+			emitStmtsLine(p, `if (!(${cond})) { msString __am = ${msgExpr}; fprintf(stderr, "assert failed: %s\\n", __am.p ? __am.p->data : ""); abort(); }`);
+		}
+		return;
+	}
+
 	// Use custom message if provided, otherwise fall back to source text
 	const raw = (d.assertMessage.length > 0) ? d.assertMessage : d.assertSource;
 	const msg = `"${escapeForC(raw)}"`;

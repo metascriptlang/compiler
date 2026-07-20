@@ -368,7 +368,7 @@ export type NodeData =
 	| { deferExpr: Node }                                          // DeferStmt
 	// Testing variants
 	| { testName: string, testBody: Node }                         // TestDecl
-	| { assertExpr: Node, assertSource: string, assertMessage: string } // AssertStmt
+	| { assertExpr: Node, assertSource: string, assertMessage: string, assertMessageExpr: Node | null } // AssertStmt
 	// Extern / Macro / Quote variants
 	| { externKind: ExternKind, externName: string, nativeName: string, externType: string } // ExternDecl
 	| { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclBody: Node } // MacroDecl
@@ -587,7 +587,7 @@ export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: No
 export type MacroInvocationData = { macroName: string, macroArgs: Node[] };
 export type HiddenDerefData = { expr: Node };
 export type TestDeclData = { testName: string, testBody: Node };
-export type AssertStmtData = { assertExpr: Node, assertSource: string, assertMessage: string };
+export type AssertStmtData = { assertExpr: Node, assertSource: string, assertMessage: string, assertMessageExpr: Node | null };
 export type QuoteExprData = { quoteBody: Node };
 export type ComptimeBlockData = { comptimeBody: Node };
 

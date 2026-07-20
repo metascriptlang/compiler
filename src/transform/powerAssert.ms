@@ -136,6 +136,7 @@ function instrumentAssert(assertNode: Node): Node {
 		assertExpr: resultRef,
 		assertSource: source,
 		assertMessage: "",
+		assertMessageExpr: null,
 	}, syntheticToken(loc));
 	failStmts.push(simpleAssert);
 

@@ -463,9 +463,12 @@ export function printAssertStmt(node: Node, options: FormatOptions): Doc {
 		docText("assert "),
 		callPrintNode(d.assertExpr, options),
 	];
-	if (d.assertMessage.length > 0) {
+	if (d.assertMessageExpr !== null) {
+		parts.push(docText(", "));
+		parts.push(callPrintNode(d.assertMessageExpr, options));
+	} else if (d.assertMessage.length > 0) {
 		// Re-escape: lexer unescapes `\"`, `\n`, etc. — reverse that.
-		parts.push(docText(" : \"" + escapeForQuote(d.assertMessage, "\"") + "\""));
+		parts.push(docText(", \"" + escapeForQuote(d.assertMessage, "\"") + "\""));
 	}
 	parts.push(docText(";"));
 	return docGroup(parts);

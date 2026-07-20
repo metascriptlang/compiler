@@ -26,14 +26,14 @@ test "struct field: assign non-null closure, read back" {
 		const f = v as Producer;
 		assert f() === 42;
 	} else {
-		assert false : "should be non-null";
+		assert false, "should be non-null";
 	}
 }
 
 test "struct field: assign null, read back" {
 	const b: BoxStruct = { fn: null };
 	const v = b.fn;
-	assert v === null : "should be null";
+	assert v === null, "should be null";
 }
 
 test "interface field: assign non-null closure, read back" {
@@ -43,12 +43,12 @@ test "interface field: assign non-null closure, read back" {
 		const f = v as Producer;
 		assert f() === 42;
 	} else {
-		assert false : "should be non-null";
+		assert false, "should be non-null";
 	}
 }
 
 test "interface field: assign null, read back" {
 	const b: BoxIface = { fn: null };
 	const v = b.fn;
-	assert v === null : "should be null";
+	assert v === null, "should be null";
 }

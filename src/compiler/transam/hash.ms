@@ -83,7 +83,7 @@ function hB(h: number, b: boolean): number {
 	return combine(h, b ? 1 : 0);
 }
 
-function hN(h: number, node: Node): number {
+function hN(h: number, node: Node | null): number {
 	if (node === null) return combine(h, 0);
 	return combine(h, transAmHashNode(node));
 }
@@ -421,7 +421,7 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.AssertStmt => {
 			const d = node.data as AssertStmtData;
-			h = hN(h, d.assertExpr); h = hS(h, d.assertSource); h = hS(h, d.assertMessage);
+			h = hN(h, d.assertExpr); h = hS(h, d.assertSource); h = hS(h, d.assertMessage); h = hN(h, d.assertMessageExpr);
 		},
 		NodeKind.MacroDecl => {
 			const d = node.data as MacroDeclData;

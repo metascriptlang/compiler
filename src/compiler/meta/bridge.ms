@@ -458,7 +458,7 @@ function setBool(objHeap: RaiserObjectHeap, h: number, name: string, val: boolea
 	heapObjectSetField(objHeap, h, name, v);
 }
 
-function setNode(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, child: Node): void {
+function setNode(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, child: Node | null): void {
 	if (child === null) {
 		// Represent null Node fields as RaiserValue.Nil — readNode handles this on the way back
 		heapObjectSetField(objHeap, h, name, raiserNil());
@@ -930,6 +930,7 @@ export function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: Rais
 			setNode(objHeap, arrHeap, handle, "assertExpr", d.assertExpr);
 			setStr(objHeap, handle, "assertSource", d.assertSource);
 			setStr(objHeap, handle, "assertMessage", d.assertMessage);
+			setNode(objHeap, arrHeap, handle, "assertMessageExpr", d.assertMessageExpr);
 		},
 
 		// === Program ===
@@ -1656,7 +1657,8 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const assertExpr = readNode(objHeap, arrHeap, h, "assertExpr", loc);
 			const assertSource = readStr(objHeap, h, "assertSource");
 			const assertMessage = readStr(objHeap, h, "assertMessage");
-			return createNodeAt(NodeKind.AssertStmt, { assertExpr, assertSource, assertMessage }, loc);
+			const assertMessageExpr = readNode(objHeap, arrHeap, h, "assertMessageExpr", loc);
+			return createNodeAt(NodeKind.AssertStmt, { assertExpr, assertSource, assertMessage, assertMessageExpr }, loc);
 		},
 
 		// === Program ===

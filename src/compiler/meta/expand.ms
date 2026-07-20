@@ -95,7 +95,7 @@ function isBuiltinDirective(name: string): boolean {
 // their argument expressions as-is instead of lowering to ObjectLiteral.
 let _quoteSpliceActive = false;
 
-function isSpliceCall(node: Node): boolean {
+function isSpliceCall(node: Node | null): boolean {
 	if (node === null || node.kind !== NodeKind.CallExpr) return false;
 	const cd = node.data as CallExprData;
 	if (cd.callee === null || cd.callee.kind !== NodeKind.Identifier) return false;
@@ -157,7 +157,7 @@ function stripMacroArgWrappers(node: Node): Node {
 	return n;
 }
 
-function nodeToASTLiteral(node: Node, loc: SourceLocation): Node {
+function nodeToASTLiteral(node: Node | null, loc: SourceLocation): Node {
 	if (node === null) return mkNull(loc);
 	node = stripMacroArgWrappers(node);
 	if (node === null) return mkNull(loc);
@@ -236,7 +236,7 @@ function addBoolField(keys: string[], values: Node[], name: string, val: boolean
 	values.push(mkBool(val, loc));
 }
 
-function addNodeField(keys: string[], values: Node[], name: string, val: Node, loc: SourceLocation): void {
+function addNodeField(keys: string[], values: Node[], name: string, val: Node | null, loc: SourceLocation): void {
 	keys.push(name);
 	// splice(expr) inside a quote body: emit the arg expression directly
 	// (Raiser evaluates at runtime) instead of converting to ObjectLiteral.
@@ -823,6 +823,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addNodeField(keys, values, "assertExpr", d.assertExpr, loc);
 		addStrField(keys, values, "assertSource", d.assertSource, loc);
 		addStrField(keys, values, "assertMessage", d.assertMessage, loc);
+		addNodeField(keys, values, "assertMessageExpr", d.assertMessageExpr, loc);
 		return;
 	}
 	if (k === NodeKind.Program) {

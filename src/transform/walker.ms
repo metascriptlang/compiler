@@ -364,6 +364,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 		NodeKind.AssertStmt => {
 			const d = node.data as AssertStmtData;
 			d.assertExpr = f(d.assertExpr);
+			if (d.assertMessageExpr !== null) { d.assertMessageExpr = f(d.assertMessageExpr); }
 		},
 		NodeKind.PropertyDecl => {
 			const d = node.data as PropertyDeclData;

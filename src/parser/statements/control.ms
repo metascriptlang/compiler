@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { TokenKind } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, createNode, makeLoc } from "../../ast/node";
+import { Node, NodeKind, DeclKind, StringLiteralData, createNode, makeLoc } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../context";
 import { skipOptionalType, isIdentLike } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
@@ -505,18 +505,23 @@ export function parseAssertStmt(state: ParserState): NodeResult {
 		source = source + state.tokens[i].value;
 	}
 
-	// Optional message: assert expr : "message";
+	// Optional message: assert expr, <message expression>;
+	// A plain string-literal message takes the static fast path (assertMessage);
+	// any other expression is stored as a node and evaluated at runtime on failure.
 	let message = "";
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
-		advance(state); // consume ':'
-		if (!isAtEnd(state) && current(state).kind === TokenKind.String) {
-			message = current(state).value;
-			advance(state);
+	let messageExpr: Node | null = null;
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Comma) {
+		advance(state); // consume ','
+		const msgNode = try callExprParser(state);
+		if (msgNode.kind === NodeKind.StringLiteral) {
+			message = (msgNode.data as StringLiteralData).value;
+		} else {
+			messageExpr = msgNode;
 		}
 	}
 
 	consumeSemicolon(state);
-	return Result.ok(createNode(NodeKind.AssertStmt, { assertExpr, assertSource: source, assertMessage: message }, assertToken));
+	return Result.ok(createNode(NodeKind.AssertStmt, { assertExpr, assertSource: source, assertMessage: message, assertMessageExpr: messageExpr }, assertToken));
 }
 
 // ===== Tests =====
@@ -593,10 +598,10 @@ test "assert stmt member" { assert programOk("assert obj.prop;"); }
 
 test "assert stmt call" { assert programOk("assert isValid(x);"); }
 
-test "assert stmt with message" { assert programOk("assert x > 0 : \"x must be positive\";"); }
+test "assert stmt with message" { assert programOk("assert x > 0, \"x must be positive\";"); }
 
 test "assert stmt message parsed" {
-	const pr = parseSource("assert x : \"hello\";");
+	const pr = parseSource("assert x, \"hello\";");
 	assert pr.ok;
 	const pd = pr.value.data as ProgramData;
 	const d = pd.programStmts[0].data as AssertStmtData;
