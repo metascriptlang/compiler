@@ -45,6 +45,7 @@ export interface CliOptions {
 	strictDefs: boolean;       // --strict-defs: warn on all uninit var use
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
 	gcMode: string;            // --gc=drc|none|manual: memory management mode
+	lto: string;               // --lto=off|thin|full: link-time optimization strategy (empty = mode default)
 	projectRoot: string;       // set by CLI main from findProjectRoot() — dir containing build.ms
 	extraArgs: string[];       // remaining args passed through for package manager commands (add, remove, etc.)
 }
@@ -84,6 +85,7 @@ export function parseArgs(): CliOptions {
 		strictDefs: false,
 		strictNullChecks: false,
 		gcMode: "orc",
+		lto: "",
 		projectRoot: "",
 		extraArgs: [],
 	};
@@ -186,6 +188,14 @@ export function parseArgs(): CliOptions {
 			opts.gcMode = "drc";
 		} else if (arg === "--gc=orc") {
 			opts.gcMode = "orc";
+		} else if (arg.startsWith("--lto=")) {
+			const ltoVal = arg.slice(6, arg.length);
+			if (ltoVal === "off" || ltoVal === "thin" || ltoVal === "full") {
+				opts.lto = ltoVal;
+			} else {
+				console.log(error("error") + ": unknown --lto strategy '" + bold(ltoVal) + "'. Valid: " + cyan("off") + ", " + cyan("thin") + ", " + cyan("full"));
+				exit(1);
+			}
 		} else if (arg === "--emit=c") {
 			opts.emitC = true;
 		} else if (arg === "--colors=on") {
@@ -209,6 +219,12 @@ export function parseArgs(): CliOptions {
 			exit(1);
 		}
 		i += 1;
+	}
+
+	// LTO default is mode-derived: danger (local optimized self-build) uses thin
+	// for a fast parallel link; debug/release stay off. --lto= overrides.
+	if (opts.lto === "") {
+		opts.lto = opts.mode === MODE_DANGER ? "thin" : "off";
 	}
 
 	return opts;

@@ -263,12 +263,25 @@ export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boo
 
 // -- Build mode flags --
 // mode: 0=debug, 1=release, 2=danger
+// Opt-level only. LTO strategy is a separate axis — see ltoFlags/opts.lto.
 
 export function modeFlags(mode: number): string {
 	return match (mode) {
-		2 => " -O3 -flto -w -DNDEBUG",
+		2 => " -O3 -w -DNDEBUG",
 		1 => " -O2 -w -DNDEBUG",
 		_ => " -O0 -g",
+	};
+}
+
+// -- LTO strategy flags --
+// Orthogonal to opt-level. Thin = parallel per-function LTO (fast link, ~full
+// runtime); full = monolithic whole-program LTO (slow serial link). Rides the
+// compile-flag string, which already flows to both compile and link commands.
+export function ltoFlags(lto: string): string {
+	return match (lto) {
+		"thin" => " -flto=thin",
+		"full" => " -flto",
+		_ => "",
 	};
 }
 
@@ -333,6 +346,10 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
 	flags = appendFlag(flags, "-fdata-sections");
 	flags = appendFlag(flags, "-ffunction-sections");
+	// LTO strategy — emitted into the compile flags, which also flow to the link
+	// command (allLink = cliLinkFlags(allFlags)); thin bitcode + -flto=thin at
+	// link enables the parallel ThinLTO backend.
+	flags = appendFlag(flags, ltoFlags(opts.lto));
 	if (opts.isHcr || opts.appMode === "lib" || opts.appMode === "staticlib") flags = appendFlag(flags, "-fPIC");
 	flags = appendFlag(flags, opts.passC);
 	return flags;
