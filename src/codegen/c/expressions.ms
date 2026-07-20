@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType } from "../../checker/types";
+import { isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUserUnknown } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -2489,12 +2489,23 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 				// via arrayElementNeedsCleanup — the whole value-struct family in ONE place, no
 				// per-kind enumeration. Else (primitive / nested-array / tuple / Unknown) free-only,
 				// with the msRefArray fallback for void*-collapsed payloads.
-				_ => arrayElementNeedsCleanup(elemT)
-					? arrCType + "Destroy"
-					: (arrCType === "msRefArray" ? "msRefArrayDestroy" : "msNumberArrayDestroy"),
+				// User-`unknown` element (Nim seq[pointer]): entries carry no rc share —
+				// free-only, never msRefArrayDestroy (net −1/death → UAF). Mirrors Actor arm;
+				// must agree with classifyArray's inert arm. Peel `unknown|null` (bare void*).
+				_ => (isUserUnknown(elemT.kind === TypeKind.Union ? unwrapRefNullUnion(elemT) : elemT))
+					? "msNumberArrayDestroy"
+					: (arrayElementNeedsCleanup(elemT)
+						? arrCType + "Destroy"
+						: (arrCType === "msRefArray" ? "msRefArrayDestroy" : "msNumberArrayDestroy")),
 			};
 		}
-		const cellName = arrCType + "RefCell";
+		// Free-only msRefArray cells (unknown / actor elements) get their OWN weak TypeInfo
+		// symbol: "msRefArrayRefCell" is ONE weak symbol program-wide, but destroyFn was
+		// per-module first-ensure-wins + cross-module last-DatInit-wins — a module mixing
+		// counted and inert element families scrambled the shared cell's destroyer.
+		const cellName = (destroyFn === "msNumberArrayDestroy" && arrCType === "msRefArray")
+			? "msPtrArrayRefCell"
+			: arrCType + "RefCell";
 		ensureDrcProto(g, destroyFn);
 		ensureRefArrayCellTypeInfo(g, cellName, destroyFn);
 		const tiArg = (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;

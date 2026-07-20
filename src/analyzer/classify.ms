@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry } from "../checker/types";
+import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUserUnknown } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
@@ -131,6 +131,17 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	if (elem.kind === TypeKind.Distinct && elem.typeReturn !== null) {
 		const unwrapped = createArray(elem.typeReturn);
 		return classifyArray(unwrapped, ctx);
+	}
+	// User-`unknown` elements (opaque handles = Nim seq[pointer], liftdestructors.nim:978
+	// tyPointer→defaultOp): entries arrive with NO rc share (classify says inert at every
+	// entry site), so hooks must be inert too — counted hooks decref refs the array never
+	// received (net −1 per death → UAF, the neon reconcile slab poison). Mirrors the Actor
+	// exemption above. `unknown|null` collapses to bare void* (NIM-REF unknown row).
+	{
+		const bareElem = elem.kind === TypeKind.Union ? unwrapRefNullUnion(elem) : elem;
+		if (bareElem !== null && isUserUnknown(bareElem)) {
+			return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
+		}
 	}
 	// Catch-all assumes void*-stride layout. Correct ONLY when the element
 	// is pointer-indirected (which the Ref/Ptr branch above already covers).
