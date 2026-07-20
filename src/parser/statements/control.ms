@@ -506,8 +506,7 @@ export function parseAssertStmt(state: ParserState): NodeResult {
 	}
 
 	// Optional message: assert expr, <message expression>;
-	// A plain string-literal message takes the static fast path (assertMessage);
-	// any other expression is stored as a node and evaluated at runtime on failure.
+	// A string literal takes the static fast path; any other expression is evaluated at runtime.
 	let message = "";
 	let messageExpr: Node | null = null;
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Comma) {

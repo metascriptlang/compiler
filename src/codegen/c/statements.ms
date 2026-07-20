@@ -788,26 +788,22 @@ function genAssertStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as AssertStmtData;
 	const cond = genExpr(g, p, d.assertExpr);
 
+	let preamble = "";
+	let msg = "";
 	if (d.assertMessageExpr !== null) {
-		const msgExpr = genExpr(g, p, d.assertMessageExpr);
 		// __am is not decref'd: msTestCheckFail keeps the pointer, read by the dispatcher after return.
-		if (g.isTestBuild) {
-			emitStmtsLine(p, `if (!(${cond})) { msString __am = ${msgExpr}; msTestCheckFail(__am.p ? __am.p->data : "", __FILE__, __LINE__); return; }`);
-		} else {
-			emitStmtsLine(p, `if (!(${cond})) { msString __am = ${msgExpr}; fprintf(stderr, "assert failed: %s\\n", __am.p ? __am.p->data : ""); abort(); }`);
-		}
-		return;
-	}
-
-	// Use custom message if provided, otherwise fall back to source text
-	const raw = (d.assertMessage.length > 0) ? d.assertMessage : d.assertSource;
-	const msg = `"${escapeForC(raw)}"`;
-
-	if (g.isTestBuild) {
-		emitStmtsLine(p, `if (!(${cond})) { msTestCheckFail(${msg}, __FILE__, __LINE__); return; }`);
+		preamble = `msString __am = ${genExpr(g, p, d.assertMessageExpr)}; `;
+		msg = "msStringToCString(__am)";
 	} else {
-		emitStmtsLine(p, `if (!(${cond})) { fprintf(stderr, "assert failed: %s\\n", ${msg}); abort(); }`);
+		const raw = (d.assertMessage.length > 0) ? d.assertMessage : d.assertSource;
+		msg = `"${escapeForC(raw)}"`;
 	}
+
+	const onFail = g.isTestBuild
+		? `msTestCheckFail(${msg}, __FILE__, __LINE__); return;`
+		: `fprintf(stderr, "assert failed: %s\\n", ${msg}); abort();`;
+
+	emitStmtsLine(p, `if (!(${cond})) { ${preamble}${onFail} }`);
 }
 
 // ===== Tests =====
