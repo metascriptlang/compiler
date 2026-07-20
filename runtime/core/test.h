@@ -91,8 +91,17 @@ extern int __ms_last_assert_line;
 /* ---- Assert failure (called by codegen-emitted assert checks) ---- */
 
 static inline void msTestCheckFail(const char* msg, const char* file, int line) {
+    /* Own the message: callers may pass a heap string they free right after
+     * this returns, while the dispatcher reads it once the test unwinds. */
+    static char __ms_assert_msg_buf[MS_PA_DIAG_SIZE];
     __ms_test_failed = 1;
-    __ms_last_assert_msg = msg;
+    if (msg != NULL) {
+        strncpy(__ms_assert_msg_buf, msg, MS_PA_DIAG_SIZE - 1);
+        __ms_assert_msg_buf[MS_PA_DIAG_SIZE - 1] = '\0';
+        __ms_last_assert_msg = __ms_assert_msg_buf;
+    } else {
+        __ms_last_assert_msg = "";
+    }
     __ms_last_assert_file = file;
     __ms_last_assert_line = line;
 }

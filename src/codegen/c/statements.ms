@@ -789,19 +789,20 @@ function genAssertStmt(g: CGen, p: CProc, node: Node): void {
 	const cond = genExpr(g, p, d.assertExpr);
 
 	let preamble = "";
+	let postamble = "";
 	let msg = "";
 	if (d.assertMessageExpr !== null) {
-		// __am is not decref'd: msTestCheckFail keeps the pointer, read by the dispatcher after return.
 		preamble = `msString __am = ${genExpr(g, p, d.assertMessageExpr)}; `;
 		msg = "msStringToCString(__am)";
+		postamble = " msStringDestroy(__am);";
 	} else {
 		const raw = (d.assertMessage.length > 0) ? d.assertMessage : d.assertSource;
 		msg = `"${escapeForC(raw)}"`;
 	}
 
 	const onFail = g.isTestBuild
-		? `msTestCheckFail(${msg}, __FILE__, __LINE__); return;`
-		: `fprintf(stderr, "assert failed: %s\\n", ${msg}); abort();`;
+		? `msTestCheckFail(${msg}, __FILE__, __LINE__);${postamble} return;`
+		: `fprintf(stderr, "assert failed: %s\\n", ${msg});${postamble} abort();`;
 
 	emitStmtsLine(p, `if (!(${cond})) { ${preamble}${onFail} }`);
 }
