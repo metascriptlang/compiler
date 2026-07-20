@@ -70,7 +70,7 @@ typedef struct {
 typedef struct {
     const char* test_name;
     const char* file_path;
-    const char* assert_msg;
+    char assert_msg[MS_PA_DIAG_SIZE];
     const char* assert_file;
     int assert_line;
     char pa_diagram[MS_PA_DIAG_SIZE];
@@ -228,7 +228,8 @@ static inline void ms_record_failure(void) {
     MsFailure* f = &__ms_failures[__ms_failure_count++];
     f->test_name = __ms_current_test_name;
     f->file_path = __ms_current_file_path;
-    f->assert_msg = __ms_last_assert_msg;
+    strncpy(f->assert_msg, __ms_last_assert_msg != NULL ? __ms_last_assert_msg : "", MS_PA_DIAG_SIZE - 1);
+    f->assert_msg[MS_PA_DIAG_SIZE - 1] = '\0';
     f->assert_file = __ms_last_assert_file;
     f->assert_line = __ms_last_assert_line;
     if (__ms_pa_pending) {
@@ -329,7 +330,7 @@ static inline int ms_test_main(MsTestModule* modules, int argc, char** argv) {
                     putchar('\n');
                     if (*p == '\n') p++;
                 }
-            } else if (f->assert_msg) {
+            } else if (f->assert_msg[0] != '\0') {
                 printf("    AssertionError: %s\n", f->assert_msg);
             }
 
