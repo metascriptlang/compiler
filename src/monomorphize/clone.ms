@@ -117,16 +117,17 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 		dst.paramLocations = src.paramLocations;
 		dst.comments = src.comments;
 		dst.typeArg = src.typeArg;
-		// Enum member access was rewritten by the checker from `E.M` (MemberExpr)
-		// to `Identifier "E_M"` whose mangled name is deliberately never bound in
-		// scope — its only resolution path is this resolvedSym. Dropping it makes
-		// a re-check (comptime/macro injected decls) see an undefined variable and
-		// rgen fold the member to nil. Preserve it (nodeType too, so the trusted
-		// re-check keeps the enum-literal type).
-		if (src.resolvedSym !== null && src.resolvedSym.symbolKind === SymbolKind.EnumMember) {
-			dst.resolvedSym = src.resolvedSym;
-			dst.nodeType = src.nodeType;
-		}
+	}
+	// Enum member access was rewritten by the checker from `E.M` (MemberExpr)
+	// to `Identifier "E_M"` whose mangled name is deliberately never bound in
+	// scope — its only resolution path is this resolvedSym. Both clone modes must
+	// carry it by reference (Nim freshGenSyms leaves non-gensym syms untouched):
+	// Check mode for comptime/macro re-check, Mono mode for generic instantiation
+	// (else a cloned `E.M` in a generic body re-resolves by name and fails).
+	// See NIM-REF.md §1 "Enum member repr & generic-instantiation survival".
+	if (src.resolvedSym !== null && src.resolvedSym.symbolKind === SymbolKind.EnumMember) {
+		dst.resolvedSym = src.resolvedSym;
+		dst.nodeType = src.nodeType;
 	}
 	return dst;
 }

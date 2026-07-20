@@ -319,7 +319,14 @@ function clearCheckerState(node: Node): void {
 		node.data = inner.data;
 		node.nodeType = inner.nodeType;
 	}
-	node.resolvedSym = null as unknown as Symbol;
+	// Enum member access is a mangled Identifier ("E_M") whose name is never bound
+	// in scope — resolvedSym is its ONLY resolution path (checkExprPass honors it,
+	// clone.ms preserves it). The enum member type is concrete, never generic, so
+	// it needs no regeneration against the instance's concrete types. Keep it.
+	// See NIM-REF.md §1 "Enum member repr & generic-instantiation survival".
+	if (node.resolvedSym === null || node.resolvedSym.symbolKind !== SymbolKind.EnumMember) {
+		node.resolvedSym = null as unknown as Symbol;
+	}
 	node.flags = 0;
 	forEachChild(node, (child: Node): void => { clearCheckerState(child); });
 }
