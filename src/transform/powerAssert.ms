@@ -91,6 +91,10 @@ function instrumentAssert(assertNode: Node): Node {
 	const source = d.assertSource;
 	const loc = assertNode.location;
 
+	// An explicit message states what to report — keep it, don't replace it with
+	// the auto-decomposition diagram (the reporter shows the diagram over the message).
+	if (d.assertMessage.length > 0 || d.assertMessageExpr !== null) return assertNode;
+
 	// Only instrument "interesting" expressions (binary, member, call, unary)
 	if (!isDecomposable(expr)) return assertNode;
 
@@ -131,7 +135,8 @@ function instrumentAssert(assertNode: Node): Node {
 	// Call __paEnd()
 	failStmts.push(makeCallStmt("__paEnd", [], loc));
 
-	// Keep the original assert for the actual test failure
+	// Keep the original assert for the actual test failure (reached only for
+	// message-less asserts, so no message to carry).
 	const simpleAssert = createNode(NodeKind.AssertStmt, {
 		assertExpr: resultRef,
 		assertSource: source,
