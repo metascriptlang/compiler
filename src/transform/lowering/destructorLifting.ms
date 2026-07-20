@@ -29,6 +29,7 @@ import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHook
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
 import { walkNode } from "../walker";
+import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
@@ -163,60 +164,7 @@ function unwrapGenericInstance(gi: Type): { mangledName: string, body: Type } {
 // Determines if a type can form reference cycles (needed for =trace hook).
 
 function isCyclicType(t: Type, lctx: LiftCtx, visited: NameSet): boolean {
-	if (t === null) return false;
-	if (isPrimitiveKind(t.kind) || t.kind === TypeKind.String) return false;
-
-	match (t.kind) {
-		TypeKind.Ref | TypeKind.Function => { return true; },
-		TypeKind.Ptr => { return false; },
-		TypeKind.Array | TypeKind.Distinct => {
-			if (t.typeReturn === null) return false;
-			return isCyclicType(t.typeReturn, lctx, visited);
-		},
-		TypeKind.Struct => {
-			if (t.typeName !== "") {
-				if (nameSetContains(lctx.cyclicCache, t.typeName)) return true;
-				if (nameSetContains(lctx.nonCyclicCache, t.typeName)) return false;
-				if (nameSetContains(visited, t.typeName)) return false;
-				nameSetAdd(visited, t.typeName);
-			}
-			for (const child of t.typeChildren) {
-				if (isCyclicType(child, lctx, visited)) {
-					if (t.typeName !== "") nameSetAdd(lctx.cyclicCache, t.typeName);
-					return true;
-				}
-			}
-			if (t.typeName !== "") nameSetAdd(lctx.nonCyclicCache, t.typeName);
-			return false;
-		},
-		TypeKind.Union => {
-			if (t.typeName !== "") {
-				if (nameSetContains(lctx.cyclicCache, t.typeName)) return true;
-				if (nameSetContains(lctx.nonCyclicCache, t.typeName)) return false;
-				if (nameSetContains(visited, t.typeName)) return false;
-				nameSetAdd(visited, t.typeName);
-			}
-			for (const variant of t.typeChildren) {
-				if (variant !== null && variant.typeChildren !== null) {
-					for (const child of variant.typeChildren) {
-						if (isCyclicType(child, lctx, visited)) {
-							if (t.typeName !== "") nameSetAdd(lctx.cyclicCache, t.typeName);
-							return true;
-						}
-					}
-				}
-			}
-			if (t.typeName !== "") nameSetAdd(lctx.nonCyclicCache, t.typeName);
-			return false;
-		},
-		TypeKind.Tuple => {
-			for (const child of t.typeChildren) {
-				if (isCyclicType(child, lctx, visited)) return true;
-			}
-			return false;
-		},
-		_ => { return false; },
-	};
+	return canFormAcycle(t, lctx.cyclicCache, lctx.nonCyclicCache);
 	return false;
 }
 
@@ -516,8 +464,9 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 		"trace" => {
 			// Arc<T> is acyclic by construction — its atomic rc is the sole owner accountant,
 			// so it must never be traced into the cycle collector (a non-atomic flag mutation
-			// there would race the atomic count). Pass &field for plain Refs only.
-			if (!atomic) {
+			// there would race the atomic count). Acyclic pointees are skipped per the
+			// reference attachedTrace gate (liftdestructors.nim:782-791).
+			if (!atomic && isCyclic) {
 				buf.items.push(makeExprStmt(makeCall(makeIdent("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
 			}
 		},
@@ -2224,14 +2173,19 @@ test "primitive-only no hooks" { assert generatedFnCount("interface Point { x: n
 
 test "string field generates 5 hooks" { assert generatedFnCount("interface Token { value: string; }") === 5; }
 
-// items is now Ref<Array> — cyclic-capable → Data gets _trace (6 hooks instead of 5)
-test "array field generates 6 hooks" { assert generatedFnCount("interface Data { items: number[]; }") === 6; }
+// canFormAcycle(Ref<Array<number>>) = false — no path back through number elements,
+// so Data gets no _trace (destroy/copy/sink/wasMoved/dup only)
+test "array field generates 5 hooks" { assert generatedFnCount("interface Data { items: number[]; }") === 5; }
 
-// Interface is now Ref type — B.a is Ref<A>, which is cyclic-capable → B gets _trace (6 hooks instead of 5)
-test "nested interface generates 11 hooks" { assert generatedFnCount("interface A { name: string; } interface B { a: A; }") === 11; }
+// Ref<A> with acyclic pointee A{name:string} cannot be part of a cycle → no _trace on B
+test "nested interface generates 10 hooks" { assert generatedFnCount("interface A { name: string; } interface B { a: A; }") === 10; }
 
-// B has Ref<A> fields → cyclic-capable → gets _trace (11 = 5 for A + 6 for B)
-test "no duplicates" { assert generatedFnCount("interface A { name: string; } interface B { a1: A; a2: A; }") === 11; }
+test "no duplicates" { assert generatedFnCount("interface A { name: string; } interface B { a1: A; a2: A; }") === 10; }
+
+// self-referential interface CAN form a cycle → keeps _trace (6th hook)
+test "self-ref interface generates 6 hooks" { assert generatedFnCount("interface Node { value: number; next: Node | null; }") === 6; }
+
+test "self-ref interface has trace" { assert hasGeneratedFn("interface Node { value: number; next: Node | null; }", "NodeTrace"); }
 
 test "exported interface" { assert generatedFnCount("export interface Token { value: string; }") === 5; }
 

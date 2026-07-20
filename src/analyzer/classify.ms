@@ -5,10 +5,11 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUserUnknown } from "../checker/types";
+import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUserUnknown } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
+import { canFormAcycle } from "../transform/cycles";
 import { mangleMonoName } from "../monomorphize/registry";
 import { anonTypeName, isAnonTypeName } from "../codegen/c/types";
 
@@ -18,7 +19,7 @@ export enum RcKind {
 	None,       // primitive/enum/void — no RC
 	String,     // msStringCopy / msStringDecref
 	Array,      // msArray* (variant depends on element type)
-	Ref,        // msIncref / msDecref (pointers, interfaces, classes)
+	Ref,        // msIncref(Cyclic) / msDecref(Cyclic) per canFormAcycle (pointers, interfaces, classes)
 	Closure,    // msClosure*
 	Named,      // TypeName_destroy / TypeName_copy (from destructorLifting)
 }
@@ -211,8 +212,13 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			// reachable; Malebolgia parity: concurrency primitives bypass GC entirely.
 			if (t.sym !== null && t.sym.symbolKind === SymbolKind.Actor) return noRcInfo();
 			if (isAtomicRef(t)) return makeRcInfo(RcKind.Ref, "", "msAtomicDecref", "msAtomicIncref", "msPtrWasMoved", "", false);
-			// cyclic ops unregister from the ORC rootset BEFORE the destructor runs (liftdestructors.nim:748)
-			return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
+			// Reference atomicRefOp (liftdestructors.nim:725): cyclic ops — which unregister
+			// from the ORC rootset BEFORE the destructor (:748) — only for pointees that can
+			// be part of a cycle; plain RC otherwise.
+			if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {
+				return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
+			}
+			return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
 		},
 		TypeKind.GenericInstance => {
 			// Awaitables (`Promise<T>`, plain or affine) are Ref-shaped heap allocs
@@ -275,7 +281,10 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				// (Nim parity: `pointer` is RC-inert) and may hold foreign handles.
 				if (refInner.kind === TypeKind.Unknown) return noRcInfo();
 				if (refInner.sym !== null && refInner.sym.symbolKind === SymbolKind.Actor) return noRcInfo();
-				return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
+				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {
+					return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
+				}
+				return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
 			}
 			// Pure string-literal union — msString at runtime (genUnionType), so the
 			// String ops apply; the Named path would fabricate <Alias>{Destroy,Copy}
@@ -445,6 +454,26 @@ test "ref → Ref" {
 	const info = classifyType(t, ctx);
 	assert info.rcKind === RcKind.Ref;
 	assert info.destroyFn === "msDecrefCyclic";
+}
+
+test "ref to self-cyclic struct → cyclic ops" {
+	const ctx = createTransformContext();
+	const s = createStruct("CycNode", ["next"], [numberType()], false);
+	s.typeChildren[0] = createRef(s);
+	const info = classifyType(createRef(s), ctx);
+	assert info.rcKind === RcKind.Ref;
+	assert info.destroyFn === "msDecrefCyclic";
+	assert info.copyFn === "msIncrefCyclic";
+}
+
+test "ref to leaf struct → plain ops" {
+	const ctx = createTransformContext();
+	const inner = createStruct("LeafInner", ["value"], [numberType()], false);
+	const leaf = createStruct("LeafOuter", ["x", "child"], [numberType(), createRef(inner)], false);
+	const info = classifyType(createRef(leaf), ctx);
+	assert info.rcKind === RcKind.Ref;
+	assert info.destroyFn === "msDecref";
+	assert info.copyFn === "msIncref";
 }
 
 test "ptr → None (unmanaged)" {
