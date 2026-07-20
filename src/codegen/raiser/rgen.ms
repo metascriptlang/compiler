@@ -242,7 +242,7 @@ export interface RaiserModuleInput {
 	program: Node;
 }
 
-export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModule {
+export function generateRaiserProject(modules: RaiserModuleInput[], autoCallMain: boolean = false): RaiserModule {
 	const functions: RaiserFunction[] = [];
 
 	// --- Pass 1: Global declaration collection ---
@@ -439,6 +439,17 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 	}
 	if (initIndices.length === 0) {
 		emitLoadConst(entryS, 0, raiserNil());
+	}
+	if (autoCallMain) {
+		let mainIdx = -1;
+		for (const e of globalFuncMap.items) {
+			if (e.name === "main") { mainIdx = e.index; break; }
+		}
+		if (mainIdx >= 0) {
+			const destReg = allocReg(entryS);
+			emitInst(entryS, raiserABC(RaiserOpcode.Call, destReg, mainIdx, 0));
+			lastResultReg = destReg;
+		}
 	}
 	emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 0, 0));
 	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.maxRegSeen);

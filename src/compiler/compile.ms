@@ -1620,6 +1620,8 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
 
 	const modules: RaiserModuleInput[] = [];
+	const entryCanonical = canonicalModulePath(filePath);
+	let autoCallMain = false;
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
@@ -1629,6 +1631,11 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		const modCtx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
 		exitOnFatalCheckerErrors(modCtx, modPath, mod.source);
 		modCtx.errors = [];
+
+		if (modPath === entryCanonical && modCtx.table !== null) {
+			const mainSym = lookupSymbol(modCtx.table, "main");
+			autoCallMain = mainSym !== null && (mainSym.symFlags & SymbolFlag.Used) === 0;
+		}
 
 		const macroExpanded = expandMacros(program, modCtx);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
@@ -1641,7 +1648,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	}
 
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
-	const raiserMod = generateRaiserProject(modules);
+	const raiserMod = generateRaiserProject(modules, autoCallMain);
 
 	if (opts.showTime) printTiming("compiled", t0);
 
