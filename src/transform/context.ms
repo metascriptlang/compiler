@@ -21,10 +21,12 @@ export class TransformContext {
 	keepBuiltinMemberCalls: boolean;  // backend resolves builtins natively (opcodes / native methods) — keep member-call form instead of UFCS-rewriting to direct calls (mangled-name backends like C set false)
 	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (reference parity)
 	pendingStructEqs: string[];  // struct/interface == uses to lift Eq for on-demand
+	cyclicCache: NameSet;     // canFormAcycle entry-level memo (types confirmed cyclic)
+	acyclicCache: NameSet;    // canFormAcycle entry-level memo (types confirmed acyclic)
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingStructEqs: [] };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingStructEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet() };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
