@@ -55,3 +55,23 @@ Optional header directive:
 Note: mangled type names are compiler-internal and can shift under transform
 refactors — prefer the double-destroy abort (name-agnostic) as the core signal;
 use `GUARD-BALANCE` only for leak guards where a stable type is available.
+
+## Guards beyond the lifecycle ledger
+
+Some Nim-derived invariants aren't lifecycle events the ledger can count — e.g.
+**type identity**. `run.sh` still hosts them: it treats a **build failure as RED**
+(a type-identity violation makes the program uncompilable), and a probe can add
+an **uncaught `throw` on a wrong value** for a runtime RED (nonzero exit) if a
+drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
+
+- **`typeKeyFnSignature.ms`** — structural type-dedup keys must not drop a
+  function signature (`hashType` tyProc / `sameInstantiation`; NIM-REF §1
+  "Structural type-dedup keys"). Two nullable-fn fields of different arity: a
+  collapse re-erases the 2nd's arity → checker "expected at most 0" → build RED.
+  Proven RED on the pre-fix compiler, GREEN post-fix (drc+orc).
+  - **Known gap:** the sibling `monoTypeKey` collapse is NOT guarded — its
+    function case is *benign* (uniform `msClosure` repr → a collapsed
+    `Holder__function` still runs correct), and its only RED case (anon-union
+    type-arg → fused `msUnion` payloads) can't yet compile clean because of a
+    separate union ctor-param proto/def indirection bug + generic-fn-over-union
+    bug. Add that guard once those land (logged in neon `BUGS.md`).
