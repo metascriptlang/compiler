@@ -2092,7 +2092,11 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[],
 		if (defNode === null) break;
 		const cloned = cloneDefaultNode(defNode);
 		// Type-check with expected param type so empty containers get correct type
-		const expectedType = paramTypes !== null && argIdx < paramTypes.length ? paramTypes[argIdx] : null;
+		// hint (e.g. `[]` for `string[]` param → msStringArray). `argIdx + defaultOffset`
+		// mirrors the `defaults[]` indexing two lines above — both arrays include the
+		// receiver slot for non-static methods (collectPass.ms:378-385 aligns them), so
+		// the same offset skips it.
+		const expectedType = paramTypes !== null && argIdx + defaultOffset < paramTypes.length ? paramTypes[argIdx + defaultOffset] : null;
 		checkExpr(defCtx, cloned, expectedType);
 		const fitted = expectedType !== null ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
 		args.push(fitted);
