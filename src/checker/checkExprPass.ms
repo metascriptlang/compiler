@@ -1995,6 +1995,9 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	if (coercionCall !== null as unknown as Node) {
 		return coercionCall;
 	}
+	// Scope: only container element-repr is enforced here. General `!isAssignable`
+	// rejection is intentionally NOT applied — see NIM-REF.md row 72 (terminal
+	// design; two intentional divergences: TS non-null types + Ref→Ptr cursor).
 	if (isReinterpretUnsafe(exprType, formal)) {
 		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — array elements differ in memory layout; a raw cast would reinterpret, not convert (annotate or map the elements)", expr.location.line, expr.location.column);
 	}

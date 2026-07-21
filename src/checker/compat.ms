@@ -204,6 +204,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// Ref<T> ↔ Ptr<T>: both are pointer types, interchangeable when inner types match.
 	// Must check BEFORE Ref→T auto-deref to prevent Ref being unwrapped then compared against Ptr.
 	// Arc<T> is excluded — it is not pointer-interchangeable (atomic rc must stay typed).
+	// Intentional divergence from Nim's strict ref/ptr split — MS Ptr<T> is the cursor
+	// pattern (NIM-REF.md row 63).
 	if ((source.kind === TypeKind.Ref && target.kind === TypeKind.Ptr)
 		|| (source.kind === TypeKind.Ptr && target.kind === TypeKind.Ref)) {
 		if (!isAtomicRef(source) && !isAtomicRef(target)
@@ -266,7 +268,10 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		return true;
 	}
 
-	// Source is union: all members must be assignable to target
+	// Source is union: all members must be assignable to target.
+	// NB: `T | null → T` is rejected here (Null not assignable to non-null T) —
+	// intentional TS-style divergence (NIM-REF.md §"Nullable-ref struct field
+	// hooks"), swallowed by the fitNode isReinterpretUnsafe scope (row 72).
 	if (source.kind === TypeKind.Union) {
 		for (const member of source.typeChildren) {
 			if (!isAssignable(member, target)) return false;
