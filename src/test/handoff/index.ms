@@ -14,6 +14,7 @@ import "./postTransform";
 import "./drcInject";
 import "./maybeCollapse";
 import "./typeCoercion";
+import "./arrayElementRepr";
 import "./unionNarrowing";
 import "./unionNarrow";
 import "./toStringResolve";
