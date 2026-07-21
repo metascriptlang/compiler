@@ -101,6 +101,8 @@ interface LiftState {
 	sharedEnvStructType: Type;          // the shared env struct type
 	sharedEnvCapturedNames: NameSet;    // union of ALL captured vars across all closures
 	sharedEnvCapturedIdents: Node[];    // captured ident nodes from detection pre-pass
+	sharedEnvChainNames: string[];      // enclosing shared-env names, immediate-parent first ($up walk)
+	sharedEnvChainTypes: Type[];        // parallel: enclosing shared-env struct types
 	// Pass 1 result: pre-computed per-FunctionDecl captures (consumed by lift's
 	// FunctionDecl path instead of running detection inline).
 	detection: DetectionState;
@@ -227,6 +229,8 @@ function createLiftState(): LiftState {
 		sharedEnvStructType: null as unknown as Type,
 		sharedEnvCapturedNames: createNameSet(),
 		sharedEnvCapturedIdents: [],
+		sharedEnvChainNames: [],
+		sharedEnvChainTypes: [],
 		detection: createDetectionState(),
 	};
 	return state;
@@ -477,32 +481,37 @@ function envFieldType(envStructType: Type, fieldName: string): Type {
 function chainWalkAccess(
 	fieldName: string,
 	currentEnvName: string, currentEnvType: Type,
-	parentEnvName: string, parentEnvType: Type,
+	chainNames: string[], chainTypes: Type[], targetIdx: number,
 	nodeOriginalType: Type,
 	loc: SourceLocation,
 ): Node {
-	// Step 1: cast _envP to current env, deref, access $up
+	// access = (*((currentEnv*)_envP)) — this closure's own env struct.
 	const envIdent = makeIdent(ENV_PARAM_NAME, loc);
 	const curCast = createNode(NodeKind.TypeAssertion, { asExpr: envIdent, asType: currentEnvName }, syntheticToken(loc));
 	curCast.nodeType = createPtr(currentEnvType);
-	const curDeref = makeHiddenDeref(curCast, loc);
-	curDeref.nodeType = currentEnvType;
-	const upMember = makeMember(curDeref, UP_FIELD, loc);
-	upMember.nodeType = unknownType();  // void* — `$up` field is typed as `unknown`
-
-	// Step 2: cast `$up` to parent env, deref, access target field
-	const parentCast = createNode(NodeKind.TypeAssertion, { asExpr: upMember, asType: parentEnvName }, syntheticToken(loc));
-	parentCast.nodeType = createPtr(parentEnvType);
-	const parentDeref = makeHiddenDeref(parentCast, loc);
-	parentDeref.nodeType = parentEnvType;
-	let result = makeMember(parentDeref, fieldName, loc);
-	result.nodeType = nodeOriginalType !== null ? nodeOriginalType : envFieldType(parentEnvType, fieldName);
-	// If the parent env stores this field as a ccgIntroducedPtr (Array/Union/
-	// Span as `Ptr<T>`), one extra deref is needed to get back T — mirroring
-	// `rewriteNode`'s handling of the same case for current-env access.
-	if (isEnvPtrField(parentEnvType, fieldName)) {
+	let access = makeHiddenDeref(curCast, loc);
+	access.nodeType = currentEnvType;
+	// Walk `$up` up the ancestor chain (Nim accessViaEnvParam loop) until the
+	// env that actually stores `fieldName` — chainTypes[targetIdx].
+	let curType = currentEnvType;
+	let k = 0;
+	while (k <= targetIdx) {
+		const upMember = makeMember(access, UP_FIELD, loc);
+		upMember.nodeType = unknownType();  // void* — `$up` is untyped at runtime
+		const nextCast = createNode(NodeKind.TypeAssertion, { asExpr: upMember, asType: chainNames[k] }, syntheticToken(loc));
+		nextCast.nodeType = createPtr(chainTypes[k]);
+		access = makeHiddenDeref(nextCast, loc);
+		access.nodeType = chainTypes[k];
+		curType = chainTypes[k];
+		k += 1;
+	}
+	let result = makeMember(access, fieldName, loc);
+	result.nodeType = nodeOriginalType !== null ? nodeOriginalType : envFieldType(curType, fieldName);
+	// If the storing env keeps this field as a ccgIntroducedPtr (Array/Union/
+	// Span as `Ptr<T>`), one extra deref recovers T — mirroring `rewriteNode`.
+	if (isEnvPtrField(curType, fieldName)) {
 		result = makeHiddenDeref(result, loc);
-		result.nodeType = nodeOriginalType !== null ? nodeOriginalType : envFieldType(parentEnvType, fieldName);
+		result.nodeType = nodeOriginalType !== null ? nodeOriginalType : envFieldType(curType, fieldName);
 	}
 	return result;
 }
@@ -511,24 +520,31 @@ function chainWalkAccess(
 // - body: the closure body to rewrite
 // - captures: names captured by this closure (rewrite targets)
 // - envTypeName / envStructType: this closure's env (cast target for `_envP`)
-// - parentEnvName / parentEnvType: lexical parent env, or empty/null when none.
-//   Used by chain walk when a capture is not a field of the current env.
+// - chainNames / chainTypes: ancestor envs, immediate-parent first. A capture
+//   not stored in the current env lives in one of these — reached by walking
+//   `$up` (Nim accessViaEnvParam), never copied down (that was bug D).
 function rewriteNode(
 	node: Node,
 	captures: NameSet,
 	envTypeName: string, envStructType: Type,
-	parentEnvName: string, parentEnvType: Type,
+	chainNames: string[], chainTypes: Type[],
 ): Node | null {
 	if (node === null) return null;
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		if (nameSetContains(captures, d.name)) {
-			// If the captured name is NOT a field of the current env, fall back
-			// to chain walk via `$up` to the parent env (Nim parity).
-			if (!envHasField(envStructType, d.name)
-					&& parentEnvName !== "" && parentEnvType !== null
-					&& envHasField(parentEnvType, d.name)) {
-				return chainWalkAccess(d.name, envTypeName, envStructType, parentEnvName, parentEnvType, node.nodeType, node.location);
+			// If the captured name is NOT a field of the current env, walk the
+			// `$up` chain to the ancestor env that stores it (Nim parity).
+			if (!envHasField(envStructType, d.name)) {
+				let idx = -1;
+				let ci = 0;
+				while (ci < chainTypes.length) {
+					if (envHasField(chainTypes[ci], d.name)) { idx = ci; break; }
+					ci += 1;
+				}
+				if (idx >= 0) {
+					return chainWalkAccess(d.name, envTypeName, envStructType, chainNames, chainTypes, idx, node.nodeType, node.location);
+				}
 			}
 			// Implementation parity: env param is void*, cast+deref to typed pointer for field access
 			// Produces: (*((EnvType*)_envP)).field  in C
@@ -549,7 +565,7 @@ function rewriteNode(
 		return node;
 	}
 	if (isFuncBoundary(node)) return node;
-	mapChildren(node, (child: Node): Node => rewriteNode(child, captures, envTypeName, envStructType, parentEnvName, parentEnvType));
+	mapChildren(node, (child: Node): Node => rewriteNode(child, captures, envTypeName, envStructType, chainNames, chainTypes));
 	return node;
 }
 
@@ -667,11 +683,21 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	// Rewrite closure body: captured vars → (*((EnvType*)_envP)).field
 	// For shared env, rewrite ALL captured names (env has fields for all captures)
 	const rewriteCaptures = useShared ? state.sharedEnvCapturedNames : captures;
-	// Chain walk parent: this per-closure env's `$up` points to the enclosing
-	// fn's shared env, so chain-walks read fields that live there.
-	const rwParentEnvName = (!useShared && hasEnclosingFnEnv(state)) ? state.sharedEnvName : "";
-	const rwParentEnvType = (!useShared && hasEnclosingFnEnv(state)) ? state.sharedEnvStructType : (null as unknown as Type);
-	let rewrittenBody = rewriteNode(body, rewriteCaptures, envName, envStructType, rwParentEnvName, rwParentEnvType);
+	// Ancestor chain for `$up` walk (immediate parent first). A shared-env closure
+	// walks the current shared env's own chain; a per-closure env prepends the
+	// enclosing shared env (its `$up` target) then that env's chain.
+	const rwChainNames: string[] = [];
+	const rwChainTypes: Type[] = [];
+	if (useShared) {
+		for (const n of state.sharedEnvChainNames) rwChainNames.push(n);
+		for (const t of state.sharedEnvChainTypes) rwChainTypes.push(t);
+	} else if (hasEnclosingFnEnv(state)) {
+		rwChainNames.push(state.sharedEnvName);
+		rwChainTypes.push(state.sharedEnvStructType);
+		for (const n of state.sharedEnvChainNames) rwChainNames.push(n);
+		for (const t of state.sharedEnvChainTypes) rwChainTypes.push(t);
+	}
+	let rewrittenBody = rewriteNode(body, rewriteCaptures, envName, envStructType, rwChainNames, rwChainTypes);
 	if (rewrittenBody === null) {
 		rewrittenBody = makeBlock([], loc);
 	} else if (rewrittenBody.kind !== NodeKind.BlockStmt) {
@@ -883,6 +909,21 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 	state.sharedEnvCapturedNames = allCaptures;
 	state.sharedEnvCapturedIdents = allCapturedIdents;
 
+	// Ancestor chain for the `$up` walk: [enclosing env] ++ its own ancestors,
+	// immediate-parent first. Empty when there is no enclosing env (top-level
+	// function). Nested closures reach ancestor-frame vars by walking this chain
+	// (Nim accessViaEnvParam), never by copying values down (that was bug D).
+	const parentChainNames: string[] = [];
+	const parentChainTypes: Type[] = [];
+	if (outerEnvName !== "" && outerEnvStructType !== null) {
+		parentChainNames.push(outerEnvName);
+		parentChainTypes.push(outerEnvStructType);
+		for (const n of state.sharedEnvChainNames) parentChainNames.push(n);
+		for (const t of state.sharedEnvChainTypes) parentChainTypes.push(t);
+	}
+	state.sharedEnvChainNames = parentChainNames;
+	state.sharedEnvChainTypes = parentChainTypes;
+
 	// Build env struct fields from all captured vars
 	const envFields: string[] = [];
 	const envFieldTypes: string[] = [];
@@ -894,6 +935,11 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 	envFieldTypes.push("unknown");
 	envResolvedTypes.push(unknownType());
 	for (const name of allCaptures.items) {
+		// Ancestor capture: an enclosing env already stores this var. Do NOT add a
+		// field here — it is read via the `$up` walk, never copied (Nim parity).
+		let isAncestor = false;
+		for (const at of parentChainTypes) { if (envHasField(at, name)) { isAncestor = true; break; } }
+		if (isAncestor) continue;
 		envFields.push(name);
 		envFieldTypes.push(lookupVarType(state, name));
 		const orig = findCapturedIdent(name, state.sharedEnvCapturedIdents);
@@ -929,6 +975,17 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 	const envDeclInit = makeVarDecl(state.sharedEnvVarName, emptyEnvObj, DeclKind.Let, loc);
 	envDeclInit.nodeType = refEnvType;
 	state.hoistedEnvDecls.push(envDeclInit);
+
+	// Wire `$up` to the enclosing env. This closure's lifted body receives the
+	// enclosing env as `_envP` (the closure pair carries it), so nested closures
+	// walk `$up` to reach ancestor-frame slots (Nim rawClosureCreation up-field).
+	if (outerEnvName !== "") {
+		const upLhs = makeMember(makeIdent(state.sharedEnvVarName, loc), UP_FIELD, loc);
+		upLhs.nodeType = unknownType();
+		const upRhs = makeIdent(ENV_PARAM_NAME, loc);
+		upRhs.nodeType = unknownType();
+		state.hoistedEnvDecls.push(makeExprStmt(makeAssign(upLhs, upRhs, loc), loc));
+	}
 
 	// Reference parity (rawClosureCreation): copy available values into env fields.
 	// Params and module-level vars/functions are available at function entry.
@@ -976,30 +1033,10 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 			state.hoistedEnvDecls.push(makeExprStmt(makeAssign(
 				lhs, rhs, loc
 			), loc));
-		} else if (outerEnvName !== "" && outerEnvStructType !== null && envHasField(outerEnvStructType, name)) {
-			// Ancestor capture (Nim parity, `up`-chain copy): name is neither a
-			// param of this closure nor module-level — it's defined in some
-			// enclosing closure's frame. Copy from outer env at this closure's
-			// entry so inner closures (which use this closure's per-call env as
-			// their $up) see the value. RHS is constructed as a cast on _envP
-			// to the outer env struct, mirroring `chainWalkAccess` but as an
-			// init stmt rather than a read in the body. Skips locals declared
-			// inside this body — those are still handled by VarDecl rewrite.
-			const lhs = makeMember(makeIdent(state.sharedEnvVarName, loc), name, loc);
-			if (orig !== null && orig.nodeType !== null) {
-				lhs.nodeType = orig.nodeType;
-			}
-			const envIdent = makeIdent(ENV_PARAM_NAME, loc);
-			const cast = createNode(NodeKind.TypeAssertion, { asExpr: envIdent, asType: outerEnvName }, syntheticToken(loc));
-			cast.nodeType = createPtr(outerEnvStructType);
-			const deref = makeHiddenDeref(cast, loc);
-			deref.nodeType = outerEnvStructType;
-			const rhs = makeMember(deref, name, loc);
-			if (orig !== null && orig.nodeType !== null) {
-				rhs.nodeType = orig.nodeType;
-			}
-			state.hoistedEnvDecls.push(makeExprStmt(makeAssign(lhs, rhs, loc), loc));
 		}
+		// Ancestor captures need NO init here — they live in an enclosing env and
+		// are read in the body via the `$up` walk (rewriteNode/chainWalkAccess).
+		// (Previously copied by value → nested-closure writes were lost: bug D.)
 	}
 
 	// Reference parity (accessViaEnvVar): activate all-refs rewrite from function entry.
@@ -1497,6 +1534,8 @@ interface SharedEnvSnapshot {
 	structType: Type;
 	capturedNames: NameSet;
 	capturedIdents: Node[];
+	chainNames: string[];
+	chainTypes: Type[];
 }
 
 function saveSharedEnv(state: LiftState): SharedEnvSnapshot {
@@ -1507,6 +1546,8 @@ function saveSharedEnv(state: LiftState): SharedEnvSnapshot {
 		structType: state.sharedEnvStructType,
 		capturedNames: state.sharedEnvCapturedNames,
 		capturedIdents: state.sharedEnvCapturedIdents,
+		chainNames: state.sharedEnvChainNames,
+		chainTypes: state.sharedEnvChainTypes,
 	};
 	state.sharedEnvActive = false;
 	return snap;
@@ -1519,6 +1560,8 @@ function restoreSharedEnv(state: LiftState, snap: SharedEnvSnapshot): void {
 	state.sharedEnvStructType = snap.structType;
 	state.sharedEnvCapturedNames = snap.capturedNames;
 	state.sharedEnvCapturedIdents = snap.capturedIdents;
+	state.sharedEnvChainNames = snap.chainNames;
+	state.sharedEnvChainTypes = snap.chainTypes;
 }
 
 // Walk + lift one capturing closure (Arrow or FunctionExpr). Drives the
