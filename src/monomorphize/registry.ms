@@ -74,8 +74,21 @@ export function monoTypeKey(t: Type | null): string {
 		TypeKind.Var => "var_" + monoTypeKey(t.typeReturn),
 		TypeKind.Borrow => "borrow_" + monoTypeKey(t.typeReturn),
 		TypeKind.Distinct => "distinct_" + monoTypeKey(t.typeReturn),
-		TypeKind.Function => "function",
-		TypeKind.Union => t.typeName !== "" ? t.typeName : "union",
+		TypeKind.Function => {
+			let key = "fn";
+			for (const child of t.typeChildren) {
+				key = key + "_" + monoTypeKey(child);
+			}
+			return key + "_r_" + monoTypeKey(t.typeReturn);
+		},
+		TypeKind.Union => {
+			if (t.typeName !== "") return t.typeName;
+			let key = "union";
+			for (const child of t.typeChildren) {
+				key = key + "_" + monoTypeKey(child);
+			}
+			return key;
+		},
 		TypeKind.Tuple => {
 			let key = "tuple";
 			for (const child of t.typeChildren) {
