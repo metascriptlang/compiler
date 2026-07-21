@@ -1030,6 +1030,7 @@ function maybeCacheKey(inner: Type): string {
 		}
 		return key;
 	}
+	if (inner.kind === TypeKind.Function) return "fn_" + identSafeKey(typeKey(inner));
 	return "p" + (inner.kind as number);
 }
 
@@ -1443,6 +1444,16 @@ function typeKey(t: Type): string {
 				i += 1;
 			}
 			return k;
+		},
+		TypeKind.Function => {
+			let k = "fn(";
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (i > 0) k = k + ",";
+				k = k + (t.typeChildren[i] !== null ? typeKey(t.typeChildren[i]) : "any");
+				i += 1;
+			}
+			return k + ")_" + (t.typeReturn !== null ? typeKey(t.typeReturn) : "void");
 		},
 		_ => t.kind.toString(),
 	};

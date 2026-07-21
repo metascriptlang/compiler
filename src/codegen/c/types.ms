@@ -69,7 +69,16 @@ function anonFieldKey(t: Type | null): string {
 		},
 		TypeKind.Enum => "enum:" + t.typeName,
 		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn),
-		TypeKind.Function => "fn",
+		TypeKind.Function => {
+			let k = "fn(";
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (i > 0) k = k + ",";
+				k = k + anonFieldKey(t.typeChildren[i]);
+				i += 1;
+			}
+			return k + "):" + anonFieldKey(t.typeReturn);
+		},
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
 		TypeKind.Unknown => "unknown",
 		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0]) : "unknown",
