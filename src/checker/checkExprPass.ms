@@ -7,7 +7,7 @@ import { unknownType, numberType, int32Type, float64Type, isFloatType, stringTyp
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorExt, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn } from "./context";
 import {
-	isAssignable, needsStdConv, findFirstMismatch,
+	isAssignable, isReinterpretUnsafe, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore,
 } from "./compat";
@@ -1897,6 +1897,19 @@ function deriveCallBindings(
 // Wraps expr in HiddenStdConv when narrowing integer conversion is needed.
 // Transform phase (rangeCheckInject.ms) later converts HiddenStdConv → range check call.
 
+// Render array-like types as `elem[]` for diagnostics — typeDisplayName otherwise
+// shows the bare "Array". Peels a Ref wrapper (owned heap arrays are Ref<Array<T>>)
+// at each level so `number[][]` reads back as `number[][]`.
+function arrayDisplay(t: Type | null): string {
+	let inner = skipModifier(t);
+	if (inner !== null && inner.kind === TypeKind.Ref) inner = inner.typeReturn;
+	if (inner !== null && (inner.kind === TypeKind.Array || inner.kind === TypeKind.Span
+			|| inner.kind === TypeKind.Ptr || inner.kind === TypeKind.SizedArray)) {
+		return arrayDisplay(inner.typeReturn) + "[]";
+	}
+	return typeDisplayName(t);
+}
+
 export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
 	if (formal === null || exprType === null) return expr;
 	if (formal.kind === TypeKind.Unknown) {
@@ -1958,7 +1971,7 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	if (isMaybeType(formal) && formal.typeReturn !== null && !isMaybeType(exprType)) {
 		return synthMaybeWrap(expr, formal, exprType);
 	}
-	if (formal.kind === exprType.kind) return expr;
+	if (formal.kind === exprType.kind && !isReinterpretUnsafe(exprType, formal)) return expr;
 	if ((exprType.kind === TypeKind.CString && formal.kind === TypeKind.String)
 		|| ((exprType.kind === TypeKind.String || exprType.kind === TypeKind.StringLiteral)
 			&& formal.kind === TypeKind.CString)) {
@@ -1981,6 +1994,9 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	const coercionCall = trySynthesizeAsCoercion(ctx, expr, exprType, formal);
 	if (coercionCall !== null as unknown as Node) {
 		return coercionCall;
+	}
+	if (isReinterpretUnsafe(exprType, formal)) {
+		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — array elements differ in memory layout; a raw cast would reinterpret, not convert (annotate or map the elements)", expr.location.line, expr.location.column);
 	}
 	return expr;
 }

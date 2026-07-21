@@ -6,6 +6,39 @@ import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, string
 
 // ===== Assignability =====
 
+// A reference array/span/ptr is assigned by a raw payload cast — no per-element
+// conversion runs. So numeric elements of different C width (int32 vs number)
+// would be reinterpreted, not converted → OOB/garbage. Require matching repr.
+function sameElementRepr(a: Type | null, b: Type | null): boolean {
+	if (a === null || b === null) return true;
+	if (!isNumeric(a) || !isNumeric(b)) return true;
+	if (a.kind === b.kind) return true;
+	const aDouble = a.kind === TypeKind.Number || a.kind === TypeKind.Float64;
+	const bDouble = b.kind === TypeKind.Number || b.kind === TypeKind.Float64;
+	return aDouble && bDouble;
+}
+
+// True only when source→target would raw-cast a container whose numeric element
+// repr differs (int32[] → number[]) — a reinterpret, not a conversion → OOB.
+// Walks Ref/Array/Span/Ptr/SizedArray in lockstep; ignores every non-container
+// mismatch (unions, nominal structs, scalars) so it does not double as a general
+// assignability gate.
+export function isReinterpretUnsafe(source: Type | null, target: Type | null): boolean {
+	source = skipModifier(source);
+	target = skipModifier(target);
+	if (source === null || target === null) return false;
+	if (source.kind === TypeKind.Ref && target.kind === TypeKind.Ref) {
+		return isReinterpretUnsafe(source.typeReturn, target.typeReturn);
+	}
+	if (source.kind !== target.kind) return false;
+	if (source.kind === TypeKind.Array || source.kind === TypeKind.Span
+		|| source.kind === TypeKind.Ptr || source.kind === TypeKind.SizedArray) {
+		if (!sameElementRepr(source.typeReturn, target.typeReturn)) return true;
+		return isReinterpretUnsafe(source.typeReturn, target.typeReturn);
+	}
+	return false;
+}
+
 let _assignDepth = 0;
 export function isAssignable(source: Type | null, target: Type | null): boolean {
 	if (_assignDepth > 20) return true;
@@ -45,7 +78,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	if (source.kind === target.kind) {
 		return match (source.kind) {
 			TypeKind.SizedArray => source.typeFlags === target.typeFlags && isAssignable(source.typeReturn, target.typeReturn),
-			TypeKind.Array | TypeKind.Span | TypeKind.Ptr => isAssignable(source.typeReturn, target.typeReturn),
+			TypeKind.Array | TypeKind.Span | TypeKind.Ptr => sameElementRepr(source.typeReturn, target.typeReturn) && isAssignable(source.typeReturn, target.typeReturn),
 			TypeKind.Ref => {
 				// Arc<T> and plain Ref<T> share kind=Ref but must not interconvert:
 				// mixing atomic + non-atomic rc ops on one object is UB.
@@ -1127,7 +1160,7 @@ test "single candidate matches" {
 	const fn1 = createFunction([numberType()], ["a"], stringType());
 	const candidates = [fn1];
 	const argTypes = [numberType()];
-	const depths = [0];
+	const depths: number[] = [0];
 	assert resolveOverloadIdx(candidates, argTypes, depths) === 0;
 }
 
@@ -1137,7 +1170,7 @@ test "picks best of two" {
 	const fn2 = createFunction([stringType()], ["b"], stringType());
 	const candidates = [fn1, fn2];
 	const argTypes = [numberType()];
-	const depths = [0, 0];
+	const depths: number[] = [0, 0];
 	assert resolveOverloadIdx(candidates, argTypes, depths) === 0;
 }
 
@@ -1147,7 +1180,7 @@ test "picks second overload" {
 	const fn2 = createFunction([stringType()], ["b"], stringType());
 	const candidates = [fn1, fn2];
 	const argTypes = [stringType()];
-	const depths = [0, 0];
+	const depths: number[] = [0, 0];
 	assert resolveOverloadIdx(candidates, argTypes, depths) === 1;
 }
 
@@ -1155,7 +1188,7 @@ test "no match returns -1" {
 	const fn1 = createFunction([numberType()], ["a"], stringType());
 	const candidates = [fn1];
 	const argTypes = [stringType()];
-	const depths = [0];
+	const depths: number[] = [0];
 	assert resolveOverloadIdx(candidates, argTypes, depths) === -1;
 }
 
@@ -1165,7 +1198,7 @@ test "ambiguous returns -2" {
 	const fn2 = createFunction([numberType()], ["b"], numberType());
 	const candidates = [fn1, fn2];
 	const argTypes = [numberType()];
-	const depths = [0, 0];
+	const depths: number[] = [0, 0];
 	assert resolveOverloadIdx(candidates, argTypes, depths) === -2;
 }
 
