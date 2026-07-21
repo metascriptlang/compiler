@@ -472,25 +472,27 @@ function envFieldType(envStructType: Type, fieldName: string): Type {
 	return null as unknown as Type;
 }
 
-// Build an AST that walks one step up the env chain to access a field.
-// Emits the C equivalent of:
-//   (*((ParentEnvType*)((CurEnvType*)_envP)->$up)).fieldName
-// Mirrors Nim's accessViaEnvParam (lambdalifting.nim:529-545) — single step.
-// Multi-step chain walks are handled by recursive emission (rare in our model).
-//
-// `nodeOriginalType` is the captured Identifier's nodeType, used to set the
-// returned member's nodeType so downstream codegen sees the right C type.
-// Walk `$up` from a base env-struct access up the ancestor chain to `fieldName`
-// (Nim accessViaEnvParam loop). `access0` is the starting env-struct value:
-// `(*((Cur*)_envP))` for a lifted body (chainWalkAccess), or the named env var
-// for the outer-ref rewrite (rewriteOuterRef). `curType0` is its struct type.
+// Index of the ancestor env in the chain that stores `fieldName`, or -1.
+function chainIndexOf(chainTypes: Type[], fieldName: string): number {
+	let i = 0;
+	while (i < chainTypes.length) {
+		if (envHasField(chainTypes[i], fieldName)) return i;
+		i += 1;
+	}
+	return -1;
+}
+
+// Walk `$up` from a base env-struct access up the ancestor chain to the env that
+// stores `fieldName` (chainTypes[targetIdx]) — Nim accessViaEnvParam, lambdalifting.nim:529.
+// `access0` is the starting env-struct value: `(*((Cur*)_envP))` for a lifted body
+// (chainWalkAccess), or the named env var for the outer-ref rewrite (rewriteOuterRef).
 function chainWalkFrom(access0: Node, curType0: Type, fieldName: string, chainNames: string[], chainTypes: Type[], targetIdx: number, nodeOriginalType: Type, loc: SourceLocation): Node {
 	let access = access0;
 	let curType = curType0;
 	let k = 0;
 	while (k <= targetIdx) {
 		const upMember = makeMember(access, UP_FIELD, loc);
-		upMember.nodeType = unknownType();  // void* — `$up` is untyped at runtime
+		upMember.nodeType = unknownType();  // read $up (owning Ref<parent>, or void* at a root env) then cast
 		const nextCast = createNode(NodeKind.TypeAssertion, { asExpr: upMember, asType: chainNames[k] }, syntheticToken(loc));
 		nextCast.nodeType = createPtr(chainTypes[k]);
 		access = makeHiddenDeref(nextCast, loc);
@@ -545,12 +547,7 @@ function rewriteNode(
 			// If the captured name is NOT a field of the current env, walk the
 			// `$up` chain to the ancestor env that stores it (Nim parity).
 			if (!envHasField(envStructType, d.name)) {
-				let idx = -1;
-				let ci = 0;
-				while (ci < chainTypes.length) {
-					if (envHasField(chainTypes[ci], d.name)) { idx = ci; break; }
-					ci += 1;
-				}
+				const idx = chainIndexOf(chainTypes, d.name);
 				if (idx >= 0) {
 					return chainWalkAccess(d.name, envTypeName, envStructType, chainNames, chainTypes, idx, node.nodeType, node.location);
 				}
@@ -596,12 +593,7 @@ function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 			// Without this, an ancestor ref at THIS scope emits `_envN->field` for
 			// a field that no longer exists (bug D fix skips it) → invalid C.
 			if (!envHasField(rewrite.envStructType, d.name)) {
-				let idx = -1;
-				let ci = 0;
-				while (ci < rewrite.chainTypes.length) {
-					if (envHasField(rewrite.chainTypes[ci], d.name)) { idx = ci; break; }
-					ci += 1;
-				}
+				const idx = chainIndexOf(rewrite.chainTypes, d.name);
 				if (idx >= 0) {
 					const baseIdent = makeIdent(rewrite.envVarName, node.location);
 					baseIdent.nodeType = createRef(rewrite.envStructType);
