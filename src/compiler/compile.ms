@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, cmdExists, execFile, platform } from "std/process";
+import { exit, exec, execFile, platform } from "std/process";
 import { exists } from "std/fs";
 import { parseSource } from "../parser/statements/validation";
 import { Node, ProgramData } from "../ast/node";
@@ -39,12 +39,13 @@ import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { globalImports } from "../checker/prelude";
 import { drainPendingInstances } from "../checker/instantiate";
-import { ResolveSection, DepsSection, defaultResolveSection, defaultCcSection, resolveCcForTarget, loadBuildConfig } from "./buildConfig";
+import { ResolveSection, DepsSection, defaultResolveSection, loadBuildConfig } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { CliOptions, Target } from "./options";
 import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker, markCppCompile, getCompilerName } from "./cc";
+import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
 import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
@@ -832,6 +833,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
+	resolveCC(opts);
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs);
 	applyGcMode(opts);
@@ -868,22 +870,6 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		if (opts.mode === 0) opts.mode = 1;  // Release (smaller .wasm)
 		setTargetSizes(4, 4);  // WASM32: 32-bit pointers and ints
 		opts.ccBinary = "emcc";  // emcc for compile + link
-	}
-
-	// Cross-compile: resolve compiler binary.
-	// Default: "zig cc" (modern cross-compiler, bundled sysroots, no external deps).
-	// Fallback: platform-specific cross-gcc (e.g. x86_64-w64-mingw32-gcc).
-	// Override: --cc=<binary>
-	// Trigger when actually crossing OS (or CPU set) and not an embedded profile.
-	if ((opts.targetOs !== platform || opts.cpuTarget !== "") && opts.targetOs !== "bare" && opts.targetOs !== "solana" && opts.targetOs !== "emcc" && opts.ccBinary === "") {
-		if (cmdExists("zig")) {
-			opts.ccBinary = "zig cc";
-		} else {
-			const resolved = resolveCcForTarget(defaultCcSection(), opts.targetOs, opts.cpuTarget !== "" ? opts.cpuTarget : "amd64");
-			if (resolved.compiler !== "") {
-				opts.ccBinary = resolved.compiler;
-			}
-		}
 	}
 
 	// Compute output binary path early for change detection

@@ -7,6 +7,7 @@ import { writeFile, ensureDir } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { CliOptions } from "./options";
 import { resolveRuntimeDir } from "../utils/path";
+import { managedZigCompiler } from "./toolchain";
 
 // -- Runtime resolution --
 
@@ -19,6 +20,7 @@ function resolveRuntime(): string {
 // -- C compiler detection --
 // 0=undetected, 1=clang, 2=gcc, 3=cc (fallback), 4=zig cc
 let detectedCC = 0;
+let managedCC = "";
 let hasZigCC = false;
 let zigCCChecked = false;
 
@@ -140,7 +142,11 @@ export function getCompilerName(ccOption: number, ccBinary: string): string {
 	// zig cc preferred: unified experience, cross-compile ready, bundled sysroots.
 	// Override with --cc=clang or --cc=gcc if needed.
 	if (detectedCC === 0) {
-		if (checkZigCC()) {
+		const mz = managedZigCompiler();
+		if (mz !== "") {
+			managedCC = mz;
+			detectedCC = 4;
+		} else if (checkZigCC()) {
 			detectedCC = 4;
 		} else if (cmdExists("clang")) {
 			detectedCC = 1;
@@ -150,10 +156,14 @@ export function getCompilerName(ccOption: number, ccBinary: string): string {
 			detectedCC = 3;
 		}
 	}
-	if (detectedCC === 4) return "zig cc";
+	if (detectedCC === 4) return managedCC !== "" ? managedCC : "zig cc";
 	if (detectedCC === 1) return "clang";
 	if (detectedCC === 2) return "gcc";
 	return "cc";
+}
+
+function isZigCC(cc: string): boolean {
+	return cc === "zig cc" || cc.endsWith(" cc");
 }
 
 // -- C++ source support: per-file extension detection drives compiler + std-flag
@@ -194,23 +204,13 @@ export function markCppCompile(path: string): void {
 // "zig cc" → "zig c++", "clang" → "clang++", "gcc" → "g++", "cc" → "c++".
 // Explicit binaries (e.g. "x86_64-linux-gnu-gcc") get best-effort suffix swap.
 function toCppCompiler(cName: string): string {
-	if (cName === "zig cc") return "zig c++";
+	if (cName.endsWith(" cc")) return cName.slice(0, cName.length - 2) + "c++";
 	if (cName === "clang")  return "clang++";
 	if (cName === "gcc")    return "g++";
 	if (cName === "cc")     return "c++";
 	if (cName.endsWith("-gcc"))   return cName.slice(0, cName.length - 4) + "-g++";
 	if (cName.endsWith("-clang")) return cName + "++";
 	return cName;
-}
-
-// Cross-compiler: zig cc is the default for cross-compilation.
-// Returns "zig cc" if available, falls back to platform-specific cross-gcc.
-export function getCrossCompilerName(ccOption: number, ccBinary: string, targetOs: string, cpuTarget: string): string {
-	if (ccBinary !== "") return ccBinary;
-	// zig cc: modern cross-compiler (clang + lld + all sysroots bundled)
-	if (checkZigCC()) return "zig cc";
-	// Fallback: platform-specific cross-gcc
-	return getCompilerName(ccOption, ccBinary);
 }
 
 // -- Cross-compilation target triple --
@@ -330,7 +330,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// Trigger when actually crossing (target differs from host OS, or CPU explicit).
 	// "bare" is freestanding (no OS) — needs target flag only if CPU is set.
 	if ((opts.targetOs !== platform && opts.targetOs !== "bare") || opts.cpuTarget !== "") {
-		const useZig = opts.ccBinary === "zig cc";
+		const useZig = isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary));
 		const ct = crossTargetFlag(opts.targetOs, opts.cpuTarget, useZig);
 		if (ct !== "") flags = appendFlag(flags, ct);
 	}
@@ -338,7 +338,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	if (opts.targetOs === "linux") {
 		flags = appendFlag(flags, "-D_GNU_SOURCE");
 	}
-	if (opts.targetOs === "windows" && opts.ccBinary !== "zig cc") {
+	if (opts.targetOs === "windows" && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
 		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0600");
 	}
 	if (opts.gcMode === "orc") flags = appendFlag(flags, "-DMSGC_ORC");
