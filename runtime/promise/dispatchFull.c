@@ -347,8 +347,10 @@ bool msCompletionQueueDrain(void) {
              * destructorLifting when $up is typed as Ref<parentEnvType>. */
             if (fut != NULL) {
                 const msTypeInfo* __t = msHeader(fut)->type;
-                if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(fut);
-                if (msDecRefIsLast(fut)) msDestroyAndDispose(fut);
+                if (msDecRefIsLast(fut)) {
+                    if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(fut);
+                    msDestroyAndDispose(fut);
+                }
             }
         } else if (msg->kind == -2) {
             /* Amendment H: deferred release — decref only, no callback.
