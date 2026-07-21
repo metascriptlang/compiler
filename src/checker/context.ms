@@ -207,8 +207,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 				const fd = ovDecl.data as FunctionDeclData;
 				if (isGenericFn(fd.fnFlags)) ovDN = ovDecl;
 			} else if (ovDecl.kind === NodeKind.MethodDecl) {
-				const md = ovDecl.data as MethodDeclData;
-				if (md.methodIsStatic && isGenericFn(md.methodFlags)) ovDN = ovDecl;
+				if (methodCarriesMonoBody(sym.overloads[ovi].symbolType)) ovDN = ovDecl;
 			}
 		}
 		ovDeclNodes.push(ovDN);
@@ -283,8 +282,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		if (sym.declNode.kind === NodeKind.FunctionDecl) {
 			exportDeclNode = sym.declNode;
 		} else if (sym.declNode.kind === NodeKind.MethodDecl) {
-			const md = sym.declNode.data as MethodDeclData;
-			if (md.methodIsStatic && isGenericFn(md.methodFlags)) exportDeclNode = sym.declNode;
+			if (methodCarriesMonoBody(sym.symbolType)) exportDeclNode = sym.declNode;
 		} else if (sym.declNode.kind === NodeKind.EnumDecl) {
 			exportDeclNode = sym.declNode;
 		}
@@ -652,6 +650,21 @@ export function isExtensionFlag(flags: string): boolean {
 // codegen (skip generic body emission), and extension resolution.
 export function isGenericFn(flags: string): boolean {
 	return findFlagSegment(flags, "gen:") !== "";
+}
+
+// Cross-module generic monomorphization: a method must carry its body (declNode)
+// across module boundaries when its signature still mentions unresolved generic
+// params — its own <T> (static generic) OR the enclosing generic class seen through
+// the `this` receiver (instance method of Cell<T>). Without the body the importing
+// module's call site can't monomorphize and falls back to the erased __unknown
+// method (void* params). Nim has no method category: every generic routine body is
+// globally reachable via the ModuleGraph (seminst.nim getBody), so instantiation
+// fires at any site regardless of module. See NIM-REF.md §1 "Generic method
+// cross-module monomorphization". The old `methodIsStatic && isGenericFn(flags)`
+// test dropped instance methods of generic classes (genericity comes from the
+// class T, not the method's own flags).
+export function methodCarriesMonoBody(symType: Type): boolean {
+	return hasGenericParams(symType);
 }
 
 export function isStaticExtensionFlag(flags: string): boolean {
