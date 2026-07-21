@@ -268,7 +268,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
 			msFutureDeferredRelease(p); \
 		} else if (msDecRefIsLast(p)) { \
-			if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(p); \
+			MS_DESTROY_DISPATCH(__t, p); \
 			msDestroyAndDispose(p); \
 		} \
 	} \
@@ -280,7 +280,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msAtomicDecref(p)     do { \
 	if ((p) != NULL && msAtomicDecRefIsLast(p)) { \
 		const msTypeInfo* __t = msHeader(p)->type; \
-		if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(p); \
+		MS_DESTROY_DISPATCH(__t, p); \
 		msDestroyAndDispose(p); \
 	} \
 } while(0)
@@ -294,7 +294,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
 			msFutureDeferredRelease(p); \
 		} else if (msOrcDecRefIsLast(p)) { \
-			if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(p); \
+			MS_DESTROY_DISPATCH(__t, p); \
 			msDestroyAndDispose(p); \
 		} \
 	} \

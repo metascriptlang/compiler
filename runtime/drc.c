@@ -10,6 +10,111 @@
  * Adaptive threshold: 128 default, increase if <50% freed, decrease otherwise.
  */
 
+/* ===== DRC Ledger (test-only, -DMS_DRC_LEDGER) — gc-mode independent ===== */
+#ifdef MS_DRC_LEDGER
+#include "runtime/drc.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+
+/* Open-addressing pointer set: holds objects finalized (destroyFn dispatched)
+ * whose slab slot has not yet been re-handed-out. A 2nd finalize of a pointer
+ * still in the set = double-destroy → abort. Alloc clears it (slot reuse). */
+#define MS_LEDGER_SET_SIZE (1u << 20)
+#define MS_LEDGER_SET_MASK (MS_LEDGER_SET_SIZE - 1)
+enum { MS_LSLOT_EMPTY = 0, MS_LSLOT_USED = 1, MS_LSLOT_TOMB = 2 };
+static void*   gLedgerKey[MS_LEDGER_SET_SIZE];
+static uint8_t gLedgerState[MS_LEDGER_SET_SIZE];
+
+#define MS_LEDGER_NAMES 4096
+static const char* gLedgerName[MS_LEDGER_NAMES];
+static long        gLedgerAllocN[MS_LEDGER_NAMES];
+static long        gLedgerDestroyN[MS_LEDGER_NAMES];
+static int         gLedgerNameCount = 0;
+
+static pthread_mutex_t gLedgerMutex = PTHREAD_MUTEX_INITIALIZER;
+static int gLedgerAtexit = 0;
+
+static inline size_t msLedgerHash(void* p) {
+	uintptr_t x = (uintptr_t)p;
+	x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+	return (size_t)(x & MS_LEDGER_SET_MASK);
+}
+static int msLedgerSetContains(void* p) {
+	size_t i = msLedgerHash(p);
+	for (size_t n = 0; n < MS_LEDGER_SET_SIZE; n++) {
+		if (gLedgerState[i] == MS_LSLOT_EMPTY) return 0;
+		if (gLedgerState[i] == MS_LSLOT_USED && gLedgerKey[i] == p) return 1;
+		i = (i + 1) & MS_LEDGER_SET_MASK;
+	}
+	return 0;
+}
+static void msLedgerSetInsert(void* p) {
+	size_t i = msLedgerHash(p);
+	for (size_t n = 0; n < MS_LEDGER_SET_SIZE; n++) {
+		if (gLedgerState[i] != MS_LSLOT_USED) { gLedgerKey[i] = p; gLedgerState[i] = MS_LSLOT_USED; return; }
+		if (gLedgerKey[i] == p) return;
+		i = (i + 1) & MS_LEDGER_SET_MASK;
+	}
+	fprintf(stderr, "\nNIM-GUARD LEDGER: pointer set full — raise MS_LEDGER_SET_SIZE\n");
+	fflush(stderr);
+	abort();
+}
+static void msLedgerSetRemove(void* p) {
+	size_t i = msLedgerHash(p);
+	for (size_t n = 0; n < MS_LEDGER_SET_SIZE; n++) {
+		if (gLedgerState[i] == MS_LSLOT_EMPTY) return;
+		if (gLedgerState[i] == MS_LSLOT_USED && gLedgerKey[i] == p) { gLedgerState[i] = MS_LSLOT_TOMB; return; }
+		i = (i + 1) & MS_LEDGER_SET_MASK;
+	}
+}
+static int msLedgerNameIdx(const char* n) {
+	if (n == NULL) n = "<untyped>";
+	for (int i = 0; i < gLedgerNameCount; i++) {
+		if (gLedgerName[i] == n || strcmp(gLedgerName[i], n) == 0) return i;
+	}
+	if (gLedgerNameCount < MS_LEDGER_NAMES) {
+		int i = gLedgerNameCount++;
+		gLedgerName[i] = n; gLedgerAllocN[i] = 0; gLedgerDestroyN[i] = 0;
+		return i;
+	}
+	return -1;
+}
+static void msLedgerDump(void) {
+	pthread_mutex_lock(&gLedgerMutex);
+	for (int i = 0; i < gLedgerNameCount; i++) {
+		fprintf(stderr, "LEDGER %s alloc=%ld destroy=%ld\n",
+			gLedgerName[i], gLedgerAllocN[i], gLedgerDestroyN[i]);
+	}
+	fflush(stderr);
+	pthread_mutex_unlock(&gLedgerMutex);
+}
+void msLedgerAlloc(void* p, const msTypeInfo* type) {
+	if (p == NULL) return;
+	pthread_mutex_lock(&gLedgerMutex);
+	if (!gLedgerAtexit) { gLedgerAtexit = 1; atexit(msLedgerDump); }
+	msLedgerSetRemove(p);   /* slab slot reused → fresh object */
+	int idx = msLedgerNameIdx(type ? type->name : NULL);
+	if (idx >= 0) gLedgerAllocN[idx]++;
+	pthread_mutex_unlock(&gLedgerMutex);
+}
+void msLedgerDestroy(void* p, const msTypeInfo* type) {
+	if (p == NULL) return;
+	pthread_mutex_lock(&gLedgerMutex);
+	if (msLedgerSetContains(p)) {
+		const char* n = (type && type->name) ? type->name : "<untyped>";
+		fprintf(stderr, "\nNIM-GUARD LEDGER: DOUBLE-DESTROY of %s at %p\n", n, p);
+		fflush(stderr);
+		abort();
+	}
+	msLedgerSetInsert(p);
+	int idx = msLedgerNameIdx(type ? type->name : NULL);
+	if (idx >= 0) gLedgerDestroyN[idx]++;
+	pthread_mutex_unlock(&gLedgerMutex);
+}
+#endif  /* MS_DRC_LEDGER */
+
 #ifdef MSGC_ORC
 
 #include "runtime/drc.h"
@@ -287,9 +392,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 	for (int32_t i = 0; i < j->toFree.len; i++) {
 		void* p = j->toFree.data[i].ptr;
 		const msTypeInfo* type = j->toFree.data[i].type;
-		if (type != NULL && type->destroyFn != NULL) {
-			type->destroyFn(p);
-		}
+		MS_DESTROY_DISPATCH(type, p);
 		msDestroyAndDispose(p);
 	}
 

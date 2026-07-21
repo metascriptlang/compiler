@@ -52,6 +52,29 @@ static inline msRefHeader* msHeader(void* p) {
 	return (msRefHeader*)((char*)p - sizeof(msRefHeader));
 }
 
+/* ===== DRC Ledger (test-only lifecycle guard) ===== */
+/* Built with -DMS_DRC_LEDGER (off by default → zero cost in normal builds).
+ * Records alloc/destroy events to catch double-destroy (abort on the 2nd
+ * finalize of a live pointer) and leaks (per-type alloc/destroy imbalance
+ * dumped at exit). Present in BOTH --gc=drc and --gc=orc. Every last-ref
+ * destroyFn dispatch routes through MS_DESTROY_DISPATCH so the ledger sees
+ * exactly one finalize per object; a second is the drift signal.
+ * See src/test/guard/ and the /nim-guard skill. */
+#ifdef MS_DRC_LEDGER
+void msLedgerAlloc(void* p, const msTypeInfo* type);
+void msLedgerDestroy(void* p, const msTypeInfo* type);
+#define MS_LEDGER_ALLOC(p, t)      msLedgerAlloc((p), (t))
+#define MS_DESTROY_DISPATCH(t, p)  do { \
+	msLedgerDestroy((p), (t)); \
+	if ((t) != NULL && (t)->destroyFn != NULL) (t)->destroyFn(p); \
+} while (0)
+#else
+#define MS_LEDGER_ALLOC(p, t)      ((void)0)
+#define MS_DESTROY_DISPATCH(t, p)  do { \
+	if ((t) != NULL && (t)->destroyFn != NULL) (t)->destroyFn(p); \
+} while (0)
+#endif
+
 /* ===== Small-Object Free-List Cache ===== */
 
 /* Thread-local free-list for DRC objects ≤ MS_SLAB_MAX bytes (header + payload).
@@ -141,6 +164,7 @@ static inline void* msAlloc(size_t size) {
 	/* rc, type already zero from msSlabAlloc; only rootIdx + allocSize need set */
 	h->rootIdx = -1;
 	h->allocSize = (uint32_t)total;
+	MS_LEDGER_ALLOC((void*)(h + 1), NULL);
 	return (void*)(h + 1);
 }
 
@@ -152,6 +176,7 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 	h->rootIdx = -1;
 	h->type = type;
 	h->allocSize = (uint32_t)total;
+	MS_LEDGER_ALLOC((void*)(h + 1), type);
 	return (void*)(h + 1);
 }
 
@@ -177,6 +202,7 @@ static inline void* msAllocUninit(size_t size) {
 	h->rootIdx = -1;
 	h->type = NULL;
 	h->allocSize = (uint32_t)total;
+	MS_LEDGER_ALLOC((void*)(h + 1), NULL);
 	return (void*)(h + 1);
 }
 
@@ -187,6 +213,7 @@ static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 	h->rootIdx = -1;
 	h->type = type;
 	h->allocSize = (uint32_t)total;
+	MS_LEDGER_ALLOC((void*)(h + 1), type);
 	return (void*)(h + 1);
 }
 

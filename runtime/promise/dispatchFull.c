@@ -348,7 +348,7 @@ bool msCompletionQueueDrain(void) {
             if (fut != NULL) {
                 const msTypeInfo* __t = msHeader(fut)->type;
                 if (msDecRefIsLast(fut)) {
-                    if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(fut);
+                    MS_DESTROY_DISPATCH(__t, fut);
                     msDestroyAndDispose(fut);
                 }
             }
