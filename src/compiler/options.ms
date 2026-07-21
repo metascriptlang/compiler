@@ -46,6 +46,7 @@ export interface CliOptions {
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
 	gcMode: string;            // --gc=drc|none|manual: memory management mode
 	lto: string;               // --lto=off|thin|full: link-time optimization strategy (empty = mode default)
+	autoYes: boolean;          // --yes: auto-accept managed toolchain install (also MSC_AUTO_INSTALL_CC=1)
 	projectRoot: string;       // set by CLI main from findProjectRoot() — dir containing build.ms
 	extraArgs: string[];       // remaining args passed through for package manager commands (add, remove, etc.)
 }
@@ -86,6 +87,7 @@ export function parseArgs(): CliOptions {
 		strictNullChecks: false,
 		gcMode: "orc",
 		lto: "",
+		autoYes: false,
 		projectRoot: "",
 		extraArgs: [],
 	};
@@ -196,6 +198,8 @@ export function parseArgs(): CliOptions {
 				console.log(error("error") + ": unknown --lto strategy '" + bold(ltoVal) + "'. Valid: " + cyan("off") + ", " + cyan("thin") + ", " + cyan("full"));
 				exit(1);
 			}
+		} else if (arg === "--yes" || arg === "-y") {
+			opts.autoYes = true;
 		} else if (arg === "--emit=c") {
 			opts.emitC = true;
 		} else if (arg === "--colors=on") {
