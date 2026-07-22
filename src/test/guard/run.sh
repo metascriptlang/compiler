@@ -25,8 +25,27 @@ for ms in "$DIR"/*.ms; do
   [ -e "$ms" ] || continue
   name="$(basename "$ms" .ms)"
   balance=$(grep -oE '// *GUARD-BALANCE +[A-Za-z0-9_]+' "$ms" | awk '{print $NF}')
+  checkfails=$(grep -E '^// GUARD-CHECK-FAIL ' "$ms" | sed -E 's|^// GUARD-CHECK-FAIL ||')
   for gc in $MODES; do
     bin="$TMP/$name.$gc"
+    if [ -n "$checkfails" ]; then
+      # errorcheck guard: build MUST fail at check, log MUST carry every tag.
+      # Compiling clean means a checker rule was silently dropped.
+      if "$MSC" build "$ms" --gc="$gc" --passC="-DMS_DRC_LEDGER" --output="$bin" \
+           >"$TMP/$name.$gc.build" 2>&1; then
+        echo "FAIL $name [$gc]: compiled clean — a checker rule was dropped"
+        fail=1; continue
+      fi
+      ok=1
+      while IFS= read -r want; do
+        [ -z "$want" ] && continue
+        if ! grep -qF "$want" "$TMP/$name.$gc.build"; then
+          echo "FAIL $name [$gc]: missing diagnostic: $want"; ok=0; fail=1
+        fi
+      done <<<"$checkfails"
+      [ $ok -eq 1 ] && echo "ok   $name [$gc]"
+      continue
+    fi
     if ! "$MSC" build "$ms" --gc="$gc" --passC="-DMS_DRC_LEDGER" --output="$bin" \
          >"$TMP/$name.$gc.build" 2>&1; then
       echo "FAIL $name [$gc]: build error"; grep -iE '^error' "$TMP/$name.$gc.build" | head -3
