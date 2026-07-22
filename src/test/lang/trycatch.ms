@@ -81,3 +81,27 @@ test "throw propagates through finally" {
 	}
 	assert caught === "got-it";
 }
+
+test "throw new Error — caught" {
+	let r = 0;
+	try {
+		throw new Error("boom");
+	} catch (e) {
+		r = 42;
+	}
+	assert r === 42;
+}
+
+test "throw new Error — propagates through finally" {
+	let log = "";
+	try {
+		try {
+			throw new Error("deep");
+		} finally {
+			log = log + "finally";
+		}
+	} catch (e) {
+		log = log + ",caught";
+	}
+	assert log === "finally,caught";
+}
