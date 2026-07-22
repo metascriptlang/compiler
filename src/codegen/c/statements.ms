@@ -3,7 +3,7 @@
 // Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
-import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isStructType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
@@ -200,6 +200,31 @@ export function resolveEmitArgs(g: CGen, mi: MacroInvocationData, p: CProc): str
 	return result;
 }
 
+// Reference fixupCall/raiseExit parity: after a call that can raise, transfer to
+// the nearest enclosing error target when the exception flag is set — so
+// statements after a raising call do not run on the raise path (double-exec).
+// Conservative canRaise (every call) is the reference's documented fallback.
+// Only fires inside a try (errorTargets non-empty); the no-try / function
+// epilogue case is a later phase.
+// A statement's top-level value can raise when it is a bare call, or an
+// assignment whose right-hand side is a call (the DRC pass splits
+// `const x = f()` into a no-init decl + a separate `x = f()` assignment).
+function exprTopIsRaisingCall(exprNode: Node): boolean {
+	if (exprNode === null) return false;
+	if (exprNode.kind === NodeKind.CallExpr) return true;
+	if (exprNode.kind === NodeKind.BinaryExpr) {
+		const d = exprNode.data as BinaryExprData;
+		if (d.operator === "=" && d.right !== null && d.right.kind === NodeKind.CallExpr) return true;
+	}
+	return false;
+}
+
+function emitCallRaiseCheck(p: CProc, exprNode: Node): void {
+	if (p.errorTargets.length === 0) return;
+	if (!exprTopIsRaisingCall(exprNode)) return;
+	emitStmtsLine(p, `if (msErr) goto ${p.errorTargets[p.errorTargets.length - 1]};`);
+}
+
 function genExprStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ExprStmtData;
 	if (d.expr.kind === NodeKind.MacroInvocation) {
@@ -218,6 +243,7 @@ function genExprStmt(g: CGen, p: CProc, node: Node): void {
 		const nrvoFuncType = getCalleeFuncType(d.expr);
 		if (nrvoRet !== null && isNrvoReturnType(nrvoRet, nrvoFuncType)) {
 			genExpr(g, p, d.expr);
+			emitCallRaiseCheck(p, d.expr);
 			return;
 		}
 	}
@@ -227,6 +253,7 @@ function genExprStmt(g: CGen, p: CProc, node: Node): void {
 	} else {
 		emitStmtsLine(p, snippet + ";");
 	}
+	emitCallRaiseCheck(p, d.expr);
 }
 
 // ===== Variable Declaration =====
@@ -362,6 +389,7 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 			else { emitStmtsLine(p, `${cType} ${varName};`); }
 		}
 	}
+	if (d.initializer !== null) emitCallRaiseCheck(p, d.initializer);
 }
 
 // Wrap a condition string in parens. Always wraps — the old "already wrapped" heuristic
