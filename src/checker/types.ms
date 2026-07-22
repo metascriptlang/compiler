@@ -1707,6 +1707,11 @@ function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
 		if (sub !== t.typeChildren[ci]) changed = true;
 	}
 	if (!changed) return t;
+	// Rebuild via createMaybeType: it stamps IsMaybe + derives the substituted name.
+	// createStruct drops IsMaybe → isMaybeType fails downstream (operatorLower, nullableLower).
+	if ((t.typeFlags & TypeFlag.IsMaybe) !== 0) {
+		return createMaybeType(newFieldTypes[0]);
+	}
 	const newNames: string[] = [];
 	for (let ni = 0; ni < t.typeNames.length; ni += 1) {
 		newNames.push(t.typeNames[ni]);
