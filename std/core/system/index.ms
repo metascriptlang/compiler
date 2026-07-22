@@ -25,6 +25,14 @@ export class Result<T, E> {
 	static extern err(e: E): Result<T, E>;
 }
 
+export class Error {
+	message: string;
+
+	constructor(message: string) {
+		this.message = message;
+	}
+}
+
 extern function msAbortThrow(): void from "msAbortThrow";
 
 export class AbortSignal {

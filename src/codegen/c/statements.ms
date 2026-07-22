@@ -3,7 +3,7 @@
 // Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
-import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isStructType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
@@ -595,6 +595,24 @@ function genContinueStmt(g: CGen, p: CProc, node: Node): void {
 
 function genThrowStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ThrowStmtData;
+	// `throw new Error(msg)` is sugar over the string-based exception runtime
+	// (msThrow(msString)); the std `Error` class is a checker-only aid and
+	// erases to its message argument at runtime.
+	if (d.throwArg.kind === NodeKind.NewExpr) {
+		const ne = d.throwArg.data as NewExprData;
+		const callee = ne.newCallee;
+		let calleeName = "";
+		if (callee.resolvedSym !== null) calleeName = callee.resolvedSym.name;
+		else if (callee.kind === NodeKind.Identifier) calleeName = (callee.data as IdentifierData).name;
+		if (calleeName === "Error") {
+			if (ne.newArguments.length > 0) {
+				emitStmtsLine(p, "msThrow(" + genExpr(g, p, ne.newArguments[0]) + ");");
+			} else {
+				emitStmtsLine(p, "msThrow(MS_EMPTY_STRING);");
+			}
+			return;
+		}
+	}
 	const snippet = genExpr(g, p, d.throwArg);
 	emitStmtsLine(p, "msThrow(" + snippet + ");");
 }
