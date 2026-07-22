@@ -2846,7 +2846,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			if (paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
 				&& paramType.kind !== TypeKind.Function
 				&& argTypes[pi].kind !== TypeKind.Unknown && argTypes[pi].kind !== TypeKind.Error
-				&& argTypes[pi].kind !== TypeKind.Function) {
+				&& (argTypes[pi].kind !== TypeKind.Function
+					|| (isMaybeType(paramType) && findFirstGenericParamName(paramType) === ""))) {
 				// Maybe<T> coercion: f(42) / f(null) where f: (number | null) → ...
 				// Mirrors the fitNode wrap rule used for var-decl/return/assignment;
 				// call args go through this site instead of fitNode. Applied
@@ -2854,6 +2855,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				// to struct (so isAssignable would skip the wrap), but codegen
 				// still needs a typed null to emit {0}, and (b) inner T is
 				// not directly assignable to Maybe<T> — we want a struct literal.
+				// Generic-containing formals never wrap here — deferred to the
+				// post-binding reconciliation (Nim implicitConv, sigmatch.nim:2179).
 				if (isMaybeType(paramType) && paramType.typeReturn !== null
 						&& !isMaybeType(argTypes[pi])
 						&& (d.arguments[pi].kind === NodeKind.NullLiteral
@@ -3276,16 +3279,20 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	// Null primitive while formal becomes Maybe<T-concrete> after mono — C
 	// codegen rejects void* vs struct mismatch. Re-coerce here.
 	//
-	// Only fires for NullLiteral args with substituted formal as Maybe<T> +
-	// concrete typeReturn. synthMaybeWrap emits typed-null literal that codegen
-	// lowers to Maybe { ok: false }.
+	// Fires for NullLiteral args and for Maybe-coercible args deferred by the
+	// coercion loop (Nim implicitConv: conversions use the instantiated formal,
+	// never a generic-containing one — sigmatch.nim:2179).
 	const reconcileLimit = cd.arguments.length < calleeType.typeChildren.length
 		? cd.arguments.length : calleeType.typeChildren.length;
 	for (let pi = 0; pi < reconcileLimit; pi += 1) {
 		const arg = cd.arguments[pi];
-		if (arg === null || arg.kind !== NodeKind.NullLiteral) continue;
+		if (arg === null) continue;
 		const substituted = applySubstitutions(calleeType.typeChildren[pi], eb);
-		if (substituted !== null && isMaybeType(substituted) && substituted.typeReturn !== null) {
+		if (substituted === null || !isMaybeType(substituted) || substituted.typeReturn === null) continue;
+		if (arg.kind === NodeKind.NullLiteral) {
+			cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType);
+		} else if (arg.nodeType !== null && !isMaybeType(arg.nodeType)
+				&& isAssignable(arg.nodeType, substituted.typeReturn)) {
 			cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType);
 		}
 	}
