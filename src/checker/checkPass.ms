@@ -1,7 +1,7 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { unknownType, charType, float64Type, voidType, nullType, createFunction, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
@@ -143,6 +143,28 @@ function detectLoopReuse(ctx: CheckerContext, outerKeys: string[], bodyStartStat
 			}
 		}
 	}
+}
+
+// PARALOCK Phase 9 E40: direct `await spawn(...)` inside a loop body serializes
+// the fan-out — each iteration blocks before the next spawn starts. Warning,
+// not error: retry-style loops legitimately await inline (E40 catalog row).
+// Stops at closure boundaries (deferred execution is not per-iteration
+// sequential) and at nested loops (each loop runs its own scan).
+function detectSequentialAwaitSpawn(ctx: CheckerContext, node: Node): void {
+	if (node === null) return;
+	match (node.kind) {
+		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction => {},
+		NodeKind.WhileStmt | NodeKind.ForStmt | NodeKind.ForOfStmt | NodeKind.ForInStmt | NodeKind.DoWhileStmt => {},
+		NodeKind.AwaitExpr => {
+			const d = node.data as AwaitExprData;
+			if (d.awaitArg !== null && d.awaitArg.kind === NodeKind.CallExpr
+				&& d.awaitArg.resolvedSym !== null && d.awaitArg.resolvedSym.builtinKind === "PromiseSpawn") {
+				addWarning(ctx, "sequential 'await spawn(...)' inside a loop — each iteration blocks before the next spawn starts; collect handles first, then 'await Promise.all(handles)' after the loop (PARALOCK E40/E41)", node.location.line, node.location.column);
+			}
+			forEachChild(node, (child: Node): void => { detectSequentialAwaitSpawn(ctx, child); });
+		},
+		_ => { forEachChild(node, (child: Node): void => { detectSequentialAwaitSpawn(ctx, child); }); },
+	};
 }
 
 // Nim parity (lambdalifting.nim): a statement-position function decl is a
@@ -838,6 +860,7 @@ function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	}
 	// PARALOCK Phase 1: detect outer-handle consumption (reuse on iteration N+1)
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
+	detectSequentialAwaitSpawn(ctx, d.whileBody);
 	restoreConsumeState(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
@@ -858,6 +881,7 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 	exitLoopScope(ctx, saved);
 	restoreInitState(ctx.initTracker, oldState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
+	detectSequentialAwaitSpawn(ctx, d.forBody);
 	restoreConsumeState(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
@@ -924,6 +948,7 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	exitLoopScope(ctx, saved);
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
+	detectSequentialAwaitSpawn(ctx, d.forOfBody);
 	restoreConsumeState(ctx.affineTracker, affineSnap);
 }
 
@@ -979,6 +1004,7 @@ function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	exitLoopScope(ctx, saved);
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
+	detectSequentialAwaitSpawn(ctx, d.forInBody);
 	restoreConsumeState(ctx.affineTracker, affineSnap);
 }
 
@@ -994,6 +1020,7 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 	checkStmt(ctx, d.doBody);
 	exitLoopScope(ctx, saved);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
+	detectSequentialAwaitSpawn(ctx, d.doBody);
 	restoreConsumeState(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 	checkExpr(ctx, d.doCondition, null);
