@@ -38,6 +38,14 @@ _Atomic(int) msActorsWithTimeout = 0;
 /* Stop-pending fast path — when 0, msActorPollLocal skips the reap scan. */
 _Atomic(int) msActorsStopPending = 0;
 
+/* I19: pid table + hazard registry (see actor.h "Pid Table + Hazard Pins"). */
+_Atomic(msPidSlot*) msPidSegs[MS_PID_SEG_COUNT] = {0};
+_Atomic(uint64_t) msPidFreeHead = 0;
+_Atomic(int32_t) msPidNextSlot = 0;
+pthread_mutex_t msPidSegLock = PTHREAD_MUTEX_INITIALIZER;
+_Atomic(msHazardRec*) msHazardHead = NULL;
+MS_THREAD_LOCAL msHazardRec* msMyHazard = NULL;
+
 /* Monitor ref counter (used by link/monitor primitives). */
 _Atomic(int64_t) msNextMonitorRef = 1;
 
