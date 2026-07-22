@@ -19,6 +19,7 @@ import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallb
 import { findChar, splitTopLevel } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 import { markConsumedName, isConsumedName, symbolConsumeKey } from "./spawnAffinity";
+import { forEachChild } from "../ast/visitor";
 import {
 	markInitialized, isInitialized, getDeclBlock,
 	saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState,
@@ -5358,7 +5359,154 @@ function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawnNode: N
 	const reported: string[] = [];
 	if (body !== null) {
 		walkForMutableCaptures(body, params, reported, ctx);
+		if (ctx.currentActorName !== "") {
+			const actorReported: string[] = [];
+			walkActorSpawnRules(ctx, body, actorReported);
+		}
 	}
+}
+
+// ===== Actor Spawn Thunk Rules (PARALOCK Phase 6: S1/E61, S3/E62) =====
+// Inside an actor method, a spawn thunk may borrow `this.f` read-only.
+// Bare `this` / `this.<method>` re-enter a suspended actor (S1); writes
+// rooted at `this` mutate frozen state (S3, deep — Pony box semantics).
+// Descends into nested closures (same `this`); skips nested spawn thunks
+// (each spawn call runs its own checkSpawnCaptures).
+
+// The checker wraps ref-typed reads in HiddenDeref/HiddenStdConv during body
+// check (which runs before this walk) — `this.n` in read position arrives as
+// MemberExpr(HiddenDeref(this), n). Assignment LHS stays unwrapped
+// (leftPartOfAsgn). All shape tests must peel, or wrapped `this` reads
+// misclassify as bare-this captures.
+function peelHidden(n: Node): Node {
+	let cur = n;
+	while (cur !== null) {
+		if (cur.kind === NodeKind.HiddenDeref) { cur = (cur.data as HiddenDerefData).expr; continue; }
+		if (cur.kind === NodeKind.HiddenStdConv) { cur = (cur.data as HiddenStdConvData).convExpr; continue; }
+		break;
+	}
+	return cur;
+}
+
+function isThisIdent(n: Node): boolean {
+	const p = peelHidden(n);
+	if (p === null) return false;
+	if (p.kind !== NodeKind.Identifier) return false;
+	return (p.data as IdentifierData).name === "this";
+}
+
+function writeChainRoot(n: Node): Node {
+	let cur = peelHidden(n);
+	while (cur !== null) {
+		if (cur.kind === NodeKind.MemberExpr) { cur = peelHidden((cur.data as MemberExprData).object); continue; }
+		if (cur.kind === NodeKind.ArrayAccess) { cur = peelHidden((cur.data as ArrayAccessData).array); continue; }
+		break;
+	}
+	return cur;
+}
+
+function thisWriteFieldName(n: Node): string {
+	let cur = peelHidden(n);
+	while (cur !== null) {
+		if (cur.kind === NodeKind.MemberExpr) {
+			const d = cur.data as MemberExprData;
+			if (isThisIdent(d.object)) return d.property;
+			cur = peelHidden(d.object); continue;
+		}
+		if (cur.kind === NodeKind.ArrayAccess) { cur = peelHidden((cur.data as ArrayAccessData).array); continue; }
+		break;
+	}
+	return "";
+}
+
+function pushIfNew(list: string[], key: string): boolean {
+	for (const k of list) { if (k === key) return false; }
+	list.push(key);
+	return true;
+}
+
+function actorDeclaresMethod(ctx: CheckerContext, methodName: string): boolean {
+	const actorSym = lookupSymbol(ctx.table, ctx.currentActorName);
+	if (actorSym === null || actorSym.declNode === null) return false;
+	if (actorSym.declNode.kind !== NodeKind.ActorDecl) return false;
+	const body = (actorSym.declNode.data as ActorDeclData).actorBody;
+	for (const m of body) {
+		let mm = m;
+		if (mm.kind === NodeKind.DecoratedDecl) {
+			const dd = mm.data as DecoratedDeclData;
+			if (dd.decoratedNode !== null) mm = dd.decoratedNode;
+		}
+		if (mm.kind === NodeKind.MethodDecl && (mm.data as MethodDeclData).methodName === methodName) return true;
+	}
+	return false;
+}
+
+function reportThisFieldWrite(ctx: CheckerContext, target: Node, node: Node, reportedKeys: string[], verb: string): void {
+	if (!isThisIdent(writeChainRoot(target))) return;
+	if (isThisIdent(target)) return;
+	const f = thisWriteFieldName(target);
+	const label = f !== "" ? "'" + f + "'" : "state";
+	if (pushIfNew(reportedKeys, "w:" + f)) {
+		addError(ctx, "captured actor field " + label + " is read-only inside a spawn thunk — " + verb + " is not allowed; compute into a local and apply after await (PARALOCK S3/E62)", node.location.line, node.location.column);
+	}
+}
+
+function walkActorSpawnRules(ctx: CheckerContext, node: Node, reportedKeys: string[]): void {
+	if (node === null) return;
+	match (node.kind) {
+		NodeKind.BinaryExpr => {
+			const d = node.data as BinaryExprData;
+			const isAsgn = d.operator === "=" || d.operator === "+=" || d.operator === "-=" ||
+				d.operator === "*=" || d.operator === "/=" || d.operator === "%=" ||
+				d.operator === "&&=" || d.operator === "||=" || d.operator === "??=";
+			if (isAsgn) {
+				reportThisFieldWrite(ctx, d.left, node, reportedKeys, "assignment");
+			}
+			walkActorSpawnRules(ctx, d.left, reportedKeys);
+			walkActorSpawnRules(ctx, d.right, reportedKeys);
+		},
+		NodeKind.UpdateExpr => {
+			const d = node.data as UpdateExprData;
+			reportThisFieldWrite(ctx, d.updateArg, node, reportedKeys, "increment/decrement");
+			walkActorSpawnRules(ctx, d.updateArg, reportedKeys);
+		},
+		NodeKind.MoveExpr => {
+			const d = node.data as MoveExprData;
+			reportThisFieldWrite(ctx, d.moveArg, node, reportedKeys, "'move'");
+			walkActorSpawnRules(ctx, d.moveArg, reportedKeys);
+		},
+		NodeKind.OutExpr => {
+			const d = node.data as OutExprData;
+			reportThisFieldWrite(ctx, d.outArg, node, reportedKeys, "'out' argument");
+			walkActorSpawnRules(ctx, d.outArg, reportedKeys);
+		},
+		NodeKind.MemberExpr => {
+			const d = node.data as MemberExprData;
+			if (isThisIdent(d.object)) {
+				if (actorDeclaresMethod(ctx, d.property) && pushIfNew(reportedKeys, "m:" + d.property)) {
+					addError(ctx, "spawn thunk cannot use method '" + d.property + "' of 'this' — the actor is suspended while spawn children run (PARALOCK S1/E61)", node.location.line, node.location.column);
+				}
+				return;
+			}
+			walkActorSpawnRules(ctx, d.object, reportedKeys);
+		},
+		NodeKind.Identifier => {
+			if ((node.data as IdentifierData).name === "this" && pushIfNew(reportedKeys, "this")) {
+				addError(ctx, "spawn thunk inside an actor method cannot capture 'this' — borrow individual fields instead (PARALOCK S1/E61)", node.location.line, node.location.column);
+			}
+		},
+		NodeKind.CallExpr => {
+			const d = node.data as CallExprData;
+			const nestedSpawn = node.resolvedSym !== null && node.resolvedSym.builtinKind === "PromiseSpawn";
+			walkActorSpawnRules(ctx, d.callee, reportedKeys);
+			let ai = 0;
+			for (const arg of d.arguments) {
+				if (!(nestedSpawn && ai === 0)) { walkActorSpawnRules(ctx, arg, reportedKeys); }
+				ai = ai + 1;
+			}
+		},
+		_ => { forEachChild(node, (child: Node): void => { walkActorSpawnRules(ctx, child, reportedKeys); }); },
+	};
 }
 
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
