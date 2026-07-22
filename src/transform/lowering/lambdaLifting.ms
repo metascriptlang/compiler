@@ -1498,7 +1498,15 @@ function walkLift(node: Node, state: LiftState): void {
 				d.elements[ei] = walkOrLift(d.elements[ei], state);
 			}
 		},
-		_ => {},
+		// Uniform child traversal (Nim transf walks every sub-node): any
+		// expression wrapper not handled above — MemberExpr/ArrayAccess/
+		// ConditionalExpr/TypeAssertion/… — must still reach an inline arrow
+		// nested in a call it holds (`g(x => …).m()`), else codegen emits
+		// `0 /* unlowered ArrowFunction */`. walkOrLift lifts arrows and routes
+		// statement children back through their own arms; leaves no-op.
+		_ => {
+			mapChildren(node, (child: Node): Node => walkOrLift(child, state));
+		},
 	};
 }
 
