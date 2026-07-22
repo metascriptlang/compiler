@@ -10,7 +10,7 @@ import { resetAllSideChannels } from "../parser/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/orchestrator";
 import { computeAliveSet } from "../checker/reachability";
-import { hasErrors } from "../checker/context";
+import { hasErrors, CheckerError } from "../checker/context";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { expandMacros } from "../compiler/meta/expand";
 import { validateTypedAST } from "../checker/validate";
@@ -33,10 +33,10 @@ export { MapEntry } from "../module/loader";
 
 type CompileResult = Result<string, string>;
 
-function collectErrors(errors: any[], prefix: string): string {
+function collectErrors(errors: CheckerError[], prefix: string): string {
 	let msg = prefix;
 	for (const err of errors) {
-		msg = `${msg} ${err.message}`;
+		msg = msg + " " + err.message;
 	}
 	return msg;
 }
