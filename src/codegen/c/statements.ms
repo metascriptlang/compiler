@@ -593,6 +593,15 @@ function genContinueStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== Throw Statement =====
 
+// A raise transfers control to the nearest enclosing error target (catch/finally).
+// Emitted after msThrow and after raising calls. Empty stack (no enclosing try)
+// falls through — msErr propagates to the caller / function epilogue.
+function emitErrorGoto(p: CProc): void {
+	if (p.errorTargets.length > 0) {
+		emitStmtsLine(p, `goto ${p.errorTargets[p.errorTargets.length - 1]};`);
+	}
+}
+
 function genThrowStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ThrowStmtData;
 	// `throw new Error(msg)` is sugar over the string-based exception runtime
@@ -610,11 +619,13 @@ function genThrowStmt(g: CGen, p: CProc, node: Node): void {
 			} else {
 				emitStmtsLine(p, "msThrow(MS_EMPTY_STRING);");
 			}
+			emitErrorGoto(p);
 			return;
 		}
 	}
 	const snippet = genExpr(g, p, d.throwArg);
 	emitStmtsLine(p, "msThrow(" + snippet + ");");
+	emitErrorGoto(p);
 }
 
 // ===== Try/Catch (goto-based — standard reference pattern) =====
@@ -638,10 +649,17 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 	const oldIndent = getStmtsIndent(p);
 	setStmtsIndent(p, oldIndent + 1);
 
+	const hasCatch = d.catchName !== "" || (d.catchBody !== null && d.catchBody.kind === NodeKind.BlockStmt && (d.catchBody.data as BlockStmtData).statements.length > 0);
+
+	// Error-propagation target for throws / raising calls inside the try body.
+	// A raise transfers control here instead of falling through — required for
+	// correctness in straight-line code and to escape async state-dispatch loops.
+	p.errorTargets.push(hasCatch ? catchLabel : finallyLabel);
+
 	// Try body
 	genStmt(g, p, d.tryBody);
 
-	const hasCatch = d.catchName !== "" || (d.catchBody !== null && d.catchBody.kind === NodeKind.BlockStmt && (d.catchBody.data as BlockStmtData).statements.length > 0);
+	p.errorTargets.pop();
 
 	if (hasCatch) {
 		// After try body, check error flag
