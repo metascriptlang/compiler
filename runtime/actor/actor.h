@@ -83,16 +83,25 @@ typedef struct msActor {
     int64_t lastActivityMs;    /* monotonic timestamp of last message receipt */
     /* Alive guard: prevents double-stop / use-after-free on dangling pid */
     _Atomic(bool) alive;
-    /* Phase 5: cooperative suspension during spawn-inside-actor */
-    void* suspendedFut;       /* msFuture* from async _impl (NULL = not suspended) */
-    void* suspendedReplyFut;  /* CALL reply future (NULL for SEND). Used by R1 stop. */
+    /* Phase 5: cooperative suspension during spawn-inside-actor.
+     * suspendedFut != NULL also holds the I18 reap gate closed: the resume
+     * callback's LAST shell store clears it (release), so the reaper's acquire
+     * proves the callback is done with the shell. */
+    _Atomic(void*) suspendedFut;  /* msFuture* from async _impl (NULL = not suspended) */
+    void* suspendedReplyFut;      /* CALL reply future (NULL for SEND). Used by R1 stop. */
     /* Phase 6 R1: out-of-band stop — supervisor can kill suspended actor without mailbox */
     _Atomic(bool) stopRequested;
+    _Atomic(int32_t) stopReason;  /* written before the stopRequested acq_rel exchange */
 } msActor;
 
 /* ===== Batch Size ===== */
 
 #define MS_ACTOR_BATCH 64
+
+/* System message kinds: -1 EXIT, -2 DOWN, -3 onIdle, -4 STOP signal.
+ * STOP is runtime-internal — swallowed by the batch loop, never routed to
+ * user handlers; its only job is scheduling a visit whose gate reaps. */
+#define MS_ACTOR_MSG_STOP (-4)
 
 /* ===== Thread-local: currently executing actor (NULL if non-actor code) ===== */
 
@@ -241,6 +250,8 @@ static inline msActor* msSchedRunPop(msSchedActors* sched) {
 
 /* Global counter: number of actors with idle timeouts. Scan skipped when 0. */
 extern _Atomic(int) msActorsWithTimeout;
+/* Global counter: stop-flagged actors not yet reaped. Reap scan skipped when 0. */
+extern _Atomic(int) msActorsStopPending;
 
 /* Forward declarations for wake routing */
 extern void msActorWakeEventLoop(void);  /* dispatch.c */
@@ -254,35 +265,45 @@ static inline void msCDTick(void);
 static inline void msActorRemoveLink(msActor* a, msActor* target);
 static inline void msActorStop(int64_t pid, int32_t reason);
 static inline void msActorUnregisterByPtr(msActor* a);
+static inline void msActorDestroyWithReason(msActor* a, int32_t reason);
 
 /* ===== Phase 5: Cooperative Actor Suspension ===== */
 
 /* Resume callback: re-enqueues actor on scheduler after spawn completion.
- * Signature matches msClosureFn (void*, ...) — called by msFutureFireCallbacks. */
+ * Signature matches msClosureFn (void*, ...) — called by msFutureFireCallbacks.
+ * I18: the reap gate stays closed while suspendedFut is non-NULL, so every shell
+ * dereference here happens-before any reap. On the stopped lane the LAST shell
+ * store is the suspendedFut=NULL release; after it, only non-shell wakes. */
 static inline void msActorResumeFromFut(void* rawActor, ...) {
     msActor* a = (msActor*)rawActor;
-    /* R1: if stop was requested during suspension, don't resume — fail reply and abandon */
+    int sid = a->schedulerID;
+    msActorClearFlag(a, MS_ACTOR_SUSPENDED);
     if (atomic_load_explicit(&a->stopRequested, memory_order_acquire)) {
-        msActorClearFlag(a, MS_ACTOR_SUSPENDED);
+        /* R1: stop arrived during suspension — don't resume the method. Fail the
+         * CALL reply so callers unblock, open the reap gate, wake the owner's
+         * reap scan. Never reap here: a stale queue entry's visit may hold the
+         * shell, and the reaper must be the owner scheduler. */
         if (a->suspendedReplyFut != NULL) {
             msFutureFail(a->suspendedReplyFut, NULL);
         }
-        a->suspendedFut = NULL;
         a->suspendedReplyFut = NULL;
+        atomic_store_explicit(&a->suspendedFut, NULL, memory_order_release);
+        if (sid == 0) msActorWakeEventLoop();
+        else msPoolWakeWorker(sid);
         return;
     }
-    msActorClearFlag(a, MS_ACTOR_SUSPENDED);
-    /* Re-enqueue on scheduler run queue (Pony parity: CAS prevents
-     * double-push if a concurrent send already re-scheduled). */
+    /* Normal resume: suspendedFut stays set — the visit clears it (gate stays
+     * closed until the visit owns the shell under processing). Re-enqueue on the
+     * run queue (Pony parity: CAS prevents double-push vs a concurrent send). */
     {
         bool exp = false;
         if (atomic_compare_exchange_strong_explicit(&a->scheduled, &exp, true,
                 memory_order_acq_rel, memory_order_relaxed)) {
-            if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
-                msSchedRunPush(&msSchedulers[a->schedulerID], a);
+            if (sid >= 0 && sid < msSchedulerCount) {
+                msSchedRunPush(&msSchedulers[sid], a);
             }
-            if (a->schedulerID == 0) msActorWakeEventLoop();
-            else msPoolWakeWorker(a->schedulerID);
+            if (sid == 0) msActorWakeEventLoop();
+            else msPoolWakeWorker(sid);
         }
     }
 }
@@ -290,8 +311,8 @@ static inline void msActorResumeFromFut(void* rawActor, ...) {
 /* Suspend actor: save async _impl future, register resume callback.
  * For CALL methods, replyFut is chained separately by the dispatch function. */
 static inline void msActorSuspend(msActor* a, void* implFut, void* replyFut) {
-    a->suspendedFut = implFut;
     a->suspendedReplyFut = replyFut;
+    atomic_store_explicit(&a->suspendedFut, implFut, memory_order_release);
     msActorSetFlag(a, MS_ACTOR_SUSPENDED);
     /* When implFut completes, resume the actor on its scheduler */
     msFutureAddCallback(implFut, (msClosure){
@@ -415,19 +436,53 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     msCurrentActor = a;
 
     /* Phase 5: check for pending suspension before draining mailbox */
-    if (a->suspendedFut != NULL) {
-        msFutureBase* sf = (msFutureBase*)a->suspendedFut;
-        if (atomic_load_explicit(&sf->finished, memory_order_acquire)) {
+    {
+        void* sfp = atomic_load_explicit(&a->suspendedFut, memory_order_acquire);
+        if (sfp != NULL) {
+            msFutureBase* sf = (msFutureBase*)sfp;
+            bool resumed = atomic_load_explicit(&sf->finished, memory_order_acquire);
+            if (!resumed) {
+                /* Still suspended — deschedule BEFORE releasing processing, or the
+                 * resume callback's scheduled-CAS can never re-enqueue (strand). */
+                atomic_store_explicit(&a->scheduled, false, memory_order_release);
+                /* Re-check: resume may have completed between the loads — reclaim
+                 * the visit (CAS back) or the mailbox stalls until the next send. */
+                if (atomic_load_explicit(&sf->finished, memory_order_acquire)) {
+                    bool reclaim = false;
+                    resumed = atomic_compare_exchange_strong_explicit(&a->scheduled,
+                        &reclaim, true, memory_order_acq_rel, memory_order_relaxed);
+                }
+                if (!resumed) {
+                    msCurrentActor = prevActor;
+                    atomic_store_explicit(&a->processing, false, memory_order_release);
+                    return 0;
+                }
+            }
             /* Resumed: _impl stepper already completed the reply future via
              * msFutureChain. Clear suspension state, fall through to mailbox drain. */
-            a->suspendedFut = NULL;
+            atomic_store_explicit(&a->suspendedFut, NULL, memory_order_release);
             a->suspendedReplyFut = NULL;
-        } else {
-            /* Still suspended — release processing lock, don't drain mailbox */
-            msCurrentActor = prevActor;
+        }
+    }
+
+    /* I18 reap point: stop requested, suspension clear, we hold processing and the
+     * only queue entry. The OWNER tears down and frees; a non-owner (steal) visit
+     * hands the actor back so registry writes and free stay single-threaded. */
+    if (atomic_load_explicit(&a->stopRequested, memory_order_acquire)) {
+        int sid = a->schedulerID;
+        msCurrentActor = prevActor;
+        if (msMySchedulerID != sid) {
             atomic_store_explicit(&a->processing, false, memory_order_release);
+            if (sid >= 0 && sid < msSchedulerCount) {
+                msSchedRunPush(&msSchedulers[sid], a);
+                if (sid == 0) msActorWakeEventLoop();
+                else msPoolWakeWorker(sid);
+            }
             return 0;
         }
+        msActorDestroyWithReason(a,
+            atomic_load_explicit(&a->stopReason, memory_order_relaxed));  /* frees a */
+        return 0;
     }
 
     /* Clear BLOCKED — we're actively processing */
@@ -442,6 +497,9 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     while (processed < maxBatch) {
         msMessage* msg = msMpscPop(&a->mailbox);
         if (msg == NULL) break;
+        /* STOP signal: swallow — its scheduling job is done; the reap gate (or
+         * the owner's reap scan) collects with the flag it rode in with. */
+        if (msg->kind == MS_ACTOR_MSG_STOP) { processed++; continue; }
         /* System messages (kind < 0): route to onSystemMsg handler if set */
         if (msg->kind < 0 && a->onSystemMsg != NULL) {
             a->onSystemMsg(a->state, (void*)msg);
@@ -613,17 +671,33 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
     }
     /* Step 4: unmute senders */
     msActorUnmuteAll(a);
-    /* Step 5: drain remaining messages */
-    msMessage* msg;
-    while ((msg = msMpscPop(&a->mailbox)) != NULL) {
-        msMsgFree(msg);
-    }
+    /* Step 5: drain remaining messages. Do NOT free the popped message — pop
+     * already made it the new tail stub (freed by the next pop, or by
+     * msMpscDestroy below). Freeing it here threads the live tail into the
+     * msg-pool free list and the drain chases pool nodes forever. */
+    while (msMpscPop(&a->mailbox) != NULL) {}
     msMpscDestroy(&a->mailbox);
     if (a->mutedBy != NULL) free(a->mutedBy);
     if (a->links != NULL) free(a->links);
     if (a->monitorWatchers != NULL) free(a->monitorWatchers);
     if (a->monitorRefs != NULL) free(a->monitorRefs);
     if (a->refs != NULL) free(a->refs);
+    /* Registry removal — I18: the reap runs on the owning scheduler's thread, so
+     * each sched->actors[] keeps a single writer (stop() no longer removes). */
+    if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
+        msSchedActors* schedR = &msSchedulers[a->schedulerID];
+        int cntR = atomic_load_explicit(&schedR->count, memory_order_acquire);
+        for (int iR = 0; iR < cntR; iR++) {
+            if (schedR->actors[iR] == a) {
+                schedR->actors[iR] = schedR->actors[cntR - 1];
+                atomic_store_explicit(&schedR->count, cntR - 1, memory_order_release);
+                break;
+            }
+        }
+    }
+    if (atomic_load_explicit(&a->stopRequested, memory_order_relaxed)) {
+        atomic_fetch_sub(&msActorsStopPending, 1);
+    }
     /* Sole owner: the handle is DRC-exempt (classify.ms) and the spawn-time msIncRef is
      * cycle-detector-only, so neither releases state — teardown frees it (Pony parity). */
     if (a->state != NULL) {
@@ -639,26 +713,27 @@ static inline void msActorDestroy(msActor* a) {
     msActorDestroyWithReason(a, MS_EXIT_NORMAL);
 }
 
-/* Stop an actor by pid — removes from scheduler, triggers onTerminate, then destroys.
- * R1: sets stopRequested so suspended actors don't resume. */
+/* Stop an actor by pid — Erlang exit-signal semantics with Pony reap discipline
+ * (I18): mark + wake; the OWNER scheduler tears down and frees at its next visit
+ * or reap scan. Never destroys here — the shell may be a live run-queue node,
+ * mid-process on another worker, or held as a pending resume-callback env. */
 static inline void msActorStop(int64_t pid, int32_t reason) {
     msActor* a = msActorFromPid(pid);
     if (a == NULL || !atomic_load_explicit(&a->alive, memory_order_acquire)) return;
-    /* R1: signal suspended actor to not resume */
-    atomic_store_explicit(&a->stopRequested, true, memory_order_release);
-    /* Remove from scheduler registry to prevent use-after-free in poll */
-    if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
-        msSchedActors* sched = &msSchedulers[a->schedulerID];
-        int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
-        for (int i = 0; i < cnt; i++) {
-            if (sched->actors[i] == a) {
-                sched->actors[i] = sched->actors[cnt - 1];
-                atomic_store_explicit(&sched->count, cnt - 1, memory_order_release);
-                break;
-            }
-        }
+    if (atomic_load_explicit(&a->stopRequested, memory_order_acquire)) return;
+    atomic_store_explicit(&a->stopReason, reason, memory_order_relaxed);
+    /* First stop wins; the exchange publishes stopReason (acq_rel). */
+    if (atomic_exchange_explicit(&a->stopRequested, true, memory_order_acq_rel)) return;
+    atomic_fetch_add(&msActorsStopPending, 1);
+    if (msActorHasFlag(a, MS_ACTOR_SUSPENDED)) {
+        /* R1: suspended — flag only, never touch the mailbox. The resume callback
+         * opens the reap gate; the owner's reap scan collects. */
+        return;
     }
-    msActorDestroyWithReason(a, reason);
+    /* Awake/idle: the STOP signal rides the mailbox (R5 lane) so scheduling stays
+     * on the wasEmpty edge — no new run-queue pusher, no double-enqueue. */
+    msMessage* stopMsg = msMsgAllocSized(MS_ACTOR_MSG_STOP, NULL, 0);
+    msActorSend(a, stopMsg);
 }
 
 /* ===== Actor References (for cycle detection) ===== */
@@ -1065,6 +1140,33 @@ static inline bool msActorPollLocal(void) {
                 msActorSend(ta, idleMsg);
                 ta->lastActivityMs = now;  /* re-arm for repeated firing */
             }
+        }
+    }
+
+    /* Phase 4: I18 reap scan — collects stop-flagged actors no visit will reach:
+     * the suspended-then-stopped lane (suspended actors are never mailbox-
+     * scheduled; the resume callback only opens the gate) and any visit that
+     * raced the flag. Owner thread only — registry writes and free stay
+     * single-threaded per scheduler. */
+    if (atomic_load_explicit(&msActorsStopPending, memory_order_acquire) > 0) {
+        int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
+        for (int i = 0; i < cnt; i++) {
+            msActor* sa = sched->actors[i];
+            if (!atomic_load_explicit(&sa->stopRequested, memory_order_acquire)) continue;
+            if (atomic_load_explicit(&sa->suspendedFut, memory_order_acquire) != NULL) continue;
+            bool expP = false;
+            if (!atomic_compare_exchange_strong_explicit(&sa->processing, &expP, true,
+                    memory_order_acquire, memory_order_relaxed)) continue;
+            if (atomic_load_explicit(&sa->scheduled, memory_order_acquire)) {
+                /* Queued — that visit's gate reaps; don't double-own. */
+                atomic_store_explicit(&sa->processing, false, memory_order_release);
+                continue;
+            }
+            msActorDestroyWithReason(sa,
+                atomic_load_explicit(&sa->stopReason, memory_order_relaxed));
+            didWork = true;
+            cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
+            i--;  /* swap-remove put a new actor in slot i — re-examine */
         }
     }
 

@@ -35,6 +35,9 @@ _Atomic(int) msNextActorRR = 0;
 /* Idle-timeout fast path — when 0, msActorPollLocal skips the timeout scan. */
 _Atomic(int) msActorsWithTimeout = 0;
 
+/* Stop-pending fast path — when 0, msActorPollLocal skips the reap scan. */
+_Atomic(int) msActorsStopPending = 0;
+
 /* Monitor ref counter (used by link/monitor primitives). */
 _Atomic(int64_t) msNextMonitorRef = 1;
 
