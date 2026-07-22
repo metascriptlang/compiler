@@ -4963,8 +4963,13 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// from body, because contextual return types may be generic (`() => T`) and would shadow
 	// the concrete inference from the body that downstream passes (lambda lifting) rely on.
 	let ctxParamTypes: Type[] = null as unknown as Type[];
-	if (expectedType !== null && expectedType.kind === TypeKind.Function && expectedType.typeChildren !== null) {
-		ctxParamTypes = expectedType.typeChildren;
+	// A `fn | null` formal is a Maybe struct — peel it so the arrow is typed from the inner fn.
+	let fnExpected = expectedType;
+	if (fnExpected !== null && isMaybeType(fnExpected) && fnExpected.typeReturn !== null) {
+		fnExpected = fnExpected.typeReturn;
+	}
+	if (fnExpected !== null && fnExpected.kind === TypeKind.Function && fnExpected.typeChildren !== null) {
+		ctxParamTypes = fnExpected.typeChildren;
 	}
 
 	// Body's expected return type. Sources, in priority order:
@@ -5003,12 +5008,12 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// args. MS uses contextual typing here for symmetry with how param
 	// types are inferred from expectedType just above.
 	if (explicitReturnType === null && returnTypeAnnotation === ""
-		&& expectedType !== null
-		&& expectedType.kind === TypeKind.Function
-		&& expectedType.typeReturn !== null
-		&& expectedType.typeReturn.kind !== TypeKind.Unknown
-		&& !hasGenericParams(expectedType.typeReturn)) {
-		explicitReturnType = expectedType.typeReturn;
+		&& fnExpected !== null
+		&& fnExpected.kind === TypeKind.Function
+		&& fnExpected.typeReturn !== null
+		&& fnExpected.typeReturn.kind !== TypeKind.Unknown
+		&& !hasGenericParams(fnExpected.typeReturn)) {
+		explicitReturnType = fnExpected.typeReturn;
 	}
 
 	const savedFunction = ctx.currentFunction;
