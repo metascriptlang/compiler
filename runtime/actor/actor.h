@@ -562,9 +562,16 @@ extern void msCallActorDestroyHook(void* actor);
  */
 static inline void msActorSend(msActor* a, msMessage* msg) {
     /* Guard: null actor (DRC scope cleanup or uninitialized) */
-    if (a == NULL) { msMsgFree(msg); return; }
+    if (a == NULL) {
+        /* I20: a CALL to a stale/dead pid must fail its reply future (BEAM {noproc})
+         * so the awaiting caller unblocks instead of hanging. SEND has no reply. */
+        if (msg->replyFuture != NULL) msFutureFail(msg->replyFuture, NULL);
+        msMsgFree(msg);
+        return;
+    }
     /* Guard: don't send to dead actor (prevents use-after-free on freed mailbox) */
     if (!atomic_load_explicit(&a->alive, memory_order_acquire)) {
+        if (msg->replyFuture != NULL) msFutureFail(msg->replyFuture, NULL);
         msMsgFree(msg);
         msHazardClear(a);
         return;
@@ -883,8 +890,15 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
     /* Step 5: drain remaining messages. Do NOT free the popped message — pop
      * already made it the new tail stub (freed by the next pop, or by
      * msMpscDestroy below). Freeing it here threads the live tail into the
-     * msg-pool free list and the drain chases pool nodes forever. */
-    while (msMpscPop(&a->mailbox) != NULL) {}
+     * msg-pool free list and the drain chases pool nodes forever.
+     * I20: fail each pending CALL's reply future (BEAM {noproc}) so callers
+     * awaiting a now-reaped actor unblock instead of hanging. */
+    {
+        msMessage* dm;
+        while ((dm = msMpscPop(&a->mailbox)) != NULL) {
+            if (dm->replyFuture != NULL) msFutureFail(dm->replyFuture, NULL);
+        }
+    }
     msMpscDestroy(&a->mailbox);
     if (a->mutedBy != NULL) free(a->mutedBy);
     if (a->links != NULL) free(a->links);
