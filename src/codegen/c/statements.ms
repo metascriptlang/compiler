@@ -653,6 +653,16 @@ function genThrowStmt(g: CGen, p: CProc, node: Node): void {
 			return;
 		}
 	}
+	// Non-string arg = re-raise a caught exception object (Nim genRaiseStmt `raise e`):
+	// `catch(e){throw e}` and the routing terminal `throw $excCaught` restore the
+	// in-flight exception and unwind, rather than minting a fresh one via msThrow.
+	const argType = d.throwArg.nodeType;
+	if (argType === null || argType.kind === TypeKind.Unknown || argType.kind === TypeKind.Error) {
+		emitStmtsLine(p, "msCurrException = " + genExpr(g, p, d.throwArg) + ";");
+		emitStmtsLine(p, "msErr = MS_TRUE;");
+		emitErrorGoto(p);
+		return;
+	}
 	const snippet = genExpr(g, p, d.throwArg);
 	emitStmtsLine(p, "msThrow(" + snippet + ");");
 	emitErrorGoto(p);
