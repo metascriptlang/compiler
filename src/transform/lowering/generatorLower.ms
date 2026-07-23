@@ -26,6 +26,7 @@ import {
 	BinaryExprData, UnaryExprData, CallExprData,
 	ConditionalExprData, TryCatchStmtData, YieldExprData,
 	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type, TypeKind,
+	isEmptyBlock,
 } from "../../ast/node";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
 import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
@@ -34,9 +35,9 @@ import {
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign, makeContinue,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
-	collectDeclNames,
+	collectDeclNames, makeTryCatch,
 } from "../util";
-import { numberType } from "../../checker/types";
+import { numberType, unknownType } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Data Structures =====
@@ -48,6 +49,7 @@ export interface GenState {
 	stmts: Node[];
 	yieldVarName: string;   // variable assigned from yield (for async resume)
 	yieldVarType: Type;     // type of the variable (for unboxing msFutureRead)
+	excLanding: number;     // reference exceptionTable[i]: state to jump to if this state raises (-1 = propagate)
 }
 
 // Active while-with-yield scope. break/continue inside the body must
@@ -180,7 +182,7 @@ function rewriteLoopExits(node: Node, top: LoopFrame, loc: SourceLocation): void
 
 export function allocState(sc: StateCollector): number {
 	const idx = sc.items.length;
-	const st: GenState = { index: idx, isYield: false, nextState: -1, stmts: [], yieldVarName: "", yieldVarType: null as unknown as Type };
+	const st: GenState = { index: idx, isYield: false, nextState: -1, stmts: [], yieldVarName: "", yieldVarType: null as unknown as Type, excLanding: -1 };
 	sc.items.push(st);
 	return idx;
 }
@@ -339,6 +341,20 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			while (ri < stmts.length) { merged.push(stmts[ri]); ri = ri + 1; }
 			splitStmts(merged, sc, currentState, exitState, loc, resultType);
 			return;
+		} else if (stmt.kind === NodeKind.TryCatchStmt) {
+			const td = stmt.data as TryCatchStmtData;
+			const hasFinally = td.finallyBody !== null && !isEmptyBlock(td.finallyBody);
+			// Covered: try/catch without finally (single or nested). Other shapes
+			// (finally, catch-less) stay V1-skip until the finallyPath port.
+			if (hasFinally || td.catchBody === null) {
+				sc.items[currentState].stmts.push(stmt);
+				i += 1;
+			} else {
+				const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
+				splitTryCatch(td, sc, currentState, afterSt, loc, resultType);
+				currentState = afterSt;
+				i += 1;
+			}
 		} else {
 			// Other stmt types containing yield — skip for V1
 			sc.items[currentState].stmts.push(stmt);
@@ -377,6 +393,47 @@ function splitWhile(node: Node, sc: StateCollector, currentState: number, exitSt
 	sc.loopStack.push({ breakState: exitState, continueState: condState });
 	splitStmts(bodyStmts, sc, bodyStart, condState, loc, resultType);
 	sc.loopStack.pop();
+}
+
+// Split try/catch (no finally) containing a yield into states.
+// Reference closureiters model: the try body's states form the exceptionTable
+// entries (they land on the catch state); the catch body is its own state
+// sequence; both rejoin at afterSt. The runtime routing (exceptionTable lookup
+// on raise) is emitted by buildExcRouting as the wrapping catch.
+function splitTryCatch(td: TryCatchStmtData, sc: StateCollector, currentState: number, afterSt: number, loc: SourceLocation, resultType: Type | null): void {
+	const catchSt = allocState(sc);
+	const tryStart = allocState(sc);
+	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc));
+
+	splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, afterSt, loc, resultType);
+	// exceptionTable: every state produced for the try body lands on the catch.
+	// Guard `excLanding < 0` so a nested inner try keeps its own (already-set) catch.
+	for (let s = tryStart; s < sc.items.length; s += 1) {
+		if (sc.items[s].excLanding < 0) sc.items[s].excLanding = catchSt;
+	}
+
+	// B-Slice1: the catch-variable binding (`catch(e)`) is deferred — it needs
+	// the exception carried across the wrap-catch → landing-state boundary
+	// (reference :curExc). The routing itself works without it.
+	splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, afterSt, loc, resultType);
+}
+
+// Wrapping-catch body: capture the exception into $exc, then map the raising
+// state to its landing (reference exceptionTable[:state]) as an if-chain; a state
+// with no landing propagates out (go terminal + re-raise).
+export function buildExcRouting(sc: StateCollector, loc: SourceLocation): Node {
+	const stmts: Node[] = [];
+	const rethrow = createNode(NodeKind.ThrowStmt, { throwArg: makeIdent("$excCaught", loc) }, syntheticToken(loc));
+	let chain: Node = makeBlock([makeStateAssign(-1, loc), rethrow], loc);
+	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
+		if (sc.items[i].excLanding >= 0) {
+			const cond = makeBinary(makeIdent("$state", loc), "===", makeNumber(i, loc), loc);
+			const then = makeBlock([makeStateAssign(sc.items[i].excLanding, loc)], loc);
+			chain = makeIf(cond, then, chain, loc);
+		}
+	}
+	stmts.push(chain);
+	return makeBlock(stmts, loc);
 }
 
 // Split if-else containing yield:
@@ -525,8 +582,18 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	// 6. Build the state dispatch (if-else chain)
 	const dispatch = buildStateDispatch(sc, loc, iterResultType);
 
+	// 6b. If any state has an exception landing (a try with a yield inside),
+	// wrap the dispatch in a try/catch that routes a raised state to its
+	// landing (reference closureiters exceptionTable + the wrapping except).
+	let hasExc = false;
+	for (const st of sc.items) { if (st.excLanding >= 0) hasExc = true; }
+	let dispatchBody = dispatch;
+	if (hasExc) {
+		dispatchBody = makeTryCatch(dispatch, "$excCaught", buildExcRouting(sc, loc), null as unknown as Node, loc);
+	}
+
 	// 7. Wrap in while(true) { dispatch }
-	const loop = makeWhile(makeBool(true, loc), dispatch, loc);
+	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
 
 	// 8. Build next() function body
 	const nextBody = makeBlock([loop], loc);
