@@ -4,7 +4,7 @@
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
 import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isStructType } from "../../checker/types";
+import { isStructType, unwrapRefNullUnion } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	CGen, CProc,
@@ -264,7 +264,9 @@ function isUnionNarrowing(node: Node): boolean {
 	const d = node.data as TypeAssertionData;
 	if (d.asExpr === null) return false;
 	const srcType = d.asExpr.nodeType;
-	return srcType !== null && srcType.kind === TypeKind.Union;
+	if (srcType === null || srcType.kind !== TypeKind.Union) return false;
+	if (unwrapRefNullUnion(srcType) !== null) return false;
+	return true;
 }
 
 function genVarDecl(g: CGen, p: CProc, node: Node): void {
