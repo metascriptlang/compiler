@@ -1386,7 +1386,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			} else {
 				node.nodeType = targetType;
 			}
-			if (srcType !== null && srcType.kind === TypeKind.Unknown && isUserUnknown(srcType)
+			const castSrcUnknown = (srcType !== null && srcType.kind === TypeKind.Union) ? unwrapRefNullUnion(srcType) : srcType;
+			if (castSrcUnknown !== null && castSrcUnknown.kind === TypeKind.Unknown && isUserUnknown(castSrcUnknown)
 				&& targetType.kind !== TypeKind.Unknown && !isPointerShapedForUnknown(targetType)) {
 				addError(ctx, "cannot cast unknown to value type " + typeDisplayName(targetType) + " — no void* representation to reinterpret", asLoc.line, asLoc.column);
 			}
