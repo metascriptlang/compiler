@@ -1319,6 +1319,19 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		},
 		NodeKind.TypeAssertion => {
 			let d = node.data as TypeAssertionData;
+			// Non-null assertion `expr!` (sentinel asType "!"): strip the nullable
+			// from the operand type; nullableLower rule 1c reads `.value` at codegen.
+			if (d.asType === "!") {
+				checkExpr(ctx, d.asExpr, null);
+				const st0 = d.asExpr.nodeType;
+				if (st0 !== null && isMaybeType(st0) && st0.typeReturn !== null) {
+					node.nodeType = st0.typeReturn;
+				} else {
+					node.nodeType = st0 !== null ? st0 : unknownType();
+				}
+				node.flags = node.flags | NodeFlag.Sem;
+				return;
+			}
 			const asLoc = node.typeExpr !== null ? node.typeExpr.location : node.location;
 			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx, asLoc.line, asLoc.column) : unknownType();
 			// TS parity: `expr as T` propagates T as contextual type to expr.
@@ -1582,7 +1595,10 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			if (isIntegerType(leftType)) return leftType;
 			return int32Type();
 		},
-		"??" => leftType,
+		"??" => {
+			if (isMaybeType(leftType) && leftType.typeReturn !== null) return leftType.typeReturn;
+			return leftType;
+		},
 		_ => unknownType(),
 	};
 }

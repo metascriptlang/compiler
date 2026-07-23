@@ -9,7 +9,7 @@
 //   4. Value wrapping (decl): const x: T|null = tok → const x = { value: tok, present: true }
 //   5. Value wrapping (assign): x = tok → x = { value: tok, present: true }
 
-import { Node, NodeKind, SourceLocation, MemberExprData, VariableDeclData, BinaryExprData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, MemberExprData, TypeAssertionData, VariableDeclData, BinaryExprData, Type, TypeKind } from "../../ast/node";
 import { isStructType, isMaybeType, isTagCarriedUnion, getProperty } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -97,6 +97,18 @@ function lowerNullableNode(node: Node): Node {
 		const member = makeMember(node, "value", loc);
 		member.nodeType = maybePayloadType(node.resolvedSym.symbolType, node.nodeType);
 		return member;
+	}
+
+	// 1c. Type assertion peeling a Maybe: `maybeExpr as V` (V = payload) → maybeExpr.value
+	if (node.kind === NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		if (d.asExpr !== null && d.asExpr.nodeType !== null
+			&& isMaybeType(d.asExpr.nodeType)
+			&& node.nodeType !== null && !isMaybeType(node.nodeType)) {
+			const member = makeMember(d.asExpr, "value", loc);
+			member.nodeType = node.nodeType;
+			return member;
+		}
 	}
 
 	// 1b. Narrowed member access: c.cursor where the field type in c's struct

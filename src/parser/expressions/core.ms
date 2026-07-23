@@ -155,6 +155,13 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 			continue;
 		}
 
+		// Non-null assertion: expr! — sentinel asType "!" strips the nullable
+		if (token.kind === TokenKind.Bang) {
+			advance(state);
+			left = createNode(NodeKind.TypeAssertion, { asExpr: left, asType: "!" }, token);
+			continue;
+		}
+
 		break;
 	}
 
