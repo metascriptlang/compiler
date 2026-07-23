@@ -158,7 +158,7 @@ export function lookupSymbol(table: SymbolTable, name: string): Symbol {
 	let scope = table.current;
 	while (scope !== null) {
 		if (scope.symbols.has(nameId)) {
-			return scope.symbols.get(nameId);
+			return scope.symbols.get(nameId) as Symbol;
 		}
 		scope = scope.parent;
 	}
@@ -169,7 +169,7 @@ export function lookupSymbol(table: SymbolTable, name: string): Symbol {
 export function lookupLocal(table: SymbolTable, name: string): Symbol {
 	const nameId = getIdentId(table.identCache, name);
 	if (table.current.symbols.has(nameId)) {
-		return table.current.symbols.get(nameId);
+		return table.current.symbols.get(nameId) as Symbol;
 	}
 	return null as unknown as Symbol;
 }
@@ -233,7 +233,7 @@ export function lookupExport(table: SymbolTable, name: string): Symbol {
 	while (scope !== null) {
 		if (scope.scopeKind === ScopeKind.Module || scope.scopeKind === ScopeKind.Global) {
 			if (scope.symbols.has(nameId)) {
-				const sym = scope.symbols.get(nameId);
+				const sym = scope.symbols.get(nameId) as Symbol;
 				if (hasFlag(sym, SymbolFlag.Exported)) return sym;
 			}
 		}

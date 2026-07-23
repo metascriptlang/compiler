@@ -542,13 +542,13 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 	m.size = m.size + 1;
 }
 
-export function get<K, V>(this m: Map<K, V>, key: K): V {
+export function get<K, V>(this m: Map<K, V>, key: K): V | null {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
-	if (m.indices.length === 0) return null as unknown as V;
+	if (m.indices.length === 0) return null;
 	const hc = key.hash();
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot >= 0) return m.entries[m.indices[slot]].value;
-	return null as unknown as V;
+	return null;
 }
 
 export function has<K, V>(this m: Map<K, V>, key: K): boolean {
