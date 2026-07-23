@@ -28,7 +28,7 @@ import {
 } from "../util";
 import { NameSet, createNameSet, nameSetAdd } from "../context";
 import { createPromise, createFunction, createPtr, createPrimitive, voidType, unknownType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
-import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, makeStateAssign } from "./generatorLower";
+import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, makeStateAssign, buildExcRouting } from "./generatorLower";
 import { stmtCountAfter } from "../testUtil";
 
 // ===== Variable Type Collection =====
@@ -500,8 +500,18 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// 6. Build async state dispatch (stepper pattern instead of iterator pattern)
 	const dispatch = buildAsyncStateDispatch(sc, promiseVoidType, closureType, loc);
 
+	// 6b. Inner exceptionTable routing (closureiters tầng 1): route a raised state
+	// to its landing; the terminal re-raises `$excCaught` out to the outer
+	// fail-catch below (asyncmacro tầng 2). Mirrors transformGeneratorFn.
+	let hasExc = false;
+	for (const st of sc.items) { if (st.excLanding >= 0) hasExc = true; }
+	let dispatchBody = dispatch;
+	if (hasExc) {
+		dispatchBody = makeTryCatch(dispatch, "$excCaught", buildExcRouting(sc, loc), null as unknown as Node, loc);
+	}
+
 	// 7. Wrap in while(true) + try/catch
-	const loop = makeWhile(makeBool(true, loc), dispatch, loc);
+	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
 	const tryBody = makeBlock([loop], loc);
 	const failCall = makeExprStmt(
 		makeCall(
