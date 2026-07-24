@@ -552,6 +552,15 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	stateDecl.nodeType = numberType();
 	outerStmts.push(stateDecl);
 
+	// Env-carried current exception (reference :curExc) — buildExcRouting stores
+	// the caught exception here so a catch state can bind its variable across the
+	// await→raise→catch boundary.
+	if (hasExc) {
+		const curExcDecl = makeVarDecl("$curExc", makeNull(loc), DeclKind.Let, loc);
+		curExcDecl.nodeType = unknownType();
+		outerStmts.push(curExcDecl);
+	}
+
 	// Hoisted locals: let a; let b; let $yf0; let $yf1; ...
 	// Set nodeType from original declarations so lambda lifting creates typed env fields.
 	for (const localName of nc.items) {

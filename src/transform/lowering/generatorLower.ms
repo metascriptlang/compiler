@@ -26,8 +26,10 @@ import {
 	BinaryExprData, UnaryExprData, CallExprData,
 	ConditionalExprData, TryCatchStmtData, YieldExprData,
 	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type, TypeKind,
+	IdentifierData, Symbol,
 	isEmptyBlock,
 } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
 import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
 import {
@@ -351,7 +353,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				i += 1;
 			} else {
 				const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
-				splitTryCatch(td, sc, currentState, afterSt, loc, resultType);
+				splitTryCatch(stmt, sc, currentState, afterSt, loc, resultType);
 				currentState = afterSt;
 				i += 1;
 			}
@@ -400,7 +402,8 @@ function splitWhile(node: Node, sc: StateCollector, currentState: number, exitSt
 // entries (they land on the catch state); the catch body is its own state
 // sequence; both rejoin at afterSt. The runtime routing (exceptionTable lookup
 // on raise) is emitted by buildExcRouting as the wrapping catch.
-function splitTryCatch(td: TryCatchStmtData, sc: StateCollector, currentState: number, afterSt: number, loc: SourceLocation, resultType: Type | null): void {
+function splitTryCatch(node: Node, sc: StateCollector, currentState: number, afterSt: number, loc: SourceLocation, resultType: Type | null): void {
+	const td = node.data as TryCatchStmtData;
 	const catchSt = allocState(sc);
 	const tryStart = allocState(sc);
 	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc));
@@ -412,10 +415,33 @@ function splitTryCatch(td: TryCatchStmtData, sc: StateCollector, currentState: n
 		if (sc.items[s].excLanding < 0) sc.items[s].excLanding = catchSt;
 	}
 
-	// B-Slice1: the catch-variable binding (`catch(e)`) is deferred — it needs
-	// the exception carried across the wrap-catch → landing-state boundary
-	// (reference :curExc). The routing itself works without it.
+	// Rewrite the catch variable to read the env-carried current exception
+	// ($curExc, reference :curExc) directly. buildExcRouting stores $excCaught into
+	// $curExc on the raise path, which survives the await→raise→catch state
+	// boundary that the runtime global msCurrException does not. Reading the env
+	// field (not a per-state local) keeps the value in scope across every split
+	// state and lets the env's DRC hooks own its lifetime — a local would be
+	// cleaned up per-state and dangle on the try-body unwind paths.
+	if (td.catchName !== "") {
+		renameIdentInSubtree(td.catchBody, td.catchName, "$curExc", node.nodeType);
+	}
 	splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, afterSt, loc, resultType);
+}
+
+// Rewrite every Identifier named `oldName` in `node`'s subtree to `newName`,
+// stamping `typ` so member access (e.g. `$curExc.message`) resolves post-check.
+function renameIdentInSubtree(node: Node, oldName: string, newName: string, typ: Type): void {
+	if (node === null) return;
+	if (node.kind === NodeKind.Identifier) {
+		const d = node.data as IdentifierData;
+		if (d.name === oldName) {
+			d.name = newName;
+			if (typ !== null) node.nodeType = typ;
+			node.resolvedSym = null as unknown as Symbol;
+		}
+		return;
+	}
+	forEachChild(node, (child: Node): void => { renameIdentInSubtree(child, oldName, newName, typ); });
 }
 
 // Wrapping-catch body: capture the exception into $exc, then map the raising
@@ -423,6 +449,9 @@ function splitTryCatch(td: TryCatchStmtData, sc: StateCollector, currentState: n
 // with no landing propagates out (go terminal + re-raise).
 export function buildExcRouting(sc: StateCollector, loc: SourceLocation): Node {
 	const stmts: Node[] = [];
+	// Carry the caught exception across the state boundary (reference :curExc) so
+	// the catch state can bind its variable from $curExc after control resumes.
+	stmts.push(makeExprStmt(makeAssign(makeIdent("$curExc", loc), makeIdent("$excCaught", loc), loc), loc));
 	const rethrow = createNode(NodeKind.ThrowStmt, { throwArg: makeIdent("$excCaught", loc) }, syntheticToken(loc));
 	let chain: Node = makeBlock([makeStateAssign(-1, loc), rethrow], loc);
 	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
@@ -623,6 +652,11 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	//   return { next: function() { while(true) { if-else dispatch } } };
 	const newBodyStmts: Node[] = [];
 	newBodyStmts.push(makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc));
+	if (hasExc) {
+		const curExcDecl = makeVarDecl("$curExc", makeNull(loc), DeclKind.Let, loc);
+		curExcDecl.nodeType = unknownType();
+		newBodyStmts.push(curExcDecl);
+	}
 	for (const localName of nc.items) {
 		// Stamp original nodeType so lambda lifting creates correctly-typed env fields.
 		// Reference parity: captureVar always adds field with original type.
