@@ -359,6 +359,20 @@ export function readProcLocals(p: CProc): string {
 	return p.blocks[0].locals.parts.join("");
 }
 
+// Single funnel for ordinary proc bodies (reference genProcAux parity): drain
+// locals + stmts, then pair the beforeRetNeeded flag with its BeforeRet_ label.
+// Every ordinary-proc emission site MUST go through here — bypassing it emits a
+// `goto BeforeRet_` with no landing label.
+export function emitProcBody(p: CProc, procs: Builder): void {
+	const locals = readProcLocals(p);
+	if (locals.length > 0) add(procs, locals);
+	const stmts = readProcStmts(p);
+	if (stmts.length > 0) add(procs, stmts);
+	if (p.beforeRetNeeded) {
+		addLine(procs, "  BeforeRet_: ;");
+	}
+}
+
 // Clear proc buffers after flushing — used for shared initProc across top-level stmts
 export function clearProcBuffers(p: CProc): void {
 	p.blocks[0].locals.parts = [];

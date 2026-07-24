@@ -9,7 +9,7 @@ import { getGenericDecl } from "../../parser/context";
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, emitStmtsLine, readProcStmts, readProcLocals,
-	clearProcBuffers, typeCacheSet, typeCacheHas, aliveSetHas,
+	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheHas, aliveSetHas,
 } from "./context";
 import { genExpr } from "./expressions";
 import { genStmt, resolveEmitArgs } from "./statements";
@@ -245,15 +245,9 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 			}
 		}
 		genStmt(g, p, d.fnBody);
-		const locals = readProcLocals(p);
-		const stmts = readProcStmts(p);
 		const procs = sec(g, CSection.Procs);
 		addLine(procs, proto + " {");
-		if (locals.length > 0) add(procs, locals);
-		add(procs, stmts);
-		if (p.beforeRetNeeded) {
-			addLine(procs, "  BeforeRet_: ;");
-		}
+		emitProcBody(p, procs);
 		// Reference parity (BeforeRet_): emit default return after DRC cleanup labels
 		// to satisfy C compiler's control flow analysis for non-void functions.
 		if (!nrvo && actualRetType !== "void") {
@@ -503,15 +497,9 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 		const p = createProc(methodName, null);
 		if (nrvo) p.isNrvo = true;
 		genStmt(g, p, d.methodBody);
-		const locals = readProcLocals(p);
-		const stmts = readProcStmts(p);
 		const procs = sec(g, CSection.Procs);
 		addLine(procs, proto + " {");
-		if (locals.length > 0) add(procs, locals);
-		add(procs, stmts);
-		if (p.beforeRetNeeded) {
-			addLine(procs, "  BeforeRet_: ;");
-		}
+		emitProcBody(p, procs);
 		addLine(procs, "}");
 		addNewline(procs);
 	}
@@ -557,13 +545,7 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 	if (d.ctorBody !== null) {
 		const p = createProc(initName, null);
 		genStmt(g, p, d.ctorBody);
-		const locals = readProcLocals(p);
-		const stmts = readProcStmts(p);
-		if (locals.length > 0) add(procs, locals);
-		add(procs, stmts);
-		if (p.beforeRetNeeded) {
-			addLine(procs, "  BeforeRet_: ;");
-		}
+		emitProcBody(p, procs);
 	}
 	addLine(procs, "}");
 	addNewline(procs);

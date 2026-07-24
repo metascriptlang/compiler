@@ -12,7 +12,7 @@
 import { Node, NodeKind, TestDeclData, BlockStmtData } from "../../ast/node";
 import {
 	CGen, CSection,
-	createProc, createBuilder, add, addLine, addNewline, sec, extract, readProcStmts, readProcLocals,
+	createProc, createBuilder, addLine, addNewline, sec, extract, emitProcBody,
 } from "./context";
 import { genStmt } from "./statements";
 import { mangleModuleName } from "./names";
@@ -40,10 +40,7 @@ export function genTestDeclNode(g: CGen, node: Node): void {
 		for (const stmt of bd.statements) {
 			genStmt(g, p, stmt);
 		}
-		const locals = readProcLocals(p);
-		if (locals.length > 0) add(procs, locals);
-		const stmts = readProcStmts(p);
-		if (stmts.length > 0) add(procs, stmts);
+		emitProcBody(p, procs);
 		g.currentProc = null;
 	}
 
