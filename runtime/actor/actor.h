@@ -944,6 +944,22 @@ static inline void msActorDestroy(msActor* a) {
     msActorDestroyWithReason(a, MS_EXIT_NORMAL);
 }
 
+/* Owner-thread synchronous reap drain: pop + process THIS scheduler's own run queue
+ * only. Excludes work-stealing, cycle-detector ticks, and the idle-timeout scan (those
+ * belong to the normal event-loop poll) — here we just let the owner's stopped actors
+ * reach their reap gate, so a sync main that never re-enters the scheduler loop doesn't
+ * accumulate stopped-actor state. */
+static inline void msActorReapLocalQueue(void) {
+    int id = msMySchedulerID;
+    if (id < 0 || id >= msSchedulerCount) return;
+    msSchedActors* sched = &msSchedulers[id];
+    msActor* a;
+    while ((a = msSchedRunPop(sched)) != NULL) {
+        if (msActorHasFlag(a, MS_ACTOR_MUTED)) continue;
+        msActorProcess(a, MS_ACTOR_BATCH);
+    }
+}
+
 /* Stop an actor by pid — Erlang exit-signal semantics with Pony reap discipline
  * (I18): mark + wake; the OWNER scheduler tears down and frees at its next visit
  * or reap scan. Never destroys here — the shell may be a live run-queue node,
@@ -971,8 +987,16 @@ static inline void msActorStop(int64_t pid, int32_t reason) {
     }
     /* Awake/idle: the STOP signal rides the mailbox (R5 lane) so scheduling stays
      * on the wasEmpty edge — no new run-queue pusher, no double-enqueue. */
+    int sid = a->schedulerID;
     msMessage* stopMsg = msMsgAllocSized(MS_ACTOR_MSG_STOP, NULL, 0);
-    msActorSend(a, stopMsg);  /* send clears the pin */
+    msActorSend(a, stopMsg);  /* send clears the pin — do not touch `a` after this */
+    /* A synchronous owner (main = scheduler 0, not inside an actor behaviour) never
+     * re-enters the scheduler loop, so I18's deferred owner reap would never run and
+     * stopped actors' state would pile up unbounded. Force the owner's reap visit now:
+     * routes through the same reap gate on the same owning thread — no new free path. */
+    if (msCurrentActor == NULL && msMySchedulerID == sid) {
+        msActorReapLocalQueue();
+    }
 }
 
 /* ===== Actor References (for cycle detection) ===== */
