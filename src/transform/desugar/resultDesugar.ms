@@ -25,8 +25,9 @@ import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import {
-	makeIdentResolved, makeVarDecl, makeBlock, makeCall, makeIdent,
+	makeIdentResolved, makeVarDecl, makeBlock,
 	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull,
+	makeExprStmt, makeTryCatch, makeAssign, makeDefaultValue,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
@@ -165,6 +166,32 @@ function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node 
 		const resType = tryData.tryArg.nodeType;
 		const sym = freshTempSym(ctx, "result", resType !== null ? resType : unknownType());
 
+		if (tryData.hasCatch && tryData.tryArg.kind === NodeKind.AwaitExpr && !isResult(resType)) {
+			const decl = makeVarDecl(sym.name, makeDefaultValue(resType, loc), DeclKind.Let, loc);
+			decl.resolvedSym = sym;
+			decl.nodeType = resType;
+			hoisted.push(decl);
+			const awSym = freshTempSym(ctx, "await", resType !== null ? resType : unknownType());
+			const awDecl = makeVarDecl(awSym.name, tryData.tryArg, DeclKind.Const, loc);
+			awDecl.resolvedSym = awSym;
+			awDecl.nodeType = resType;
+			const awRef = makeIdentResolved(awSym, loc);
+			awRef.nodeType = resType;
+			const awTarget = makeIdentResolved(sym, loc);
+			awTarget.nodeType = resType;
+			const storeAssign = makeAssign(awTarget, awRef, loc);
+			if (tryData.catchVal.nodeType === null) tryData.catchVal.nodeType = resType;
+			const fbTarget = makeIdentResolved(sym, loc);
+			fbTarget.nodeType = resType;
+			const fbAssign = makeAssign(fbTarget, tryData.catchVal, loc);
+			const tryBlock = makeBlock([awDecl, makeExprStmt(storeAssign, loc)], loc);
+			const catchBlock = makeBlock([makeExprStmt(fbAssign, loc)], loc);
+			hoisted.push(makeTryCatch(tryBlock, "$e", catchBlock, makeBlock([], loc), loc));
+			const ref = makeIdentResolved(sym, loc);
+			ref.nodeType = node.nodeType !== null ? node.nodeType : resType;
+			return ref;
+		}
+
 		// const $result_N = tryArg;
 		const resDecl = makeVarDecl(sym.name, tryData.tryArg, DeclKind.Const, loc);
 		resDecl.resolvedSym = sym;
@@ -172,20 +199,6 @@ function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node 
 		hoisted.push(resDecl);
 
 		if (tryData.hasCatch) {
-			// Reject-catch form: `try await Promise<T> catch Y` (T not Result).
-			// The await sets msErr on a rejected future (msFutureRead* / msAwaitSlotResult),
-			// so msErrTake() consumes it and routes to catchVal. Distinct from the Result
-			// form below (which reads $result.ok/.value on a Result value).
-			if (tryData.tryArg.kind === NodeKind.AwaitExpr && !isResult(resType)) {
-				const errTake = makeCall(makeIdent("msErrTake", loc), [], loc);
-				errTake.nodeType = booleanType();
-				const awRef = makeIdentResolved(sym, loc);
-				awRef.nodeType = resType;
-				if (tryData.catchVal.nodeType === null) tryData.catchVal.nodeType = resType;
-				const rc = makeConditional(errTake, tryData.catchVal, awRef, loc);
-				rc.nodeType = node.nodeType !== null ? node.nodeType : resType;
-				return rc;
-			}
 			// $result.ok ? $result.value : catchVal
 			const okCheck = makeResultMember(sym, resType, "ok", loc);
 			const valueAccess = makeResultMember(sym, resType, "value", loc);
