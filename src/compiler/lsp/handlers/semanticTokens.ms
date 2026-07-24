@@ -40,8 +40,9 @@ export function handleSemanticTokensFull(id: string, params: string, db: TransAm
 	const path = lspUriToPath(uri);
 
 	const rev = db.revision.value;
-	if (_semTokenRevision.has(path) && _semTokenRevision.get(path) === rev) {
-		return lspResponse(id, "{\"data\":" + _semTokenCache.get(path) + "}");
+	const cachedRev = _semTokenRevision.get(path);
+	if (cachedRev !== null && cachedRev === rev) {
+		return lspResponse(id, "{\"data\":" + (_semTokenCache.get(path) ?? "") + "}");
 	}
 
 	const program = dbParse(db, path);

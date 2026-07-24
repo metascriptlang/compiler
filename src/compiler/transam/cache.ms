@@ -68,8 +68,8 @@ function evictAt(cache: TaCacheStore, idx: number): void {
 	// Remove from file index before evicting
 	const evicted = cache.entries[idx];
 	const fid = evicted.key.fileId;
-	if (cache.fileIndex.has(fid)) {
-		const arr = cache.fileIndex.get(fid);
+	const arr = cache.fileIndex.get(fid);
+	if (arr !== null) {
 		const kept: TaCacheEntry[] = [];
 		for (let ri = 0; ri < arr.length; ri += 1) {
 			if (arr[ri] !== evicted) kept.push(arr[ri]);
@@ -99,8 +99,8 @@ export function cachePut(cache: TaCacheStore, entry: TaCacheEntry): void {
 		cache.accessCounters[idx] = cache.accessClock;
 		// Replace old entry in fileIndex
 		const fid = entry.key.fileId;
-		if (cache.fileIndex.has(fid)) {
-			const arr = cache.fileIndex.get(fid);
+		const arr = cache.fileIndex.get(fid);
+		if (arr !== null) {
 			const replaced: TaCacheEntry[] = [];
 			for (let fi = 0; fi < arr.length; fi += 1) {
 				if (arr[fi] === old) { replaced.push(entry); } else { replaced.push(arr[fi]); }
@@ -120,8 +120,8 @@ export function cachePut(cache: TaCacheStore, entry: TaCacheEntry): void {
 	cache.accessCounters.push(cache.accessClock);
 	// Update file index
 	const fid = entry.key.fileId;
-	if (cache.fileIndex.has(fid)) {
-		const old = cache.fileIndex.get(fid);
+	const old = cache.fileIndex.get(fid);
+	if (old !== null) {
 		const updated: TaCacheEntry[] = [];
 		for (let ui = 0; ui < old.length; ui += 1) { updated.push(old[ui]); }
 		updated.push(entry);
@@ -151,8 +151,8 @@ export function markAllRed(cache: TaCacheStore): void {
 }
 
 export function markQueriesRedForFile(cache: TaCacheStore, fileId: number): void {
-	if (!cache.fileIndex.has(fileId)) return;
 	const indexed = cache.fileIndex.get(fileId);
+	if (indexed === null) return;
 	for (const entry of indexed) {
 		entry.state = TaQueryState.Red;
 	}

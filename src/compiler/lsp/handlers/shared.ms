@@ -32,7 +32,8 @@ export function cacheResolveEdit(label: string, detail: string, editsJson: strin
 }
 
 export function lookupResolveEdit(label: string, detail: string): string {
-	if (_resolveCache.has(label)) return _resolveCache.get(label);
+	const cached = _resolveCache.get(label);
+	if (cached !== null) return cached;
 	return "";
 }
 

@@ -279,8 +279,8 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 	// Check if the awaited identifier was registered as a spawn handle in this scope.
 	if (awaitArg.kind === NodeKind.Identifier) {
 		const name = (awaitArg.data as IdentifierData).name;
-		if (_spawnSlotMap.has(name)) {
-			const slotEntry = _spawnSlotMap.get(name);
+		const slotEntry = _spawnSlotMap.get(name);
+		if (slotEntry !== null) {
 			_spawnSlotMap.delete(name);
 			const stmts: Node[] = [];
 			// msAwaitSlotWait($slot);

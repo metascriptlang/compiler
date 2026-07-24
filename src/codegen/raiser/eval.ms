@@ -158,7 +158,8 @@ function seedCtxForSym(sym: Symbol): CheckerContext {
 function ensureCompiledIntoEngine(sym: Symbol): number {
 	if (_engine === null) return -1;
 	const name = sym.name;
-	if (_engine.seen.has(name)) return _engine.seen.get(name);
+	const seenIdx = _engine.seen.get(name);
+	if (seenIdx !== null) return seenIdx;
 	if (sym.declNode === null) return -1;
 	_engine.seen.set(name, _engine.image.functions.length);
 	const seedCtx = seedCtxForSym(sym);

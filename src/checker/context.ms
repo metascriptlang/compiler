@@ -86,8 +86,8 @@ export function createExportRegistry(): ExportRegistry {
 function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
 	for (const sym of exports) {
 		if (sym.name.length === 0) continue;
-		if (registry.nameIndex.has(sym.name)) {
-			const old = registry.nameIndex.get(sym.name);
+		const old = registry.nameIndex.get(sym.name);
+		if (old !== null) {
 			const updated: ExportedSymInfo[] = [];
 			for (let ai = 0; ai < old.length; ai += 1) {
 				updated.push(old[ai]);
@@ -103,8 +103,8 @@ function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): v
 export function removeFromNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
 	for (const sym of exports) {
 		if (sym.name.length === 0) continue;
-		if (!registry.nameIndex.has(sym.name)) continue;
 		const arr = registry.nameIndex.get(sym.name);
+		if (arr === null) continue;
 		const kept: ExportedSymInfo[] = [];
 		for (let ri = 0; ri < arr.length; ri += 1) {
 			if (arr[ri] !== sym) kept.push(arr[ri]);
@@ -126,10 +126,11 @@ export function registerModuleExports(registry: ExportRegistry, modulePath: stri
 
 // Replace existing module's exports (Phase 2 updates Phase 1 placeholders)
 export function updateModuleExports(registry: ExportRegistry, modulePath: string, exports: ExportedSymInfo[]): void {
-	if (registry.moduleIndex.has(modulePath)) {
-		const i = registry.moduleIndex.get(modulePath);
-		removeFromNameIndex(registry, registry.entries[i].symbols);
-		registry.entries[i].symbols = exports;
+	const i = registry.moduleIndex.get(modulePath);
+	if (i !== null) {
+		const e = registry.entries[i];
+		removeFromNameIndex(registry, e.symbols);
+		e.symbols = exports;
 		addToNameIndex(registry, exports);
 		return;
 	}
@@ -137,15 +138,17 @@ export function updateModuleExports(registry: ExportRegistry, modulePath: string
 }
 
 export function findModuleExports(registry: ExportRegistry, modulePath: string): ModuleExports {
-	if (registry.moduleIndex.has(modulePath)) {
-		return registry.entries[registry.moduleIndex.get(modulePath)];
+	const i = registry.moduleIndex.get(modulePath);
+	if (i !== null) {
+		return registry.entries[i];
 	}
 	return null as unknown as ModuleExports;
 }
 
 // O(1) cross-module lookup by name — returns all exports with that name across all modules.
 export function findExportsByName(registry: ExportRegistry, name: string): ExportedSymInfo[] {
-	if (registry.nameIndex.has(name)) return registry.nameIndex.get(name);
+	const arr = registry.nameIndex.get(name);
+	if (arr !== null) return arr;
 	return [];
 }
 

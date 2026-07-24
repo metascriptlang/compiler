@@ -48,7 +48,8 @@ function nameIndexBuild(idx: ModuleIndex): void {
 }
 
 function nameIndexLookup(name: string): string {
-	if (_nameIndex.has(name)) return _nameIndex.get(name);
+	const v = _nameIndex.get(name);
+	if (v !== null) return v;
 	return "";
 }
 

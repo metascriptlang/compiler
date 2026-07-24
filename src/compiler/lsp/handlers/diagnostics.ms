@@ -341,7 +341,7 @@ export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): str
 		const depUri = lspPathToUri(depPath);
 		const diagJson = buildDiagnosticsJson(depUri, db, depPath);
 		// Skip publish if diagnostics unchanged since last time
-		const cached = _lastDiagCache.has(depPath) ? _lastDiagCache.get(depPath) : "";
+		const cached = _lastDiagCache.get(depPath) ?? "";
 		if (diagJson === cached) continue;
 		_lastDiagCache.set(depPath, diagJson);
 		const notif = lspNotification("textDocument/publishDiagnostics", diagJson);

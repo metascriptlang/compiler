@@ -1423,7 +1423,8 @@ function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, p
 		_compiledMacros = new HashMap<string, CompiledMacro>();
 		_compiledMacrosCtx = ctx;
 	}
-	if (_compiledMacros.has(macroName)) return _compiledMacros.get(macroName);
+	const existing = _compiledMacros.get(macroName);
+	if (existing !== null) return existing;
 
 	const loc = body.location;
 	const wrapperStmts: Node[] = [];
@@ -1476,12 +1477,11 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	if (isBuiltinDirective(d.macroName)) return node;
 
 	// Look up the macro body
-	if (!ctx.macroBodyRegistry.has(d.macroName)) {
-		// Not a known user macro — leave it alone (could be parsed but undefined)
-		return node;
-	}
+	// Not a known user macro — leave it alone (could be parsed but undefined)
 	const body = ctx.macroBodyRegistry.get(d.macroName);
+	if (body === null) return node;
 	const params = ctx.macroParamsRegistry.get(d.macroName);
+	if (params === null) return node;
 
 	// Phase D: Preprocess the body to rewrite NodeKind.X / DeclKind.X member
 	// access to integer literals. Mutation is in-place and idempotent — running

@@ -246,7 +246,7 @@ export function dbPreprocess(db: TransAmDb, filePath: string): string {
 	const key = createQueryKey(TaQueryKind.Preprocess, fileId);
 
 	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
-		return db.preprocessCache.has(fileId) ? db.preprocessCache.get(fileId) : "";
+		return db.preprocessCache.get(fileId) ?? "";
 	}
 
 	pushFrame(db.depStack, key);

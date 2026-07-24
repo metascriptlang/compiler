@@ -319,9 +319,8 @@ export function refineTypes(program: Node, ctx: TransformContext, registry: Expo
 // Uses pre-built name index from ExportRegistry → O(1) avg instead of linear scan.
 function registryLookup(name: string): Type | null {
 	if (_registryNameIndex === null) return null;
-	if (!_registryNameIndex.has(name)) return null;
 	const list = _registryNameIndex.get(name);
-	if (list.length === 0) return null;
+	if (list === null || list.length === 0) return null;
 	return list[0].symType;
 }
 
@@ -329,8 +328,8 @@ function registryLookup(name: string): Type | null {
 // Searches only homonymous exports for matching TypeKind (struct/enum/alias).
 function registryTypeLookup(name: string): Type | null {
 	if (_registryNameIndex === null) return null;
-	if (!_registryNameIndex.has(name)) return null;
 	const list = _registryNameIndex.get(name);
+	if (list === null) return null;
 	for (const sym of list) {
 		if (sym.symType !== null) {
 			const k = sym.symType.kind;
