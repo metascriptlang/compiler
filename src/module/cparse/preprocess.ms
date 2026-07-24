@@ -194,8 +194,9 @@ function addMacro(ctx: PPContext, name: string, isObjlike: boolean, body: CToken
 
 function findMacro(ctx: PPContext, tok: CToken): Macro {
 	if (tok.kind !== CTokenKind.Ident) return null as unknown as Macro;
-	if (!ctx.macros.has(tok.stringVal)) return null as unknown as Macro;
-	return ctx.macros.get(tok.stringVal) as Macro;
+	const m = ctx.macros.get(tok.stringVal);
+	if (m !== null) return m;
+	return null as unknown as Macro;
 }
 
 // ===== Read Macro Definition =====

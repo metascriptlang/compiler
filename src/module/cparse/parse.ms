@@ -184,7 +184,7 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 				"struct" => { advance(ctx); ty = structDecl(ctx); },
 				"union" => { advance(ctx); ty = unionDecl(ctx); },
 				"enum" => { advance(ctx); ty = enumSpecifier(ctx); },
-				_ => { ty = ctx.typedefs.get(s) as CType; ty.typedefName = s; advance(ctx); },
+				_ => { const td = ctx.typedefs.get(s); if (td !== null) { ty = td; ty.typedefName = s; } advance(ctx); },
 			};
 			counter = counter + SPEC_OTHER;
 			continue;
@@ -492,8 +492,9 @@ function structOrUnionDecl(ctx: ParseCtx, isUnion: boolean): CType {
 
 	// No body: forward declaration or reference
 	if (!eq(ctx, "{")) {
-		if (tagName !== "" && ctx.tags.has(tagName)) {
-			return ctx.tags.get(tagName) as CType;
+		if (tagName !== "") {
+			const existingTag = ctx.tags.get(tagName);
+			if (existingTag !== null) return existingTag;
 		}
 		const ty = isUnion ? makeUnion() : makeStruct();
 		ty.tagName = tagName;
@@ -502,8 +503,8 @@ function structOrUnionDecl(ctx: ParseCtx, isUnion: boolean): CType {
 	}
 
 	// Parse body
-	const existing = tagName !== "" && ctx.tags.has(tagName);
-	const ty = existing ? ctx.tags.get(tagName) as CType : (isUnion ? makeUnion() : makeStruct());
+	const existingTag = tagName !== "" ? ctx.tags.get(tagName) : null;
+	const ty = existingTag !== null ? existingTag : (isUnion ? makeUnion() : makeStruct());
 	ty.tagName = tagName;
 	if (tagName !== "") ctx.tags.set(tagName, ty);
 
@@ -594,8 +595,9 @@ function enumSpecifier(ctx: ParseCtx): CType {
 	}
 
 	if (!eq(ctx, "{")) {
-		if (tagName !== "" && ctx.tags.has(tagName)) {
-			return ctx.tags.get(tagName) as CType;
+		if (tagName !== "") {
+			const existingTag = ctx.tags.get(tagName);
+			if (existingTag !== null) return existingTag;
 		}
 		const ty = makeEnum(ctx.target);
 		ty.tagName = tagName;

@@ -157,9 +157,8 @@ export function lookupSymbol(table: SymbolTable, name: string): Symbol {
 	const nameId = getIdentId(table.identCache, name);
 	let scope = table.current;
 	while (scope !== null) {
-		if (scope.symbols.has(nameId)) {
-			return scope.symbols.get(nameId) as Symbol;
-		}
+		const sym = scope.symbols.get(nameId);
+		if (sym !== null) return sym;
 		scope = scope.parent;
 	}
 	return null as unknown as Symbol;
@@ -168,9 +167,8 @@ export function lookupSymbol(table: SymbolTable, name: string): Symbol {
 // Check current scope only, O(1) via symbols.
 export function lookupLocal(table: SymbolTable, name: string): Symbol {
 	const nameId = getIdentId(table.identCache, name);
-	if (table.current.symbols.has(nameId)) {
-		return table.current.symbols.get(nameId) as Symbol;
-	}
+	const sym = table.current.symbols.get(nameId);
+	if (sym !== null) return sym;
 	return null as unknown as Symbol;
 }
 
@@ -232,10 +230,8 @@ export function lookupExport(table: SymbolTable, name: string): Symbol {
 	let scope = table.current;
 	while (scope !== null) {
 		if (scope.scopeKind === ScopeKind.Module || scope.scopeKind === ScopeKind.Global) {
-			if (scope.symbols.has(nameId)) {
-				const sym = scope.symbols.get(nameId) as Symbol;
-				if (hasFlag(sym, SymbolFlag.Exported)) return sym;
-			}
+			const sym = scope.symbols.get(nameId);
+			if (sym !== null && hasFlag(sym, SymbolFlag.Exported)) return sym;
 		}
 		scope = scope.parent;
 	}
