@@ -236,7 +236,7 @@ function typeToCStr(t: Type): string {
 				return match (t.typeReturn.kind) {
 					TypeKind.Number | TypeKind.Float64 => "msNumberArray",
 					TypeKind.String => "msStringArray",
-					TypeKind.Uint8 => "msUint8Array",
+					TypeKind.Uint8 | TypeKind.Boolean => "msUint8Array",
 					_ => "msRefArray",
 				};
 			} else {

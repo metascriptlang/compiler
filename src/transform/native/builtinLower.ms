@@ -333,7 +333,7 @@ function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 	// Pick the right C runtime function based on element type
 	let fn = "msGenericArraySetLen";
 	if (elemType !== null) {
-		if (isNumeric(elemType) || elemType.kind === TypeKind.Boolean) {
+		if (isNumeric(elemType)) {
 			fn = "msNumberArraySetLen";
 		} else if (elemType.kind === TypeKind.String) {
 			fn = "msStringArraySetLen";

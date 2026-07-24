@@ -161,6 +161,7 @@ export function annotationToC(annotation: string): string {
 		if (elem === "number") return "msNumberArray";
 		if (elem === "string") return "msStringArray";
 		if (elem === "uint8") return "msUint8Array";
+		if (elem === "boolean") return "msUint8Array";
 		// Per-type array typedef (Standard reference pattern)
 		return mangle(elem) + "Array";
 	}
@@ -1085,7 +1086,7 @@ function genArrayType(g: CGen, t: Type): string {
 export function getArrayTypeName(elemType: string): string {
 	if (elemType === "double") return "msNumberArray";
 	if (elemType === "msString") return "msStringArray";
-	if (elemType === "MS_BOOL") return "msNumberArray";
+	if (elemType === "MS_BOOL") return "msUint8Array";
 	if (elemType === "uint8_t") return "msUint8Array";
 	if (elemType === "msClosure") return "msClosureArray";
 	return mangle(elemType) + "Array";
