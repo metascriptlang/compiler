@@ -406,14 +406,18 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 	const td = node.data as TryCatchStmtData;
 	const catchSt = allocState(sc);
 	const tryStart = allocState(sc);
+	// tryExit sits inside the excLanding range below so a trailing await's resume
+	// (the re-raising read) routes to the catch, not the shared post-try state.
+	const tryExit = allocState(sc);
 	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc));
 
-	splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, afterSt, loc, resultType);
+	splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
 	// exceptionTable: every state produced for the try body lands on the catch.
 	// Guard `excLanding < 0` so a nested inner try keeps its own (already-set) catch.
 	for (let s = tryStart; s < sc.items.length; s += 1) {
 		if (sc.items[s].excLanding < 0) sc.items[s].excLanding = catchSt;
 	}
+	sc.items[tryExit].stmts.push(makeStateAssign(afterSt, loc));
 
 	// Rewrite the catch variable to read the env-carried current exception
 	// ($curExc, reference :curExc) directly. buildExcRouting stores $excCaught into
