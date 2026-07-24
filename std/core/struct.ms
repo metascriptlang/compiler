@@ -194,11 +194,11 @@ export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
 	}
 }
 
-export function get<K, V>(this m: HashMap<K, V>, key: K): V {
+export function get<K, V>(this m: HashMap<K, V>, key: K): V | null {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	const idx = hashMapRawGet(m, key);
 	if (idx >= 0) return m.data[idx].value;
-	return null as unknown as V;
+	return null;
 }
 
 export function has<K, V>(this m: HashMap<K, V>, key: K): boolean {
