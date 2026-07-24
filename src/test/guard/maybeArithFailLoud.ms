@@ -7,6 +7,7 @@
 // errorcheck runner reports the regression.
 //
 // GUARD-CHECK-FAIL operand of '+' is possibly null
+// GUARD-CHECK-FAIL operand of '<' is possibly null
 
 import { Map } from "std/core/struct";
 
@@ -15,6 +16,8 @@ function main(): void {
 	m.set(1 as int32, 10 as int32);
 	let sum = 0;
 	for (const k of m.toItems()) { sum = sum + m.get(k); }
-	console.log(`${sum}`);
+	let hits = 0;
+	for (const k of m.toItems()) { if (m.get(k) < 5) { hits = hits + 1; } }
+	console.log(`${sum} ${hits}`);
 }
 main();
