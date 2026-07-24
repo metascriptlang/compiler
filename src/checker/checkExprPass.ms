@@ -714,12 +714,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					}
 				}
 			}
-			if (isArithmeticOp && !isStringLike(effLeft) && !isStringLike(effRight)
+			const isRelational = d.operator === "<" || d.operator === ">" || d.operator === "<=" || d.operator === ">=";
+			const isConcat = d.operator === "+" && (isStringLike(effLeft) || isStringLike(effRight));
+			if ((isArithmeticOp || isRelational) && !isConcat
 				&& (isMaybeType(effLeft) || isMaybeType(effRight))) {
 				const maybeSide = isMaybeType(effLeft) ? effLeft : effRight;
 				const innerName = maybeSide.typeReturn !== null ? typeDisplayName(maybeSide.typeReturn) : "T";
 				addError(ctx, "operand of '" + d.operator + "' is possibly null (" + innerName + " | null) — unwrap with '!', '??', or a null check first", node.location.line, node.location.column);
-				node.nodeType = (maybeSide.typeReturn !== null) ? maybeSide.typeReturn : unknownType();
+				node.nodeType = isRelational ? booleanType() : ((maybeSide.typeReturn !== null) ? maybeSide.typeReturn : unknownType());
 				return;
 			}
 			node.nodeType = inferBinaryOp(d.operator, effLeft, effRight); return;
