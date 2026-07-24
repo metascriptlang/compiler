@@ -775,7 +775,17 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			checkExpr(ctx, d.array, null);
 			let arrType = d.array.nodeType;
-			if (d.index !== null) checkExpr(ctx, d.index, null);
+			// The index is a READ even when the ArrayAccess is on an assignment
+			// LHS (`a[i] = v`). leftPartOfAsgn suppresses flow narrowing for the
+			// assignment target, but the index sub-expression must still narrow
+			// (else a value-Maybe index keeps its carrier type → codegen mixes
+			// struct and payload). Reset around the index check only.
+			if (d.index !== null) {
+				const savedLpa = ctx.initTracker.leftPartOfAsgn;
+				ctx.initTracker.leftPartOfAsgn = 0;
+				checkExpr(ctx, d.index, null);
+				ctx.initTracker.leftPartOfAsgn = savedLpa;
+			}
 			// Array sub-expr may have null nodeType when a macro expansion
 			// returns an Identifier whose lookup hasn't repopulated the
 			// symbol's type yet. Diagnostic instead of null deref.
