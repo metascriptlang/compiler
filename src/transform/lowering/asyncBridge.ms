@@ -305,12 +305,23 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 		// Find the ACTUAL yield predecessor: the state whose nextState === i.
 		// Can't use i-1 because splitIf creates parallel branches.
 		let prevIdx = -1;
+		let voidPrevIdx = -1;
 		let pi = 0;
 		while (pi < sc.items.length) {
-			if (sc.items[pi].isYield && sc.items[pi].nextState === i && sc.items[pi].yieldVarName !== "") {
-				prevIdx = pi;
+			if (sc.items[pi].isYield && sc.items[pi].nextState === i) {
+				if (sc.items[pi].yieldVarName !== "") prevIdx = pi;
+				else voidPrevIdx = pi;
 			}
 			pi = pi + 1;
+		}
+		if (prevIdx < 0 && voidPrevIdx >= 0) {
+			// Void await resume: no value to read, but the awaited future may have
+			// failed — re-raise its error (reference: read() of Future[void] still
+			// raises). The per-call check appends the goto to the catch.
+			const futName = "$yf" + voidPrevIdx;
+			const yfType = promiseTypeFor(sc.items[voidPrevIdx].yieldVarType);
+			const checkCall = makeCall(makeIdent("msFutureCheckErr", loc), [makeTypedIdent(futName, yfType, loc)], loc);
+			stateStmts.push(makeExprStmt(checkCall, loc));
 		}
 		if (prevIdx >= 0) {
 			const futName = "$yf" + prevIdx;
