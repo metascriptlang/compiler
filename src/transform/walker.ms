@@ -648,7 +648,12 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 				i = i + 1;
 			}
 		},
-		_ => {},
+		_ => {
+			mapChildren(node, (child) => {
+				walkExpandBlocksHooked(child, expander, ctx, onFnEntry, onFnExit);
+				return child;
+			});
+		},
 	};
 }
 
