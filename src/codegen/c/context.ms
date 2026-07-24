@@ -167,6 +167,8 @@ export class CProc {
 	indirectLocals: string[];  // locals pointing into union variant data — auto-deref as (*name)
 	nestedFinally: Node[];     // stack of finally body nodes (reference: p.nestedTryStmts[].fin)
 	errorTargets: string[];    // stack of goto labels for error propagation (reference: p.nestedTryStmts[].label → raiseExit)
+	beforeRetNeeded: boolean;
+	suppressRaiseCheck: boolean;
 	// Reference parity (sigConflicts + fillLocalName): per-name conflict counter.
 	// Each local gets name_N_ suffix. Unique name stored on resolvedSym.nativeName.
 	sigConflicts: string[];   // parallel arrays: [mangledName, count, ...]
@@ -212,6 +214,8 @@ export function createProc(name: string, returnType: Type | null): CProc {
 		indirectLocals: [],
 		nestedFinally: [],
 		errorTargets: [],
+		beforeRetNeeded: false,
+		suppressRaiseCheck: false,
 		sigConflicts: [],
 		localNameMap: [],
 	};

@@ -150,6 +150,10 @@ function genModuleInitFns(g: CGen): void {
 	if (initContent.length > 0) {
 		add(procs, initContent);
 	}
+	if (g.initProc.beforeRetNeeded) {
+		addLine(procs, "  BeforeRet_: ;");
+		g.initProc.beforeRetNeeded = false;
+	}
 	addLine(procs, "}");
 	addNewline(procs);
 }

@@ -204,8 +204,8 @@ export function resolveEmitArgs(g: CGen, mi: MacroInvocationData, p: CProc): str
 // the nearest enclosing error target when the exception flag is set — so
 // statements after a raising call do not run on the raise path (double-exec).
 // Conservative canRaise (every call) is the reference's documented fallback.
-// Only fires inside a try (errorTargets non-empty); the no-try / function
-// epilogue case is a later phase.
+// Inside a try → nearest error target; no enclosing try → BeforeRet_ epilogue
+// (raiseExit L==0). DRC lifecycle hooks are no-raise ABI — never checked.
 // A statement's top-level value can raise when it is a bare call, or an
 // assignment whose right-hand side is a call (the DRC pass splits
 // `const x = f()` into a no-init decl + a separate `x = f()` assignment).
@@ -220,8 +220,13 @@ function exprTopIsRaisingCall(exprNode: Node): boolean {
 }
 
 function emitCallRaiseCheck(p: CProc, exprNode: Node): void {
-	if (p.errorTargets.length === 0) return;
+	if (p.suppressRaiseCheck) return;
 	if (!exprTopIsRaisingCall(exprNode)) return;
+	if (p.errorTargets.length === 0) {
+		p.beforeRetNeeded = true;
+		emitStmtsLine(p, "if (msErr) goto BeforeRet_;");
+		return;
+	}
 	emitStmtsLine(p, `if (msErr) goto ${p.errorTargets[p.errorTargets.length - 1]};`);
 }
 
@@ -623,13 +628,15 @@ function genContinueStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== Throw Statement =====
 
-// A raise transfers control to the nearest enclosing error target (catch/finally).
-// Emitted after msThrow and after raising calls. Empty stack (no enclosing try)
-// falls through — msErr propagates to the caller / function epilogue.
+// A raise transfers control to the nearest enclosing error target (catch/finally),
+// or to the BeforeRet_ epilogue when there is no enclosing try (raiseInstr L==0).
 function emitErrorGoto(p: CProc): void {
 	if (p.errorTargets.length > 0) {
 		emitStmtsLine(p, `goto ${p.errorTargets[p.errorTargets.length - 1]};`);
+		return;
 	}
+	p.beforeRetNeeded = true;
+	emitStmtsLine(p, "goto BeforeRet_;");
 }
 
 function genThrowStmt(g: CGen, p: CProc, node: Node): void {

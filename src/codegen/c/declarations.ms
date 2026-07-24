@@ -230,6 +230,8 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	if (instanceAlreadyEmitted) return;
 	if (d.fnBody !== null) {
 		const p = createProc(name, fnType.typeReturn);
+		const isActorDispatch = name.length > 9 && name.slice(name.length - 9, name.length) === "_dispatch";
+		p.suppressRaiseCheck = isDrcHookFn || isActorDispatch;
 		if (nrvo) p.isNrvo = true;
 		// Populate param names + pointer promotion (auto-deref via indirectParams)
 		const mutBits: int32 = sym !== null ? sym.mutatedParams : 0;
@@ -249,6 +251,9 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 		addLine(procs, proto + " {");
 		if (locals.length > 0) add(procs, locals);
 		add(procs, stmts);
+		if (p.beforeRetNeeded) {
+			addLine(procs, "  BeforeRet_: ;");
+		}
 		// Reference parity (BeforeRet_): emit default return after DRC cleanup labels
 		// to satisfy C compiler's control flow analysis for non-void functions.
 		if (!nrvo && actualRetType !== "void") {
@@ -504,6 +509,9 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 		addLine(procs, proto + " {");
 		if (locals.length > 0) add(procs, locals);
 		add(procs, stmts);
+		if (p.beforeRetNeeded) {
+			addLine(procs, "  BeforeRet_: ;");
+		}
 		addLine(procs, "}");
 		addNewline(procs);
 	}
@@ -553,6 +561,9 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 		const stmts = readProcStmts(p);
 		if (locals.length > 0) add(procs, locals);
 		add(procs, stmts);
+		if (p.beforeRetNeeded) {
+			addLine(procs, "  BeforeRet_: ;");
+		}
 	}
 	addLine(procs, "}");
 	addNewline(procs);
