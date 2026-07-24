@@ -2118,7 +2118,27 @@ function processTryCatch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 	const d = stmt.data as TryCatchStmtData;
 	d.tryBody = processBlockBody(d.tryBody, dctx, false, false, loc);
 	if (d.catchBody !== null) {
-		d.catchBody = processBlockBody(d.catchBody, dctx, false, false, loc);
+		// The catch-var is a scope-owned local: it binds msCurrException by borrow
+		// (no incref) and must be destroyed once at handler exit. The type is carried
+		// on stmt.nodeType by the checker.
+		const catchType = stmt.nodeType;
+		let handled = false;
+		if (d.catchName !== "" && catchType !== null && catchType.kind !== TypeKind.Unknown && catchType.kind !== TypeKind.Error) {
+			const rcInfo = classifyType(catchType, dctx.ctx);
+			if (rcInfo.needsCleanup) {
+				pushScope(dctx, false, false);
+				registerVar(dctx, d.catchName, rcInfo, false, noSym);
+				d.catchBody = processBlockBody(d.catchBody, dctx, false, false, loc);
+				const scope = popScope(dctx);
+				const cleanup = generateCleanup(scope, emptyNameSet(), loc);
+				const cbd = d.catchBody.data as BlockStmtData;
+				for (const cs of cleanup) { cbd.statements.push(cs); }
+				handled = true;
+			}
+		}
+		if (!handled) {
+			d.catchBody = processBlockBody(d.catchBody, dctx, false, false, loc);
+		}
 	}
 	if (d.finallyBody !== null) {
 		d.finallyBody = processBlockBody(d.finallyBody, dctx, false, false, loc);

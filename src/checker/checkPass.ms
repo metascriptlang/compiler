@@ -1166,11 +1166,14 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 		restoreConsumeState(ctx.affineTracker, oldAffine);
 		openScope(ctx.table, ScopeKind.Block);
 		if (d.catchName !== "") {
-			const catchSym = makeSymbol(d.catchName, SymbolKind.Variable, unknownType(), false);
+			const errSym = lookupSymbol(ctx.table, "Error");
+			const catchType = (errSym !== null && errSym.symbolType !== null) ? errSym.symbolType : unknownType();
+			node.nodeType = catchType;
+			const catchSym = makeSymbol(d.catchName, SymbolKind.Variable, catchType, false);
 			defineSymbol(ctx.table, catchSym);
 			// Catch param is always initialized (exception runtime provides it)
 			markInitialized(ctx.initTracker, d.catchName);
-			sgRecordSym(ctx, d.catchBindingLocation.line, d.catchBindingLocation.column, d.catchBindingLocation.column + d.catchName.length, catchSym, unknownType(), SymbolKind.Variable, d.catchName, "", true);
+			sgRecordSym(ctx, d.catchBindingLocation.line, d.catchBindingLocation.column, d.catchBindingLocation.column + d.catchName.length, catchSym, catchType, SymbolKind.Variable, d.catchName, "", true);
 		}
 		checkStmt(ctx, d.catchBody);
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));

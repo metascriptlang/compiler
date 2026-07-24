@@ -651,27 +651,23 @@ function genThrowStmt(g: CGen, p: CProc, node: Node): void {
 		if (callee.resolvedSym !== null) calleeName = callee.resolvedSym.name;
 		else if (callee.kind === NodeKind.Identifier) calleeName = (callee.data as IdentifierData).name;
 		if (calleeName === "Error") {
-			if (ne.newArguments.length > 0) {
-				emitStmtsLine(p, "msThrow(" + genExpr(g, p, ne.newArguments[0]) + ");");
-			} else {
-				emitStmtsLine(p, "msThrow(MS_EMPTY_STRING);");
-			}
+			emitStmtsLine(p, "msCurrException = (msException*)(" + genExpr(g, p, d.throwArg) + ");");
+			emitStmtsLine(p, "msErr = MS_TRUE;");
 			emitErrorGoto(p);
 			return;
 		}
 	}
-	// Non-string arg = re-raise a caught exception object (Nim genRaiseStmt `raise e`):
-	// `catch(e){throw e}` and the routing terminal `throw $excCaught` restore the
-	// in-flight exception and unwind, rather than minting a fresh one via msThrow.
+	// A thrown string mints an exception via msThrow; anything else is already an
+	// exception object (a rethrown `catch(e){ throw e }` or `throw $excCaught`) and
+	// is stored directly as the current exception, then unwound.
 	const argType = d.throwArg.nodeType;
-	if (argType === null || argType.kind === TypeKind.Unknown || argType.kind === TypeKind.Error) {
-		emitStmtsLine(p, "msCurrException = " + genExpr(g, p, d.throwArg) + ";");
-		emitStmtsLine(p, "msErr = MS_TRUE;");
+	if (argType !== null && argType.kind === TypeKind.String) {
+		emitStmtsLine(p, "msThrow(" + genExpr(g, p, d.throwArg) + ");");
 		emitErrorGoto(p);
 		return;
 	}
-	const snippet = genExpr(g, p, d.throwArg);
-	emitStmtsLine(p, "msThrow(" + snippet + ");");
+	emitStmtsLine(p, "msCurrException = (msException*)(" + genExpr(g, p, d.throwArg) + ");");
+	emitStmtsLine(p, "msErr = MS_TRUE;");
 	emitErrorGoto(p);
 }
 
@@ -717,7 +713,13 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 		emitStmtsLine(p, catchLabel + ": {");
 		setStmtsIndent(p, oldIndent + 2);
 		if (d.catchName !== "") {
-			emitStmtsLine(p, `msException* ${safeName(d.catchName)} = msCurrException;`);
+			const ct = node.nodeType;
+			if (ct !== null && ct.kind !== TypeKind.Unknown && ct.kind !== TypeKind.Error) {
+				const cty = getTypeDesc(g, ct);
+				emitStmtsLine(p, `${cty} ${safeName(d.catchName)} = (${cty})msCurrException;`);
+			} else {
+				emitStmtsLine(p, `msException* ${safeName(d.catchName)} = msCurrException;`);
+			}
 		}
 		emitStmtsLine(p, "msErr = MS_FALSE;");
 		emitStmtsLine(p, "msClearException();");
