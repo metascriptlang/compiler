@@ -81,18 +81,29 @@ void msClosureArrayCopy(msClosureArray* dest, const msClosureArray* src);
 void msClosureArrayWasMoved(msClosureArray* arr);
 #endif
 
+/* Exception handling — declared before future.h so a failed-future read can
+ * surface the caught exception object on msCurrException (await re-raise). */
+typedef struct {
+	const char* message;
+	int code;
+} msException;
+
+/* Heap Error object — DRC-managed. Layout MUST match the std `Error` class
+ * struct (single msString message) so a caught `Error*` reads it directly. */
+typedef struct {
+	msString message;
+} msError;
+
+extern const msTypeInfo msErrorTypeInfo;
+msError* msMakeError(msString message);
+
 /* Async future runtime (msFuture, msFutureCreate/Complete/etc.) */
 #include "runtime/promise/future.h"
 
 /* Async dispatcher (event loop, msWaitFor, sleepAsync) */
 #include "runtime/promise/dispatch.h"
 
-/* Exception handling */
-typedef struct {
-	const char* message;
-	int code;
-} msException;
-
+/* MS_THREAD_LOCAL becomes available via future.h above. */
 extern MS_THREAD_LOCAL bool msErr;
 extern MS_THREAD_LOCAL msException* msCurrException;
 void msClearException(void);
@@ -390,7 +401,7 @@ MS_PROMISE_ALL_FOR(msString, msFuture_msString, msString, msStringArray, msStrin
 static inline msString msFutureReadString(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
-	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return MS_EMPTY_STRING; }
+	if (f->cancelled || f->failed) { msFutureRaiseFrom(f); return MS_EMPTY_STRING; }
 	return ((msFuture_msString*)fp)->value;
 }
 

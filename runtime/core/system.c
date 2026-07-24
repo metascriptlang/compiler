@@ -28,13 +28,40 @@ void msClearException(void) {
 	msCurrException = NULL;
 }
 
-static msException __staticException;
+static void msErrorDestroy(void* p) {
+	msError* e = (msError*)p;
+	msStringDecref(e->message);
+}
+
+const msTypeInfo msErrorTypeInfo = {
+	.name = "Error",
+	.isCyclic = false,
+	.traceFn = NULL,
+	.destroyFn = (msDestroyProc)msErrorDestroy,
+	.flags = 0,
+};
+
+msError* msMakeError(msString message) {
+	msError* e = (msError*)msAllocTyped(sizeof(msError), &msErrorTypeInfo);
+	e->message = message;
+	return e;
+}
 
 void msThrow(msString msg) {
-	__staticException.message = (msg.p != NULL) ? msg.p->data : "";
-	__staticException.code = 1;
-	msCurrException = &__staticException;
+	msCurrException = (msException*)msMakeError(msg);
 	msErr = true;
+}
+
+void msFutureRaiseFrom(msFutureBase* f) {
+	msErr = true;
+	void* err = (f != NULL) ? f->error : NULL;
+	if (err != NULL) {
+		msCurrException = (msException*)err;
+		f->error = NULL;
+	} else {
+		msCurrException = (msException*)msMakeError(msStringFromCStr("noproc"));
+	}
+	msErrPayload = (void*)msCurrException;
 }
 
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {

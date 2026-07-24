@@ -8,8 +8,7 @@
 
 /* Raise abort error — sets msErr flag (same as throw) */
 static inline void msAbortThrow(void) {
-	static msException __abortEx = { "AbortError", 20 };
-	msCurrException = &__abortEx;
+	msCurrException = (msException*)msMakeError(msStringFromCStr("AbortError"));
 	msErr = true;
 }
 

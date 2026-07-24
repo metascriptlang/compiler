@@ -393,12 +393,18 @@ MS_DEFINE_FUTURE_CHAIN(msFutureChain_ptr, msFuture_ptr)
 extern MS_THREAD_LOCAL bool msErr;
 extern MS_THREAD_LOCAL void* msErrPayload;
 
+/* Failed/cancelled future read surfaces the caught exception object on
+ * msCurrException so an enclosing catch binds it (await re-raise). A NULL error
+ * payload (cancel / noproc) synthesizes a real Error so the catch-var deref is
+ * always safe. Ownership moves out of the future — the awaiting catch destroys
+ * it exactly once. Defined in system.c (needs the exception object types). */
+void msFutureRaiseFrom(msFutureBase* f);
+
 /* Check error status on a future base (used before typed read) */
 static inline bool msFutureCheckErr(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
-	if (f->cancelled) { msErr = true; msErrPayload = NULL; return true; }
-	if (f->failed) { msErr = true; msErrPayload = f->error; return true; }
+	if (f->cancelled || f->failed) { msFutureRaiseFrom(f); return true; }
 	return false;
 }
 
@@ -431,21 +437,21 @@ static inline bool msUnboxBool(void* p) { return (bool)(intptr_t)p; }
 static inline double msFutureReadDouble(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
-	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return 0.0; }
+	if (f->cancelled || f->failed) { msFutureRaiseFrom(f); return 0.0; }
 	return ((msFuture_double*)fp)->value;
 }
 
 static inline int32_t msFutureReadInt32(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
-	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return 0; }
+	if (f->cancelled || f->failed) { msFutureRaiseFrom(f); return 0; }
 	return ((msFuture_int32*)fp)->value;
 }
 
 static inline bool msFutureReadBool(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
-	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return false; }
+	if (f->cancelled || f->failed) { msFutureRaiseFrom(f); return false; }
 	return ((msFuture_bool*)fp)->value;
 }
 
@@ -456,8 +462,7 @@ static inline bool msFutureReadBool(void* fp) {
 static inline void* msFutureRead(void* fp) {
 	msFuture* f = (msFuture*)fp;
 	assert(atomic_load_explicit(&f->base.finished, memory_order_acquire) && "Future not yet finished");
-	if (f->base.cancelled) { msErr = true; msErrPayload = NULL; return NULL; }
-	if (f->base.failed) { msErr = true; msErrPayload = f->base.error; return NULL; }
+	if (f->base.cancelled || f->base.failed) { msFutureRaiseFrom(&f->base); return NULL; }
 	void* v = f->value;
 	f->value = NULL;
 	return v;
