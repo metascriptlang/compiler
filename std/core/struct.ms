@@ -94,6 +94,8 @@ export function hashNumber(n: number): int64 {
 export function hash(this s: string): int64 { return hashString(s); }
 export function hash(this n: number): int64 { return hashNumber(n); }
 export function hash(this i: int32): int64 { return hashNumber(i as number); }
+extern function msPtrHash(p: unknown): int64;
+export function hash(this u: unknown): int64 { return msPtrHash(u); }
 
 // ===== DRY note =====
 // The four implementations below (HashMap, HashSet, Map, Set) share ~350 lines
