@@ -267,9 +267,18 @@ static inline int ms_test_main(MsTestModule* modules, int argc, char** argv) {
 
             __ms_test_failed = 0;
             __ms_last_assert_msg = NULL;
+            __ms_last_assert_file = NULL;
+            __ms_last_assert_line = 0;
             __ms_pa_pending = 0;
             __ms_current_test_name = e->name;
             e->fn();
+
+            if (msErr) {
+                if (__ms_last_assert_msg == NULL)
+                    __ms_last_assert_msg = "uncaught exception escaped the test body";
+                __ms_test_failed = 1;
+                msDiscardCurrentException();
+            }
 
             if (__ms_test_failed) {
                 mod_failed++;

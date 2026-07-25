@@ -91,6 +91,7 @@ export function emitTestTable(g: CGen): void {
 export function genTestDispatcher(modulePaths: string[], entryPath: string): string {
 	const b = createBuilder();
 
+	addLine(b, "#include \"runtime/core/system.h\"");
 	addLine(b, "#include \"runtime/core/test.h\"");
 	addNewline(b);
 
