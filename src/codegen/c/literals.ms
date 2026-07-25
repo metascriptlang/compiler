@@ -113,7 +113,11 @@ export function formatCNumber(value: number, type: Type | null = null): string {
 		return isFloat ? intStr + ".0" : intStr;
 	}
 
-	return "" + value;
+	const text = "" + value;
+	if (isFloat && !text.contains(".") && !text.contains("e") && !text.contains("E")) {
+		return text + ".0";
+	}
+	return text;
 }
 
 // Format as int32
