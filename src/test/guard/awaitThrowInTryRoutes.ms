@@ -20,6 +20,7 @@
 //
 // GUARD-BALANCE dollarEnv_voidCase_shared_
 // GUARD-BALANCE dollarEnv_valCase_shared_
+// GUARD-BALANCE Error
 
 async function throwsVoid(): Promise<void> { throw new Error("deep"); }
 async function throwsVal(): Promise<int32> { throw new Error("val12"); }
