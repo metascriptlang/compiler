@@ -477,7 +477,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	bodyStmts.push(makeReturn(makeNull(loc), loc));
 
 	// 4. Split at yield points (reuse generatorLower's algorithm)
-	const sc: StateCollector = { items: [], loopStack: [] };
+	const sc: StateCollector = { items: [], loopStack: [], excType: null };
 	const initState = allocState(sc);
 	const doneState = -1;
 	splitStmts(bodyStmts, sc, initState, doneState, loc, null as unknown as Type);
@@ -568,7 +568,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// await→raise→catch boundary.
 	if (hasExc) {
 		const curExcDecl = makeVarDecl("$curExc", makeNull(loc), DeclKind.Let, loc);
-		curExcDecl.nodeType = unknownType();
+		curExcDecl.nodeType = sc.excType !== null ? sc.excType : unknownType();
 		outerStmts.push(curExcDecl);
 	}
 

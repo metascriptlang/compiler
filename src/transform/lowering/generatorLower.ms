@@ -37,7 +37,7 @@ import {
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign, makeContinue,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
-	collectDeclNames, makeTryCatch,
+	collectDeclNames, makeTryCatch, makeMoveExpr,
 } from "../util";
 import { numberType, unknownType } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -65,6 +65,7 @@ export interface LoopFrame {
 export interface StateCollector {
 	items: GenState[];
 	loopStack: LoopFrame[];
+	excType: Type | null;   // exception type carried by $curExc (from a catch's nodeType)
 }
 
 
@@ -426,6 +427,10 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 	// field (not a per-state local) keeps the value in scope across every split
 	// state and lets the env's DRC hooks own its lifetime — a local would be
 	// cleaned up per-state and dangle on the try-body unwind paths.
+	// $curExc carries the caught exception; its type must be the exception type
+	// (DRC-owned) even when the handler never reads the catch var — otherwise the
+	// env field falls back to void* and the exception leaks (no destructor hook).
+	if (node.nodeType !== null) sc.excType = node.nodeType;
 	if (td.catchName !== "") {
 		renameIdentInSubtree(td.catchBody, td.catchName, "$curExc", node.nodeType);
 	}
@@ -455,7 +460,10 @@ export function buildExcRouting(sc: StateCollector, loc: SourceLocation): Node {
 	const stmts: Node[] = [];
 	// Carry the caught exception across the state boundary (reference :curExc) so
 	// the catch state can bind its variable from $curExc after control resumes.
-	stmts.push(makeExprStmt(makeAssign(makeIdent("$curExc", loc), makeIdent("$excCaught", loc), loc), loc));
+	// MOVE (reference nkFastAsgn — no incref): $curExc becomes the exception's sole
+	// owner and the env's DRC hooks free it once. A copy here over-owns (the sole
+	// currException ref is dropped by the clear without decref) → leak on every catch.
+	stmts.push(makeExprStmt(makeAssign(makeIdent("$curExc", loc), makeMoveExpr(makeIdent("$excCaught", loc), loc), loc), loc));
 	const rethrow = createNode(NodeKind.ThrowStmt, { throwArg: makeIdent("$excCaught", loc) }, syntheticToken(loc));
 	let chain: Node = makeBlock([makeStateAssign(-1, loc), rethrow], loc);
 	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
@@ -601,7 +609,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	rewriteReturns(bodyStmts, loc, iterResultType);
 
 	// 4. Split at yield points
-	const sc: StateCollector = { items: [], loopStack: [] };
+	const sc: StateCollector = { items: [], loopStack: [], excType: null };
 	const initState = allocState(sc);
 	const doneState = -1;  // terminal
 
@@ -658,7 +666,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	newBodyStmts.push(makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc));
 	if (hasExc) {
 		const curExcDecl = makeVarDecl("$curExc", makeNull(loc), DeclKind.Let, loc);
-		curExcDecl.nodeType = unknownType();
+		curExcDecl.nodeType = sc.excType !== null ? sc.excType : unknownType();
 		newBodyStmts.push(curExcDecl);
 	}
 	for (const localName of nc.items) {
