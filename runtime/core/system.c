@@ -28,6 +28,17 @@ void msClearException(void) {
 	msCurrException = NULL;
 }
 
+/* Reference popCurrentException, reduced to the single-slot representation: a
+ * handler with no owning catch-var (bare `catch {}`) consumes the current
+ * exception's sole reference here — decref then null. Named catch-vars instead
+ * MOVE the reference into the binding and the analyzer decrefs it at handler
+ * scope-end, so those keep using msClearException (null only). */
+void msDiscardCurrentException(void) {
+	msDecref((void*)msCurrException);
+	msErr = false;
+	msCurrException = NULL;
+}
+
 static void msErrorDestroy(void* p) {
 	msError* e = (msError*)p;
 	msStringDecref(e->message);

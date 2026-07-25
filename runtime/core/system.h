@@ -107,6 +107,7 @@ msError* msMakeError(msString message);
 extern MS_THREAD_LOCAL bool msErr;
 extern MS_THREAD_LOCAL msException* msCurrException;
 void msClearException(void);
+void msDiscardCurrentException(void);
 void msThrow(msString msg);
 
 /* Check-and-clear the pending-exception flag. Emitted by the `try await X catch Y`
