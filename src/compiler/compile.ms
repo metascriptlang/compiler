@@ -311,9 +311,20 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	// windows build's linkFlags().
 	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, targetOs);
 	graphPreludeCtx = getPreludeContext();
-	// Report type errors but continue — allows codegen to proceed past non-fatal checker issues
 	reportModuleErrors(graph, "type error");
-	// Per-module phase skips warnings via Severity check — no clearing needed
+	// Standard reference parity (main.nim: `if conf.errorCounter > 0: return` before
+	// cgenWriteModules): the gate lives in the shared funnel, so no command can reach
+	// codegen with type errors. reportModuleErrors already rendered them — count only.
+	let graphErrors = 0;
+	for (const mod of graph.modules) {
+		for (const e of mod.errors) {
+			if (e.severity === ErrorSeverity.Error) graphErrors = graphErrors + 1;
+		}
+	}
+	if (graphErrors > 0) {
+		console.log(`${error("error")}: ${graphErrors} type error(s) found, stopping before codegen`);
+		exit(1);
+	}
 	return graph;
 }
 
