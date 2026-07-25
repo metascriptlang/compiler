@@ -692,7 +692,10 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 	const oldIndent = getStmtsIndent(p);
 	setStmtsIndent(p, oldIndent + 1);
 
-	const hasCatch = d.catchName !== "" || (d.catchBody !== null && d.catchBody.kind === NodeKind.BlockStmt && (d.catchBody.data as BlockStmtData).statements.length > 0);
+	// Any catch clause (even an empty `catch {}`) is a handler: it must swallow
+	// the error (reset msErr) and release the exception. An empty bare catch used
+	// to fall through to finally with msErr still set → stale error + leak.
+	const hasCatch = d.catchBody !== null;
 
 	// Error-propagation target for throws / raising calls inside the try body.
 	// A raise transfers control here instead of falling through — required for
@@ -722,7 +725,15 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 			}
 		}
 		emitStmtsLine(p, "msErr = MS_FALSE;");
-		emitStmtsLine(p, "msClearException();");
+		if (d.catchName === "") {
+			// Bare catch: no owning binding consumes the exception, so release
+			// its sole reference here (single-slot popCurrentException).
+			emitStmtsLine(p, "msDiscardCurrentException();");
+		} else {
+			// Named catch: the binding MOVES the reference (borrow) and the
+			// analyzer decrefs it at handler scope-end — clear only nulls.
+			emitStmtsLine(p, "msClearException();");
+		}
 		genStmt(g, p, d.catchBody);
 		setStmtsIndent(p, oldIndent + 1);
 		emitStmtsLine(p, "}");
