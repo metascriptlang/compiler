@@ -22,7 +22,7 @@ import {
 	MatchStmtData, MatchCaseData,
 } from "../../ast/node";
 import { TransformContext } from "../context";
-import { makeBlock, makeExprStmt, makeTryCatch } from "../util";
+import { makeBlock, makeExprStmt, makeTryFinally } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -200,7 +200,7 @@ function lowerDeferInBlock(stmts: Node[], loc: SourceLocation): Node[] {
 	} else {
 		finallyBody = makeBlock([makeExprStmt(deferBody, deferLoc)], deferLoc);
 	}
-	const tryCatch = makeTryCatch(tryBody, "", emptyBlock, finallyBody, deferLoc);
+	const tryCatch = makeTryFinally(tryBody, finallyBody, deferLoc);
 
 	// Result: before + [tryCatch]
 	const result: Node[] = [];

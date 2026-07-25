@@ -361,7 +361,7 @@ export type NodeData =
 	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] } // ConstructorDecl
 	// Error handling variants
 	| { throwArg: Node }                                           // ThrowStmt
-	| { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation } // TryCatchStmt
+	| { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation, hasCatchClause: boolean } // TryCatchStmt
 	// Decorator variants
 	| { macroName: string, macroArgs: Node[] }                     // MacroInvocation
 	| { decorators: Node[], decoratedNode: Node }                  // DecoratedDecl
@@ -583,7 +583,7 @@ export type ProgramData = { programStmts: Node[] };
 export type SpliceManyData = { spliceNodes: Node[] };
 export type DeferStmtData = { deferExpr: Node };
 export type ThrowStmtData = { throwArg: Node };
-export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation };
+export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation, hasCatchClause: boolean };
 export type MacroInvocationData = { macroName: string, macroArgs: Node[] };
 export type HiddenDerefData = { expr: Node };
 export type TestDeclData = { testName: string, testBody: Node };

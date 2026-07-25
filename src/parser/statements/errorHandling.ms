@@ -61,7 +61,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 			return Result.ok(createNode(NodeKind.TryCatchStmt, {
 				tryBody: tryBlock, catchName: catchParam,
 				catchBody: catchBlock, finallyBody: finallyBlock,
-				catchBindingLocation: makeLoc(catchParamLine, catchParamCol),
+				catchBindingLocation: makeLoc(catchParamLine, catchParamCol), hasCatchClause: true,
 			}, tryToken));
 		}
 		// try-catch only
@@ -69,7 +69,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 			tryBody: tryBlock, catchName: catchParam,
 			catchBody: catchBlock,
 			finallyBody: createNode(NodeKind.BlockStmt, { statements: [] }, tryToken),
-			catchBindingLocation: makeLoc(catchParamLine, catchParamCol),
+			catchBindingLocation: makeLoc(catchParamLine, catchParamCol), hasCatchClause: true,
 		}, tryToken));
 	}
 
@@ -81,7 +81,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 			tryBody: tryBlock, catchName: "",
 			catchBody: createNode(NodeKind.BlockStmt, { statements: [] }, tryToken),
 			finallyBody: finallyBlock,
-			catchBindingLocation: makeLoc(0, 0),
+			catchBindingLocation: makeLoc(0, 0), hasCatchClause: false,
 		}, tryToken));
 	}
 

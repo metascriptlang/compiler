@@ -16,7 +16,7 @@ import { lookupSymbol, hasFlag, setFlag, SymbolFlag, makeSymbol } from "../check
 import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
-	makeReturn, makeAssign, makeTryCatch, makeNull, makeMember, makeHiddenAddr, makeIf,
+	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf,
 } from "../transform/util";
 import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -1274,7 +1274,7 @@ function wrapWithTryFinally(bodyStmts: Node[], cleanupStmts: Node[], scope: DrcS
 
 	const tryBlock = makeBlock(tryBody, loc);
 	const finallyBlock = makeBlock(cleanupStmts, loc);
-	const tryFinally = makeTryCatch(tryBlock, "", makeNull(loc), finallyBlock, loc);
+	const tryFinally = makeTryFinally(tryBlock, finallyBlock, loc);
 
 	const result: Node[] = [];
 	for (const h of hoisted) {
@@ -2498,10 +2498,8 @@ test "collectFinallyVars finds vars in finally block" {
 	const finallyBody = makeBlock([
 		makeExprStmt(makeCall(makeIdent("cleanup", loc), [makeIdent("s", loc)], loc), loc),
 	], loc);
-	const tryStmt = makeTryCatch(
+	const tryStmt = makeTryFinally(
 		makeBlock([makeExprStmt(makeIdent("s", loc), loc)], loc),
-		"",
-		null as unknown as Node,
 		finallyBody,
 		loc,
 	);
