@@ -906,16 +906,74 @@ msString msIntToString(int64_t value) {
 	return msStringNew(buf, len);
 }
 
+static int msShortestRoundTripDigits(double value, char* digits, int* decExp) {
+	char sci[64];
+	int prec = 0;
+	for (; prec < 16; prec++) {
+		snprintf(sci, sizeof(sci), "%.*e", prec, value);
+		if (strtod(sci, NULL) == value) break;
+	}
+	if (prec == 16) snprintf(sci, sizeof(sci), "%.16e", value);
+	const char* q = sci;
+	int k = 0;
+	digits[k++] = *q++;
+	if (*q == '.') {
+		q++;
+		while (*q != 'e' && *q != 'E') digits[k++] = *q++;
+	}
+	while (*q != 'e' && *q != 'E') q++;
+	*decExp = (int)strtol(q + 1, NULL, 10);
+	while (k > 1 && digits[k - 1] == '0') k--;
+	return k;
+}
+
 msString msNumberToString(double value) {
 	char buf[64];
-	int len;
-	/* Check if integer value */
-	if (value == (double)(int64_t)value && value >= -1e15 && value <= 1e15) {
-		len = snprintf(buf, sizeof(buf), "%lld", (long long)(int64_t)value);
-	} else {
-		len = snprintf(buf, sizeof(buf), "%.17g", value);
+	if (isnan(value)) return msStringNew("NaN", 3);
+	if (value == 0.0) return msStringNew("0", 1);
+	if (isinf(value)) return value < 0.0 ? msStringNew("-Infinity", 9) : msStringNew("Infinity", 8);
+	if (value >= -1e15 && value <= 1e15 && value == (double)(int64_t)value) {
+		int len = snprintf(buf, sizeof(buf), "%lld", (long long)(int64_t)value);
+		return msStringNew(buf, len);
 	}
-	return msStringNew(buf, len);
+
+	char* p = buf;
+	if (value < 0.0) {
+		*p++ = '-';
+		value = -value;
+	}
+	char digits[32];
+	int decExp = 0;
+	int k = msShortestRoundTripDigits(value, digits, &decExp);
+	int n = decExp + 1;
+	if (k <= n && n <= 21) {
+		memcpy(p, digits, (size_t)k);
+		p += k;
+		for (int i = 0; i < n - k; i++) *p++ = '0';
+	} else if (n > 0 && n <= 21) {
+		memcpy(p, digits, (size_t)n);
+		p += n;
+		*p++ = '.';
+		memcpy(p, digits + n, (size_t)(k - n));
+		p += k - n;
+	} else if (n > -6 && n <= 0) {
+		*p++ = '0';
+		*p++ = '.';
+		for (int i = 0; i < -n; i++) *p++ = '0';
+		memcpy(p, digits, (size_t)k);
+		p += k;
+	} else {
+		*p++ = digits[0];
+		if (k > 1) {
+			*p++ = '.';
+			memcpy(p, digits + 1, (size_t)(k - 1));
+			p += k - 1;
+		}
+		*p++ = 'e';
+		*p++ = n > 0 ? '+' : '-';
+		p += snprintf(p, 8, "%d", n > 0 ? n - 1 : -(n - 1));
+	}
+	return msStringNew(buf, (int)(p - buf));
 }
 
 msString msNumberToStringRadix(double value, double radix) {
