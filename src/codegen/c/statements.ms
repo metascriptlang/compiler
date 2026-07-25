@@ -692,10 +692,15 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 	const oldIndent = getStmtsIndent(p);
 	setStmtsIndent(p, oldIndent + 1);
 
-	// Any catch clause (even an empty `catch {}`) is a handler: it must swallow
-	// the error (reset msErr) and release the exception. An empty bare catch used
-	// to fall through to finally with msErr still set → stale error + leak.
-	const hasCatch = d.catchBody !== null;
+	const errSave = "__oldErr_" + labelId;
+	emitStmtsLine(p, `bool ${errSave} = MS_FALSE;`);
+
+	// Reference parity (ccgstmts.nim genTryGoto: `hasExcept = t[1].kind ==
+	// nkExceptBranch`): handler presence is STRUCTURAL. `try/finally` carries a
+	// NullLiteral in catchBody to mean "no catch clause" — it must propagate the
+	// error, not swallow it. An empty `catch {}` is a real BlockStmt handler and
+	// still swallows.
+	const hasCatch = d.hasCatchClause;
 
 	// Error-propagation target for throws / raising calls inside the try body.
 	// A raise transfers control here instead of falling through — required for
@@ -743,11 +748,25 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 	emitStmtsLine(p, `${finallyLabel}:`);
 
 	if (d.finallyBody !== null) {
+		// ccgstmts.nim genTryGoto `oldNimErrFin`: run the finally body with the
+		// error flag cleared so its own raise-checks don't misfire, then restore
+		// it so a propagating exception keeps propagating.
+		emitStmtsLine(p, `${errSave} = msErr;`);
+		emitStmtsLine(p, "msErr = MS_FALSE;");
 		genStmt(g, p, d.finallyBody);
+		emitStmtsLine(p, `msErr = ${errSave};`);
 	}
 
 	// Pop the finally entry — cleanup is now handled by the label above
 	p.nestedFinally.pop();
+
+	// ccgstmts.nim genTryGoto's trailing `raiseExit(p)`: an error still set after
+	// the finally must reach the ENCLOSING handler (errorTargets already popped).
+	emitStmtsLine(p, "if (msErr) {");
+	setStmtsIndent(p, oldIndent + 2);
+	emitErrorGoto(p);
+	setStmtsIndent(p, oldIndent + 1);
+	emitStmtsLine(p, "}");
 
 	setStmtsIndent(p, oldIndent);
 	emitStmtsLine(p, "}");
