@@ -739,7 +739,15 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 			// analyzer decrefs it at handler scope-end — clear only nulls.
 			emitStmtsLine(p, "msClearException();");
 		}
+		// ccgstmts.nim genTryGoto keeps the try entry alive across the except
+		// branches (`p.nestedTryStmts[^1].label = nextExcept`) and places
+		// `LA<nextExcept>_:` right after the branch body, so a raise inside a
+		// handler still falls into this try's finally before propagating.
+		const afterCatchLabel = "__aftercatch_" + labelId;
+		p.errorTargets.push(afterCatchLabel);
 		genStmt(g, p, d.catchBody);
+		p.errorTargets.pop();
+		emitStmtsLine(p, afterCatchLabel + ": ;");
 		setStmtsIndent(p, oldIndent + 1);
 		emitStmtsLine(p, "}");
 	}
