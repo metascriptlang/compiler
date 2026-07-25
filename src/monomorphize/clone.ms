@@ -339,7 +339,7 @@ export function monoConcreteTypeName(t: Type | null): string {
 				i = i + 1;
 			}
 			const retName = t.typeReturn !== null ? monoConcreteTypeName(t.typeReturn) : "void";
-			return sig + ") => " + retName;
+			return "(" + sig + ") => " + retName + ")";
 		},
 		TypeKind.Int8 => "int8",
 		TypeKind.Int16 => "int16",
