@@ -639,6 +639,15 @@ function emitErrorGoto(p: CProc): void {
 	emitStmtsLine(p, "goto BeforeRet_;");
 }
 
+function emitPendingErrorGoto(p: CProc): void {
+	if (p.errorTargets.length > 0) {
+		emitStmtsLine(p, `if (msErr) goto ${p.errorTargets[p.errorTargets.length - 1]};`);
+		return;
+	}
+	p.beforeRetNeeded = true;
+	emitStmtsLine(p, "if (msErr) goto BeforeRet_;");
+}
+
 function genThrowStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ThrowStmtData;
 	// `throw new Error(msg)` is sugar over the string-based exception runtime
@@ -924,10 +933,11 @@ function genAssertStmt(g: CGen, p: CProc, node: Node): void {
 	}
 
 	const onFail = g.isTestBuild
-		? `msTestCheckFail(${msg}, __FILE__, __LINE__);${postamble} return;`
+		? `msTestCheckFail(${msg}, __FILE__, __LINE__);${postamble} msErr = MS_TRUE;`
 		: `fprintf(stderr, "assert failed: %s\\n", ${msg});${postamble} abort();`;
 
 	emitStmtsLine(p, `if (!(${cond})) { ${preamble}${onFail} }`);
+	if (g.isTestBuild) emitPendingErrorGoto(p);
 }
 
 // ===== Tests =====
