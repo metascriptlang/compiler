@@ -288,7 +288,7 @@ export function emitTryCatchStmt(gen: JSGenerator, node: Node): void {
 	emitIndent(gen);
 	emit(gen, "try ");
 	emitBlockOrStmt(gen, d.tryBody);
-	if (d.catchBody !== null) {
+	if (d.hasCatchClause) {
 		if (d.catchName !== "") {
 			emit(gen, " catch (");
 			emit(gen, safeJsName(d.catchName));
