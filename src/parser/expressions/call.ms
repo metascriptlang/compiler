@@ -35,14 +35,17 @@ export function parseExprList(state: ParserState, endKind: TokenKind, exprParser
 
 export function parseCallExpr(state: ParserState, callee: Expression, exprParser: ExprParser): ExprResult {
 	const lparen = current(state);
+	// Capture the pending type arg (set by generic call parsing: foo<T>(...))
+	// BEFORE parsing arguments — a nested call inside the argument list finishes
+	// parsing first and would otherwise consume the slot meant for THIS call.
+	const typeArg = state.pendingTypeArg;
+	state.pendingTypeArg = "";
 	advance(state);
 	const args = try parseExprList(state, TokenKind.RParen, exprParser);
 	const callNode = createNode(NodeKind.CallExpr, { callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, lparen);
 	stampEnd(state, callNode);
-	// Consume pending type arg (set by generic call parsing: foo<T>(...))
-	if (state.pendingTypeArg !== "") {
-		callNode.typeArg = state.pendingTypeArg;
-		state.pendingTypeArg = "";
+	if (typeArg !== "") {
+		callNode.typeArg = typeArg;
 	}
 	return Result.ok(callNode);
 }
