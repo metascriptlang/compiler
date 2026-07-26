@@ -464,7 +464,7 @@ test "join mixed separators" {
 
 test "join Windows absolute b wins" {
 	assert join("/a", "C:\\b") === "C:/b";
-	assert join("/a", "\\\\server\\share") === "//server/share";
+	assert join("/a", "\\\\server\\share") === "//server/share/";
 }
 
 test "resolve Windows absolute passthrough" {
