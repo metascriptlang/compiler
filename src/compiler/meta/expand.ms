@@ -53,10 +53,10 @@ import {
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
 	SymbolKind,
 } from "../../ast/node";
-import { CheckerContext, addError, addErrorFullRange, createContext } from "../../checker/context";
+import { CheckerContext, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { hasGenericParams } from "../../checker/types";
-import { callMacroEngineCompiler, EngineMacroResult } from "./callbacks";
+import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath } from "./callbacks";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
@@ -1429,8 +1429,6 @@ function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, p
 	const loc = body.location;
 	const wrapperStmts: Node[] = [];
 
-	// Params are UNANNOTATED (fnParamTypes all "" → Unknown): args arrive through
-	// registers at invocation, not as const decls, so param types are never known.
 	const fnBodyStmts: Node[] = [];
 	const bodyData = body.data as BlockStmtData;
 	let si = 0;
@@ -1445,8 +1443,13 @@ function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, p
 		si = si + 1;
 	}
 	const fnBody = createNode(NodeKind.BlockStmt, { statements: fnBodyStmts }, synthToken(loc));
+	const declParamTypes = ctx.macroParamTypesRegistry.get(macroName);
 	const paramTypes: string[] = [];
-	for (const _p of params) paramTypes.push("");
+	let pti = 0;
+	while (pti < params.length) {
+		paramTypes.push(declParamTypes !== null && pti < declParamTypes.length ? declParamTypes[pti] : "");
+		pti = pti + 1;
+	}
 	const emptyDefaults: Node[] = [];
 	const macroFn = createNode(NodeKind.FunctionDecl, {
 		fnName: "__macroBody",
@@ -1462,8 +1465,16 @@ function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, p
 
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
 
+	const declModulePath = ctx.macroDeclModuleRegistry.get(macroName);
+	setMacroDeclModulePath(declModulePath !== null ? declModulePath : "");
 	const result = callMacroEngineCompiler(program, ctx, "__macroBody");
 	if (result === null as unknown as EngineMacroResult || result.funcIdx < 0) return null as unknown as CompiledMacro;
+	if (result.errors !== null && result.errors.length > 0) {
+		for (const e of result.errors) {
+			if (e.severity !== Severity.Error) continue;
+			addError(ctx, `Macro '${macroName}' body: ${e.message}`, e.line, e.column);
+		}
+	}
 
 	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx };
 	_compiledMacros.set(macroName, cm);

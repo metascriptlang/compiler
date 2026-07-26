@@ -5,7 +5,7 @@ import { Node } from "../../ast/node";
 import { RaiserContext } from "../../raiser/context";
 import { RaiserModule } from "../../raiser/module";
 import { RaiserVM } from "../../raiser/vm";
-import { CheckerContext, ExportRegistry } from "../../checker/context";
+import { CheckerContext, CheckerError, ExportRegistry } from "../../checker/context";
 import { Module, ModuleGraph } from "../../module/graph";
 
 type MacroEvaluatorFn = (program: Node) => RaiserContext | null;
@@ -42,6 +42,7 @@ export function registerMacroCompiler(fn: MacroCompilerFn): void {
 export interface EngineMacroResult {
 	vm: RaiserVM;
 	funcIdx: number;
+	errors: CheckerError[];
 }
 
 type MacroEngineCompilerFn = (program: Node, token: CheckerContext, macroFnName: string) => EngineMacroResult | null;
@@ -56,6 +57,16 @@ export function callMacroEngineCompiler(program: Node, token: CheckerContext, ma
 
 export function registerMacroEngineCompiler(fn: MacroEngineCompilerFn): void {
 	macroEngineCompilerFn = fn;
+}
+
+let _macroDeclModulePath = "";
+
+export function setMacroDeclModulePath(path: string): void {
+	_macroDeclModulePath = path;
+}
+
+export function getMacroDeclModulePath(): string {
+	return _macroDeclModulePath;
 }
 
 // ===== Comptime outer context =====

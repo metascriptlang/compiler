@@ -5,7 +5,7 @@
 import { Node, Symbol, createNode, NodeKind, ProgramData } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
-import { ExportRegistry, CheckerContext } from "../../checker/context";
+import { ExportRegistry, CheckerContext, CheckerError, setEngineCheckMode } from "../../checker/context";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
 import { createTransformContextWithChecker } from "../../transform/context";
@@ -23,7 +23,7 @@ import { lookupModuleCtx } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { registerRaiserOnDemand } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
-import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult } from "../../compiler/meta/callbacks";
+import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, getMacroDeclModulePath } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 
 // --- Full Pipeline API ---
@@ -56,6 +56,8 @@ function raiserPreludeCtx(): CheckerContext {
 	return _raiserPreludeCtx;
 }
 
+let _lastEngineCheckErrors: CheckerError[] = [];
+
 // Check + refineTypes + transformForRaiser over a synthetic Program, ready for
 // bytecode generation. Runs the inner pipeline destructively, so the caller must
 // pass a Program whose real-module decls are CLONED (never the canonical nodes).
@@ -71,12 +73,15 @@ function transformForEngine(program: Node): Node {
 		&& outer.graph !== null
 		&& outer.module !== null
 		&& outer.preludeCtx !== null;
+	const prevEngineMode = setEngineCheckMode(true);
 	const checkerCtx = hasFullOuterCtx
 		? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
 		: checkProgram(program);
+	_lastEngineCheckErrors = checkerCtx.errors;
 	const txCtx = createTransformContextWithChecker(checkerCtx);
 	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
 	const transformed = transformForRaiser(refined, checkerCtx);
+	setEngineCheckMode(prevEngineMode);
 	if (outer !== null) {
 		outer.program = savedOuterProgram;
 		outer.preludeCtx = savedOuterPrelude;
@@ -140,8 +145,16 @@ export function compileMacroIntoEngine(program: Node, token: CheckerContext, mac
 		_engine = freshEngine();
 		_engineToken = token;
 	}
-	const funcIdx = compileProgramIntoEngine(program, moduleScopeSymbols(token.table), macroFnName);
-	return { vm: _engine.vm, funcIdx };
+	const seeds = moduleScopeSymbols(token.table);
+	const declPath = getMacroDeclModulePath();
+	if (declPath !== "") {
+		const declCtx = lookupModuleCtx(declPath);
+		if (declCtx !== null) {
+			for (const s of moduleScopeSymbols(declCtx.table)) seeds.push(s);
+		}
+	}
+	const funcIdx = compileProgramIntoEngine(program, seeds, macroFnName);
+	return { vm: _engine.vm, funcIdx, errors: _lastEngineCheckErrors };
 }
 
 registerMacroEngineCompiler(compileMacroIntoEngine);

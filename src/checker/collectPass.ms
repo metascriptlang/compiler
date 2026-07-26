@@ -512,6 +512,8 @@ function collectMacro(ctx: CheckerContext, node: Node): void {
 	defineOrError(ctx, sym, node);
 	ctx.macroBodyRegistry.set(d.macroDeclName, d.macroDeclBody);
 	ctx.macroParamsRegistry.set(d.macroDeclName, d.macroDeclParams);
+	ctx.macroParamTypesRegistry.set(d.macroDeclName, d.macroDeclParamTypes);
+	ctx.macroDeclModuleRegistry.set(d.macroDeclName, ctx.modulePath);
 }
 
 // Look up resolved source path for an import specifier from the module's import entries
@@ -743,6 +745,10 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 						&& exportInfo.macroParams !== null) {
 					ctx.macroBodyRegistry.set(localAlias, exportInfo.macroBody);
 					ctx.macroParamsRegistry.set(localAlias, exportInfo.macroParams);
+					if (exportInfo.macroParamTypes !== null) {
+						ctx.macroParamTypesRegistry.set(localAlias, exportInfo.macroParamTypes);
+					}
+					ctx.macroDeclModuleRegistry.set(localAlias, exportInfo.definingModule !== "" ? exportInfo.definingModule : sourcePath);
 				}
 				// Implementation parity: import enum members alongside enum type
 				// (rawImportSymbol registers each skEnumField in the importing scope)
@@ -1010,6 +1016,10 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 									&& exportInfo.macroParams !== null) {
 								ctx.macroBodyRegistry.set(alias, exportInfo.macroBody);
 								ctx.macroParamsRegistry.set(alias, exportInfo.macroParams);
+								if (exportInfo.macroParamTypes !== null) {
+									ctx.macroParamTypesRegistry.set(alias, exportInfo.macroParamTypes);
+								}
+								ctx.macroDeclModuleRegistry.set(alias, exportInfo.definingModule !== "" ? exportInfo.definingModule : sourcePath);
 							}
 							// Re-export parity: propagate extension-method dispatch via
 							// shared helper. Same path used by collectImport's primary
@@ -1421,7 +1431,7 @@ test "re-export preserves original location and records sgSymRecord" {
 		definingModule: "/test/hub/accessors", originalName: "", headerPath: "",
 		location: origLoc, memberLocations: [],
 		primaryFlags: 0, overloadFlags: [],
-		macroBody: null as unknown as Node, macroParams: [],
+		macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [],
 	};
 	registerModuleExports(ctx.exportRegistry, "/test/hub/accessors", [fakeExport]);
 

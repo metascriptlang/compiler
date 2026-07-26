@@ -54,6 +54,7 @@ export interface ExportedSymInfo {
 	// the export pipeline so importing modules can register in macroBodyRegistry.
 	macroBody: Node;
 	macroParams: string[];
+	macroParamTypes: string[];
 	// Cross-module generic mono — generic FunctionDecl / MethodDecl AST so
 	// importing modules can instantiate the body with concrete type args.
 	// Without this, `import { f } from "./lib"` + `f<Post>(...)` would keep
@@ -251,12 +252,16 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	// Phase E: carry macro body + params for cross-module macro import.
 	let mBody: Node = null as unknown as Node;
 	let mParams: string[] = [];
+	let mParamTypes: string[] = [];
 	if (sym.symbolKind === SymbolKind.Macro && ctx !== null) {
 		if (ctx.macroBodyRegistry.has(sym.name)) {
 			mBody = ctx.macroBodyRegistry.get(sym.name);
 		}
 		if (ctx.macroParamsRegistry.has(sym.name)) {
 			mParams = ctx.macroParamsRegistry.get(sym.name);
+		}
+		if (ctx.macroParamTypesRegistry.has(sym.name)) {
+			mParamTypes = ctx.macroParamTypesRegistry.get(sym.name);
 		}
 	}
 
@@ -313,6 +318,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		declNode: exportDeclNode,
 		overloadDeclNodes: ovDeclNodes,
 		macroParams: mParams,
+		macroParamTypes: mParamTypes,
 	};
 }
 
@@ -897,6 +903,8 @@ export class CheckerContext {
 	extensionRegistry: ExtensionRegistry;
 	macroBodyRegistry: HashMap<string, Node>;       // Phase B: macroName → macroDeclBody
 	macroParamsRegistry: HashMap<string, string[]>; // Phase B: macroName → param names
+	macroParamTypesRegistry: HashMap<string, string[]>;
+	macroDeclModuleRegistry: HashMap<string, string>;
 	macroExpansionDepth: int32;                  // Phase B+ eager: recursion limit for macros that produce macros
 	jsxMacroArgDepth: int32;                     // JSX leak guard: >0 while checking a macro's args (JSX there is consumed, not leaked)
 	inferredReturn: Type;  // tracks inferred return type during function body checking
@@ -938,6 +946,8 @@ export function createContext(): CheckerContext {
 		extensionRegistry: createExtensionRegistry(),
 		macroBodyRegistry: new HashMap<string, Node>(),
 		macroParamsRegistry: new HashMap<string, string[]>(),
+		macroParamTypesRegistry: new HashMap<string, string[]>(),
+		macroDeclModuleRegistry: new HashMap<string, string>(),
 		macroExpansionDepth: 0,
 		jsxMacroArgDepth: 0,
 		inferredReturn: unknownType(),
@@ -986,6 +996,18 @@ export function createModuleContextWithCache(graph: ModuleGraph, mod: Module, ca
 // ===== Error Collection =====
 
 // localError — non-fatal, compilation continues
+let _engineCheckMode = false;
+
+export function setEngineCheckMode(on: boolean): boolean {
+	const prev = _engineCheckMode;
+	_engineCheckMode = on;
+	return prev;
+}
+
+export function isEngineCheckMode(): boolean {
+	return _engineCheckMode;
+}
+
 export function addError(ctx: CheckerContext, msg: string, line: number, col: number): void {
 	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: 0, fatal: false, severity: Severity.Error, tags: 0 });
 }
@@ -1211,7 +1233,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [], declNode: null as unknown as Node, overloadDeclNodes: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [], declNode: null as unknown as Node, overloadDeclNodes: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -1229,7 +1251,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [], declNode: null as unknown as Node, overloadDeclNodes: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [], declNode: null as unknown as Node, overloadDeclNodes: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");

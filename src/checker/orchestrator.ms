@@ -133,6 +133,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 				overloadFlags: [],
 				macroBody: null as unknown as Node,
 				macroParams: [],
+				macroParamTypes: [],
 				declNode: null as unknown as Node,
 				overloadDeclNodes: [],
 				};

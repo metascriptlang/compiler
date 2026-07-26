@@ -5,7 +5,7 @@ import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLoc
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUserUnknown } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorExt, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn } from "./context";
+import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorExt, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -1084,6 +1084,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 								if (objNames[ni] === key) { found = true; break; }
 								ni = ni + 1;
 							}
+							if (!found && engineNodeHasVirtualKey(objE, key)) found = true;
 							if (!found && d.keyLocations !== null && ki < d.keyLocations.length) {
 								const kl = d.keyLocations[ki];
 								addErrorRange(ctx, "'" + key + "' does not exist in type '" + containerName + "'", kl.line, kl.column, kl.column + key.length);
@@ -4744,6 +4745,8 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 				}
 			}
 		}
+		const engineVirtual = resolveEngineNodeVirtualProp(ctx, resolvedObjType, d.property, node);
+		if (engineVirtual !== null) return engineVirtual;
 		if (!suppressDynWrite) {
 			const typeName = typeDisplayName(resolvedObjType);
 			let suggestion = "";
@@ -4763,6 +4766,82 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		}
 	}
 	return propType;
+}
+
+// The macro VM's wire format flattens NodeData payload fields onto the Node
+// object (expand.ms nodeToASTLiteral / bridge.ms). Inside engine compiles,
+// resolve those flat reads against the NodeData union declaration: a field
+// name unique across variants (or shared with one type) types directly;
+// same name with different types must be narrowed first (LANG.md "unique
+// field name" DU access rule).
+function engineNodeHasVirtualKey(recvType: Type | null, key: string): boolean {
+	if (!isEngineCheckMode()) return false;
+	if (recvType === null || recvType.typeName !== "Node") return false;
+	if (key === "line" || key === "column" || key === "endLine" || key === "endColumn") return true;
+	if (recvType.typeNames === null || recvType.typeChildren === null) return false;
+	let dataType: Type | null = null;
+	let fi = 0;
+	while (fi < recvType.typeNames.length) {
+		if (recvType.typeNames[fi] === "data" && fi < recvType.typeChildren.length) {
+			dataType = recvType.typeChildren[fi];
+			break;
+		}
+		fi = fi + 1;
+	}
+	if (dataType === null) return false;
+	const dataUnion = peelToStructOrUnion(dataType);
+	if (dataUnion === null || dataUnion.kind !== TypeKind.Union || dataUnion.typeChildren === null) return false;
+	for (const variantRaw of dataUnion.typeChildren) {
+		const variant = peelToStructOrUnion(variantRaw);
+		if (variant === null || variant.typeNames === null) continue;
+		for (const fn of variant.typeNames) {
+			if (fn === key) return true;
+		}
+	}
+	return false;
+}
+
+function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop: string, node: Node): Type | null {
+	if (!isEngineCheckMode()) return null;
+	if (recvType.typeName !== "Node") return null;
+	if (prop === "line" || prop === "column" || prop === "endLine" || prop === "endColumn") return numberType();
+	if (recvType.typeNames === null || recvType.typeChildren === null) return null;
+	let dataType: Type | null = null;
+	let fi = 0;
+	while (fi < recvType.typeNames.length) {
+		if (recvType.typeNames[fi] === "data" && fi < recvType.typeChildren.length) {
+			dataType = recvType.typeChildren[fi];
+			break;
+		}
+		fi = fi + 1;
+	}
+	if (dataType === null) return null;
+	const dataUnion = peelToStructOrUnion(dataType);
+	if (dataUnion === null || dataUnion.kind !== TypeKind.Union || dataUnion.typeChildren === null) return null;
+	let found: Type | null = null;
+	let conflict = false;
+	for (const variantRaw of dataUnion.typeChildren) {
+		const variant = peelToStructOrUnion(variantRaw);
+		if (variant === null || variant.typeNames === null || variant.typeChildren === null) continue;
+		let vi = 0;
+		while (vi < variant.typeNames.length) {
+			if (variant.typeNames[vi] === prop && vi < variant.typeChildren.length) {
+				const ft = variant.typeChildren[vi];
+				if (found === null) {
+					found = ft;
+				} else if (typeDisplayName(found) !== typeDisplayName(ft)) {
+					conflict = true;
+				}
+			}
+			vi = vi + 1;
+		}
+	}
+	if (found === null) return null;
+	if (conflict) {
+		addError(ctx, `field '${prop}' has different types across Node variants — narrow with a kind check or '.data as <Kind>Data' before accessing it`, node.location.line, node.location.column);
+		return unknownType();
+	}
+	return found;
 }
 
 // ===== Match Expression =====
