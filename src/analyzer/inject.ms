@@ -9,7 +9,7 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { createPrimitive, isAwaitable } from "../checker/types";
 import { lookupSymbol, hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
@@ -1380,7 +1380,7 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.TryCatchStmt => processTryCatch(stmt, dctx, sloc),
 		NodeKind.SwitchStmt => processSwitch(stmt, dctx, sloc),
 		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryToLoop(dctx); return stmt; },
-		NodeKind.ThrowStmt => { setNeedsTryAll(dctx); return stmt; },
+		NodeKind.ThrowStmt => processThrow(stmt, dctx, sloc),
 		NodeKind.ExportDecl => processExport(stmt, dctx, sloc),
 		NodeKind.ClassDecl => processClass(stmt, dctx, sloc),
 		NodeKind.ArrowFunction => processArrow(stmt, dctx, sloc),
@@ -1974,6 +1974,38 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 		}
 	}
 	return false;
+}
+
+// Nim pRaiseStmt: the raise argument is a sink. An owned-local identifier is
+// moved (destructiveMoveVar via the Consumed walk); a non-movable RC source
+// (field/element read) is copy-temp'd — `tmp = copy(arg); raise tmp`
+// (injectdestructors.nim:773) — so the raise machinery owns exactly one live
+// reference and no aliasing second owner survives the unwind. String throws
+// stay untouched: msThrow copies the message (MS sugar outside the ref domain).
+function processThrow(stmt: Node, dctx: DrcContext, sloc: SourceLocation): Node {
+	setNeedsTryAll(dctx);
+	const td = stmt.data as ThrowStmtData;
+	const at = td.throwArg.nodeType;
+	if (at === null || at.kind === TypeKind.String) return stmt;
+	const rc = classifyType(at, dctx.ctx);
+	if (!rc.needsCleanup) return stmt;
+	if (td.throwArg.kind === NodeKind.Identifier) {
+		td.throwArg = processNode(td.throwArg, dctx, DrcMode.Consumed);
+		return stmt;
+	}
+	if (td.throwArg.kind === NodeKind.MemberExpr || td.throwArg.kind === NodeKind.ArrayAccess) {
+		const excSym = freshTempSym(dctx.ctx, "exc", at);
+		const tmpDecl = makeVarDecl(excSym.name, td.throwArg, DeclKind.Const, sloc);
+		tmpDecl.nodeType = at;
+		tmpDecl.resolvedSym = excSym;
+		const rcCopy = sinkClassify(at, dctx.ctx);
+		const increfFn = rcCopy.copyFn !== "" ? rcCopy.copyFn : "msIncref";
+		const incref = makeExprStmt(
+			makeCall(makeIdent(increfFn, sloc), [makeIdentResolved(excSym, sloc)], sloc), sloc);
+		td.throwArg = makeIdentResolved(excSym, sloc);
+		return makeBlock([tmpDecl, incref, stmt], sloc);
+	}
+	return stmt;
 }
 
 // Emit: { const $ret_N = expr; msIncref($ret_N); return $ret_N; }
