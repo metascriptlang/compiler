@@ -137,9 +137,20 @@ function compoundBaseOpcode(op: string): RaiserOpcode {
 	};
 }
 
-// --- String type inference (AST-based, no checker needed) ---
+// --- String type inference (checker-resolved type first, AST as fallback) ---
 
 export function exprIsString(s: RaiserCompState, node: Node): boolean {
+	// Nim's vmgen dispatches string-vs-seq on the operand's SEMANTIC type
+	// (`n[1].typ.skipTypes(...)`, vmgen.nim:1122) — never on a syntactic guess.
+	// The checker-resolved type is therefore the authority here; the AST arms
+	// below only cover nodes the Raiser's mini-pipeline left untyped. Asking the
+	// AST first made a string-typed PARAMETER (an Identifier that `isLocalString`
+	// cannot know) answer false, so `s.length` emitted ArrayLen against a string
+	// handle and `s.charAt` missed its fast path entirely.
+	if (node.nodeType !== null) {
+		const tk = node.nodeType.kind;
+		if (tk === TypeKind.String || tk === TypeKind.StringLiteral) return true;
+	}
 	const k = node.kind;
 	if (k === NodeKind.StringLiteral) return true;
 	if (k === NodeKind.Identifier) {
@@ -156,16 +167,6 @@ export function exprIsString(s: RaiserCompState, node: Node): boolean {
 	if (k === NodeKind.ConditionalExpr) {
 		const d = node.data as ConditionalExprData;
 		return exprIsString(s, d.ternaryConsequent) || exprIsString(s, d.ternaryAlternate);
-	}
-	// Fallback: any expression with checker-resolved nodeType String is a string.
-	// Catches MemberExpr / ArrayAccess / CallExpr returning string. Without this,
-	// `obj.field === other.field` (both string fields) compiles to numeric BeqI64
-	// instead of EqStr — silently wrong because BeqI64 compares heap handles.
-	// Also accept StringLiteral type (e.g., literal-typed disc fields like `"click"`)
-	// so DU disc field comparisons dispatch to EqStr.
-	if (node.nodeType !== null) {
-		const tk = node.nodeType.kind;
-		if (tk === TypeKind.String || tk === TypeKind.StringLiteral) return true;
 	}
 	return false;
 }
@@ -381,6 +382,23 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): number {
 		const dest = allocReg(s);
 		emitLoadConst(s, dest, raiserBool(true));
 		emitInst(s, raiserABC(RaiserOpcode.NeStr, lReg, rReg, 1));
+		emitLoadConst(s, dest, raiserBool(false));
+		return dest;
+	}
+	// Ordering. Nim has magics for `<` and `<=` only and derives `>`/`>=` by
+	// swapping operands (lib/system/comparisons.nim); same here, so two opcodes
+	// cover four operators. Falling through to the numeric tail instead — which
+	// is what happened before these arms existed — compares string HANDLES.
+	if (isStrCmp && (op === "<" || op === "<=" || op === ">" || op === ">=")) {
+		const lReg = compileExpr(s, d.left);
+		const rReg = compileExpr(s, d.right);
+		const swapped = op === ">" || op === ">=";
+		const aReg = swapped ? rReg : lReg;
+		const bReg = swapped ? lReg : rReg;
+		const strict = op === "<" || op === ">";
+		const dest = allocReg(s);
+		emitLoadConst(s, dest, raiserBool(true));
+		emitInst(s, raiserABC(strict ? RaiserOpcode.LtStr : RaiserOpcode.LeStr, aReg, bReg, 1));
 		emitLoadConst(s, dest, raiserBool(false));
 		return dest;
 	}
