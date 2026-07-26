@@ -23,6 +23,7 @@ import "./typeAliasStruct";
 import "./literalCoercion";
 import "./discriminatedUnion";
 import "./classGeneric";
+import "./macroNodeFieldTyped";
 import "./tryResultPropagation";
 import "./nullCheckValueType";
 import "./nullValueType";
