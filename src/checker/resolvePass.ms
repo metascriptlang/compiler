@@ -395,7 +395,12 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 			if (field !== "") {
 				const colonIdx = findChar(field, ":");
 				if (colonIdx > 0) {
-					const fname = field.slice(0, colonIdx).trim();
+					let fname = field.slice(0, colonIdx).trim();
+					// Optional field `name?: T` — strip the marker, parity with the
+					// interface TOKEN path (parseInterfaceLikeDecl discards the `?` token).
+					if (fname.endsWith("?")) {
+						fname = fname.slice(0, fname.length - 1).trim();
+					}
 					const ftypeStr = field.slice(colonIdx + 1, field.length).trim();
 					names.push(fname);
 					types.push(resolveAnnotation(ftypeStr, ctx, line, col));
