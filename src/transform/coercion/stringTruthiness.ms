@@ -13,7 +13,7 @@ import { Node, NodeKind, IfStmtData, WhileStmtData, DoWhileStmtData, Conditional
 import { isStructType, isMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeMember, makeNumber, makeBool } from "../util";
+import { makeBinary, makeMember, makeNumber, makeBool, makeNull } from "../util";
 
 import { firstStmtKindAfter, firstExprKindAfter, stmtCountAfter } from "../testUtil";
 
@@ -64,6 +64,11 @@ function wrapTruthiness(cond: Node): Node {
 	// Arrays → len > 0
 	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.Array) {
 		return makeBinary(makeMember(cond, "len", cond.location), ">", makeNumber(0, cond.location), cond.location);
+	}
+	// Ref types (class/interface values) → null-sentinel check; without this arm
+	// a ref-typed identifier fell into the string byteLength fallback below.
+	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.Ref) {
+		return makeBinary(cond, "!==", makeNull(cond.location), cond.location);
 	}
 	if (isAlreadyBoolean(cond)) return cond;
 	if (cond.kind === NodeKind.Identifier || cond.kind === NodeKind.MemberExpr) {
