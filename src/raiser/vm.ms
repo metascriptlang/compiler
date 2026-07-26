@@ -354,6 +354,10 @@ export function execLoop(vm: RaiserVM): void {
 			vmHandleEqStr(vm, inst);
 		} else if (op === RaiserOpcode.NeStr) {
 			vmHandleNeStr(vm, inst);
+		} else if (op === RaiserOpcode.LtStr) {
+			vmHandleLtStr(vm, inst);
+		} else if (op === RaiserOpcode.LeStr) {
+			vmHandleLeStr(vm, inst);
 		} else if (op === RaiserOpcode.StrLen) {
 			vmHandleStrLen(vm, inst);
 		} else if (op === RaiserOpcode.StrCharAt) {
@@ -706,6 +710,22 @@ function vmHandleNeStr(vm: RaiserVM, inst: RaiserInstruction): void {
 	const lhs = getReg(vm, vm.baseReg + inst.a);
 	const rhs = getReg(vm, vm.baseReg + inst.b);
 	if (lhs.strVal !== rhs.strVal) {
+		vm.ip = vm.ip + inst.c;
+	}
+}
+
+function vmHandleLtStr(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.a);
+	const rhs = getReg(vm, vm.baseReg + inst.b);
+	if (lhs.strVal < rhs.strVal) {
+		vm.ip = vm.ip + inst.c;
+	}
+}
+
+function vmHandleLeStr(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.a);
+	const rhs = getReg(vm, vm.baseReg + inst.b);
+	if (lhs.strVal <= rhs.strVal) {
 		vm.ip = vm.ip + inst.c;
 	}
 }

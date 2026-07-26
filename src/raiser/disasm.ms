@@ -43,6 +43,8 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.ConcatStr => "ConcatStr",
 		RaiserOpcode.EqStr => "EqStr",
 		RaiserOpcode.NeStr => "NeStr",
+		RaiserOpcode.LtStr => "LtStr",
+		RaiserOpcode.LeStr => "LeStr",
 		RaiserOpcode.StrLen => "StrLen",
 		RaiserOpcode.StrCharAt => "StrCharAt",
 		RaiserOpcode.StrSlice => "StrSlice",
