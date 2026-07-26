@@ -28,7 +28,7 @@ import {
 } from "../util";
 import { NameSet, createNameSet, nameSetAdd } from "../context";
 import { createPromise, createFunction, createPtr, createPrimitive, voidType, unknownType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
-import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, makeStateAssign, buildExcRouting } from "./generatorLower";
+import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl } from "./generatorLower";
 import { stmtCountAfter } from "../testUtil";
 
 // ===== Variable Type Collection =====
@@ -512,14 +512,10 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	const dispatch = buildAsyncStateDispatch(sc, promiseVoidType, closureType, loc);
 
 	// 6b. Inner exceptionTable routing (closureiters tầng 1): route a raised state
-	// to its landing; the terminal re-raises `$excCaught` out to the outer
+	// to its landing; the terminal re-raises `$curExc` out to the outer
 	// fail-catch below (asyncmacro tầng 2). Mirrors transformGeneratorFn.
-	let hasExc = false;
-	for (const st of sc.items) { if (st.excLanding >= 0) hasExc = true; }
-	let dispatchBody = dispatch;
-	if (hasExc) {
-		dispatchBody = makeTryCatch(dispatch, "$excCaught", buildExcRouting(sc, loc), null as unknown as Node, loc);
-	}
+	const hasExc = hasExcLanding(sc);
+	const dispatchBody = wrapExcRouting(dispatch, sc, loc);
 
 	// 7. Wrap in while(true) + try/catch
 	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
@@ -566,11 +562,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// Env-carried current exception (reference :curExc) — buildExcRouting stores
 	// the caught exception here so a catch state can bind its variable across the
 	// await→raise→catch boundary.
-	if (hasExc) {
-		const curExcDecl = makeVarDecl("$curExc", makeNull(loc), DeclKind.Let, loc);
-		curExcDecl.nodeType = sc.excType !== null ? sc.excType : unknownType();
-		outerStmts.push(curExcDecl);
-	}
+	if (hasExc) outerStmts.push(makeCurExcDecl(sc, loc));
 
 	// Hoisted locals: let a; let b; let $yf0; let $yf1; ...
 	// Set nodeType from original declarations so lambda lifting creates typed env fields.

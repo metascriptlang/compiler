@@ -464,7 +464,12 @@ export function buildExcRouting(sc: StateCollector, loc: SourceLocation): Node {
 	// owner and the env's DRC hooks free it once. A copy here over-owns (the sole
 	// currException ref is dropped by the clear without decref) → leak on every catch.
 	stmts.push(makeExprStmt(makeAssign(makeIdent("$curExc", loc), makeMoveExpr(makeIdent("$excCaught", loc), loc), loc), loc));
-	const rethrow = createNode(NodeKind.ThrowStmt, { throwArg: makeIdent("$excCaught", loc) }, syntheticToken(loc));
+	// Terminal re-raises $curExc — the slot the store above just filled — never
+	// $excCaught, which the store's move already nulled (reference closureiters
+	// wrapIntoTryExcept re-raises :curExc). Typed so the raise-arg sink fires.
+	const curExcRef = makeIdent("$curExc", loc);
+	if (sc.excType !== null) curExcRef.nodeType = sc.excType;
+	const rethrow = createNode(NodeKind.ThrowStmt, { throwArg: curExcRef }, syntheticToken(loc));
 	let chain: Node = makeBlock([makeStateAssign(-1, loc), rethrow], loc);
 	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
 		if (sc.items[i].excLanding >= 0) {
@@ -475,6 +480,22 @@ export function buildExcRouting(sc: StateCollector, loc: SourceLocation): Node {
 	}
 	stmts.push(chain);
 	return makeBlock(stmts, loc);
+}
+
+export function hasExcLanding(sc: StateCollector): boolean {
+	for (const st of sc.items) { if (st.excLanding >= 0) return true; }
+	return false;
+}
+
+export function wrapExcRouting(dispatch: Node, sc: StateCollector, loc: SourceLocation): Node {
+	if (!hasExcLanding(sc)) return dispatch;
+	return makeTryCatch(dispatch, "$excCaught", buildExcRouting(sc, loc), null as unknown as Node, loc);
+}
+
+export function makeCurExcDecl(sc: StateCollector, loc: SourceLocation): Node {
+	const curExcDecl = makeVarDecl("$curExc", makeNull(loc), DeclKind.Let, loc);
+	curExcDecl.nodeType = sc.excType !== null ? sc.excType : unknownType();
+	return curExcDecl;
 }
 
 // Split if-else containing yield:
@@ -626,12 +647,8 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	// 6b. If any state has an exception landing (a try with a yield inside),
 	// wrap the dispatch in a try/catch that routes a raised state to its
 	// landing (reference closureiters exceptionTable + the wrapping except).
-	let hasExc = false;
-	for (const st of sc.items) { if (st.excLanding >= 0) hasExc = true; }
-	let dispatchBody = dispatch;
-	if (hasExc) {
-		dispatchBody = makeTryCatch(dispatch, "$excCaught", buildExcRouting(sc, loc), null as unknown as Node, loc);
-	}
+	const hasExc = hasExcLanding(sc);
+	const dispatchBody = wrapExcRouting(dispatch, sc, loc);
 
 	// 7. Wrap in while(true) { dispatch }
 	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
@@ -664,11 +681,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	//   return { next: function() { while(true) { if-else dispatch } } };
 	const newBodyStmts: Node[] = [];
 	newBodyStmts.push(makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc));
-	if (hasExc) {
-		const curExcDecl = makeVarDecl("$curExc", makeNull(loc), DeclKind.Let, loc);
-		curExcDecl.nodeType = sc.excType !== null ? sc.excType : unknownType();
-		newBodyStmts.push(curExcDecl);
-	}
+	if (hasExc) newBodyStmts.push(makeCurExcDecl(sc, loc));
 	for (const localName of nc.items) {
 		// Stamp original nodeType so lambda lifting creates correctly-typed env fields.
 		// Reference parity: captureVar always adds field with original type.
