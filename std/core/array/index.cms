@@ -233,6 +233,28 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 	}
 }
 
+/**
+ * Returns a copy of a section of an array.
+ * Generic over element type — monomorphized per T, element-wise copy. The
+ * number[]/string[] overloads above bind first and stay memcpy-fast.
+ * @param start The beginning index of the specified portion of the array.
+ * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
+ */
+export function slice<T>(this arr: T[], start: number, end: number): T[] {
+	const n = arr.length;
+	let lo = start < 0 ? n + start : start;
+	let hi = end < 0 ? n + end : end;
+	if (lo < 0) { lo = 0; }
+	if (hi > n) { hi = n; }
+	const out: T[] = [];
+	let i = lo;
+	while (i < hi) {
+		out.push(arr[i]);
+		i = i + 1;
+	}
+	return out;
+}
+
 // ===== Zero-Copy Bridge (uint8[] → string) =====
 
 /** Returns the byte array as a string (zero-copy). */
