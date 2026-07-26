@@ -425,18 +425,19 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
    race means memory may already be corrupt, so unwinding past it is unsafe). */
 _Noreturn void msMapFatal(msString msg);
 
-/* Reference-identity hash for Map<unknown, _> keys (JS Map / Java Object.hashCode parity).
-   XOR-folds the 64-bit address to 32 bits, then applies Knuth multiplicative hash
-   to match hashNumber's distribution. Map's `key === key` equality provides the
-   matching pointer comparison. */
-static inline int64_t msPtrHash(const void* p) {
+/* Reference identity for Map<unknown, _> keys (JS Map / Java Object.hashCode
+   parity): XOR-fold the address to 32 bits. Map's `key === key` equality
+   provides the matching pointer comparison.
+
+   FOLD ONLY — the avalanche step belongs to std's hashNumber, which every other
+   key type already goes through. Keeping a second copy of Knuth's constant here
+   is what let one copy be fixed and the other stay wrong: this one multiplied in
+   SIGNED int64 (2^32-1 * 2654435761 overflows INT64_MAX), which is undefined
+   behaviour and trapped nondeterministically under zig cc's debug UB checks —
+   nondeterministically because the folded value comes from an ASLR'd pointer. */
+static inline int64_t msPtrFold(const void* p) {
 	uint64_t a = (uint64_t)(uintptr_t)p;
-	uint32_t folded = (uint32_t)((a >> 32) ^ (a & 0xFFFFFFFFULL));
-	if (folded == 0) return 314159265;
-	int64_t h = (int64_t)folded * (int64_t)2654435761LL;
-	h &= 0xFFFFFFFFLL;
-	if (h == 0) return 314159265;
-	return h;
+	return (int64_t)(uint32_t)((a >> 32) ^ (a & 0xFFFFFFFFULL));
 }
 
 /* ===== Bounds-Checked Array Access ===== */

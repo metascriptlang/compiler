@@ -79,10 +79,50 @@ export function hashString(s: string): int64 {
 export function hashNumber(n: number): int64 {
 	let bits = (n as int64) & (0xFFFFFFFF as int64);
 	if (bits === (0 as int64)) bits = 314159265 as int64;
-	let h = bits * (2654435761 as int64);
-	h = h & (0xFFFFFFFF as int64);
+	// Unsigned mixing: bits reaches 2^32-1 and the
+	// product exceeds INT64_MAX, which traps under overflow checks. Nim keeps
+	// hash mixing in uint64 and casts to the signed Hash last (hashes.nim).
+	const mixed = ((bits as uint64) * (2654435761 as uint64)) & (0xFFFFFFFF as uint64);
+	const h = mixed as int64;
 	if (h === (0 as int64)) return 314159265 as int64;
 	return h;
+}
+
+// Knuth's constant times a full 32-bit key exceeds INT64_MAX, so mixing the
+// hash with signed arithmetic is undefined behaviour and traps under zig cc's
+// debug UB checks. Not theoretical: the second copy of this multiply (in the C
+// runtime, fed by an ASLR'd pointer) made neon's reconcile tests fail ~1 run in
+// 3 for weeks. The two copies are now one — hence the routing assertion below,
+// which is what keeps them from drifting apart again.
+test "hashNumber mixes without signed overflow at the 32-bit boundary" {
+	assert hashNumber(4294967295.0) === (1640531535 as int64);
+	assert hashNumber(4294967294.0) === (3281063070 as int64);
+	assert hashNumber(2147483648.0) === (2147483648 as int64);
+	assert hashNumber(0.0) === (125188177 as int64);
+	const m = new Map<number, string>();
+	m.set(4294967295.0, "hi");
+	m.set(4294967294.0, "lo");
+	assert (m.get(4294967295.0) ?? "") === "hi";
+	assert (m.get(4294967294.0) ?? "") === "lo";
+}
+
+test "reference hashing routes through the one mixing site" {
+	const a = new Map<number, string>();
+	const b = new Map<number, string>();
+	// The pointer path must BE hashNumber(fold), not a second private mix — a
+	// reintroduced copy would drift from this equality even while both "work".
+	assert a.hash() === hashNumber(msPtrFold(a) as number);
+	assert b.hash() === hashNumber(msPtrFold(b) as number);
+	// Fold is 32-bit, so the mixed result stays inside the masked range and can
+	// never carry the overflowed high bits that used to trap.
+	assert a.hash() >= (0 as int64) && a.hash() <= (0xFFFFFFFF as int64);
+	assert msPtrFold(a) >= (0 as int64) && msPtrFold(a) <= (0xFFFFFFFF as int64);
+	assert a.hash() === a.hash(), "stable for one identity";
+	const seen = new Map<unknown, string>();
+	seen.set(a, "A");
+	seen.set(b, "B");
+	assert (seen.get(a) ?? "") === "A";
+	assert (seen.get(b) ?? "") === "B";
 }
 
 // Overloaded hash — type-dispatched hash(x: int) and hash(x: string).
@@ -94,8 +134,11 @@ export function hashNumber(n: number): int64 {
 export function hash(this s: string): int64 { return hashString(s); }
 export function hash(this n: number): int64 { return hashNumber(n); }
 export function hash(this i: int32): int64 { return hashNumber(i as number); }
-extern function msPtrHash(p: unknown): int64;
-export function hash(this u: unknown): int64 { return msPtrHash(u); }
+// Reference identity folds to 32 bits in C, then shares hashNumber's avalanche —
+// one Knuth site for every key type, so the unsigned-mixing fix cannot be half
+// applied again.
+extern function msPtrFold(p: unknown): int64;
+export function hash(this u: unknown): int64 { return hashNumber(msPtrFold(u) as number); }
 
 // ===== DRY note =====
 // The four implementations below (HashMap, HashSet, Map, Set) share ~350 lines
