@@ -29,6 +29,7 @@ import "./anonOptionalField";
 import "./refTruthiness";
 import "./genericArraySlice";
 import "./crossModuleGenericCtor";
+import "./passCModuleRelativeInclude";
 import "./tryResultPropagation";
 import "./nullCheckValueType";
 import "./nullValueType";
