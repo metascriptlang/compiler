@@ -268,13 +268,17 @@ test "true/false" {
 test "null" { assert cNullLiteral() === "MS_NIL"; }
 
 test "hex escape passthrough" {
-	assert escapeCString("\\x1b[") === "\\x1b[";
-	assert escapeCString("hi\\x0ayo") === "hi\\x0ayo";
+	const backslash = "\\";
+	const esc = backslash + "x1b[";
+	assert escapeCString(esc) === esc;
+	const embedded = "hi" + backslash + "x0ayo";
+	assert escapeCString(embedded) === embedded;
 }
 
 test "cStringByteLen plain" { assert cStringByteLen("hello") === 5; }
 
 test "cStringByteLen hex escape" {
-	assert cStringByteLen("\\x1b[") === 2;
-	assert cStringByteLen("\\x1b[0m") === 4;
+	const backslash = "\\";
+	assert cStringByteLen(backslash + "x1b[") === 2;
+	assert cStringByteLen(backslash + "x1b[0m") === 4;
 }
