@@ -1584,6 +1584,30 @@ function resolveDirectiveString(ctx: CheckerContext, node: Node): string {
 	return "";
 }
 
+// A `./`- or `../`-prefixed include dir is module-relative, the same rule
+// @compile applies to its .c paths. Bare dirs stay CWD-then-include-search so
+// std's `-Ivendor/...` keeps resolving through the compiler root.
+function resolveModuleRelativeIncludes(flags: string, modDir: string): string {
+	if (flags === "" || modDir === "") return flags;
+	const parts = flags.split(" ");
+	let result = "";
+	for (const p of parts) {
+		let prefixLen = 0;
+		if (p.length > 2 && p.slice(0, 2) === "-I") prefixLen = 2;
+		else if (p.length > 7 && p.slice(0, 7) === "-iquote") prefixLen = 7;
+		else if (p.length > 8 && p.slice(0, 8) === "-isystem") prefixLen = 8;
+		let resolved = p;
+		if (prefixLen > 0) {
+			const dir = p.slice(prefixLen, p.length);
+			if (dir.slice(0, 2) === "./" || dir.slice(0, 3) === "../") {
+				resolved = p.slice(0, prefixLen) + modDir + "/" + dir;
+			}
+		}
+		result = result === "" ? resolved : `${result} ${resolved}`;
+	}
+	return result;
+}
+
 // Process a single MacroInvocation node as a directive (@include/@link/@passC/@passL).
 function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	if (mi.kind !== NodeKind.MacroInvocation) return;
@@ -1619,7 +1643,7 @@ function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 		}
 		ctx.compileDirectives = ctx.compileDirectives + entry;
 	} else if (name === "passC") {
-		ctx.compilerFlags = appendFlag(ctx.compilerFlags, arg0Str);
+		ctx.compilerFlags = appendFlag(ctx.compilerFlags, resolveModuleRelativeIncludes(arg0Str, getModuleDir(ctx.modulePath)));
 	} else if (name === "link") {
 		// Resolve @link paths relative to declaring module's directory (like @compile).
 		// Prepend to link list (reference-aligned: linked first, like addExternalFileToLink).
