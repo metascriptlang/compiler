@@ -3135,7 +3135,17 @@ test "object properties" {
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", objType);
-	assert candidates.length === 3;
+	let hasX = false;
+	let hasY = false;
+	let hasZ = false;
+	for (const c of candidates) {
+		if (c.name === "x") hasX = true;
+		if (c.name === "y") hasY = true;
+		if (c.name === "z") hasZ = true;
+	}
+	assert hasX;
+	assert hasY;
+	assert hasZ;
 }
 
 test "object properties with prefix" {
@@ -3157,7 +3167,17 @@ test "enum members" {
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", enumType);
-	assert candidates.length === 3;
+	let hasRed = false;
+	let hasGreen = false;
+	let hasBlue = false;
+	for (const c of candidates) {
+		if (c.name === "Red") hasRed = true;
+		if (c.name === "Green") hasGreen = true;
+		if (c.name === "Blue") hasBlue = true;
+	}
+	assert hasRed;
+	assert hasGreen;
+	assert hasBlue;
 }
 
 test "null receiver returns empty" {
