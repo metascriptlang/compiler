@@ -114,3 +114,63 @@ const ISO_CT2: number = @comptime { return isoSeed(); };
 test "isolation: second comptime block still resolves outer fns" {
 	assert ISO_CT2 === 42;
 }
+
+// String ops on a PARAMETER receiver. exprIsString must consult the resolved
+// type (Nim vmgen dispatches on n[1].typ); when it asked the AST first, a param
+// — an Identifier no local-string table knows — answered false, so `.length`
+// emitted ArrayLen against a string handle ("array handle out of bounds: 0")
+// and charAt/slice silently missed their opcodes.
+function paramLen(s: string): int32 { return s.length as int32; }
+function paramCharAt(s: string): string { return s.charAt(1); }
+function paramSlice(s: string): string { return s.slice(1, 4); }
+function paramScan(s: string): string {
+	let out = "";
+	let i = 0;
+	while (i < s.length) { out = out + s.charAt(i); i = i + 1; }
+	return out;
+}
+
+const PARAM_LEN: int32 = @comptime { return paramLen("abcde"); };
+const PARAM_CHAR_AT: string = @comptime { return paramCharAt("abcdef"); };
+const PARAM_SLICE: string = @comptime { return paramSlice("abcdef"); };
+const PARAM_SCAN: string = @comptime { return paramScan("abc"); };
+
+test "comptime: string ops on a string-typed parameter" {
+	assert PARAM_LEN === 5;
+	assert PARAM_CHAR_AT === "b";
+	assert PARAM_SLICE === "bcd";
+	assert PARAM_SCAN === "abc";
+}
+
+// String ORDERING. `isStrCmp` was computed for every comparison operator but
+// only `==`/`!=` had branches, so `<` `<=` `>` `>=` fell through to the numeric
+// tail and compared string HANDLES with BxxI64 — silently wrong, and wrong for
+// literals too. Nim gives `<`/`<=` their own magics + opcodes (LtStr/LeStr) and
+// derives `>`/`>=` by swapping operands; we now do the same.
+// ⚠ Equal operands are NOT sufficient coverage: `<=`/`>=` on two equal strings
+// returned true even when broken, because the two handles were equal.
+function ordLt(a: string, b: string): boolean { return a < b; }
+function ordLe(a: string, b: string): boolean { return a <= b; }
+function ordGt(a: string, b: string): boolean { return a > b; }
+function ordGe(a: string, b: string): boolean { return a >= b; }
+
+const ORD: string = @comptime {
+	let r = "";
+	r = r + (("abc" < "abd") ? "1" : "0");
+	r = r + (("abd" < "abc") ? "1" : "0");
+	r = r + (("abc" <= "abd") ? "1" : "0");
+	r = r + (("abd" <= "abc") ? "1" : "0");
+	r = r + (("abd" > "abc") ? "1" : "0");
+	r = r + (("abc" >= "abd") ? "1" : "0");
+	r = r + (ordLt("abc", "abd") ? "1" : "0");
+	r = r + (ordLe("abc", "abc") ? "1" : "0");
+	r = r + (ordGt("abd", "abc") ? "1" : "0");
+	r = r + (ordGe("abc", "abc") ? "1" : "0");
+	r = r + (("Z" < "a") ? "1" : "0");
+	r = r + (("ab" < "abc") ? "1" : "0");
+	return r;
+};
+
+test "comptime: string ordering compares text, not handles" {
+	assert ORD === "101010111111";
+}
