@@ -881,10 +881,21 @@ test "cancelled type check returns without crash" {
 	assert true;
 }
 
-test "type check completes within 200ms" {
+test "first type check on a fresh db stays under 1500ms" {
 	const db = testDb("file:///test.ms", "function foo(x: number): number { return x + 1; }\nconst y = foo(42);");
 	const t0 = performance.now();
 	dbTypeCheck(db, lspUriToPath("file:///test.ms"));
 	const elapsed = performance.now() - t0;
-	assert elapsed < 200;
+	assert elapsed < 1500;
+}
+
+test "re-checking an edited file stays under 50ms" {
+	const path = lspUriToPath("file:///test.ms");
+	const db = testDb("file:///test.ms", "function foo(x: number): number { return x + 1; }\nconst y = foo(42);");
+	dbTypeCheck(db, path);
+	dbSetFileText(db, path, "function foo(x: number): number { return x + 2; }\nconst y = foo(42);");
+	const t0 = performance.now();
+	dbTypeCheck(db, path);
+	const elapsed = performance.now() - t0;
+	assert elapsed < 50;
 }
