@@ -80,17 +80,9 @@ type NodeD = match (kind: NodeK) {
 	NodeK.Bin => { left: number, right: number },
 };
 
-// Split per-variant: sequential if-chain disc reads need residual-union
-// disc support — P1 backlog "disc-read on narrowed DU variant".
 function evalNode(n: NodeD): number {
 	if (n.kind === NodeK.Num) return n.numVal;
-	return evalNodeNonNum(n);
-}
-function evalNodeNonNum(n: NodeD): number {
 	if (n.kind === NodeK.Str) return -1;
-	return evalNodeBin(n);
-}
-function evalNodeBin(n: NodeD): number {
 	if (n.kind === NodeK.Bin) return n.left + n.right;
 	return 0;
 }
