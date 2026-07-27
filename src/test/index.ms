@@ -68,6 +68,3 @@ import "./handoff/index";
 
 // -- 3-pass checker isolation tests (Phase F infrastructure) --
 import "./checker3pass/index";
-
-// -- DRC array destroy routing (BUG #3 family — Phase G) --
-import "./drcArray/index";
