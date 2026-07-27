@@ -1160,7 +1160,8 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	const isRefWrapped = baseType.kind === TypeKind.Ref && baseType.typeReturn !== null;
 	const innerBase = isRefWrapped ? baseType.typeReturn : baseType;
 	if (innerBase.kind !== TypeKind.Struct && innerBase.kind !== TypeKind.Union
-		&& innerBase.kind !== TypeKind.Conditional && innerBase.kind !== TypeKind.GenericParam) return;
+		&& innerBase.kind !== TypeKind.Conditional && innerBase.kind !== TypeKind.GenericParam
+		&& innerBase.kind !== TypeKind.GenericInstance) return;
 	// Split declared param names (e.g. "K,V" → ["K", "V"])
 	const paramNames = splitTopLevel(declaredParams, ",");
 	if (paramNames.length === 0 || paramNames.length > gi.typeChildren.length) return;
