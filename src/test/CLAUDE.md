@@ -19,7 +19,14 @@ Zig:
 - **Language tests** that exercise user-visible features end-to-end.
 - **Pipeline tests** that pin specific phase contracts.
 - **Regression tests** with a 1-to-1 bug-to-test mapping (`fixedbugs/`).
-- **Self-host bootstrap** as the integration test of last resort.
+- **Lifecycle guards** that go red on drift from the reference memory
+  model (`guard/`, §3.7).
+- **Differential corpus** — the same program through independent
+  executions (C vs JS backend; drc vs orc and -O0 vs --danger as they
+  come online), outputs byte-compared (`differential/`, §3.6). No golden
+  files: the other execution IS the expected output, so tests can't drift.
+- **Self-host bootstrap** as the integration test of last resort
+  (gen-0 vs gen-1 fixpoint on identical input — the definition of "solid").
 
 What "solid" means here:
 
@@ -29,7 +36,7 @@ What "solid" means here:
 | **Reproducible** | Tests live in version control and run identically on every machine. NEVER scratch files in `/tmp/`. |
 | **Locked-in** | Every shipped bug fix has a regression test. Old tests are append-only — never delete or refactor regression repros. |
 | **Cross-cutting** | The hard interactions (DU + generics + RC + closures + async) have explicit tests, not implicit coverage via self-host. |
-| **Fast feedback** | Inline tests run on every `bun run test-ms`. Bootstrap runs in CI. |
+| **Fast feedback** | Inline tests run natively via `msc test <file>`. Bootstrap runs in CI. |
 
 ---
 
@@ -39,8 +46,7 @@ What "solid" means here:
 src/test/
 ├── CLAUDE.md           # this file
 ├── helpers.ms          # compileToC / compileToJS / compileProjectToC|JS
-├── index.ms            # full test suite (lang + c + js + handoff + fixedbugs)
-├── lang.ms             # language-only subset (no compiler imports — C-backend safe)
+├── index.ms            # full test suite — the single entry point (all tiers)
 ├── lang/               # user-visible language behavior
 │   ├── basics.ms       # values, control flow primitives
 │   ├── strings.ms      # string ops, escapes, concat
@@ -80,10 +86,22 @@ src/test/
 │   └── result.ms
 ├── handoff/            # phase-handoff contracts
 │   └── index.ms
+├── checker3pass/       # checker 3-pass invariants (scenarios/ + stress/)
+├── fmt/                # formatter round-trip tests (cases/ + roundtrip.ms)
+├── std/                # std-library tests (http/)
+├── paralock/           # concurrency isolation probes: actorOnly / spawnOnly /
+│                       #   asyncOnly (paralock/README.md + docs/PARALOCK.md)
+├── guard/              # nim-guard tier — proactive lifecycle drift guards,
+│                       #   built with the DRC ledger (-DMS_DRC_LEDGER).
+│                       #   Runner: guard/run.sh. Every guard must be PROVEN
+│                       #   RED once before it is trusted (guard/README.md).
+├── differential/       # differential corpus — programs/*.ms run through BOTH
+│   ├── run.sh          #   backends (C binary vs JS-on-node); stdout must
+│   └── programs/*.ms   #   match byte-for-byte. Authoring contract: §3.6.
 └── native/             # NATIVE-execution tier — builds real binaries (clang),
     ├── README.md       #   runs under --gc=drc AND --gc=orc, asserts exit 0 +
-    ├── manifest.ts     #   peak-RSS bound. The ONLY tier that runs the C runtime
-    └── programs/*.ms   #   (DRC/ORC/actor/spawn). Runner: bun/test-native.ts.
+    ├── manifest.ms     #   peak-RSS bound. The ONLY tier that runs the C runtime
+    └── programs/*.ms   #   (DRC/ORC/actor/spawn). Runner: run.ms + manifest.ms (msc run).
 ```
 
 > **Why `native/` exists:** every other tier runs through the Bun transpiler
@@ -134,7 +152,7 @@ test "Generic DU — multiple instantiations coexist" {
 
 Rules:
 - One file per feature group.
-- Every `lang/foo.ms` must be imported in BOTH `lang.ms` and `index.ms`.
+- Every `lang/foo.ms` must be imported in `index.ms`.
 - Use only the standard library and language features — never reach into
   `src/checker/`, `src/codegen/`, etc.
 - If the bun transpiler can't handle a syntax (e.g. complex match-types),
@@ -192,6 +210,48 @@ Pin contracts BETWEEN phases. E.g. "after transform, every `MatchExpr` is
 gone" or "after analyze, every RC-typed local has a destroy call". Catches
 silent contract drift between adjacent phases.
 
+### 3.6. Differential corpus programs (`differential/programs/*.ms`)
+
+Standalone programs (not `test {}` files) that print to stdout and exit.
+The runner (`differential/run.sh`) compiles each program through every
+lane and byte-compares outputs pairwise — no golden files, nothing to
+bless, nothing to drift. Lanes today: C binary vs JS-on-node; planned
+(§7 P1): C-drc vs C-orc, -O0 vs --danger, and a sanitizer lane.
+
+Authoring contract — the runner stays a dumb byte-compare; ALL
+determinism obligations live on the program:
+
+- **Deterministic stdout only**: no timers, no randomness, no
+  pointer/address or RSS/timing prints. Ordered output, fixed loop bounds.
+- **Directive head** — the first two lines may carry directives, one per
+  line:
+  - `// @exit: <n>` — expected exit code for all lanes (default 0).
+  - `// @skip-js: <reason>` — C-only program; the JS lane skips it and
+    logs the reason. The skip list doubles as the JS backend's worklist.
+- **Name files `NNN-topic.ms`**, clustered by hundreds (0xx basics,
+  1xx strings, 2xx DU/match, 3xx closures, 4xx async/actor, 5xx std).
+  Append-only, like `fixedbugs/`.
+- **Write RC-stress shapes deliberately**: churn in loops, values relayed
+  through calls then dropped unread, throw/catch unwinding mid-build,
+  refcounted values held across await. The plain lane asserts behavior;
+  the same program under the sanitizer lane becomes a leak/double-free
+  probe for free.
+
+Divergences between lanes are CONTRACTS, not normalizations: when lanes
+legitimately differ (e.g. uncaught-error report format on stderr), the
+runner documents it once (stderr is not compared for `@exit:` programs) —
+it never fuzzy-matches. If float printing differs between the C and JS
+lanes, fix number formatting in the runtime once; never paper over it in
+the runner.
+
+### 3.7. Lifecycle guards (`guard/*.ms`)
+
+One invariant per file, built with the DRC ledger (`-DMS_DRC_LEDGER`):
+aborts on the 2nd finalize of a live pointer, dumps per-type
+alloc/destroy balances at exit. A guard is only trusted after it has been
+PROVEN RED against the drift it targets. Methodology and ledger details:
+`guard/README.md`; runner: `guard/run.sh`.
+
 ---
 
 ## 4. Anti-patterns (DO NOT DO THESE)
@@ -212,32 +272,65 @@ silent contract drift between adjacent phases.
 - ❌ **Cross-cutting bugs without explicit tests** — when DU + generics +
   RC + closures interact in a fix, add a `lang/` or `fixedbugs/` test that
   exercises that exact combination.
+- ❌ **Fuzzy comparison in a differential runner** — never "normalize until
+  it passes". Nondeterminism is fixed by rewriting the PROGRAM (or
+  classifying it out of a lane), not by weakening the comparison. Any
+  normalization must be individually enumerated in the runner with its
+  reason attached.
+- ❌ **A non-obvious test file without a header stating its split** — when a
+  test deliberately does NOT live in the most obvious tier (e.g. can't be
+  differential because only one lane checks the behavior), open the file
+  with a short comment saying why and where its siblings live.
 
 ---
 
 ## 5. Running Tests
 
 ```bash
+# === PRIMARY: native msc (no Bun) — compiles a C test binary and runs it ===
 # Full suite (lang + c + js + handoff + fixedbugs)
-bun run test-ms src/test/index.ms
-
-# Native runtime tier — real binaries under --gc=drc + --gc=orc, leak/crash guard
-bun run test-native
-
-# Language-only subset (fast, runs through bun transpiler)
-bun run test-ms src/test/lang.ms
+# ⚠ KNOWN RED (2026-07-27): 74 latent type errors — this entry historically
+# ran only under Bun test-ms, which SKIPS the MS checker; it has never
+# passed native type-check. Verified identical at clean HEAD c227ded, so
+# not caused by any working-tree WIP. Migration campaign: §7 P1.
+msc test src/test/index.ms
 
 # Compiler internal tests (inline `test {}` blocks across src/)
-bun run test-ms src/index.ms
+msc test src/index.ms
+
+# Under the ORC cycle collector (drc is the default)
+msc test src/index.ms --gc=orc
 
 # Run a single example for hand-debugging
-bun run run-ms run examples/foo.ms
+msc run examples/foo.ms
+
+# === Native leak/crash guard tier — a separate curated program set (manifest.ms)
+# built as real binaries under BOTH --gc=drc and --gc=orc with peak-RSS bounds.
+# A MetaScript dogfood runner (no Bun): it builds each program via msc, runs it
+# under /usr/bin/time -l, asserts exit + RSS + stdout. Point MSC at a HEAD-matched
+# binary so a stale installed msc can't cause false build-fails. `msc test` runs
+# the inline `test {}` blocks; THIS runs the leak/crash probes. ===
+MSC=./msc msc run src/test/native/run.ms
+
+# === Differential corpus — every differential/programs/*.ms through both
+# backends (C binary vs JS-on-node), stdout byte-compared. ===
+MSC=./msc src/test/differential/run.sh
+
+# === nim-guard lifecycle tier — DRC-ledger builds; see guard/README.md ===
+src/test/guard/run.sh
+
+# === Bun bootstrap fallback — transpiles the compiler to TS, NEVER runs the C
+# runtime (blind to DRC/ORC/codegen). Only when msc can't self-run yet. Supports
+# --filter / --jobs (msc test does NOT). ===
+bun run test-ms src/test/index.ms
 ```
 
-The test runner spawns `bun test` with a `.ms` shim that imports the
-target file. The bun transpiler (`bun/transform.ts`) converts MetaScript
-syntax to TypeScript so Bun can execute it. **If a test fails to PARSE
-through the transpiler, fix the transpiler — do not weaken the test.**
+The native runner (`msc test <file>`) compiles the file + its transitive
+dep tests to a C binary and runs it — the primary path. The Bun fallback
+(`bun run test-ms`) spawns `bun test` with a `.ms` shim and transpiles
+MetaScript to TypeScript via `bun/transform.ts`. **On the fallback path, if
+a test fails to PARSE through the transpiler, fix the transpiler — do not
+weaken the test.**
 
 ---
 
@@ -248,13 +341,21 @@ through the transpiler, fix the transpiler — do not weaken the test.**
 3. Convert your minimal repro into `fixedbugs/bugNNN_short_slug.ms` with
    the header block (Symptom / Root cause / Fix).
 4. Add the import to `fixedbugs/index.ms`.
-5. Run `bun run test-ms src/test/lang.ms` — must pass.
-6. Run `bun run test-ms src/index.ms` — must stay at baseline (no
-   regressions).
-7. If the bug was found via self-host, ALSO add a focused test in the
+5. If the bug is observable from a program's stdout/exit (codegen, DRC,
+   runtime behavior — not checker internals), ALSO drop the repro into
+   `differential/programs/` as a corpus program (§3.6): one file then
+   guards both backends and every future lane.
+6. Run `msc test` on the files you touched (e.g. `msc test
+   src/test/lang/match.ms` — the file plus its transitive dep tests) —
+   must pass.
+7. Run `msc test src/index.ms` — must stay at baseline (no regressions).
+8. If the bug was found via self-host, ALSO add a focused test in the
    appropriate `lang/*.ms` so future devs hit it without needing self-host.
 
 This is not optional. Without step 3, the bug WILL re-regress.
+
+Same rule for features: a user-visible feature lands together with corpus
+programs that pin its observable behavior through every lane (§3.6).
 
 ---
 
@@ -272,24 +373,71 @@ Status legend: ✅ done · 🚧 in progress · 🔲 todo
 - [x] ✅ `bun/transform.ts` — generic match-type DU now supported in transpiler (regex extended, boolean disc literals preserved instead of being numbered)
 - [x] ✅ Wired into `lang.ms` + `index.ms`
 
-Result: `bun run test-ms src/test/lang.ms` → **159 pass / 0 fail** (was 138 before this push). Self-host stable at **2749/9** baseline.
+Current baseline: full native suite green — `msc test src/index.ms` **3338/0** (2026-07-27).
 
 ### P0.5 — Native runtime guard (the "test-ms is blind to the C runtime" tier)
 
 - [x] ✅ `src/test/native/` — builds real binaries via clang, runs under BOTH
   `--gc=drc` and `--gc=orc`, asserts exit 0 (no over-free/UAF/crash) + peak RSS
-  under bound (no leak). Runner `bun/test-native.ts`, `bun run test-native`.
+  under bound (no leak). Runner `run.ms` + `manifest.ms` via `msc run` (no Bun;
+  replaces the old `bun/test-native.ts`).
   Seeded 5 cases; on first run it immediately caught **2 real leaks** invisible
   to `test-ms` (call-result-in-non-RC-context, array-literal-of-strings — both
   xfail anchors) and proved bug033 + PARALOCK spawn/actor/async hold natively.
   This is the tier that would have caught the over-free crash in 149eb30 and the
   "Bug D" leak-fix-gone-over-free that both passed `test-ms` green.
 
-### P1 — Codegen drift detection
+### P1 — Differential corpus + diagnostics (reprioritized 2026-07-27)
 
+- [x] ✅ C↔JS differential runner — `differential/run.sh` + first programs
+  (nullable, truthy), byte-exact stdout parity (2026-07-10).
+- [ ] 🚧 Corpus growth 2 → ~60 programs per the §3.6 authoring contract
+  (directive head, NNN-topic numbering, RC-stress shapes). First blocker
+  to probe: float-formatting parity (C printf vs JS Number.toString) —
+  if they differ, fix runtime number printing once; never normalize in
+  the runner.
+- [ ] 🔲 Matrix lanes in run.sh: + C-drc vs C-orc, + -O0 vs --danger;
+  sanitizer lane (`MSDIFF_SAN=1`: ASan + `-DMS_DRC_LEDGER`, every ledger
+  must balance) over the same corpus.
+- [ ] 🔲 JS-lane tier auto-discovery — attempt EVERY corpus program through
+  the JS backend instead of hand-picking; a refusal must be a loud
+  diagnostic naming the first unsupported construct (never silently-wrong
+  JS); the refusal histogram becomes the JS backend's roadmap queue.
+  Prerequisite: the JS backend must refuse loudly — compiler change,
+  needs separate approval.
+- [ ] 🔲 Diagnostics snapshots — supersedes the old substring errorcheck
+  idea: a diagnostics corpus where every program MUST fail to compile and
+  the complete rendered diagnostic (code, span, message) is snapshotted.
+  Changing one character of an error message becomes a deliberate,
+  reviewed act.
+- [ ] 🔲 Disc-read on narrowed DU variant — `if (n.kind === A) return; n.kind`
+  (residual union) and disc reads after full narrow both fail: flow narrowing
+  drops the union's discriminant metadata AND member-emit only routes
+  disc→`_tag` for the full union. Needs a coordinated checker+codegen fix
+  (checker stamps a disc-read marker; codegen stays dumb). Checker-only fix
+  attempted and REVERTED 2026-07-27 — type-check went green but codegen
+  emitted `n->v2.kind` (payload-relative, miscompile). Reference for the
+  narrowing semantics: the TS checker (flow.ms already tracks its
+  getTypeOfDottedName family); tsc types the residual disc as a union of
+  literal types. lang/discrim.ms evalNode is split per-variant until this
+  lands. SAME FAMILY, worse: match-type BOOL-disc DU `if (r.ok)` miscompiles
+  too (emits payload-relative `.v0.ok` then stringTruthiness wraps it in
+  `.byteLength` — SHAPE 4 never compiled natively either), and match-type
+  string-field `===` on a narrowed variant emits raw C `==` (known bug,
+  separate memory w/ 20-line repro). discrim.ms is the gate's stop point
+  until this DU-codegen campaign lands — both errors reproduce at clean
+  HEAD c227ded with the installed msc, so they are NOT caused by any
+  2026-07-27 change.
 - [ ] 🔲 Codegen baseline tests — for critical patterns (DU layout, Result lowering, closure lifting) commit expected `.c` snippets in `src/test/c/snapshots/` and diff on regen.
-- [ ] 🔲 C↔JS differential testing — pick 5-10 `lang/*.ms` tests that don't use C-only features, compile via both backends, run, compare runtime output.
-- [ ] 🔲 Errorcheck-style tests — annotate `.ms` files with `// expect-error: <substring>` markers and assert the checker emits matching errors at the expected lines.
+- [ ] 🔲 Native-checker migration of `src/test/index.ms` — 74 latent type
+  errors from the Bun era (test-ms never type-checked). Three buckets:
+  TS-isms the checker doesn't cover (block-local type aliases,
+  intersection/branded types — parser skipIntersectionTail discards `&`
+  tails), plain MS-invalid test code (`.includes` on string, stale field
+  names, assert outside test blocks), and suspected real checker gaps
+  (NodeData alias resolution shows type '' in fixedbugs/bug028;
+  compileProjectToC Array-arg mismatches ×8 — root-cause before touching
+  tests). Until green, the native full-suite gate does not exist.
 
 ### P2 — Coverage & infrastructure
 
@@ -303,6 +451,26 @@ Result: `bun run test-ms src/test/lang.ms` → **159 pass / 0 fail** (was 138 be
 - [ ] 🔲 DU validation gaps in `resolvePass.ms:1197-1217` — duplicate variant keys, missing-variant exhaustiveness for boolean and enum discs (Task #78).
 - [ ] 🔲 Cross-module DU usage stress test (one module defines, another consumes).
 - [ ] 🔲 DRC + DU stress: nested generics with RC fields, multiple destruction orders.
+- [ ] 🔲 Listening-process differential pattern — server fixture binds port 0
+  and reports the real port on stderr (the never-compared channel); ONE
+  shared driver script talks to whichever lane is up; server stdout + exit
+  code + driver stdout all byte-compared. Deliberately deferred until
+  Photon needs E2E server tests.
+- [ ] 🔲 Corpus build caching + sharding — content-addressed keys over
+  program bytes + toolchain fingerprint. Only when corpus wall-time hurts;
+  premature below ~200 programs.
+- [ ] 🔲 Absorb `js/` pipeline pins (2 files, 68 loc) into the differential
+  JS lane once the matrix runner lands — behavior parity there supersedes
+  brittle emitted-text pins.
+- [ ] 🔲 Trim `examples/` after the differential corpus absorbs the
+  valuable ones. NOTE: examples/ is almost entirely UNTRACKED in git —
+  deleting is unrecoverable; 13 docs reference it. Never bulk-delete.
+- [ ] 🔲 Array-destroy contract pin — ONE `c/` test pinning the final
+  cleanup mechanism (generic `msArrayDestroy` + TypeInfo; primitives emit
+  no per-array destroy), to be written AFTER array-migration Phase 3c
+  lands and the mechanism stops moving. The old per-kind-name pins
+  (ex-drcArray tier) went stale mid-migration and were removed 2026-07-27;
+  runtime coverage lives in native/ refArray* + fixedbugs/bug033..035.
 
 ---
 
