@@ -9,26 +9,26 @@ interface Point {
 
 type SqrtResult = Result<number, string>;
 
-async function asyncAdd(a: number, b: number): number {
+async function asyncAdd(a: number, b: number): Promise<number> {
 	return a + b;
 }
 
-async function asyncDouble(x: number): number {
+async function asyncDouble(x: number): Promise<number> {
 	return x * 2;
 }
 
-async function asyncChain(x: number): number {
+async function asyncChain(x: number): Promise<number> {
 	const doubled = await asyncDouble(x);
 	const added = await asyncAdd(doubled, 10);
 	return added;
 }
 
-async function asyncMax(a: number, b: number): number {
+async function asyncMax(a: number, b: number): Promise<number> {
 	if (a > b) return a;
 	return b;
 }
 
-async function asyncSum(arr: number[]): number {
+async function asyncSum(arr: number[]): Promise<number> {
 	let total = 0;
 	let i = 0;
 	while (i < arr.length) {
@@ -38,7 +38,7 @@ async function asyncSum(arr: number[]): number {
 	return total;
 }
 
-async function asyncFind(arr: number[], target: number): number {
+async function asyncFind(arr: number[], target: number): Promise<number> {
 	let i = 0;
 	while (i < arr.length) {
 		if (arr[i] === target) return i;
@@ -51,7 +51,7 @@ async function asyncFind(arr: number[], target: number): number {
 // state-machine emitted bare C `break;`/`continue;` which exited the outer
 // dispatcher while(1) without completing the return future → deadlock.
 // for..of is lowered to while BEFORE generatorLower so this hits the same fix path.
-async function asyncTakeUntil(arr: number[], stopAt: number): number {
+async function asyncTakeUntil(arr: number[], stopAt: number): Promise<number> {
 	let sum = 0;
 	for (const v of arr) {
 		if (v === stopAt) break;
@@ -60,7 +60,7 @@ async function asyncTakeUntil(arr: number[], stopAt: number): number {
 	return sum;
 }
 
-async function asyncSumSkipping(arr: number[], skip: number): number {
+async function asyncSumSkipping(arr: number[], skip: number): Promise<number> {
 	let total = 0;
 	for (const v of arr) {
 		if (v === skip) continue;
@@ -69,7 +69,7 @@ async function asyncSumSkipping(arr: number[], skip: number): number {
 	return total;
 }
 
-async function asyncDistance(a: Point, b: Point): number {
+async function asyncDistance(a: Point, b: Point): Promise<number> {
 	const dx = a.x - b.x;
 	const dy = a.y - b.y;
 	return dx * dx + dy * dy;
@@ -82,7 +82,7 @@ function safeSqrt(x: number): SqrtResult {
 	return Result.ok(r - 1);
 }
 
-async function asyncPipeline(x: number): SqrtResult {
+async function asyncPipeline(x: number): Promise<SqrtResult> {
 	const root = try safeSqrt(x);
 	const doubled = await asyncDouble(root);
 	return Result.ok(doubled);
