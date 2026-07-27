@@ -1497,6 +1497,18 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			declTy = peelToStructOrUnion(declTy);
 			// Same DU-only filter as the main path.
 			if (declTy !== null && declTy.kind === TypeKind.Union && isRealDiscriminatedUnion(declTy)) {
+				// Disc re-read on a narrowed variant: route via the wrapper's
+				// disc contract exactly like the full-union gate above — `_tag`
+				// for enum disc, `v0.<disc>` overlapping read for bool/string.
+				let discSuffix = "";
+				if (isDiscriminatedUnion(declTy) && getDiscriminantName(declTy) === d.property) {
+					const ddt = declTy.typeExtra;
+					if (ddt !== null && (ddt.kind === TypeKind.Boolean || ddt.kind === TypeKind.String)) {
+						discSuffix = `v0.${field}`;
+					} else {
+						discSuffix = "_tag";
+					}
+				}
 				let declVarIdx = -1;
 				if (objType !== null && objType.kind === TypeKind.Struct) {
 					declVarIdx = duVariantIndexOfType(declTy, objType);
@@ -1508,7 +1520,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				if (declVarIdx >= 0 && walkObj.kind === NodeKind.MemberExpr) {
 					// Chained access (m.lifecycle.condition): the object snippet is already
 					// emitted correctly — just route through the variant slot.
-					ctx.results.push(`${obj}${objIsPtr ? "->" : "."}v${declVarIdx}.${field}`);
+					const chainTail = discSuffix !== "" ? discSuffix : `v${declVarIdx}.${field}`;
+					ctx.results.push(`${obj}${objIsPtr ? "->" : "."}${chainTail}`);
 					return;
 				}
 				if (declVarIdx >= 0) {
@@ -1536,7 +1549,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					const ptrType = isPointerType(walkObj.nodeType !== null ? walkObj.nodeType : (idSym !== null ? idSym.symbolType : null));
 					const indirect = isIndirectParam(p, rawName) || isIndirectLocal(p, rawName);
 					const acc2 = (ptrType || indirect) ? "->" : ".";
-					ctx.results.push(`${cName}${acc2}v${declVarIdx}.${field}`);
+					const identTail = discSuffix !== "" ? discSuffix : `v${declVarIdx}.${field}`;
+					ctx.results.push(`${cName}${acc2}${identTail}`);
 					return;
 				}
 			}
