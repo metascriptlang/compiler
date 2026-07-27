@@ -53,8 +53,11 @@ function truthifyNode(node: Node): Node {
 // Wrap a condition for C boolean context.
 // Type-aware checks first (reference parity), then syntactic fallback.
 function wrapTruthiness(cond: Node): Node {
-	// Type-aware: boolean-typed nodes need no wrapping
-	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.Boolean) return cond;
+	// Type-aware: boolean-typed nodes need no wrapping.
+	// BooleanLiteral covers disc re-reads on narrowed bool-disc DU variants
+	// (`ok: BooleanLiteral` injected by resolvePass) — same C repr as boolean.
+	if (cond.nodeType !== null && (cond.nodeType.kind === TypeKind.Boolean
+		|| cond.nodeType.kind === TypeKind.BooleanLiteral)) return cond;
 	// Maybe<T> in boolean context → .present
 	if (cond.nodeType !== null && isMaybeType(cond.nodeType)) {
 		return makeMember(cond, "present", cond.location);
