@@ -12,8 +12,8 @@
 import { assertFmtContains, assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: short if-block stays one line" {
-	assertFmtPreservesAst("function f(x: number): number { if (x === 0) { return 1; } return x; }");
-	assertFmtContains(
+	assert assertFmtPreservesAst("function f(x: number): number { if (x === 0) { return 1; } return x; }");
+	assert assertFmtContains(
 		"function f(x: number): number { if (x === 0) { return 1; } return x; }",
 		"if (x === 0) { return 1; }",
 	);

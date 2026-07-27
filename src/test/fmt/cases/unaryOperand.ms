@@ -12,9 +12,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: !(a && b) preserves parens" {
-	assertFmtPreservesAst("const a: boolean = true; const b: boolean = false; const x = !(a && b);");
+	assert assertFmtPreservesAst("const a: boolean = true; const b: boolean = false; const x = !(a && b);");
 }
 
 test "fmt: -(a + b) preserves parens" {
-	assertFmtPreservesAst("const a: number = 1; const b: number = 2; const x: number = -(a + b);");
+	assert assertFmtPreservesAst("const a: number = 1; const b: number = 2; const x: number = -(a + b);");
 }

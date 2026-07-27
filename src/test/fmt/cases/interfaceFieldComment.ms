@@ -16,14 +16,14 @@ import { assertFmtContains, assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: interface field with trailing comment preserves attachment" {
 	const src = "interface I {\n\ta: number; // alpha\n\tb: number; // beta\n}";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "a: number; // alpha");
-	assertFmtContains(src, "b: number; // beta");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "a: number; // alpha");
+	assert assertFmtContains(src, "b: number; // beta");
 }
 
 test "fmt: interface mixed trailing + standalone comments preserved" {
 	const src = "interface I {\n\ta: number; // alpha\n\t// standalone before b\n\tb: number;\n}";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "a: number; // alpha");
-	assertFmtContains(src, "// standalone before b");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "a: number; // alpha");
+	assert assertFmtContains(src, "// standalone before b");
 }

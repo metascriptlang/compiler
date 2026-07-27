@@ -8,5 +8,5 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: (a + b).toString() preserves parens" {
-	assertFmtPreservesAst("const a: number = 1; const b: number = 2; const s = (a + b).toString();");
+	assert assertFmtPreservesAst("const a: number = 1; const b: number = 2; const s = (a + b).toString();");
 }

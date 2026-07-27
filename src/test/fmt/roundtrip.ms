@@ -21,6 +21,7 @@ import { Node, NodeKind,
 	MoveExprData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, DoWhileStmtData, BlockStmtData, FunctionDeclData,
 	VariableDeclData, ImportDeclData, ProgramData, ThrowStmtData, TryCatchStmtData,
+	FunctionExprData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, MethodDeclData,
 } from "../../ast/node";
 import { printNode } from "../../compiler/fmt/printer/index";
 import { formatDoc } from "../../compiler/fmt/layout";
@@ -108,8 +109,9 @@ export function astShape(node: Node): string {
 			for (let i = 0; i < d.arrowParams.length; i = i + 1) {
 				if (i > 0) params = params + ",";
 				params = params + d.arrowParams[i] + ":" + d.arrowParamTypes[i];
-				if (i < d.arrowDefaults.length && d.arrowDefaults[i] !== null) {
-					params = params + "=" + astShape(d.arrowDefaults[i]);
+				if (i < d.arrowDefaults.length) {
+					const dflt = d.arrowDefaults[i];
+					if (dflt !== null) params = params + "=" + astShape(dflt);
 				}
 			}
 			return k + "[" + d.arrowFlags + "](" + params + "):" + d.arrowReturnType + "=>" + astShape(d.arrowBody) + ")";
@@ -333,14 +335,13 @@ function shapeList(nodes: Node[]): string {
 // freshly for each version. Without the reset, the comparator can't
 // notice if the formatted output dropped generic params on a class
 // or interface — both parses would query the same accumulated store.
-export function assertFmtPreservesAst(source: string): void {
+export function assertFmtPreservesAst(source: string): boolean {
 	resetAllSideChannels();
 	const parsedA = parseSource(source);
 	if (!parsedA.ok) {
 		console.log("INPUT FAILED TO PARSE: " + parsedA.error);
 		console.log("source: " + source);
-		assert false;
-		return;
+		return false;
 	}
 	const shapeA = astShape(parsedA.value);
 
@@ -349,8 +350,7 @@ export function assertFmtPreservesAst(source: string): void {
 	if (formatted === "") {
 		console.log("FMT FAILED");
 		console.log("source: " + source);
-		assert false;
-		return;
+		return false;
 	}
 
 	resetAllSideChannels();
@@ -359,8 +359,7 @@ export function assertFmtPreservesAst(source: string): void {
 		console.log("FORMATTED OUTPUT FAILED TO PARSE: " + parsedB.error);
 		console.log("source:    " + source);
 		console.log("formatted: " + formatted);
-		assert false;
-		return;
+		return false;
 	}
 	const shapeB = astShape(parsedB.value);
 
@@ -370,36 +369,37 @@ export function assertFmtPreservesAst(source: string): void {
 		console.log("formatted: " + formatted);
 		console.log("before:    " + shapeA);
 		console.log("after:     " + shapeB);
-		assert false;
+		return false;
 	}
+	return true;
 }
 
 // Visual-quality assertion: formatted output must contain the expected
 // substring exactly. Used to test "stays on one line when fits" patterns
 // that AST-shape comparison can't catch (line-break decisions).
-export function assertFmtContains(source: string, expected: string): void {
+export function assertFmtContains(source: string, expected: string): boolean {
 	const formatted = fmt(source);
 	if (formatted === "") {
 		console.log("FMT FAILED");
 		console.log("source: " + source);
-		assert false;
-		return;
+		return false;
 	}
 	if (!formatted.contains(expected)) {
 		console.log("FMT MISSING SUBSTRING");
 		console.log("source:    " + source);
 		console.log("formatted: " + formatted);
 		console.log("expected:  " + expected);
-		assert false;
+		return false;
 	}
+	return true;
 }
 
 // Sanity: simple variable decl already works (no parens issues).
 test "fmt roundtrip: simple variable decl" {
-	assertFmtPreservesAst("const a = 1;");
+	assert assertFmtPreservesAst("const a = 1;");
 }
 
 // Sanity: simple member access (no parens issue).
 test "fmt roundtrip: simple member access" {
-	assertFmtPreservesAst("const a = obj.field;");
+	assert assertFmtPreservesAst("const a = obj.field;");
 }

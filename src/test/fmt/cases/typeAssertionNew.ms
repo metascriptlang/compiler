@@ -8,5 +8,5 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: new (Ctor as T)() preserves parens" {
-	assertFmtPreservesAst("const a = new (Ctor as Builder)();");
+	assert assertFmtPreservesAst("const a = new (Ctor as Builder)();");
 }

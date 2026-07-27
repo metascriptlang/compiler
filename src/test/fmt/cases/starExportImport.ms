@@ -12,9 +12,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: export * from preserves bare star" {
-	assertFmtPreservesAst("export * from \"./mod\";");
+	assert assertFmtPreservesAst("export * from \"./mod\";");
 }
 
 test "fmt: import * as Name from preserves namespace import" {
-	assertFmtPreservesAst("import * as M from \"./mod\";");
+	assert assertFmtPreservesAst("import * as M from \"./mod\";");
 }

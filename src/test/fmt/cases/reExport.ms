@@ -13,9 +13,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: export { x } from \"...\" preserves shape" {
-	assertFmtPreservesAst("export { foo, bar } from \"./mod\";");
+	assert assertFmtPreservesAst("export { foo, bar } from \"./mod\";");
 }
 
 test "fmt: export { x as y } from \"...\" preserves alias" {
-	assertFmtPreservesAst("export { foo as renamed } from \"./mod\";");
+	assert assertFmtPreservesAst("export { foo as renamed } from \"./mod\";");
 }

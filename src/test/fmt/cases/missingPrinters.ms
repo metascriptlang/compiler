@@ -11,13 +11,13 @@ import { assertFmtPreservesAst } from "../roundtrip";
 // Skipped here — covered separately if needed.
 
 test "fmt: sizeof expression preserved" {
-	assertFmtPreservesAst("const a = sizeof int32;");
+	assert assertFmtPreservesAst("const a = sizeof int32;");
 }
 
 test "fmt: for-in statement preserved" {
-	assertFmtPreservesAst("function f(obj: { x: number }): void { for (const k in obj) { console.log(k); } }");
+	assert assertFmtPreservesAst("function f(obj: { x: number }): void { for (const k in obj) { console.log(k); } }");
 }
 
 test "fmt: macro invocation as decorator preserved" {
-	assertFmtPreservesAst("@derive class Foo { x: number = 1; }");
+	assert assertFmtPreservesAst("@derive class Foo { x: number = 1; }");
 }

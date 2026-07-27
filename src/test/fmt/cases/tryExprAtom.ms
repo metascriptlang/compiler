@@ -8,5 +8,5 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: (try x catch y).z preserves parens" {
-	assertFmtPreservesAst("function f(): string { return (try Result.ok(1) catch 0).toString(); }");
+	assert assertFmtPreservesAst("function f(): string { return (try Result.ok(1) catch 0).toString(); }");
 }

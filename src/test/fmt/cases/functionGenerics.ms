@@ -11,9 +11,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: function f<T>(x: T): T preserves generics" {
-	assertFmtPreservesAst("function id<T>(x: T): T { return x; }");
+	assert assertFmtPreservesAst("function id<T>(x: T): T { return x; }");
 }
 
 test "fmt: function f<T, U>(...) multi-param generics" {
-	assertFmtPreservesAst("function pair<T, U>(a: T, b: U): T { return a; }");
+	assert assertFmtPreservesAst("function pair<T, U>(a: T, b: U): T { return a; }");
 }

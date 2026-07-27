@@ -19,12 +19,12 @@
 import { assertFmtContains } from "../roundtrip";
 
 test "fmt: comment after stmt stays standalone" {
-	assertFmtContains(
+	assert assertFmtContains(
 		"function f(): void {\n\tlet x = 1;\n\t// standalone\n\tlet y = 2;\n}",
 		"// standalone",
 	);
 	// Verify the comment is NOT merged onto x's line.
-	assertFmtContains(
+	assert assertFmtContains(
 		"function f(): void {\n\tlet x = 1;\n\t// standalone\n\tlet y = 2;\n}",
 		"let x = 1;\n",
 	);

@@ -10,9 +10,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: class property with initializer" {
-	assertFmtPreservesAst("class C { foo: number = 42; }");
+	assert assertFmtPreservesAst("class C { foo: number = 42; }");
 }
 
 test "fmt: class property with array initializer" {
-	assertFmtPreservesAst("class C { items: number[] = []; }");
+	assert assertFmtPreservesAst("class C { items: number[] = []; }");
 }

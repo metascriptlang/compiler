@@ -9,12 +9,12 @@ import { assertFmtPreservesAst, assertFmtContains } from "../roundtrip";
 
 test "fmt: extern function preserves extern keyword" {
 	const src = "extern function printf(fmt: string): void;";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "extern function");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "extern function");
 }
 
 test "fmt: top-level generator preserves star" {
 	const src = "function* gen(): number { yield 1; return 0; }";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "function* gen");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "function* gen");
 }

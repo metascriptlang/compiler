@@ -7,5 +7,5 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: IIFE (() => x)() preserves parens" {
-	assertFmtPreservesAst("const a = (() => 1)();");
+	assert assertFmtPreservesAst("const a = (() => 1)();");
 }

@@ -19,9 +19,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: template literal with embedded single quotes" {
-	assertFmtPreservesAst("function f(got: string, line: number): string { return `expected, got '${got}' at line ${line}`; }");
+	assert assertFmtPreservesAst("function f(got: string, line: number): string { return `expected, got '${got}' at line ${line}`; }");
 }
 
 test "fmt: simple template literal" {
-	assertFmtPreservesAst("function f(name: string): string { return `hello ${name}!`; }");
+	assert assertFmtPreservesAst("function f(name: string): string { return `hello ${name}!`; }");
 }

@@ -14,18 +14,18 @@ import { assertFmtContains, assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: private class property preserved" {
 	const src = "class Foo { private x: number = 1; }";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "private x");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "private x");
 }
 
 test "fmt: protected class property preserved" {
 	const src = "class Foo { protected y: string = \"a\"; }";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "protected y");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "protected y");
 }
 
 test "fmt: public class property preserved" {
 	const src = "class Foo { public z: boolean = true; }";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "public z");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "public z");
 }

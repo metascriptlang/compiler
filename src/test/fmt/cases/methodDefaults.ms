@@ -10,12 +10,12 @@ import { assertFmtPreservesAst, assertFmtContains } from "../roundtrip";
 
 test "fmt: class method default literal preserved" {
 	const src = "class Foo { greet(name: string = \"world\"): string { return name; } }";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "name: string = \"world\"");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "name: string = \"world\"");
 }
 
 test "fmt: class method default expression preserved" {
 	const src = "class Foo { compute(a: number, b: number = 1): number { return a + b; } }";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "b: number = 1");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "b: number = 1");
 }

@@ -13,30 +13,30 @@ import { assertFmtPreservesAst, assertFmtContains } from "../roundtrip";
 
 test "fmt: async function expression preserves async" {
 	const src = "const f = async function (): Promise<number> { return 1; };";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "async function");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "async function");
 }
 
 test "fmt: async arrow function preserves async" {
 	const src = "const f = async (x: number): Promise<number> => x + 1;";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "async (");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "async (");
 }
 
 test "fmt: async class method preserves async" {
 	const src = "class Foo { async bar(): Promise<void> {} }";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "async bar");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "async bar");
 }
 
 test "fmt: generic class method preserves <T>" {
 	const src = "class Foo { process<T>(x: T): T { return x; } }";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "process<T>");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "process<T>");
 }
 
 test "fmt: generator function expression preserves star" {
 	const src = "const f = function* (): number { yield 1; return 0; };";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "function*");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "function*");
 }

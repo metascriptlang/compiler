@@ -12,9 +12,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: type Body<T, E> preserves generics" {
-	assertFmtPreservesAst("type Body<T, E> = T;");
+	assert assertFmtPreservesAst("type Body<T, E> = T;");
 }
 
 test "fmt: discriminated-union type Body<T, E> preserves generics" {
-	assertFmtPreservesAst("enum K { A, B } type Body<T, E> = match (k: K) { K.A => { value: T }, K.B => { error: E } };");
+	assert assertFmtPreservesAst("enum K { A, B } type Body<T, E> = match (k: K) { K.A => { value: T }, K.B => { error: E } };");
 }

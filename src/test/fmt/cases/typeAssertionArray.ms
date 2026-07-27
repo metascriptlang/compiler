@@ -9,5 +9,5 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: (arr as T[])[0] preserves parens" {
-	assertFmtPreservesAst("const a = (arr as Item[])[0];");
+	assert assertFmtPreservesAst("const a = (arr as Item[])[0];");
 }

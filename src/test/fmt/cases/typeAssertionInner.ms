@@ -11,9 +11,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: (a + b) as T preserves parens" {
-	assertFmtPreservesAst("const a: number = 1; const b: number = 2; const x = (a + b) as int32;");
+	assert assertFmtPreservesAst("const a: number = 1; const b: number = 2; const x = (a + b) as int32;");
 }
 
 test "fmt: (cond ? a : b) as T preserves parens" {
-	assertFmtPreservesAst("const a: number = 1; const b: number = 2; const c: boolean = true; const x = (c ? a : b) as int32;");
+	assert assertFmtPreservesAst("const a: number = 1; const b: number = 2; const c: boolean = true; const x = (c ? a : b) as int32;");
 }

@@ -12,9 +12,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: function f(x: T = lit) preserves default" {
-	assertFmtPreservesAst("function f(x: string = \"foo\"): string { return x; }");
+	assert assertFmtPreservesAst("function f(x: string = \"foo\"): string { return x; }");
 }
 
 test "fmt: function f(a, b = 0, c = \"hi\") mixed defaults" {
-	assertFmtPreservesAst("function f(a: number, b: number = 0, c: string = \"hi\"): number { return a + b; }");
+	assert assertFmtPreservesAst("function f(a: number, b: number = 0, c: string = \"hi\"): number { return a + b; }");
 }

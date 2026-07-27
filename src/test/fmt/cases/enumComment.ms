@@ -12,11 +12,11 @@
 import { assertFmtContains } from "../roundtrip";
 
 test "fmt: enum members keep trailing comments" {
-	assertFmtContains(
+	assert assertFmtContains(
 		"enum K {\n\tA, // foo\n\tB, // bar\n}",
 		"A, // foo",
 	);
-	assertFmtContains(
+	assert assertFmtContains(
 		"enum K {\n\tA, // foo\n\tB, // bar\n}",
 		"B, // bar",
 	);

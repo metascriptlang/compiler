@@ -11,9 +11,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: await (cond ? a : b) preserves parens" {
-	assertFmtPreservesAst("async function f(c: boolean, a: number, b: number): Promise<number> { return await (c ? a : b); }");
+	assert assertFmtPreservesAst("async function f(c: boolean, a: number, b: number): Promise<number> { return await (c ? a : b); }");
 }
 
 test "fmt: await (a + b) preserves parens" {
-	assertFmtPreservesAst("async function f(a: number, b: number): Promise<number> { return await (a + b); }");
+	assert assertFmtPreservesAst("async function f(a: number, b: number): Promise<number> { return await (a + b); }");
 }

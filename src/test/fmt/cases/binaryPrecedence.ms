@@ -14,9 +14,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: (a + b) * c keeps parens (lower-prec child)" {
-	assertFmtPreservesAst("const a: number = 1; const b: number = 2; const c: number = 3; const x: number = (a + b) * c;");
+	assert assertFmtPreservesAst("const a: number = 1; const b: number = 2; const c: number = 3; const x: number = (a + b) * c;");
 }
 
 test "fmt: a - (b - c) keeps parens (right child, equal prec)" {
-	assertFmtPreservesAst("const a: number = 1; const b: number = 2; const c: number = 3; const x: number = a - (b - c);");
+	assert assertFmtPreservesAst("const a: number = 1; const b: number = 2; const c: number = 3; const x: number = a - (b - c);");
 }

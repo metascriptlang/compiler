@@ -6,9 +6,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: bigint literal" {
-	assertFmtPreservesAst("const a = 123n;");
+	assert assertFmtPreservesAst("const a = 123n;");
 }
 
 test "fmt: regex literal" {
-	assertFmtPreservesAst("const a = /hello/g;");
+	assert assertFmtPreservesAst("const a = /hello/g;");
 }

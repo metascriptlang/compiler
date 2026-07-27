@@ -9,7 +9,7 @@ import { assertFmtContains, assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: class field with trailing comment preserves attachment" {
 	const src = "class Foo {\n\ta: number = 1; // alpha\n\tb: number = 2; // beta\n}";
-	assertFmtPreservesAst(src);
-	assertFmtContains(src, "a: number = 1; // alpha");
-	assertFmtContains(src, "b: number = 2; // beta");
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "a: number = 1; // alpha");
+	assert assertFmtContains(src, "b: number = 2; // beta");
 }

@@ -11,9 +11,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: class Box<T> preserves generics" {
-	assertFmtPreservesAst("class Box<T> { value: T; }");
+	assert assertFmtPreservesAst("class Box<T> { value: T; }");
 }
 
 test "fmt: interface Pair<T, U> preserves generics" {
-	assertFmtPreservesAst("interface Pair<T, U> { a: T; b: U; }");
+	assert assertFmtPreservesAst("interface Pair<T, U> { a: T; b: U; }");
 }

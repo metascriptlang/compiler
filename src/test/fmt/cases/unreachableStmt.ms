@@ -7,5 +7,5 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: unreachable statement" {
-	assertFmtPreservesAst("function f(): number { unreachable; }");
+	assert assertFmtPreservesAst("function f(): number { unreachable; }");
 }

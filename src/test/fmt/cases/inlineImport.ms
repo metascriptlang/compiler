@@ -17,7 +17,7 @@
 import { assertFmtContains } from "../roundtrip";
 
 test "fmt: short import stays one line" {
-	assertFmtContains(
+	assert assertFmtContains(
 		"import { A, B, C } from \"./mod\";",
 		"import { A, B, C } from \"./mod\";",
 	);

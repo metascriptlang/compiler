@@ -12,9 +12,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: new T<U>() preserves type args" {
-	assertFmtPreservesAst("class Box<T> { constructor() {} } const a = new Box<string>();");
+	assert assertFmtPreservesAst("class Box<T> { constructor() {} } const a = new Box<string>();");
 }
 
 test "fmt: new T<U, V>(args) preserves type args + args" {
-	assertFmtPreservesAst("class Pair<T, U> { constructor(a: T, b: U) {} } const a = new Pair<string, number>(\"x\", 1);");
+	assert assertFmtPreservesAst("class Pair<T, U> { constructor(a: T, b: U) {} } const a = new Pair<string, number>(\"x\", 1);");
 }

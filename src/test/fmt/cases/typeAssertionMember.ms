@@ -12,5 +12,5 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: (x as T).field preserves parens" {
-	assertFmtPreservesAst("const a = (x as IdentifierData).name;");
+	assert assertFmtPreservesAst("const a = (x as IdentifierData).name;");
 }

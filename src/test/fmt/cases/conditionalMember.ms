@@ -8,5 +8,5 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: (c ? a : b).field preserves parens" {
-	assertFmtPreservesAst("interface T { x: number; } const a: T = { x: 1 }; const b: T = { x: 2 }; const c: boolean = true; const v = (c ? a : b).x;");
+	assert assertFmtPreservesAst("interface T { x: number; } const a: T = { x: 1 }; const b: T = { x: 2 }; const c: boolean = true; const v = (c ? a : b).x;");
 }

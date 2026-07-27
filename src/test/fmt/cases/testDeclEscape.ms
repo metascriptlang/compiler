@@ -12,5 +12,5 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: test name containing escaped double-quote" {
-	assertFmtPreservesAst("test \"foo \\\"bar\\\" baz\" { assert true; }");
+	assert assertFmtPreservesAst("test \"foo \\\"bar\\\" baz\" { assert true; }");
 }

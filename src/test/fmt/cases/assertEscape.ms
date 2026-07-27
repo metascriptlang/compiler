@@ -7,9 +7,9 @@
 import { assertFmtPreservesAst } from "../roundtrip";
 
 test "fmt: assert message with embedded quote re-escapes" {
-	assertFmtPreservesAst("function f(): void { assert true, \"with \\\"quote\\\"\"; }");
+	assert assertFmtPreservesAst("function f(): void { assert true, \"with \\\"quote\\\"\"; }");
 }
 
 test "fmt: assert message with newline re-escapes" {
-	assertFmtPreservesAst("function f(): void { assert true, \"line1\\nline2\"; }");
+	assert assertFmtPreservesAst("function f(): void { assert true, \"line1\\nline2\"; }");
 }
