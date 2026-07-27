@@ -27,14 +27,14 @@
 //             matching the inline pattern already used for class-without-
 //             ctor (and Nim's `genObjConstr`).
 
-class Box {
+class Bug005Box {
 	count(items: string[]): int32 {
 		return items.length as int32;
 	}
 }
 
 test "bug005: method with string[] param accepts named lvalue" {
-	const b = new Box();
+	const b = new Bug005Box();
 	const items: string[] = ["a", "b", "c"];
 	const n = b.count(items);
 	assert n === 3;

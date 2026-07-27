@@ -50,8 +50,9 @@ test "bug010: Map<string, Handler> stores and retrieves closures" {
 	assert !m.has("c");
 }
 
+type IntFn = (x: int32) => int32;
+
 test "bug010: Map<string, FunctionType> with custom return type" {
-	type IntFn = (x: int32) => int32;
 	const ops: Map<string, IntFn> = new Map<string, IntFn>();
 	ops.set("double", (x) => (x * 2) as int32);
 	ops.set("inc", (x) => (x + 1) as int32);

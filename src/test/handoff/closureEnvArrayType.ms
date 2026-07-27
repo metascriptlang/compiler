@@ -23,9 +23,9 @@ function findEnvDecl(prog: Node): Node {
 }
 
 // Helper to find field type in env struct
-function envFieldType(envDecl: Node, fieldName: string): number {
+function envFieldType(envDecl: Node, fieldName: string): TypeKind {
 	const t = envDecl.nodeType;
-	if (t === null) return -1;
+	if (t === null) return TypeKind.Unknown;
 	let i = 0;
 	while (i < t.typeNames.length) {
 		if (t.typeNames[i] === fieldName) {
@@ -39,7 +39,7 @@ function envFieldType(envDecl: Node, fieldName: string): number {
 		}
 		i = i + 1;
 	}
-	return -1;
+	return TypeKind.Unknown;
 }
 
 test "string[] env field resolves to Array(String)" {

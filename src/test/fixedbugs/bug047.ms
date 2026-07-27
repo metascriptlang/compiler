@@ -49,6 +49,6 @@ test "bug047: HashMap subscript in expression context" {
 	const m = new HashMap<string, number>();
 	m.set("a", 5);
 	m.set("b", 7);
-	const sum = m["a"] + m["b"];
+	const sum = m["a"]! + m["b"]!;
 	assert sum === 12;
 }

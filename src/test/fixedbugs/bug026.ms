@@ -48,8 +48,9 @@ test "bug026: Result.err narrowing through if" {
 	}
 }
 
+interface Container { fields: string[]; primary: string; }
+
 test "bug026: string ArrayAccess === MemberExpr" {
-	interface Container { fields: string[]; primary: string; }
 	const c: Container = { fields: ["a", "b", "c"], primary: "b" };
 	// Both ArrayAccess and MemberExpr returning string — comparison must
 	// use EqStr not BeqI64. Without Bug C fix, fields[i] === primary

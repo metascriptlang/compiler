@@ -49,7 +49,7 @@
 //           still folds correctly, AND `JsonValueData` no longer appears
 //           in type-error output.
 
-import { CheckerContext, ExportRegistry, createExportRegistry, registerModuleExports, ModuleExports, ExportedSymInfo, findExportsByName, buildExportInfo } from "../../checker/context";
+import { CheckerContext, ExportRegistry, ExtensionRegistry, createExportRegistry, registerModuleExports, ModuleExports, ExportedSymInfo, findExportsByName, buildExportInfo } from "../../checker/context";
 import { makeSymbol } from "../../checker/symbol";
 import { createNodeAt, NodeKind, SymbolKind, Type, TypeKind, makeLoc, Symbol } from "../../ast/node";
 import { unknownType } from "../../checker/types";
@@ -60,32 +60,28 @@ function _buildExportFor(name: string, declKind: int32): ExportedSymInfo {
 	const sym = makeSymbol(name, SymbolKind.TypeAlias, unknownType(), false);
 	if (declKind === NodeKind.InterfaceDecl) {
 		sym.declNode = createNodeAt(NodeKind.InterfaceDecl, {
-			interfaceName: name, interfaceFields: [], fieldTypes: [],
-			interfaceFlags: "", interfaceBaseName: "", nameLocation: zl,
-			fieldLocations: [],
+			interfaceName: name, interfaceFields: [], nameLocation: zl,
 		}, zl);
 	} else if (declKind === NodeKind.TypeAliasDecl) {
 		sym.declNode = createNodeAt(NodeKind.TypeAliasDecl, {
 			aliasName: name, aliasType: "", aliasGenericParams: "",
-			discriminantName: "", discriminantType: "", variants: [],
+			discriminantName: "", discriminantType: "",
 			nameLocation: zl,
 		}, zl);
 	} else if (declKind === NodeKind.ClassDecl) {
 		sym.declNode = createNodeAt(NodeKind.ClassDecl, {
-			className: name, classBody: [], classFlags: "", classBaseName: "",
-			classGenericParams: "", nameLocation: zl,
+			className: name, classBody: [], nameLocation: zl,
 		}, zl);
 	} else if (declKind === NodeKind.ActorDecl) {
 		sym.declNode = createNodeAt(NodeKind.ActorDecl, {
-			actorName: name, actorBody: [], actorFlags: "", nameLocation: zl,
+			actorName: name, actorBody: [], nameLocation: zl,
 		}, zl);
 	} else if (declKind === NodeKind.EnumDecl) {
 		sym.declNode = createNodeAt(NodeKind.EnumDecl, {
-			enumName: name, members: [], values: [], explicitValues: [],
-			memberLocations: [], nameLocation: zl,
+			enumName: name, memberLocations: [], nameLocation: zl,
 		}, zl);
 	}
-	return buildExportInfo(sym, null as unknown as ExportRegistry, "test.ms", null as unknown as CheckerContext);
+	return buildExportInfo(sym, null as unknown as ExtensionRegistry, "test.ms", null as unknown as CheckerContext);
 }
 
 test "bug028: buildExportInfo does NOT preserve InterfaceDecl in exportInfo.declNode" {
