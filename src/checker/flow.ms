@@ -19,7 +19,7 @@ import {
 	createUnion, unknownType, nullType, neverType,
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
-	isMaybeType, unwrapMaybeType, isNumeric,
+	isMaybeType, unwrapMaybeType, isNumeric, isDiscriminatedUnion,
 } from "./types";
 import { typeRelation, TypeRelation } from "./compat";
 
@@ -1253,8 +1253,33 @@ export function narrowTypeByDiscriminantProperty(
 		i = i + 1;
 	}
 	if (remaining.length === 0) return t;
+	if (isDiscriminatedUnion(t)) return unionPreservingDiscriminant(t, remaining);
 	if (remaining.length === 1) return remaining[0];
 	return createUnion(remaining);
+}
+
+// Residual union after excluding variants from a metadata-carrying DU.
+// Copies the discriminant contract (`typeExtra` = disc type, `typeNames` =
+// [discName, variantKey...]) so disc re-reads keep resolving and codegen's
+// `_tag` route keeps firing. Match-type variants don't physically carry the
+// disc field, so a bare createUnion residual would reject `n.kind` — and a
+// single-variant residual must stay a 1-child union for the same reason.
+function unionPreservingDiscriminant(parent: Type, remaining: Type[]): Type {
+	const u = createUnion(remaining);
+	if (u.kind !== TypeKind.Union) return u;
+	if (parent.typeExtra === null || parent.typeNames === null
+		|| parent.typeNames.length === 0 || parent.typeChildren === null) return u;
+	u.typeExtra = parent.typeExtra;
+	u.typeNames.push(parent.typeNames[0]);
+	for (const rv of remaining) {
+		for (let pi = 0; pi < parent.typeChildren.length; pi += 1) {
+			if (parent.typeChildren[pi] === rv) {
+				if (pi + 1 < parent.typeNames.length) u.typeNames.push(parent.typeNames[pi + 1]);
+				break;
+			}
+		}
+	}
+	return u;
 }
 
 // Narrow a union type by equality to a literal. Handles:
