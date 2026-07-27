@@ -52,6 +52,7 @@
 //              actor boundary executes the COPY semantic.
 
 import { compileToC, compileProjectToC } from "../helpers";
+import { MapEntry } from "../../module/loader";
 
 // These tests lock in the return-path AND param-path fixes for Bug B Item 2.
 // PARAM tests use `move` to satisfy the checker's `isSendable` requirement
@@ -138,7 +139,7 @@ test "bug036: cross-module value-struct return — compile succeeds end-to-end" 
 	// the call site in main.ms also sees Promise<T>. Pre-fix this failed
 	// at the C compile step with "too many arguments" because the call
 	// site emitted an NRVO out-param against the void*-returning proxy.
-	const entries = [
+	const entries: MapEntry[] = [
 		{ entryPath: "src/inner.ms", entrySource: `
 			export struct Bug036XV { a: int32; b: int32; }
 			export actor Bug036XA {

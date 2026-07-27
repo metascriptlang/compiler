@@ -4,7 +4,7 @@
 
 import { checkSource } from "./helpers";
 import { hasErrors } from "../../checker/context";
-import { createMapProvider, loadModuleGraph, canonicalModulePath } from "../../module/loader";
+import { createMapProvider, loadModuleGraph, canonicalModulePath, MapEntry } from "../../module/loader";
 import { checkModuleGraph, getPreludeContext } from "../../checker/orchestrator";
 import { findModule } from "../../module/graph";
 import { parseSource } from "../../parser/statements/validation";
@@ -31,7 +31,7 @@ test "cross-module as-cast with overlapping union fields" {
 	const modB = "checker.ms";
 	const srcA = "export type NodeData = | { value: number } | { value: string } | { name: string };\nexport type NumberLiteralData = { value: number };\nexport type StringLiteralData = { value: string };\nexport type IdentifierData = { name: string };";
 	const srcB = "import { NodeData, StringLiteralData, NumberLiteralData } from \"./node\";\nfunction useStr(data: NodeData): string {\n\tconst sd = data as StringLiteralData;\n\treturn sd.value;\n}\nfunction useNum(data: NodeData): number {\n\tconst nd = data as NumberLiteralData;\n\treturn nd.value;\n}";
-	const entries = [
+	const entries: MapEntry[] = [
 		{ entryPath: modA, entrySource: srcA },
 		{ entryPath: modB, entrySource: srcB },
 	];

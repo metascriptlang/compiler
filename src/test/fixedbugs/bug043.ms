@@ -26,12 +26,12 @@
 //             matchDeclName).
 
 import { compileProjectToC } from "../helpers";
-import { inlineHeaderImports, createFileSystemProvider } from "../../module/loader";
+import { inlineHeaderImports, createFileSystemProvider, MapEntry } from "../../module/loader";
 import { ModuleError } from "../../module/graph";
 import { writeFile, ensureDir, readFile } from "std/fs";
 
 test "bug043: decorated main and its callees survive DCE" {
-	const entries = [{
+	const entries: MapEntry[] = [{
 		entryPath: "bug043/main.ms",
 		entrySource: `function helper043(): number { return 42; }
 @passL("-lm")

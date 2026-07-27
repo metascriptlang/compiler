@@ -18,9 +18,10 @@
 //             the hub.
 
 import { compileProjectToC } from "../helpers";
+import { MapEntry } from "../../module/loader";
 
 test "bug022: hub re-export propagates class static methods" {
-	const entries = [
+	const entries: MapEntry[] = [
 		{ entryPath: "src/inner.ms", entrySource: `
 			export class Multi {
 				static one(): int32 { return 1 as int32; }

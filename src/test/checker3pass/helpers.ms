@@ -21,7 +21,7 @@ import { checkModuleGraph, getPreludeContext } from "../../checker/orchestrator"
 import { CheckerContext, Severity } from "../../checker/context";
 import { validateTypedAST } from "../../checker/validate";
 import { Node, NodeKind, ProgramData, FunctionDeclData, MethodDeclData, ClassDeclData, ArrowFunctionData, FunctionExprData, CallExprData, IdentifierData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BinaryExprData, MemberExprData, NewExprData } from "../../ast/node";
-import { createMapProvider, loadModuleGraph, canonicalModulePath } from "../../module/loader";
+import { createMapProvider, loadModuleGraph, canonicalModulePath, MapEntry } from "../../module/loader";
 import { findModule } from "../../module/graph";
 
 export interface CheckResult {
@@ -35,7 +35,7 @@ export interface CheckResult {
 export function checkOnly(source: string): CheckResult {
 	resetAllSideChannels();
 	const modPath = canonicalModulePath("test/checker3pass.ms");
-	const entries = [{ entryPath: modPath, entrySource: source }];
+	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph(modPath, provider);
 	const registry = checkModuleGraph(graph, "");
@@ -181,7 +181,7 @@ function walkChildren(node: Node, cb: (child: Node) => boolean): void {
 		},
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
-			if (d.expression !== null && cb(d.expression)) return;
+			if (d.expr !== null && cb(d.expr)) return;
 		},
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;

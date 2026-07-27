@@ -4,6 +4,7 @@
 // emits `msAnon_xxx d = ...` in C instead of `DocData_v3 d = ((*doc).data).v3`.
 
 import { compileToC, compileProjectToC } from "../helpers";
+import { MapEntry } from "../../module/loader";
 
 test "union narrowing as-cast emits variant accessor" {
 	const r = compileToC(`
@@ -64,7 +65,7 @@ test "partial as-cast resolves to full variant" {
 }
 
 test "union narrowing as-cast works across files" {
-	const entries = [
+	const entries: MapEntry[] = [
 		{ entryPath: "src/doc.ms", entrySource: `
 			export enum DocKind { Nil, Text, Group, Indent, Line, HardLine, IfBreak, LineSuffix }
 

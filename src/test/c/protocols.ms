@@ -12,6 +12,7 @@
 // (compile + execute end-to-end).
 
 import { compileToC, compileProjectToC } from "../helpers";
+import { MapEntry } from "../../module/loader";
 
 // =====================================================================
 // Phase 1: getDynamicField protocol
@@ -430,7 +431,7 @@ function main(): void {
 }
 
 test "E2E C: setDynamicField cross-module — extension in lib, used in main" {
-	const entries = [
+	const entries: MapEntry[] = [
 		{ entryPath: "src/lib.ms", entrySource: `
 			export interface Bag { tag: string; }
 			export function setDynamicField(this b: Bag, key: string, value: string): void {}
@@ -501,7 +502,7 @@ function main(): void {
 // ===== V2: cross-module generic protocols (mixin) — docs/PROTOCOLS.md Part II =====
 
 test "E2E C: generic protocol cross-module — caller extensions visible in instantiation" {
-	const entries = [
+	const entries: MapEntry[] = [
 		{ entryPath: "src/lib.ms", entrySource: `
 			export function describeAll<T>(x: T): string {
 				return x.protoTag();
@@ -522,7 +523,7 @@ test "E2E C: generic protocol cross-module — caller extensions visible in inst
 }
 
 test "E2E C: generic protocol conflict — defining + caller extension with same receiver errors" {
-	const entries = [
+	const entries: MapEntry[] = [
 		{ entryPath: "src/lib.ms", entrySource: `
 			export interface Gadget { name: string; }
 			export function protoTag(this g: Gadget): string { return "lib"; }
@@ -545,7 +546,7 @@ test "E2E C: generic protocol conflict — defining + caller extension with same
 }
 
 test "E2E C: generic protocol private extension — check-time error with instantiation note" {
-	const entries = [
+	const entries: MapEntry[] = [
 		{ entryPath: "src/lib.ms", entrySource: `
 			export function describeAll<T>(x: T): string {
 				return x.protoTag();
@@ -565,3 +566,4 @@ test "E2E C: generic protocol private extension — check-time error with instan
 	assert cCode.contains("ERROR:");
 	assert cCode.contains("in instantiation of");
 }
+
