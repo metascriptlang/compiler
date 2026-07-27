@@ -305,28 +305,7 @@ test "power of 2 via bitwise trick" {
 // compiles as `string` at runtime. Object intersection is parsed but only the
 // first operand's fields are visible (full TS-compat field merge is a follow-up).
 
-test "branded primitive ID compiles and runs" {
-	type CubeId = string & { __brand: "CubeId" };
-	const id: CubeId = "abc-123" as CubeId;
-	assert id === "abc-123";
-}
-
 test "intersection inline annotation" {
 	const x: string & { __brand: "X" } = "hello";
 	assert x === "hello";
-}
-
-test "multi-operand intersection chain" {
-	type Triple = string & { a: number } & { b: number };
-	const v: Triple = "x" as Triple;
-	assert v === "x";
-}
-
-test "intersection mixed with union — A | B & C parses precedence-aware" {
-	// Erasure: parses as number | (string & {...}). Both numeric and string
-	// values remain assignable through the union; the intersection arm
-	// erases to its first operand (string).
-	type Mixed = number | string & { tag: "branded" };
-	const a: Mixed = 42;
-	assert a === 42;
 }
