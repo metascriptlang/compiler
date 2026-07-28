@@ -2,7 +2,7 @@
 # Sync locally-built msc + support trees to ~/.metascript/
 # so downstream projects pick it up via $PATH.
 #
-# Run AFTER `bun bun/run.ts build src/index.ms --gc=drc --danger --cc=clang --output=msc`
+# Run AFTER `msc build src/index.ms --gc=drc --danger --cc=clang --output=msc`
 # See docs/DEVELOPMENT.md for the full workflow.
 #
 # Usage:
@@ -34,7 +34,7 @@ mkdir -p "$DEST/bin" "$DEST/std" "$DEST/runtime" "$DEST/vendor"
 if [ "$SYNC_BINARY" = "1" ]; then
 	if [ ! -f "$SRC/msc" ]; then
 		echo "error: $SRC/msc not found. Build it first:" >&2
-		echo "  cd $SRC && bun bun/run.ts build src/index.ms --gc=drc --danger --cc=clang --output=msc" >&2
+		echo "  cd $SRC && msc build src/index.ms --gc=drc --danger --cc=clang --output=msc" >&2
 		exit 1
 	fi
 	if [ -f "$DEST/bin/msc" ] && [ "$CHECK" = "0" ]; then

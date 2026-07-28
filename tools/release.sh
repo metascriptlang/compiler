@@ -8,7 +8,7 @@
 #   ./tools/release.sh --upload              # Build all + upload to GitHub
 #   ./tools/release.sh --upload darwin-arm64 # Build one + upload
 #
-# Requires: bun, zig, tar, gh (for --upload)
+# Requires: msc, zig, tar, gh (for --upload)
 # Output: dist/msc-<version>-<os>-<arch>.tar.gz
 #
 # Archive naming matches install.sh expectations:
@@ -86,7 +86,7 @@ for t in "${TARGETS[@]}"; do
 done
 
 # Check prerequisites
-for cmd in bun zig zip; do
+for cmd in msc zig zip; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "error: $cmd is required but not found in PATH"
         exit 1
@@ -265,7 +265,7 @@ build_target() {
     rm -rf out
     echo "  compiling..."
     # shellcheck disable=SC2086
-    if ! bun run run-ms build src/index.ms --release --strip --gc=drc $cross_flags --time 2>&1 | tee "$DIST_DIR/${archive_name}.log" | tail -5; then
+    if ! msc build src/index.ms --release --strip --gc=drc $cross_flags --time 2>&1 | tee "$DIST_DIR/${archive_name}.log" | tail -5; then
         echo "  FAILED — see $DIST_DIR/${archive_name}.log"
         return 1
     fi
