@@ -1,9 +1,8 @@
 // MetaScript CBOR — Decoder (RFC 8949 §3, §5)
 //
 // Reads a byte stream and produces a CborValue tree. Mirrors encoder's design:
-// internal reader uses `number[]` to keep test-ms harness off the Buffer
-// loader. Public API at index.ms accepts a Buffer and converts to number[]
-// for the reader (one-time linear copy, V1 simple).
+// internal reader uses `number[]`. Public API at index.ms accepts a Buffer
+// and converts to number[] for the reader (one-time linear copy, V1 simple).
 //
 // V1 scope mirrors encoder:
 //   - Major 0..6 fully supported
@@ -23,11 +22,8 @@ import {
 	cborBool, cborNull, cborUndefined, cborFloat, cborSimple,
 } from "./builder";
 
-// Local extern bindings for the runtime byte allocator. Calling Buffer-typeof
-// methods (e.g. `Buffer.fromArray`) makes Bun's TS loader resolve through
-// std/core/buffer/index.cms — which the test-ms harness can't transpile (the
-// `extern function ... from "..."` syntax isn't TS). Routing through the C
-// symbols directly bypasses that path.
+// Local extern bindings for the runtime byte allocator — routed through the
+// C symbols directly.
 extern function msBufferAlloc(size: number): string;
 extern function msBufferSet(buf: string, index: number, value: number): void;
 extern function msBufferReadDoubleBE(buf: string, offset: number): float64;
@@ -47,7 +43,7 @@ const MAX_COLLECTION_SIZE: number = 100000000;
 // Copy `length` bytes from r.buf[start..start+length] into a freshly-
 // allocated Buffer (string alias). Used by both Bytes decoding and the
 // double-precision float decode path; previously inlined in 3 places.
-// NATIVE-ONLY (relies on msBufferAlloc/Set externs — Bun-test stubs throw).
+// NATIVE-ONLY (relies on msBufferAlloc/Set externs).
 function bytesToBuffer(src: number[], start: number, length: number): string {
 	const buf: string = msBufferAlloc(length);
 	let i = 0;
@@ -204,15 +200,14 @@ function decodeBytes(r: CborReader, length: number): CborValue {
 		setError(r, "truncated byte string payload");
 		return cborNull();
 	}
-	// NATIVE-ONLY path (test-ms throws on the Buffer extern); inline Bytes
-	// fixtures are skipped — coverage lives in examples/_probe_cbor.ms.
+	// Inline Bytes fixtures are skipped — coverage lives in examples/_probe_cbor.ms.
 	const buf = bytesToBuffer(r.buf, r.pos, length);
 	r.pos = r.pos + length;
 	return cborBytes(buf);
 }
 
 // Portable UTF-8 byte-sequence → string decoder. Works in both native MS
-// (compiled binary) and the Bun-test harness because it only uses bitwise +
+// (compiled binary) and the JS backend because it only uses bitwise +
 // arithmetic + fromCodePoint — no Buffer or extern dependencies. Stops at
 // truncated multi-byte sequences (V1: silently drops the trailing partial
 // run; spec strict mode would error). Caller passes the byte source array
@@ -567,8 +562,7 @@ function decodeSingleFloat(arg: int64): CborValue {
 // Double-precision (8 bytes). readHead intentionally left the 8 arg-bytes
 // unconsumed (its int64 path rejects bit patterns with sign bit set, which
 // covers all negative floats and ±Inf). Read the raw bytes directly here.
-// NATIVE-ONLY path (test-ms throws on extern); inline float tests skipped —
-// coverage via run-ms probe.
+// Inline float tests skipped — coverage via native probe.
 function decodeDoubleFloat(r: CborReader): CborValue {
 	if (remaining(r) < 8) {
 		return decodeError(r, "truncated double-precision float payload");
@@ -1115,10 +1109,10 @@ test "decode tag chain just under depth limit succeeds" {
 }
 
 test "decode half-precision float marker (parses without error)" {
-	// 0xf9 = major 7 + info 25 (half float). NATIVE-ONLY path — Bun-test
+	// 0xf9 = major 7 + info 25 (half float). NATIVE-ONLY path — the extern
 	// stubs msBufferAlloc/msBufferReadDoubleBE return 0, so numVal value
 	// can't be checked inline (same gap as single/double float decode at
-	// decoder.ms:50). Coverage via run-ms probe: examples/_probe_cbor_half.ms.
+	// decoder.ms:50). Coverage via native probe: examples/_probe_cbor_half.ms.
 	// Inline test verifies decoder accepts the byte sequence without
 	// erroring — value correctness verified at native run.
 	const r = decodeAll([0xf9, 0x3c, 0x00]);

@@ -9,9 +9,7 @@
 // wire I/O happens in `./client`. Keeping it pure lets us drive the codec
 // from inline tests without spinning up a server.
 
-// Import from submodules directly — pulling from `std/serialize/cbor` (the
-// index hub) drags `std/core/buffer/index.cms` into the test-ms harness path,
-// which Bun's TS loader can't transpile (extern syntax).
+// Import from submodules directly.
 import { CborKind, CborValue } from "std/serialize/cbor/types";
 import { cborText, cborTextMap, cborArray } from "std/serialize/cbor/builder";
 import { newCborWriter, encodeValue } from "std/serialize/cbor/encoder";

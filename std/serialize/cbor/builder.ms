@@ -193,9 +193,7 @@ test "cborText utf8" {
 }
 
 // cborBytes shape verified in encoder/decoder round-trip tests where actual
-// byte buffers are constructed. Skipping shape-only test here to avoid
-// pulling Buffer.fromArray into the test-ms harness path (Bun loader can't
-// parse runtime/core/buffer/index.cms type-of method calls).
+// byte buffers are constructed.
 
 test "cborArray empty" {
 	const items: CborValue[] = [];

@@ -2,10 +2,7 @@
 //
 // Pure MetaScript: byte work is done on `number[]` (each element 0..255).
 // Converting `number[] ↔ string` happens only at the network boundary in
-// client.cms, mirroring the CBOR encoder/decoder pattern. This keeps the
-// inline tests in this file off the Buffer extern path that the test-ms
-// harness can't transpile (Bun loader can't parse buffer/index.cms typeof
-// method calls).
+// client.cms, mirroring the CBOR encoder/decoder pattern.
 //
 // Server-to-client frames MUST NOT be masked (RFC 6455 §5.1) — parseFrame
 // returns ProtocolError if it sees one. Client-to-server frames MUST be
@@ -560,7 +557,7 @@ test "buildFrame ext-64 emits non-zero byte 4 for length 16 MB exactly" {
 	// the old 24-bit emitter mishandled. Build a payload of length 0x01000001
 	// (one byte over 16 MB) and read back the header bytes only.
 	//
-	// Allocating 16 MB+ bytes via push is feasible (~50ms in Bun). Skip the
+	// Allocating 16 MB+ bytes via push is feasible (~50ms). Skip the
 	// payload-content allocation by using buildFrameUnmasked which doesn't
 	// XOR — the header bytes are still emitted from `len = payload.length`.
 	let payload: number[] = [];

@@ -137,10 +137,9 @@ function parseString(input: string, pos: number): ParseResult {
 	const len = input.byteLength;
 	let result = "";
 
-	// Plain bytes are copied in RUNS (runStart..p), never one byte at a time:
-	// a single-byte slice inside a multi-byte UTF-8 sequence is not
-	// representable as a string on the Bun host. Runs only break at ASCII
-	// bytes (quote/backslash), so every slice stays on character boundaries.
+	// Plain bytes are copied in RUNS (runStart..p), never one byte at a time.
+	// Runs only break at ASCII bytes (quote/backslash), so every slice stays
+	// on character boundaries and multi-byte UTF-8 is never split.
 	let runStart = p;
 	while (p < len) {
 		const ch = input.byteAt(p);

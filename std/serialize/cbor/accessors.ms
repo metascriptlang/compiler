@@ -187,11 +187,9 @@ export function cborToFloat32Array(this v: CborValue): float32[] {
 
 // ===== Tests =====
 //
-// Bun test-ms harness doesn't dispatch extension methods (`v.asString()`)
-// through MS's `this T` resolution — same limitation that keeps JSON's
-// accessors.ms test-free. So inline tests call the functions DIRECTLY
-// (as `asString(v)` not `v.asString()`). End-to-end extension-method
-// dispatch is validated via run-ms probes (basic / utf8 / float).
+// Inline tests call the functions DIRECTLY (as `asString(v)` not
+// `v.asString()`); end-to-end extension-method dispatch is validated via
+// native probes (basic / utf8 / float).
 
 import { cborInt, cborText, cborArray, cborMap, cborTextMap, cborBool, cborTag, cborFloat } from "./builder";
 

@@ -146,7 +146,7 @@ export function hashToBase36(s: string): string {
 
 // ===== Tests =====
 // Tests use internal names via the hash() overloads where possible.
-// Named calls (djb2, splitmix32) used where Bun can't resolve overloads.
+// Named calls (djb2, splitmix32) used where overload resolution is ambiguous.
 
 test "hash string deterministic" {
 	assert djb2("hello") === djb2("hello");

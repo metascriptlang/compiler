@@ -29,7 +29,7 @@ export interface MultipartResult {
 // Build a multipart/form-data body. The caller is responsible for generating
 // a `boundary` that does not appear inside any part body — typically a 32-char
 // random hex string. This function does not generate randomness itself so it
-// stays pure and Bun-runnable without crypto externs.
+// stays pure, with no crypto externs.
 //
 // Returns the assembled body and the full Content-Type header value.
 export function buildMultipart(parts: MultipartPart[], boundary: string): MultipartResult {

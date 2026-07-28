@@ -132,9 +132,9 @@ function escapeString(s: string): string {
 	let i = 0;
 	const len = s.byteLength;
 	// Walk byte-by-byte; every escape-relevant byte is ASCII. Plain content
-	// (including multi-byte UTF-8) is copied in RUNS — a single-byte slice
-	// inside a multi-byte sequence is not representable on the Bun host, and
-	// runs only break at ASCII escape bytes so slices stay on char boundaries.
+	// (including multi-byte UTF-8) is copied in RUNS — runs only break at
+	// ASCII escape bytes so slices stay on char boundaries and multi-byte
+	// sequences are never split.
 	let runStart = 0;
 	while (i < len) {
 		const ch = s.byteAt(i);

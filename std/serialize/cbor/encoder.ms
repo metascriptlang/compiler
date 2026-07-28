@@ -1,10 +1,9 @@
 // MetaScript CBOR — Encoder (RFC 8949 §3, §4)
 //
 // Walks a CborValue tree and produces the canonical wire byte sequence.
-// Internal builder uses `number[]` (each element 0..255) to keep the test
-// path off the Buffer loader (test-ms harness can't transpile buffer/index.cms
-// extern declarations). Public API at index.ms wraps this builder and converts
-// the byte array to a Buffer for the user.
+// Internal builder uses `number[]` (each element 0..255). Public API at
+// index.ms wraps this builder and converts the byte array to a Buffer for
+// the user.
 //
 // V1 scope:
 //   - Major types 0, 1, 2, 3, 4, 5, 6 fully supported
@@ -19,8 +18,7 @@
 import { CborKind, CborValue } from "./types";
 
 // Local externs to runtime byte helpers — see decoder.ms for the same
-// pattern + rationale (avoids Buffer typeof method dispatch in test-ms
-// harness). msBufferAllocUnsafe gives an 8-byte scratch slot we fill via
+// pattern. msBufferAllocUnsafe gives an 8-byte scratch slot we fill via
 // msBufferWriteDoubleBE then read back byte-by-byte to push into the
 // writer.bytes accumulator.
 extern function msBufferAllocUnsafe(size: number): string;
@@ -65,8 +63,8 @@ function writeBE(w: CborWriter, value: number, byteCount: number): void {
 }
 
 // Write 8 bytes of an int64 in big-endian order. Splits the int64 into upper
-// 32 + lower 32 via div/mod (bitwise on int64 is unreliable in the Bun
-// transpiler — see project_bun_int64_bitwise_gap memory).
+// 32 + lower 32 via div/mod: bitwise ops on int64 do not wrap correctly on the
+// JS backend.
 function writeInt64BE(w: CborWriter, value: int64): void {
 	const upper = (value / (4294967296 as int64)) as number;
 	const lower = (value % (4294967296 as int64)) as number;
@@ -213,9 +211,8 @@ export function encodeSimple(w: CborWriter, n: number): void {
 // V1 always emits double; the encoder doesn't try to downcast to half/single
 // even when the value would fit (RFC 8949 §3.4 allows this — the canonical
 // encoding rules are an optional layer). Routes through Buffer's runtime
-// writeDoubleBE helper to produce the 8 BE bytes; this is a NATIVE-ONLY path
-// (Bun-test stubs the externs), so float encoding has no inline tests —
-// coverage lives in run-ms probes.
+// writeDoubleBE helper to produce the 8 BE bytes; float encoding has no
+// inline tests — coverage lives in native probes.
 export function encodeFloat(w: CborWriter, f: float64): void {
 	w.bytes.push(MAJOR7_HEAD | 27);
 	const buf: string = msBufferAllocUnsafe(8);

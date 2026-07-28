@@ -314,13 +314,12 @@ export function requestWithRedirects(options: RequestOptions, maxRedirects: int3
 	return requestWithRedirectsOver(options, maxRedirects, doRequestPlain);
 }
 
-// Binary-body regression: verified natively, NOT via bun:test
+// Binary-body regression: verified natively
 // ----------------------------------------------------------
-// The `bun:test` shim (bun/transform.ts) rewrites `.byteLength → .length`
-// and `.byteSlice(...) → .slice(...)`, so JS-runtime tests can't observe
-// the byte-vs-codepoint distinction this fix targets. The fix is verified:
-//   1. Native MS probe — `bun bun/run.ts run <probe>` confirms byteSlice
-//      preserves all 4 bytes of "AéZ" (4 UTF-8 bytes, 3 codepoints).
+// JS-runtime tests can't observe the byte-vs-codepoint distinction this
+// fix targets. The fix is verified:
+//   1. Native MS probe — byteSlice preserves all 4 bytes of "AéZ"
+//      (4 UTF-8 bytes, 3 codepoints).
 //   2. End-to-end against live OTA — Lightcube's ion update.check() flow
 //      downloads a real .dmg artifact and hash-matches sha256 exactly.
 // Both live in lightcube vendor probes; revisit when the test shim grows

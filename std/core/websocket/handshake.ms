@@ -2,24 +2,21 @@
 //
 // Pure string work: build the HTTP/1.1 upgrade request, parse the 101 response,
 // derive the expected Sec-WebSocket-Accept key. The actual SHA-1 + Base64
-// primitives come from std/crypto via local extern bindings — this keeps the
-// import path off the test-ms harness's prelude resolver (the std/crypto .cms
-// file itself can't be transpiled by Bun, but we don't need to import it; the
-// C linker resolves the symbols at compile time through the .cms wrapper that
-// pulls in std/crypto separately).
+// primitives come from std/crypto via local extern bindings — the C linker
+// resolves the symbols at compile time through the .cms wrapper that pulls
+// in std/crypto separately.
 //
 // Inline tests cover the pure-string paths (request building, response parsing,
 // header validation, base64 key generation). The cryptographic accept-key
 // derivation is exercised in src/test/std/http/websocket.ms via the C compile
-// path — the inline harness can't run sha1 because the Bun stub throws.
+// path — the inline harness cannot run sha1 (the extern stub throws).
 
 @include("runtime/crypto/hash.h");
 
 import { WsError, wsHandshakeFailed, wsInvalidUrl } from "./errors";
 
-// Local externs into std/crypto's runtime — declared without "from" so the
-// test-ms harness doesn't try to transpile std/crypto/index.cms. Native C link
-// resolves these via the .cms wrapper that imports std/crypto.
+// Local externs into std/crypto's runtime — the C link resolves these via
+// the .cms wrapper that imports std/crypto.
 extern function msCryptoHashString(algorithm: string, data: string, encoding: string): string;
 extern function msCryptoToBase64(data: string): string;
 extern function msCryptoRandomBytes(size: number): string;
