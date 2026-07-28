@@ -4,12 +4,11 @@ Real C-compiled scenarios that exercise the three async primitives
 defined in `docs/PARALOCK.md` — `async` / `await`, `spawn`, and `actor` —
 both in isolation and in the load-bearing nested combinations.
 
-The existing `lang/` tier runs through the Bun transpiler (JavaScript
-runtime). It validates **language semantics** for `async`/`await` and
-exercises the spawn polyfill, but it cannot prove the C runtime is
-actually doing the right thing for actors or for cross-thread spawn
-completion. This tier closes that gap: every scenario here is built
-with the C backend and executed as a native binary.
+The `lang/` tier validates **language semantics** for `async`/`await`
+and spawn, but its assertions cannot prove the C runtime is actually
+doing the right thing for actors or for cross-thread spawn completion.
+This tier closes that gap: every scenario here is built with the C
+backend and executed as a native binary.
 
 ## What each scenario validates
 
@@ -53,8 +52,7 @@ bash src/test/paralock/runAll.sh
 Or single scenario for debugging:
 
 ```bash
-rm -rf out
-bun bun/run.ts build src/test/paralock/actorWithSpawn.ms
+msc build src/test/paralock/actorWithSpawn.ms
 ./out/debug/actorWithSpawn
 ```
 

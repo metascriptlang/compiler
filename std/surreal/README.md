@@ -682,15 +682,15 @@ for production deployments.
 
 PRs welcome. Before submitting:
 
-1. Run the test suite: `bun run test-ms src/test/surreal/index.ms`
+1. Run the test suite: `msc test src/test/surreal/index.ms`
 2. Run the live-server smokes (require a running SurrealDB):
 
    ```bash
    surreal start --user root --pass root memory &
-   bun run run-ms run examples/wsSurreal.ms
-   bun run run-ms run examples/wsSurrealTyped.ms
-   bun run run-ms run examples/wsSurrealLive.ms
-   bun run run-ms run examples/wsSurrealAllOps.ms
+   msc run examples/wsSurreal.ms
+   msc run examples/wsSurrealTyped.ms
+   msc run examples/wsSurrealLive.ms
+   msc run examples/wsSurrealAllOps.ms
    ```
 3. Lint commit messages as `<type>: <description>` per Conventional Commits.
 

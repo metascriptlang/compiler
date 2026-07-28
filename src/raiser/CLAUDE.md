@@ -290,16 +290,16 @@ Two-phase compilation: collect functions/classes/enums first, then compile bodie
 
 ```bash
 # Per-file (fast)
-rm -rf out && bun run test-ms src/raiser/value.ms
+msc test src/raiser/value.ms
 
 # Full VM
-rm -rf out && bun run test-ms src/raiser/vm.ms
+msc test src/raiser/vm.ms
 
 # Codegen + VM end-to-end (in src/codegen/raiser/)
-rm -rf out && bun run test-ms src/codegen/raiser/eval.ms
+msc test src/codegen/raiser/eval.ms
 
 # Phase 1 spike bench
-rm -rf out && bun run run-ms run src/raiser/spike/bench.ms
+msc run src/raiser/spike/bench.ms
 ```
 
 ---

@@ -1,11 +1,10 @@
 # Native execution tier
 
-The rest of the suite (`bun run test-ms`) transpiles MetaScript to TypeScript
-and runs it on Bun — so the **C runtime never executes** there: DRC reference
-counting, the ORC cycle collector, the actor scheduler, and the spawn worker
-pool are all invisible to `test-ms`. That blind spot shipped real regressions
-green (an over-free crash, a leak/over-free attempt) because every check passed
-on Bun while the native binary was broken.
+The rest of the suite (`msc test`) asserts test-level outcomes inside one
+large C test binary. DRC reference counting, the ORC cycle collector, the
+actor scheduler, and the spawn worker pool often fail no assertion — they
+surface as crashes or RSS growth in a standalone binary. That blind spot
+shipped real regressions green (an over-free crash, a leak/over-free attempt).
 
 This tier closes it. Each case is a real `.ms` program compiled to a **native
 binary** via clang and run under **both `--gc=drc` and `--gc=orc`**, asserting:
@@ -28,7 +27,7 @@ race).
 MSC=./msc msc run src/test/native/run.ms   # point MSC at a HEAD-matched binary
 ```
 
-The runner is itself MetaScript (dogfood) — no Bun. Slow (clang build per case
+The runner is itself MetaScript (dogfood). Slow (clang build per case
 × 2 GC modes) — run it before/after any change to DRC injection, transforms
 touching RC, the actor scheduler, or the spawn/await runtime.
 
@@ -61,7 +60,7 @@ tier is MetaScript, compiled + run by msc.
 | Case | Purpose |
 |---|---|
 | `clean-loop` | Always-green control — heap interface churn that must stay flat. |
-| `closure-array` | bug033 native repro (closure-array scope-exit destroy) — runs the C DRC path `test-ms` can't reach. |
+| `closure-array` | bug033 native repro (closure-array scope-exit destroy) — exercises the C DRC scope-exit path end-to-end. |
 | `paralock-nested` | PARALOCK guard — spawn + actor + async crossed, massive interleave. Standing answer to "did my change break PARALOCK seamlessly?". |
 | `actor-heapstr` | **xfail** — heap-concatenated string through an actor field reads back corrupted (a literal round-trips). The std/http multi-WS broadcast path; pre-existing at HEAD. Caught by `expectStdout`, not exit/RSS. |
 | `leak-call-in-cond` | **xfail** — fresh RC call used for a non-RC read leaks (awaiting the Phase-3 call-hoist fix). |

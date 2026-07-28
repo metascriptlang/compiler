@@ -148,8 +148,7 @@ src/module/cparse.ms  C→MS emitter (consumer: imports src/cparse/, emits exter
 - **Pure C library.** Input: C source text. Output: `Obj[]` and `CType`
   trees. No MetaScript-specific knowledge — the C→MS type mapping
   lives in the consumer (`src/module/cparse.ms`).
-- **Test entry**: `bun run run-ms run src/cparse/parse.ms` runs inline
-  tests. `bun run test-ms src/cparse/tokenize.ms` runs Bun-side tests.
+- **Test entry**: `msc test src/module/cparse/parse.ms` runs inline tests.
 - **No global state.** All state lives in context structs passed
   explicitly. (Chibicc uses globals; we pass context.)
 - **No `exit()`.** Chibicc calls `error()` → `exit(1)` on any parse
@@ -230,13 +229,13 @@ declares required AND compiles as MS source counts as passing.
 
 ```bash
 # All cparse tests
-rm -rf out && bun run test-ms src/compiler/cparse/test.ms
+msc test src/module/cparse/test.ms
 
 # Standalone CLI on a real header
-bun run run-ms run src/compiler/cparse/main.ms -- /usr/include/stdio.h
+msc run src/module/cimport/cli.ms -- /usr/include/stdio.h
 
 # With target override
-bun run run-ms run src/compiler/cparse/main.ms -- \
+msc run src/module/cimport/cli.ms -- \
     --target=linux-x86_64 \
     -I/usr/include \
     -D_GNU_SOURCE \
@@ -537,7 +536,7 @@ Numbers are targets, not guarantees. Measure before optimizing.
    also handled here (strict superset).
 4. At least one header the current scanner mis-parses (likely `pthread.h`
    or anything with function pointer typedefs) parses correctly here.
-5. Full MS test suite passes (`bun run test-ms src/compiler/cparse/test.ms`).
+5. Full MS test suite passes (`msc test src/module/cparse/test.ms`).
 
 Once v1 passes, open a wiring task to route `importCHeader` through
 this module behind a flag, then migrate headers one at a time.

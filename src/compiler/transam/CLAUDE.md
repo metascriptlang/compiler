@@ -564,8 +564,8 @@ testGroup("Trans-Am Integration", () => {
 ### Test Execution
 
 ```bash
-rm -rf out && bun run test-ms src/compiler/transam/index.ms    # Trans-Am tests only
-rm -rf out && bun run test-ms src/index.ms                     # Full compiler suite
+msc test src/compiler/transam/index.ms    # Trans-Am tests only
+msc test src/index.ms                     # Full compiler suite
 ```
 
 ---

@@ -104,12 +104,12 @@ src/test/
     └── programs/*.ms   #   (DRC/ORC/actor/spawn). Runner: run.ms + manifest.ms (msc run).
 ```
 
-> **Why `native/` exists:** every other tier runs through the Bun transpiler
-> (`test-ms`), which executes MetaScript-as-TypeScript on Bun and **never runs
-> the emitted C runtime**. DRC over-free, ORC cycle-collector faults, actor
-> scheduler and spawn-pool leaks are all invisible to `test-ms` — that blind
-> spot shipped real regressions green. `native/` is the runtime guard: real
-> binary, both GC modes, exit-code + peak-RSS assertions.
+> **Why `native/` exists:** the other tiers assert test-level outcomes inside
+> one large test binary. DRC over-free, ORC cycle-collector faults, actor
+> scheduler and spawn-pool leaks often fail no assertion — they surface as
+> crashes or RSS growth in a standalone binary. `native/` is the runtime
+> guard: real binary per program, both GC modes, exit-code + peak-RSS
+> assertions.
 
 ---
 
@@ -138,8 +138,7 @@ Rules:
 ### 3.2. Language tests (`lang/*.ms`)
 
 End-to-end, user-visible language behavior. No compiler imports — the file
-must compile cleanly to C. Used by both the bun-transpiler test runner AND
-the C self-host pipeline.
+must compile cleanly to C via the self-host pipeline.
 
 ```ms
 test "Generic DU — multiple instantiations coexist" {
@@ -155,8 +154,6 @@ Rules:
 - Every `lang/foo.ms` must be imported in `index.ms`.
 - Use only the standard library and language features — never reach into
   `src/checker/`, `src/codegen/`, etc.
-- If the bun transpiler can't handle a syntax (e.g. complex match-types),
-  fix the transpiler in `bun/transform.ts` rather than skipping the test.
 
 ### 3.3. Regression tests (`fixedbugs/bugNNN_*.ms`)
 
@@ -281,18 +278,59 @@ PROVEN RED against the drift it targets. Methodology and ledger details:
   test deliberately does NOT live in the most obvious tier (e.g. can't be
   differential because only one lane checks the behavior), open the file
   with a short comment saying why and where its siblings live.
+- ❌ **Writing a test file without wiring it into an index** — the entries
+  import an explicit list; a file nobody imports is silently never run and
+  looks like coverage that does not exist. See §4.1.
+
+### 4.1 Orphan test files — audited 2026-07-28
+
+**22 test files are not imported by any entry** (excluding `guard/`, which
+has its own `run.sh`). None carry an `xfail`/parked marker, so this is
+neglect, not policy. The worst case is `fixedbugs/bug048.ms` — it guards a
+real self-host regression (collectPass hoisting test-block-local `const`
+to module scope) and it **passes today**, so the guard exists but has
+never protected anything.
+
+```
+handoff/   toStringType matchIfChain resultTypeAlias classNew
+           nilableUnknownCastError ccgPtrClosure selfRefField diag
+           classNewDebug staticExtern unionParam drcHookParams   (12)
+lang/      nullable nullableFunction inheritance                  (3)
+paralock/  spawnOnly actorOnly asyncOnly                          (3)
+std/http/  websocket websocketServer                              (2)
+fixedbugs/ bug048                                                 (1)
+c/         asCoercionNullable                                     (1)
+```
+
+Triage so far (partial — the machine was loaded, see the flakiness note
+in §5): `lang/nullable` passes (296), `fixedbugs/bug048` passes (278),
+`lang/inheritance` fails for real (`Unresolved type 'Admin'`). The rest
+were inconclusive: repeated runs flipped between pass and `link failed`,
+which is the known cold-build link race, not a verdict.
+
+Wire the passing ones; give each failing one a header saying what it
+proves and why it is parked, or delete it. Re-run the audit with:
+
+```bash
+cd src/test && for f in $(find . -name '*.ms' -not -path './native/programs/*' \
+  -not -path './differential/programs/*' -not -path './guard/*' -not -name 'run.ms' \
+  | sed 's|^\./||'); do base=$(basename $f .ms)
+  n=$(rg -l "/${base}\"|\./${base}\"" --glob '*.ms' . | grep -v "^\./$f$" | wc -l)
+  [ "$n" = "0" ] && [ "$base" != "index" ] && echo "$f"
+done
+```
 
 ---
 
 ## 5. Running Tests
 
 ```bash
-# === PRIMARY: native msc (no Bun) — compiles a C test binary and runs it ===
+# === PRIMARY: msc test — compiles a C test binary and runs it ===
 # Full suite (lang + c + js + handoff + fixedbugs)
-# ⚠ KNOWN RED (2026-07-27): 74 latent type errors — this entry historically
-# ran only under Bun test-ms, which SKIPS the MS checker; it has never
-# passed native type-check. Verified identical at clean HEAD c227ded, so
-# not caused by any working-tree WIP. Migration campaign: §7 P1.
+# ⚠ KNOWN RED (2026-07-27): 74 latent type errors — this entry predates the
+# native runner and has never passed native type-check. Verified identical at
+# clean HEAD c227ded, so not caused by any working-tree WIP. Migration
+# campaign: §7 P1.
 msc test src/test/index.ms
 
 # Compiler internal tests (inline `test {}` blocks across src/)
@@ -306,7 +344,7 @@ msc run examples/foo.ms
 
 # === Native leak/crash guard tier — a separate curated program set (manifest.ms)
 # built as real binaries under BOTH --gc=drc and --gc=orc with peak-RSS bounds.
-# A MetaScript dogfood runner (no Bun): it builds each program via msc, runs it
+# A MetaScript dogfood runner: it builds each program via msc, runs it
 # under /usr/bin/time -l, asserts exit + RSS + stdout. Point MSC at a HEAD-matched
 # binary so a stale installed msc can't cause false build-fails. `msc test` runs
 # the inline `test {}` blocks; THIS runs the leak/crash probes. ===
@@ -318,19 +356,10 @@ MSC=./msc src/test/differential/run.sh
 
 # === nim-guard lifecycle tier — DRC-ledger builds; see guard/README.md ===
 src/test/guard/run.sh
-
-# === Bun bootstrap fallback — transpiles the compiler to TS, NEVER runs the C
-# runtime (blind to DRC/ORC/codegen). Only when msc can't self-run yet. Supports
-# --filter / --jobs (msc test does NOT). ===
-bun run test-ms src/test/index.ms
 ```
 
-The native runner (`msc test <file>`) compiles the file + its transitive
-dep tests to a C binary and runs it — the primary path. The Bun fallback
-(`bun run test-ms`) spawns `bun test` with a `.ms` shim and transpiles
-MetaScript to TypeScript via `bun/transform.ts`. **On the fallback path, if
-a test fails to PARSE through the transpiler, fix the transpiler — do not
-weaken the test.**
+The runner (`msc test <file>`) compiles the file + its transitive dep tests
+to a C binary and runs it.
 
 ---
 
@@ -432,22 +461,20 @@ Status legend: ✅ done · 🚧 in progress · 🔲 todo
 - [x] ✅ `src/test/fixedbugs/` — directory created, pattern documented, 2 entries:
   - `bug001_du_structural_key_collision.ms` (genUnionType named-named cache collision)
   - `bug002_ref_gi_mono_name.ms` (peelToStructOrUnion lost mono name through Ref<GI>)
-- [x] ✅ `bun/transform.ts` — generic match-type DU now supported in transpiler (regex extended, boolean disc literals preserved instead of being numbered)
 - [x] ✅ Wired into `lang.ms` + `index.ms`
 
 Current baseline: full native suite green — `msc test src/index.ms` **3338/0** (2026-07-27).
 
-### P0.5 — Native runtime guard (the "test-ms is blind to the C runtime" tier)
+### P0.5 — Native runtime guard
 
 - [x] ✅ `src/test/native/` — builds real binaries via clang, runs under BOTH
   `--gc=drc` and `--gc=orc`, asserts exit 0 (no over-free/UAF/crash) + peak RSS
-  under bound (no leak). Runner `run.ms` + `manifest.ms` via `msc run` (no Bun;
-  replaces the old `bun/test-native.ts`).
-  Seeded 5 cases; on first run it immediately caught **2 real leaks** invisible
-  to `test-ms` (call-result-in-non-RC-context, array-literal-of-strings — both
+  under bound (no leak). Runner `run.ms` + `manifest.ms` via `msc run`.
+  Seeded 5 cases; on first run it immediately caught **2 real leaks** no other
+  tier saw (call-result-in-non-RC-context, array-literal-of-strings — both
   xfail anchors) and proved bug033 + PARALOCK spawn/actor/async hold natively.
   This is the tier that would have caught the over-free crash in 149eb30 and the
-  "Bug D" leak-fix-gone-over-free that both passed `test-ms` green.
+  "Bug D" leak-fix-gone-over-free that both shipped green.
 
 ### P1 — Differential corpus + diagnostics (reprioritized 2026-07-27)
 
@@ -492,7 +519,8 @@ Current baseline: full native suite green — `msc test src/index.ms` **3338/0**
   2026-07-27 change.
 - [ ] 🔲 Codegen baseline tests — for critical patterns (DU layout, Result lowering, closure lifting) commit expected `.c` snippets in `src/test/c/snapshots/` and diff on regen.
 - [ ] 🔲 Native-checker migration of `src/test/index.ms` — 74 latent type
-  errors from the Bun era (test-ms never type-checked). Three buckets:
+  errors predating the native runner (this entry was never type-checked).
+  Three buckets:
   TS-isms the checker doesn't cover (block-local type aliases,
   intersection/branded types — parser skipIntersectionTail discards `&`
   tails), plain MS-invalid test code (`.includes` on string, stale field
