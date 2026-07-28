@@ -1029,6 +1029,16 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						&& fi < objChildren.length) {
 						fieldExpected = objChildren[fi];
 					}
+					// Engine (macro-body) view of Node.nodeType, write position: macros
+					// stamp type-AST Nodes into emitted literals (`nodeType: ft`), so the
+					// slot expects a Node VALUE — Ref<Node>, matching the read override in
+					// checkMemberExpr — not the checker Type the class declares.
+					if (fieldExpected !== null && isEngineCheckMode()
+							&& keyName === "nodeType" && containerName === "Node") {
+						fieldExpected = (expectedType !== null && typeNameOf(expectedType) === "Node")
+							? expectedType
+							: objE;
+					}
 					checkExpr(ctx, d.properties[fi], fieldExpected);
 					// Auto-wrap directFn → closure when field type is closure (Reference parity)
 					if (fieldExpected !== null) {
@@ -4236,6 +4246,18 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			|| d.object.resolvedSym.symbolKind === SymbolKind.Interface
 			|| d.object.resolvedSym.symbolKind === SymbolKind.Struct);
 	let propType = isStaticClassAccess ? unknownType() : getProperty(resolvedObjType, d.property);
+	// Engine (macro-body) view of Node.nodeType: the VM wire carries a type-AST
+	// Node tree (mapTypeToAst), not the checker Type the class declares. Type
+	// the member as Node so flat reads on it resolve via the NodeData
+	// unique-field-name rule below — same contract as reads on the node itself.
+	if (isEngineCheckMode() && d.property === "nodeType"
+			&& resolvedObjType.typeName === "Node" && propType.kind !== TypeKind.Unknown) {
+		// objType, not resolvedObjType: a Node-typed VALUE is Ref<Node> everywhere
+		// else (isPointerInC peels it above only to resolve the field). Handing back
+		// the peeled Struct makes `detectUnionDisc(tt)` fail against its Ref<Node>
+		// parameter with the nonsensical "got Node, expected Node".
+		propType = objType;
+	}
 	// Actor isolation: block external field access (only message-passing allowed).
 	// Allow access from inside the actor's own methods (ctx.currentActorName matches).
 	// Allow @nonisolated fields for read access (Swift parity).

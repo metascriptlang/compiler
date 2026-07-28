@@ -481,6 +481,12 @@ export class Node {
 	kind: NodeKind;
 	location: SourceLocation;
 	data: NodeData;
+	// Compiler-internal: the checker's resolved Type. MACRO BODIES see a
+	// different shape here — the VM wire carries a type-AST Node tree
+	// (TypeObject/TypeUnion/TypeArray/TypeGeneric/Identifier/literal kinds,
+	// from mapTypeToAst), so the engine checker types `node.nodeType` as Node
+	// and flat reads (.typExprFieldNames, .discFieldName, ...) resolve per the
+	// NodeData unique-field-name rule (checkExprPass engine virtual props).
 	nodeType: Type;
 	resolvedSym: Symbol;
 	flags: int32;
@@ -490,13 +496,11 @@ export class Node {
 	paramLocations: SourceLocation[]; // Per-param source locations for DEF recording
 	typeArg: string; // Explicit generic type arg string (e.g. "Person" from parse<Person>()) — stored on AST, not side-channel
 	flowNode: FlowNode; // Flow graph node for narrowing queries. Null until binder runs; null for non-reference nodes.
-	// Type-AST hint preserved across macro VM round-trip. When nodeToASTLiteral
-	// serializes a Node into the macro VM's heap, it embeds the type info as
-	// a type-AST. valueToNode → readNodeFromObject reconstructs the Node but
-	// can't restore nodeType (a Type, not a Node). It stores the type-AST
-	// here instead. Subsequent nodeToASTLiteral calls (for nested macro
-	// re-expansion) check this field as a fallback when nodeType is null,
-	// preserving type info through the chain.
+	// Compiler-side round-trip slot mirrored here for wire parity: the compiler's
+	// internal Node keeps nodeType as a checker Type, so valueToNode stores the
+	// reconstructed type-AST in nodeTypeAst and nodeToASTLiteral falls back to it
+	// for nested re-expansion. Macro bodies should read nodeType (above) — in the
+	// VM heap that key always carries the type-AST Node.
 	nodeTypeAst: Node;
 }
 
