@@ -70,5 +70,5 @@ import "./bug054";
 import "./bug055";
 import "./bug056";
 import "./bug057";
-import "./bug058_assert_message_expr_unwalked";
 import "./bug059_mono_pending_dedup_module_blind";
+import "./bug060_assert_message_expr_unwalked";
