@@ -328,10 +328,10 @@ done
 # === PRIMARY: msc test — compiles a C test binary and runs it ===
 # Full suite (lang + c + js + handoff + fixedbugs)
 # ⚠ PARTIALLY RED (2026-07-28): the 74 latent type errors are GONE — this entry
-# now passes the checker clean. It fails later, in C codegen, on 14 files (6 of
-# them one generic-instantiation root cause). Pre-existing latents that the old
-# checker abort was hiding, not regressions — verified by identical errors under
-# binaries built before and after. Inventory: docs/TSGAP.md "G1-gate".
+# now passes the checker clean. It fails later, in C codegen, on 7 files (was 14;
+# 6 fell to the assertMessageExpr child-walker gap, bug008 to a module-blind
+# generic-instance dedup). Pre-existing latents that the old checker abort was
+# hiding, not regressions. Inventory: docs/TSGAP.md "G1-gate".
 msc test src/test/index.ms
 
 # Compiler internal tests (inline `test {}` blocks across src/)
@@ -375,7 +375,7 @@ smaller entry no longer buys much, because you still pay a build.
 |---|---|---|---|
 | `msc test src/test/fixedbugs/bug048.ms` (14 files) | ~18s | 2.7s | **20s** |
 | `msc test src/compiler/meta/expand.ms` (69 files) | ~45s | 4.8s | **49s** |
-| `msc test src/index.ms` — 163 files / 3342 tests | ~21s | 17-19s | **40s** |
+| `msc test src/index.ms` — 164 files / 3346 tests | ~21s | 17-19s | **40s** |
 | ↑ same, first run after a large tree change | ~51s | 17s | **69s** |
 
 Yes, that table is right: the **full battery (40s) beats a single-module test
@@ -418,10 +418,12 @@ Traps, all measured rather than assumed:
   decide whether you are green.
 - **`msc test` accepts exactly one file** — no directories, no globs, no
   `--filter`. Grouping is only possible through an aggregator module.
-- **Aggregator status**: `src/test/index.ms` now type-checks clean but 14 files
+- **Aggregator status**: `src/test/index.ms` now type-checks clean but 7 files
   fail C codegen (see the banner in §5 and docs/TSGAP.md "G1-gate");
-  `src/test/fixedbugs/index.ms` is red for the same reason (bug006 / bug008 /
-  bug010 / bug047 are 4 of those 14, each passing standalone).
+  `src/test/fixedbugs/index.ms` is red for the same reason (bug006 / bug010 /
+  bug047 are 3 of those 7, each passing standalone). bug008 was the fourth
+  until 2026-07-28 — it passed standalone and failed ONLY in an aggregate,
+  because its generic instance collided by name with bug007's.
 
 Where the remaining time actually goes, if you want to attack it:
 
@@ -473,12 +475,16 @@ Status legend: ✅ done · 🚧 in progress · 🔲 todo
 
 - [x] ✅ `src/test/lang/discrim.ms` — 4 DU shapes + generic mono + multi-instance coexistence + RC interaction (18 tests, 2026-05-03)
 - [x] ✅ `src/test/lang/result.ms` — extended with edge cases: `Result<T,T>`, nested Result, ref/array/string payload, 3-deep `try` chain, Result+Either coexistence, `Result<void, E>` construction (17 new tests, 2026-05-03)
-- [x] ✅ `src/test/fixedbugs/` — directory created, pattern documented, 2 entries:
+- [x] ✅ `src/test/fixedbugs/` — directory created, pattern documented; seeded with
   - `bug001_du_structural_key_collision.ms` (genUnionType named-named cache collision)
   - `bug002_ref_gi_mono_name.ms` (peelToStructOrUnion lost mono name through Ref<GI>)
+
+  and grown to **bug001–bug059** (2026-07-28; 59 imports in `index.ms`, plus the
+  `bug005helper` / `bug059helper` sibling modules that their owners import, and
+  `bug048` which is still an orphan — see §4.1).
 - [x] ✅ Wired into `lang.ms` + `index.ms`
 
-Current baseline: full native suite green — `msc test src/index.ms` **3338/0** (2026-07-27).
+Current baseline: full native suite green — `msc test src/index.ms` **3346/0**, 164 files (2026-07-28).
 
 ### P0.5 — Native runtime guard
 
@@ -520,14 +526,15 @@ Current baseline: full native suite green — `msc test src/index.ms` **3338/0**
   regression guard: `evalNode` is back to a sequential `if` chain
   (`bea5869`) and the file is green 294/294 under drc AND orc.
 - [ ] 🔲 Codegen baseline tests — for critical patterns (DU layout, Result lowering, closure lifting) commit expected `.c` snippets in `src/test/c/snapshots/` and diff on regen.
-- [ ] 🔲 Native full-suite gate `src/test/index.ms` — **the type errors are
+- [ ] 🚧 Native full-suite gate `src/test/index.ms` — **the type errors are
   gone** (74 → 0; the last two, `jsonValueOf`'s `got Node, expected Node`,
   fell to the structural `typeRelation` work). It now fails in C codegen on
-  14 files, 6 of which share one generic-instantiation root cause. They are
-  pre-existing latents the old checker abort was hiding — identical errors
-  under binaries built before and after. Inventory + error-class census:
-  docs/TSGAP.md "G1-gate". Fix those and this gate joins the standing
-  ladder.
+  **7 files, down from 14** (2026-07-28): 6 fell to `assertMessageExpr`
+  missing from the AST child-walkers, `bug008` to a module-blind
+  generic-instance dedup. They are pre-existing latents the old checker abort
+  was hiding — identical errors under binaries built before and after.
+  Inventory + error-class census + the remaining clusters: docs/TSGAP.md
+  "G1-gate". Fix those and this gate joins the standing ladder.
 
 ### P2 — Coverage & infrastructure
 
