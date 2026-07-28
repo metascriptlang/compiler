@@ -1031,6 +1031,10 @@ function maybeCacheKey(inner: Type): string {
 		return key;
 	}
 	if (inner.kind === TypeKind.Function) return "fn_" + identSafeKey(typeKey(inner));
+	const k = inner.kind;
+	if (k === TypeKind.Union || k === TypeKind.Array || k === TypeKind.Tuple || k === TypeKind.Span || k === TypeKind.SizedArray) {
+		return "p" + (k as number) + "_" + identSafeKey(typeKey(inner));
+	}
 	return "p" + (inner.kind as number);
 }
 
@@ -1455,6 +1459,22 @@ function typeKey(t: Type): string {
 				i += 1;
 			}
 			return k + ")_" + (t.typeReturn !== null ? typeKey(t.typeReturn) : "void");
+		},
+		TypeKind.Union => {
+			let k = "union(";
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (i > 0) k = k + "|";
+				k = k + (t.typeChildren[i] !== null ? typeKey(t.typeChildren[i]) : "null");
+				i += 1;
+			}
+			return k + ")";
+		},
+		TypeKind.Span => {
+			return "Span(" + (t.typeReturn !== null ? typeKey(t.typeReturn) : "any") + ")";
+		},
+		TypeKind.SizedArray => {
+			return "SizedArray" + t.typeFlags.toString() + "(" + (t.typeReturn !== null ? typeKey(t.typeReturn) : "any") + ")";
 		},
 		_ => t.kind.toString(),
 	};
