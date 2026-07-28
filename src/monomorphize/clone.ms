@@ -128,6 +128,9 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 	if (src.resolvedSym !== null && src.resolvedSym.symbolKind === SymbolKind.EnumMember) {
 		dst.resolvedSym = src.resolvedSym;
 		dst.nodeType = src.nodeType;
+	} else if (src.resolvedSym !== null && (src.flags & NodeFlag.BoundSym) !== 0) {
+		// bindSym: pre-bound symbol travels by reference; checker re-derives nodeType.
+		dst.resolvedSym = src.resolvedSym;
 	}
 	return dst;
 }

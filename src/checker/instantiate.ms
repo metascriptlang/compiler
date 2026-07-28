@@ -4,7 +4,7 @@
 // immediately clone the function body, substitute types, and register
 // the specialized version. No separate monomorphize pass needed.
 
-import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName } from "./types";
 import { resolveAnnotation } from "./resolvePass";
@@ -324,10 +324,11 @@ function clearCheckerState(node: Node): void {
 	// clone.ms preserves it). The enum member type is concrete, never generic, so
 	// it needs no regeneration against the instance's concrete types. Keep it.
 	// See NIM-REF.md §1 "Enum member repr & generic-instantiation survival".
-	if (node.resolvedSym === null || node.resolvedSym.symbolKind !== SymbolKind.EnumMember) {
+	const keepBound = (node.flags & NodeFlag.BoundSym) !== 0 && node.resolvedSym !== null;
+	if (!keepBound && (node.resolvedSym === null || node.resolvedSym.symbolKind !== SymbolKind.EnumMember)) {
 		node.resolvedSym = null as unknown as Symbol;
 	}
-	node.flags = 0;
+	node.flags = node.flags & NodeFlag.BoundSym;
 	forEachChild(node, (child: Node): void => { clearCheckerState(child); });
 }
 
