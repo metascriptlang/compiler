@@ -334,6 +334,68 @@ weaken the test.**
 
 ---
 
+### 5.1. Cost model — run the smallest loop that can actually fail
+
+Measured 2026-07-27 (gen-10 `msc`, warm filesystem). Re-measure before trusting
+these numbers after a toolchain change; the SHAPE is what matters, not ±20%.
+
+| command | what it loads | wall time |
+|---|---|---|
+| `msc test src/compiler/meta/expand.ms` | that module + its imports | **11s** |
+| `msc test src/checker/checkExprPass.ms` | that module + its imports | **13s** |
+| `msc test src/test/fixedbugs/bugNNN.ms` | whole pipeline (via `helpers.ms`) | **240s** |
+| `msc test src/test/c/json.ms` | whole pipeline | **~250s** |
+| `msc test src/index.ms` — 163 files / 3342 tests | whole compiler | **276-289s** |
+
+**The rule that explains every number above:** `msc test <file>` runs EVERY inline
+test in that file's transitive dependency closure, not just the tests in the file
+you named. Cost tracks the closure, never the handful of assertions you care
+about. Anything under `src/test/**` imports `helpers.ms`, which pulls
+parse→check→mono→transform→analyze→codegen for BOTH backends — roughly 2760
+foreign tests come along for the ride. Read any guard run and you can see it:
+`codegen/js/jsgen.ms (43) 59793ms`, `analyzer/inject.ms (48) 37902ms` — about 100
+of those 240 seconds are inline tests with no relationship to your guard.
+
+**Corollary that should decide your workflow: one e2e guard costs about the same
+as the ENTIRE battery.** Never run two or three guards individually "to save
+time" — at that price, run `msc test src/index.ms` and get all 3342 instead.
+The only real saving is staying inside a module's own closure (10-15s).
+
+| you changed | run | why |
+|---|---|---|
+| one compiler module, no rule change | `msc test <that module>` | 10-15s edit loop |
+| a checker / codegen RULE | `msc test src/test/fixedbugs/bugNNN.ms` | runs the SOURCE checker, so it proves RED/GREEN *before* any rebuild (dodges the bootstrap trap) |
+| anything, before saying "done" | `msc test src/index.ms` | same price as one guard, covers everything |
+| `std/`, or anything users compile against | rebuild + `tools/sync-local-binary.sh`, then re-run downstream suites | the installed `msc` resolves `std/` from `~/.metascript`, NOT from this repo — a repo-only edit measures nothing |
+
+Traps, all measured rather than assumed:
+
+- **`out/` does not cache `msc test`.** Cold (`rm -rf out`) 240s vs warm 237s — the
+  difference is noise. So `rm -rf out` before a test costs nothing, and equally
+  buys nothing; keep it before `build` / `run` after touching compiler or std
+  source, where artifacts really are reused.
+- **`msc check` is not a fast gate.** On this repo it fails to resolve relative
+  imports (`Cannot resolve module './compiler/upgrade'`) and did NOT report a
+  deliberately planted type error. It exits quietly. Never use it to decide
+  whether you are green.
+- **`msc test` accepts exactly one file** — no directories, no globs, no
+  `--filter`. Grouping is only possible through an aggregator module...
+- **...and both aggregators are RED today**: `src/test/index.ms` (74 latent type
+  errors, §7 P1) and `src/test/fixedbugs/index.ms` (bug006 / bug008 / bug010 /
+  bug047 fail C codegen when bundled together, though each passes standalone).
+  Until one is fixed, guards can only be run one at a time.
+
+Levers to make this better, highest payoff first:
+
+1. **`msc test <file> --filter=<pattern>` / `--only-entry`** — would take a guard
+   from 240s to seconds and make per-guard TDD viable. Compiler change; by far
+   the biggest win available.
+2. **Fix `fixedbugs/index.ms`** — turns N guards × 240s into a single 240s pass.
+3. **Split `helpers.ms`** so C-only guards stop pulling `codegen/js` — worth
+   roughly 60s off every guard run.
+
+---
+
 ## 6. When You Fix a Bug — Mandatory Checklist
 
 1. Reproduce the bug with a minimal program. Save it.
