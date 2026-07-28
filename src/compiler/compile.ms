@@ -43,7 +43,7 @@ import { ResolveSection, DepsSection, defaultResolveSection, loadBuildConfig } f
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { CliOptions, Target } from "./options";
-import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
+import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker, markCppCompile, getCompilerName } from "./cc";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
@@ -96,7 +96,7 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection, tar
 	if (target === Target.JS) { backend = Backend.JS; }
 	if (target === Target.Raiser) { backend = Backend.Raiser; }
 	if (targetOs === "wasm" || targetOs === "emcc") { backend = Backend.Wasm; }
-	// Resolve stdPath from project root (handles both binary and Bun execution).
+	// Resolve stdPath from project root.
 	const root = resolveRuntimeDir();
 	const stdPath = root !== "" ? join(root, "std") : "std";
 	const config = createDefaultConfig(backend, stdPath);
@@ -485,9 +485,7 @@ interface CompileJob {
 //   1. GATHER (serial) — parse directives, dedup via _compiledOFiles, filter
 //      cache hits, precompute fingerprints.
 //   2. DISPATCH (parallel) — spawn one worker per cache miss. Each worker calls
-//      compileCFile() on its own thread. Under C backend this is real thread-
-//      level parallelism; under Bun-hosted bootstrap the spawn polyfill
-//      serializes (no speedup, still correct).
+//      compileCFile() on its own thread — real thread-level parallelism.
 //   3. COLLECT (serial, main thread) — waitFor each future in input order, check
 //      exit codes, publish cache entries, emit oFiles deterministically.
 // --emit=c is emit-only: write generated C, compile/link nothing.
@@ -1597,8 +1595,8 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	// Execute entry module
 	const entryRel = relative(baseDir, filePath);
 	const entryJs = `${outDir}/${replaceExt(entryRel, ".js")}`;
-	if (opts.verbose) verboseLog(`exec ${getJSRuntime()} ${entryJs}`);
-	const r = exec(`${getJSRuntime()} ${entryJs}`);
+	if (opts.verbose) verboseLog(`exec node ${entryJs}`);
+	const r = exec(`node ${entryJs}`);
 	if (r.ok) {
 		if (r.value !== "") console.log(r.value);
 		exit(0);

@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — File I/O and shared error helpers
 
-import { exit, cmdExists, platform } from "std/process";
+import { exit, platform } from "std/process";
 import { readFile, writeFile, ensureDir as fsEnsureDir } from "std/fs";
 import { CheckerContext } from "../checker/context";
 import { error, red, green, bold, dim } from "../utils/color";
@@ -43,19 +43,6 @@ export function replaceExt(inputFile: string, newExt: string): string {
 // Delegates to std/fs — cross-platform (no shell dependency).
 export function ensureDir(dir: string): void {
 	fsEnsureDir(dir);
-}
-
-// -- JS runtime detection (bun preferred, node fallback) --
-
-let jsRuntime = "";
-let jsRuntimeChecked = false;
-
-export function getJSRuntime(): string {
-	if (!jsRuntimeChecked) {
-		jsRuntimeChecked = true;
-		jsRuntime = cmdExists("bun") ? "bun" : "node";
-	}
-	return jsRuntime;
 }
 
 // -- Platform-dependent file suffixes --
