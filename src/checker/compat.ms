@@ -499,43 +499,88 @@ export enum TypeRelation {
 	Exact,          // 6 - exact match
 }
 
-function pairwiseExact(a: Type[], b: Type[]): boolean {
+// ===== Type identity =====
+//
+// Identity answers "are these the SAME type", which is a different question
+// from `typeRelation`/`isAssignable` ("may a value of one be used where the
+// other is expected"). Control-flow merges need identity: two narrowed
+// branches may only collapse into one when their types are the same, or a
+// union variant is silently dropped.
+//
+// Structure mirrors the reference `sameType`/`sameTypeAux`: dispatch on kind,
+// nominal types compare by name, anonymous aggregates compare field names +
+// field types + repr flags, value-carrying types compare values, transparent
+// wrappers compare their inner type. Self-referential types (Node, Scope)
+// make the walk cyclic, so the reference bounds it with a recursion check and
+// assumes "same" once the budget is spent — the conservative answer for a
+// merge is to treat the pair as identical rather than to recurse forever.
+
+let _sameTypeDepth = 0;
+
+export function sameType(a: Type | null, b: Type | null): boolean {
+	if (a === b) return true;
+	if (a === null || b === null) return false;
+	if (_sameTypeDepth > 12) return true;
+	_sameTypeDepth = _sameTypeDepth + 1;
+	const result = sameTypeInner(a, b);
+	_sameTypeDepth = _sameTypeDepth - 1;
+	return result;
+}
+
+function sameTypeList(a: Type[], b: Type[]): boolean {
 	if (a === null && b === null) return true;
 	if (a === null || b === null) return false;
 	if (a.length !== b.length) return false;
 	for (let i = 0; i < a.length; i += 1) {
-		if (typeRelation(a[i], b[i]) !== TypeRelation.Exact) return false;
+		if (!sameType(a[i], b[i])) return false;
 	}
 	return true;
 }
 
-function sameAnonStructShape(a: Type, b: Type): boolean {
+function sameNameList(a: string[], b: string[]): boolean {
+	if (a === null && b === null) return true;
+	if (a === null || b === null) return false;
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (a[i] !== b[i]) return false;
+	}
+	return true;
+}
+
+function sameStructType(a: Type, b: Type): boolean {
+	// Nominal types keep comparing by name; anonymous ones are structural.
+	if (a.typeName !== "" || b.typeName !== "") return a.typeName === b.typeName;
 	if (a.typeFlags !== b.typeFlags) return false;
-	if (a.typeNames === null || b.typeNames === null) return false;
-	if (a.typeNames.length !== b.typeNames.length) return false;
-	for (let i = 0; i < a.typeNames.length; i += 1) {
-		if (a.typeNames[i] !== b.typeNames[i]) return false;
-	}
-	return pairwiseExact(a.typeChildren, b.typeChildren);
+	if (!sameNameList(a.typeNames, b.typeNames)) return false;
+	return sameTypeList(a.typeChildren, b.typeChildren);
 }
 
-function unionMembersFit(formal: Type, actual: Type): boolean {
-	if (formal.typeChildren === null || actual.typeChildren === null) return false;
-	for (const m of actual.typeChildren) {
-		let fits = false;
-		for (const f of formal.typeChildren) {
-			if (typeRelation(f, m) !== TypeRelation.None) { fits = true; break; }
-		}
-		if (!fits) return false;
-	}
-	return true;
-}
-
-function sameFunctionShape(a: Type, b: Type): boolean {
-	if (!pairwiseExact(a.typeChildren, b.typeChildren)) return false;
+function sameInnerType(a: Type, b: Type): boolean {
 	if (a.typeReturn === null && b.typeReturn === null) return true;
 	if (a.typeReturn === null || b.typeReturn === null) return false;
-	return typeRelation(a.typeReturn, b.typeReturn) === TypeRelation.Exact;
+	return sameType(a.typeReturn, b.typeReturn);
+}
+
+function sameTypeInner(a: Type, b: Type): boolean {
+	if (a.kind !== b.kind) return false;
+	return match (a.kind) {
+		TypeKind.Struct => sameStructType(a, b),
+		TypeKind.Enum | TypeKind.Distinct | TypeKind.GenericParam
+			| TypeKind.StringLiteral | TypeKind.BooleanLiteral
+			| TypeKind.TypeReference => a.typeName === b.typeName,
+		TypeKind.EnumLiteral => a.typeName === b.typeName && sameNameList(a.typeNames, b.typeNames),
+		TypeKind.GenericInstance => a.typeName === b.typeName && sameTypeList(a.typeChildren, b.typeChildren),
+		TypeKind.Union | TypeKind.Tuple | TypeKind.Varargs
+			| TypeKind.Conditional => sameTypeList(a.typeChildren, b.typeChildren),
+		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren) && sameInnerType(a, b),
+		TypeKind.SizedArray => a.typeFlags === b.typeFlags && sameInnerType(a, b),
+		TypeKind.Array | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr
+			| TypeKind.Borrow | TypeKind.Var | TypeKind.Sink
+			| TypeKind.Lent => sameInnerType(a, b),
+		// Primitives and every remaining kind carry no payload — same kind is
+		// the whole answer.
+		_ => true,
+	};
 }
 
 let _relationDepth = 0;
@@ -563,11 +608,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	if (formal.kind === actual.kind) {
 		return match (formal.kind) {
 			TypeKind.Struct => {
-				if (formal.typeName !== "" && formal.typeName === actual.typeName) return TypeRelation.Exact;
-				if (formal.typeName === "" && actual.typeName === ""
-					&& sameAnonStructShape(formal, actual)) {
-					return TypeRelation.Exact;
-				}
+				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
 				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
 				return TypeRelation.None;
 			},
@@ -607,36 +648,6 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 					if (argRel === TypeRelation.None) return TypeRelation.None;
 				}
 				return TypeRelation.Exact;
-			},
-			TypeKind.StringLiteral | TypeKind.BooleanLiteral => {
-				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
-				return TypeRelation.None;
-			},
-			TypeKind.Union => {
-				if (pairwiseExact(formal.typeChildren, actual.typeChildren)) return TypeRelation.Exact;
-				if (unionMembersFit(formal, actual)) return TypeRelation.Subtype;
-				return TypeRelation.None;
-			},
-			TypeKind.Function => {
-				if (sameFunctionShape(formal, actual)) return TypeRelation.Exact;
-				return TypeRelation.Subtype;
-			},
-			TypeKind.Tuple => {
-				if (pairwiseExact(formal.typeChildren, actual.typeChildren)) return TypeRelation.Exact;
-				return TypeRelation.Subtype;
-			},
-			TypeKind.Borrow | TypeKind.Var => {
-				if (formal.typeReturn === null && actual.typeReturn === null) return TypeRelation.Exact;
-				if (formal.typeReturn === null || actual.typeReturn === null) return TypeRelation.None;
-				return typeRelation(formal.typeReturn, actual.typeReturn);
-			},
-			TypeKind.Varargs | TypeKind.Conditional => {
-				if (pairwiseExact(formal.typeChildren, actual.typeChildren)) return TypeRelation.Exact;
-				return TypeRelation.None;
-			},
-			TypeKind.GenericParam => {
-				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
-				return TypeRelation.Generic;
 			},
 			_ => TypeRelation.Exact,
 		};

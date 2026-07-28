@@ -21,7 +21,7 @@ import {
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isNumeric, isDiscriminatedUnion,
 } from "./types";
-import { typeRelation, TypeRelation } from "./compat";
+import { typeRelation, TypeRelation, sameType } from "./compat";
 
 // ===== FlowType =====
 //
@@ -604,7 +604,8 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 	// instances built at different sites with the same shape (e.g. Type | null
 	// constructed twice produces two different Union objects), which leaks into
 	// hover/error messages as `Type | null | Type` when reassignment chains
-	// merge at a BranchLabel. Use typeRelation === Exact to catch these.
+	// merge at a BranchLabel. Dedup by type IDENTITY (sameType) — assignability
+	// would collapse distinct union variants and drop one of them.
 	// Filter Never — it's the empty/unreachable type and contributes nothing.
 	const uniq: Type[] = [];
 	for (const a of antecedents) {
@@ -613,7 +614,7 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 		let seen = false;
 		for (const u of uniq) {
 			if (u === a) { seen = true; break; }
-			if (typeRelation(u, a) === TypeRelation.Exact) { seen = true; break; }
+			if (sameType(u, a)) { seen = true; break; }
 		}
 		if (!seen) uniq.push(a);
 	}
