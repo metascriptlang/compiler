@@ -376,7 +376,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 		// through to the Identifier branch below and got mis-typed.
 		if (ftype.kind === NodeKind.StringLiteral) {
 			keyNodes.push(fname);
-			valueNodes.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ftype.value });
+			valueNodes.push(ftype);
 			i = i + 1;
 			continue;
 		}

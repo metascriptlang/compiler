@@ -386,7 +386,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 		// Mirrors JSON decode Bug A fix.
 		if (ftype.kind === NodeKind.StringLiteral) {
 			keyNodes.push(fname);
-			valueNodes.push({ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: ftype.value });
+			valueNodes.push(ftype);
 			i = i + 1;
 			continue;
 		}
