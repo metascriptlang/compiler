@@ -25,32 +25,32 @@ race).
 ## Run
 
 ```bash
-bun run test-native      # or: bun bun/test-native.ts
+MSC=./msc msc run src/test/native/run.ms   # point MSC at a HEAD-matched binary
 ```
 
-Slow (clang build per case × 2 GC modes) — run it before/after any change to
-DRC injection, transforms touching RC, the actor scheduler, or the spawn/await
-runtime. Not part of the default `test-ms` loop.
+The runner is itself MetaScript (dogfood) — no Bun. Slow (clang build per case
+× 2 GC modes) — run it before/after any change to DRC injection, transforms
+touching RC, the actor scheduler, or the spawn/await runtime.
 
 ## Layout
 
 ```
 src/test/native/
 ├── README.md           # this file
-├── manifest.ts         # the case list (name, program, RSS bound, xfail modes)
+├── run.ms              # the runner (MetaScript; `msc run`) — builds+runs each case
+├── manifest.ms         # the case list (name, program, RSS bound, xfail modes)
 └── programs/*.ms       # self-contained real programs, each with a main()
 ```
 
-The runner (`bun/test-native.ts`) lives with the other harness drivers
-(`test-ms.ts`); the **test content** — programs + manifest — is here under
-version control.
+Runner, manifest, and programs are all here under version control — the whole
+tier is MetaScript, compiled + run by msc.
 
 ## Adding a case
 
 1. Drop a self-contained `programs/foo.ms` with a `main()`. Keep accumulators
    bounded (`% n`) — a signed-overflow UBSan trap in the test program would
    masquerade as a runtime crash.
-2. Add an entry to `manifest.ts`. Pick `maxRssMb` generously above the honest
+2. Add an entry to `manifest.ms`. Pick `maxRssMb` generously above the honest
    steady state.
 3. If it documents an OPEN bug, set `xfail: ["drc","orc"]`. The runner reports
    XFAIL (not a suite failure) and flags **XPASS** when it starts passing — the
