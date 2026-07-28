@@ -337,6 +337,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		NodeKind.AssertStmt => {
 			const d = node.data as AssertStmtData;
 			cb(d.assertExpr);
+			if (d.assertMessageExpr !== null) cb(d.assertMessageExpr);
 		},
 		NodeKind.ActorDecl => {
 			const d = node.data as ActorDeclData;

@@ -286,6 +286,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 				addFatalError(ctx, "'assert' can only be used inside test blocks", node.location.line, node.location.column);
 			}
 			checkExpr(ctx, d.assertExpr, null);
+			if (d.assertMessageExpr !== null) checkExpr(ctx, d.assertMessageExpr, null);
 		},
 		_ => {},
 	};
