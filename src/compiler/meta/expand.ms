@@ -56,6 +56,9 @@ import {
 import { CheckerContext, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { hasGenericParams } from "../../checker/types";
+import { lookupModuleCtx } from "../../checker/instantiate";
+import { lookupSymbol } from "../../checker/symbol";
+import { TypeKind } from "../../ast/node";
 import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath } from "./callbacks";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
@@ -1405,6 +1408,93 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 	return node;
 }
 
+// ===== getTypeImpl(TypeName): bake a named type's type-AST into the body =====
+//
+// Macro bodies can read the type of a VALUE they receive (`arg.nodeType`), but a
+// macro that validates against a FIXED interface has no value to read it from —
+// a bare object-literal argument carries no contextual type at expand time. This
+// resolves `getTypeImpl(Style)` in the macro's DECLARING module scope (where the
+// name is in scope, not the call site's) and splices the type-AST literal in.
+//
+// Safe to bake into the shared body: the compiled-macro cache is keyed by macro
+// name, and a named type does not vary per call site. Mutation is idempotent —
+// a second pass finds literals, not calls.
+function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroName: string, typeArg: string): Node {
+	if (node === null) return node;
+	if (node.kind === NodeKind.CallExpr) {
+		const cd = node.data as CallExprData;
+		if (cd.callee.kind === NodeKind.Identifier
+				&& (cd.callee.data as IdentifierData).name === "getTypeImpl"
+				&& cd.arguments.length === 1
+				&& cd.arguments[0].kind === NodeKind.Identifier) {
+			const typeName = (cd.arguments[0].data as IdentifierData).name;
+			let declCtx = ctx;
+			const declPath = ctx.macroDeclModuleRegistry.get(macroName);
+			if (declPath !== null && declPath !== "") {
+				const mc = lookupModuleCtx(declPath);
+				if (mc !== null) declCtx = mc;
+			}
+			const sym = lookupSymbol(declCtx.table, typeName);
+			if (sym === null || sym.symbolType === null) {
+				addError(ctx, `Macro '${macroName}': getTypeImpl cannot resolve type '${typeName}' in the macro's module scope`, node.location.line, node.location.column);
+				return node;
+			}
+			// Peel the Ref/Alias wrapper: the caller asked about a TYPE, so hand back
+			// its implementation (TypeObject) rather than the Ref<T> that a VALUE of
+			// that type would carry. `nodeType` is the opposite case and keeps Ref.
+			let t = sym.symbolType;
+			let guard = 0;
+			while (t !== null && guard < 4
+					&& (t.kind === TypeKind.Ref || t.kind === TypeKind.Alias)
+					&& t.typeReturn !== null) {
+				t = t.typeReturn;
+				guard = guard + 1;
+			}
+			// Assert to Node so flat reads on the spliced literal resolve through the
+			// NodeData unique-field-name rule; a bare literal would type as its own
+			// anonymous struct and expose only the keys it happens to carry.
+			return createNodeAt(NodeKind.TypeAssertion, {
+				asExpr: nodeToASTLiteral(mapTypeToAst(t, node.location), node.location),
+				asType: "Node",
+			}, node.location);
+		}
+		// getTypeArg() — the explicit <T> written at THIS call site. Resolved in the
+		// CALL SITE scope (that is where the user spelled the name), unlike
+		// getTypeImpl which resolves in the macro's own module.
+		if (cd.callee.kind === NodeKind.Identifier
+				&& (cd.callee.data as IdentifierData).name === "getTypeArg"
+				&& cd.arguments.length === 0) {
+			if (typeArg === "") {
+				addError(ctx, `Macro '${macroName}': getTypeArg() needs an explicit type argument at the call site — write ${macroName}<T>(...)`, node.location.line, node.location.column);
+				return node;
+			}
+			if (typeArg.indexOf(",", 0) >= 0) {
+				addError(ctx, `Macro '${macroName}': getTypeArg() supports a single type argument, got '${typeArg}'`, node.location.line, node.location.column);
+				return node;
+			}
+			const argSym = lookupSymbol(ctx.table, typeArg);
+			if (argSym === null || argSym.symbolType === null) {
+				addError(ctx, `Macro '${macroName}': getTypeArg() cannot resolve type '${typeArg}' at the call site`, node.location.line, node.location.column);
+				return node;
+			}
+			let at = argSym.symbolType;
+			let aguard = 0;
+			while (at !== null && aguard < 4
+					&& (at.kind === TypeKind.Ref || at.kind === TypeKind.Alias)
+					&& at.typeReturn !== null) {
+				at = at.typeReturn;
+				aguard = aguard + 1;
+			}
+			return createNodeAt(NodeKind.TypeAssertion, {
+				asExpr: nodeToASTLiteral(mapTypeToAst(at, node.location), node.location),
+				asType: "Node",
+			}, node.location);
+		}
+	}
+	mapChildren(node, (child: Node): Node => bakeTypeIntrinsics(child, ctx, macroName, typeArg));
+	return node;
+}
+
 // ===== expandMacroInvocation: run a single macro =====
 
 // Exported for eager inline expansion from checkExprPass.ms
@@ -1418,13 +1508,23 @@ interface CompiledMacro {
 let _compiledMacros: HashMap<string, CompiledMacro> = new HashMap<string, CompiledMacro>();
 let _compiledMacrosCtx: CheckerContext = null as unknown as CheckerContext;
 
-function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, params: string[]): CompiledMacro {
+function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, params: string[], typeArg: string): CompiledMacro {
 	if (_compiledMacrosCtx !== ctx) {
 		_compiledMacros = new HashMap<string, CompiledMacro>();
 		_compiledMacrosCtx = ctx;
 	}
-	const existing = _compiledMacros.get(macroName);
+	// A macro reading getTypeArg() compiles to a DIFFERENT body per instantiation,
+	// so the cache key carries the type argument.
+	const cacheKey = macroName;
+	const existing = _compiledMacros.get(cacheKey);
 	if (existing !== null) return existing;
+
+	// Bake into a CLONE when the call site supplies a type argument: the registry
+	// body is shared by every call site, and getTypeArg() resolves per site.
+	let workBody = body;
+	if (typeArg !== "") workBody = cloneNodeForCheck(body);
+	bakeTypeIntrinsics(workBody, ctx, macroName, typeArg);
+	body = workBody;
 
 	const loc = body.location;
 	const wrapperStmts: Node[] = [];
@@ -1477,7 +1577,7 @@ function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, p
 	}
 
 	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx };
-	_compiledMacros.set(macroName, cm);
+	_compiledMacros.set(cacheKey, cm);
 	return cm;
 }
 
@@ -1521,7 +1621,7 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		}
 	}
 
-	const cm = getOrCompileMacro(ctx, d.macroName, body, params);
+	const cm = getOrCompileMacro(ctx, d.macroName, body, params, node.typeArg);
 	if (cm === null as unknown as CompiledMacro) {
 		addError(ctx, `Macro '${d.macroName}' evaluator unavailable`, node.location.line, node.location.column);
 		return node;
