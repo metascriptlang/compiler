@@ -1,9 +1,5 @@
 # MetaScript Compiler
 
-A self-hosted compiler for MetaScript, written in MetaScript itself.
-
-## Overview
-
 This repository contains the **public, self-hosted implementation** of the MetaScript compiler. MetaScript is a modern, TypeScript-inspired language that compiles to native code via C, designed for high-performance game development and systems programming.
 
 ### Why This Repository?
@@ -33,13 +29,14 @@ This is a **clean rewrite** of the internal compiler used at [Metacraft Studio](
 ### Running the Compiler
 
 ```bash
-# Compile and run the self-hosted compiler
+# Run the self-hosted compiler
 msc run src/index.ms
 
-# Expected output:
-# === MetaScript Compiler ===
-# Step 1: Testing Lexer
-# ...
+# Run tests
+msc test src/index.ms
+
+# Compile an example
+msc run examples/testBasics.ms
 ```
 
 ### Project Structure
@@ -56,7 +53,7 @@ src/
 
 ## Current Status
 
-**Pre-Bootstrap** - The compiler pipeline is complete through all 5 phases. Currently closing gaps between the clean and hacked versions to achieve self-compilation.
+**Self-Hosted** — All 5 phases are complete and `msc` compiles, tests, and runs itself natively (C runtime and all). The build, test, and release paths are pure MetaScript: each generation of the compiler is built by the previous one, seeded from a released binary on a clean machine.
 
 - Phase 1 (Parse + Module): Complete — 37 NodeKind, 80+ TokenKind, recursive descent + Pratt
 - Phase 2 (TypeCheck): Complete — 3-pass (collect, resolve, check), cross-module propagation
@@ -87,11 +84,8 @@ The type system is inspired by TypeScript but optimized for systems programming:
 ### Building from Source
 
 ```bash
-# Ensure you have the MetaScript compiler installed
-msc --version
-
-# Run the self-hosted compiler
-msc run src/index.ms
+# Build the self-hosted compiler, generate ./out/release/index
+msc build --gc=drc --release src/index.ms
 ```
 
 ## Roadmap
@@ -104,12 +98,12 @@ msc run src/index.ms
 - [x] ~~Basic type checker~~
 
 ### Phase 2: Self-Hosting (Current)
-- [ ] Compile the compiler with itself
+- [x] ~~Compile the compiler with itself~~
 - [x] ~~Bootstrap process documentation~~
 - [ ] Performance benchmarking
 
 ### Phase 3: Production Ready
-- [x] ~~Full type system implementation (single-module)~~
+- [x] ~~Full type system implementation~~
 - [x] ~~Optimization passes (27 general + 4 C-backend transforms)~~
 - [x] ~~Error recovery and diagnostics~~
 - [ ] Standard library integration
@@ -137,17 +131,6 @@ We welcome contributions! This is the future of MetaScript, and we're building i
 - Update documentation as needed
 - Keep commits focused and well-described
 
-## Background: MetaScript at Metacraft Studio
-
-MetaScript was born from real-world game development needs at Metacraft Studio. Our internal compiler has powered multiple shipped games, handling:
-
-- Real-time gameplay logic
-- Network synchronization
-- Asset pipeline tools
-- Build automation
-
-This public compiler represents lessons learned from production use, redesigned for clarity and extensibility.
-
 ## Why MetaScript?
 
 **For TypeScript Developers**: Familiar syntax, but compiles to native code for 10-100x performance improvements.
@@ -156,18 +139,28 @@ This public compiler represents lessons learned from production use, redesigned 
 
 **For Game Developers**: Fast iteration with scripting-like ergonomics, production performance with native compilation.
 
-## License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
 ## Links
 
 - **Discord Community**: [Join us on Discord](https://discord.com/invite/gCwkmqS3xB)
 
 ## Acknowledgments
 
-This compiler is built on lessons learned from production game development and inspired by the design of TypeScript. Special thanks to the Metacraft Studio team for their insights and patience during the internal compiler's evolution.
+MetaScript is used internally at Metacraft Studio — powering gameplay logic, network code, asset pipelines, and build tooling across shipped games. This public compiler reflects lessons from that production usage.
 
----
+Its design draws on ideas from several languages:
 
-*This is the beginning of MetaScript's journey as a truly community-driven language. Join us in building something great!*
+- **TypeScript** — surface syntax, structural typing, and developer ergonomics familiar to JavaScript developers
+- **Nim** — transformation pipeline design, phase ordering, IR-based lowering, and the **ORC** reference counting model that directly inspired our deterministic memory management
+- **Zig** — `defer` for scope-exit cleanup, `comptime` metaprogramming, explicit allocators passed as arguments, and the "no hidden allocations" philosophy behind our memory system
+- **Rust** — memory safety discipline, ownership semantics, `Result<T, E>` error handling, and the principle of making unsafe code opt-in rather than the default
+- **Swift** — ARC (automatic reference counting) patterns and the idioms around safe, deterministic object lifecycles that informed our DRC implementation
+- **Pony** — actor model with capability-based concurrency and garbage collection per actor, the foundation of our own actor runtime
+- **Erlang / OTP** — supervisor trees, hierarchical fault recovery, and the "let it crash" philosophy behind our supervision model
+- **Haxe** — multi-target compilation philosophy: one source, many native outputs
+- **Salsa** — query-based incremental computation, directly inspired **Trans-Am**, our incremental build and caching engine
+
+MetaScript is a new language with its own tradeoffs, not a clone of any of these — but it would not exist in its current shape without the work these communities did first.
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file for details.
