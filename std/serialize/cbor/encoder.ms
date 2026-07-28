@@ -16,6 +16,7 @@
 // Endianness: CBOR is big-endian. All multi-byte arguments emit MSB first.
 
 import { CborKind, CborValue } from "./types";
+import { Buffer } from "std/core/buffer";
 
 // Local externs to runtime byte helpers — see decoder.ms for the same
 // pattern. msBufferAllocUnsafe gives an 8-byte scratch slot we fill via
@@ -24,6 +25,14 @@ import { CborKind, CborValue } from "./types";
 extern function msBufferAllocUnsafe(size: number): string;
 extern function msBufferWriteDoubleBE(buf: string, value: float64, offset: number): number;
 extern function msBufferReadUint8(buf: string, offset: number): number;
+
+// Public encode entry — lives here (not index.ms) so the encode macro can
+// bindSym("encode") without an encode↔index import cycle.
+export function encode(v: CborValue): Buffer {
+	const w = newCborWriter();
+	encodeValue(w, v);
+	return Buffer.fromArray(w.bytes);
+}
 
 // --- Internal byte builder ---
 //

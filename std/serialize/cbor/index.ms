@@ -16,7 +16,7 @@ export {
 	cborArrayOfInt8, cborArrayOfInt16, cborArrayOfInt32, cborArrayOfInt64,
 	cborArrayOfUint8, cborArrayOfUint16, cborArrayOfUint32,
 } from "./builder";
-export { CborWriter, newCborWriter, encodeValue, encodeText, encodeInt } from "./encoder";
+export { CborWriter, newCborWriter, encode, encodeValue, encodeText, encodeInt } from "./encoder";
 export { CborReader, decodeAll, decodeValue, newCborReader } from "./decoder";
 export {
 	asString, asNumber, asBoolean, asInt32, asInt64,
@@ -97,15 +97,8 @@ export function _cborToStructArray<T>(cv: CborValue, witness: T | null): T[] {
 	return out;
 }
 
-// --- Public encode entry ---
-//
-// Walks the CborValue tree, returns the encoded bytes as a Buffer.
-
-export function encode(v: CborValue): Buffer {
-	const w = newCborWriter();
-	encodeValue(w, v);
-	return Buffer.fromArray(w.bytes);
-}
+// encode moved to encoder.ms (bindSym target — importing it back here from
+// encode.ms would cycle); re-exported above.
 
 // --- Public decode entry ---
 //
