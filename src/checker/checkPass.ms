@@ -2141,16 +2141,26 @@ function checkProgramCore(
 
 // ===== Public API =====
 
+// A prelude context is read-only once built (checkProgramCore only reads it,
+// injectPrelude copies what it registers), so callers that would otherwise
+// rebuild it per invocation share one instance. NOT for checkModuleGraph — it
+// stamps targetOs onto its base context, which must not outlive one build.
+let _preludeCtxByKey: Map<string, CheckerContext> = new Map<string, CheckerContext>();
+export function preludeContextFor(stdPath: string, backendExt: string): CheckerContext {
+	const key = backendExt + "|" + stdPath;
+	const hit = _preludeCtxByKey.get(key);
+	if (hit !== null) return hit;
+	const ctx = buildPreludeContext(stdPath, backendExt);
+	_preludeCtxByKey.set(key, ctx);
+	return ctx;
+}
+
 // Discover the stdPath from the compiler's install location so prelude
 // (console, print, Result, etc.) loads for `msc check` regardless of cwd.
-let _standalonePreludeCtx: CheckerContext | null = null;
 function standalonePreludeCtx(): CheckerContext {
-	if (_standalonePreludeCtx === null) {
-		const root = resolveRuntimeDir();
-		const stdPath = root !== "" ? join(root, "std") : "";
-		_standalonePreludeCtx = buildPreludeContext(stdPath);
-	}
-	return _standalonePreludeCtx;
+	const root = resolveRuntimeDir();
+	const stdPath = root !== "" ? join(root, "std") : "";
+	return preludeContextFor(stdPath, ".cms");
 }
 
 // Convenience wrapper — creates empty registry. For inline tests and CLI tools

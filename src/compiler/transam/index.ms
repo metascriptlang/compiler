@@ -47,7 +47,7 @@ import {
 } from "./intern";
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
-import { checkProgramWithRegistryCancellable, buildPreludeContext } from "../../checker/checkPass";
+import { checkProgramWithRegistryCancellable, preludeContextFor } from "../../checker/checkPass";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
@@ -83,7 +83,7 @@ export function dbSetStdPath(db: TransAmDb, stdPath: string): void {
 
 export function dbEnsurePrelude(db: TransAmDb): void {
 	if (db.preludeCtx === null && db.stdPath.length > 0) {
-		db.preludeCtx = buildPreludeContext(db.stdPath, ".cms");
+		db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
 		// Pre-register exports from top-level std modules (e.g., std/build.ms)
 		// so auto-import suggestions work even without explicit imports.
 		preRegisterStdModule(db, db.stdPath + "/build.ms", "std/build");
@@ -560,7 +560,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	mod.imports = imports;
 	const graph = createModuleGraph();
 	addModule(graph, mod);
-	if (db.preludeCtx === null) db.preludeCtx = buildPreludeContext(db.stdPath, ".cms");
+	if (db.preludeCtx === null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
 	const checkerCtx = checkProgramWithRegistryCancellable(
 		program, db.exportRegistry, graph, mod,
 		db.preludeCtx, db.cancelCtx, startVersion
