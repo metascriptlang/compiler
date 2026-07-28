@@ -24,6 +24,11 @@
 
 import { Node, NodeKind } from "std/meta";
 import { detectUnionDisc, parseDiscKey } from "../discDetect";
+// bindSym targets — the macros bind every emitted name in THIS module's scope,
+// so the user imports nothing but the entry macro. encode lives in encoder.ms
+// (not the index hub) precisely so binding it cannot cycle. See SERIALIZE.md §11.
+import { cborBool, cborText, cborTextMap, cborInt, cborFloat } from "./builder";
+import { encode } from "./encoder";
 
 export macro cborValueOf(t: Node): Node {
 	// Resolve underlying type-AST node (peel Ref<Struct> wrapper).
@@ -163,7 +168,7 @@ export macro cborValueOf(t: Node): Node {
 				pattern = { kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: dp.boolValue };
 				discValueNode = {
 					kind: NodeKind.CallExpr, line: t.line, column: t.column,
-					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "cborBool" },
+					callee: bindSym("cborBool"),
 					arguments: [{ kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: dp.boolValue }],
 				};
 			} else if (discKind === "enum") {
@@ -175,14 +180,14 @@ export macro cborValueOf(t: Node): Node {
 				};
 				discValueNode = {
 					kind: NodeKind.CallExpr, line: t.line, column: t.column,
-					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "cborText" },
+					callee: bindSym("cborText"),
 					arguments: [{ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: dp.memberName }],
 				};
 			} else {
 				pattern = { kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: variantKey };
 				discValueNode = {
 					kind: NodeKind.CallExpr, line: t.line, column: t.column,
-					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "cborText" },
+					callee: bindSym("cborText"),
 					arguments: [{ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: variantKey }],
 				};
 			}
@@ -201,7 +206,7 @@ export macro cborValueOf(t: Node): Node {
 				};
 				vValueNodes.push({
 					kind: NodeKind.CallExpr, line: t.line, column: t.column,
-					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "cborValueOf" },
+					callee: bindSym("cborValueOf"),
 					arguments: [memberExpr],
 				});
 			}
@@ -212,7 +217,7 @@ export macro cborValueOf(t: Node): Node {
 				caseGuard: null as unknown as Node,
 				caseBody: {
 					kind: NodeKind.CallExpr, line: t.line, column: t.column,
-					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "cborTextMap" },
+					callee: bindSym("cborTextMap"),
 					arguments: [
 						{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vKeyNodes },
 						{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vValueNodes },
@@ -245,9 +250,12 @@ export macro cborValueOf(t: Node): Node {
 			_ => "",
 		};
 		if (literalBuilder !== "") {
+			const litCallee: Node = literalBuilder === "cborText"
+				? bindSym("cborText")
+				: bindSym("cborBool");
 			return {
 				kind: NodeKind.CallExpr, line: t.line, column: t.column,
-				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: literalBuilder },
+				callee: litCallee,
 				arguments: [t],
 			};
 		}
@@ -283,16 +291,17 @@ export macro cborValueOf(t: Node): Node {
 				asExpr: t,
 				asType: castType,
 			};
+		// bindSym is bake-time static — select the pre-bound callee in static
+		// branches rather than emitting the computed name unqualified.
+		let builderCallee: Node = bindSym("cborInt");
+		if (builderName === "cborText") { builderCallee = bindSym("cborText"); }
+		else if (builderName === "cborBool") { builderCallee = bindSym("cborBool"); }
+		else if (builderName === "cborFloat") { builderCallee = bindSym("cborFloat"); }
 		return {
 			kind: NodeKind.CallExpr,
 			line: t.line,
 			column: t.column,
-			callee: {
-				kind: NodeKind.Identifier,
-				line: t.line,
-				column: t.column,
-				name: builderName,
-			},
+			callee: builderCallee,
 			arguments: [argNode],
 		};
 	}
@@ -318,7 +327,7 @@ export macro cborValueOf(t: Node): Node {
 		// based on f's actual type (atomic or struct).
 		valueNodes.push({
 			kind: NodeKind.CallExpr, line: t.line, column: t.column,
-			callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "cborValueOf" },
+			callee: bindSym("cborValueOf"),
 			arguments: [memberExpr],
 		});
 		// Map keys are text (CBOR allows any-typed keys per RFC 8949 §3.1
@@ -330,12 +339,7 @@ export macro cborValueOf(t: Node): Node {
 		kind: NodeKind.CallExpr,
 		line: t.line,
 		column: t.column,
-		callee: {
-			kind: NodeKind.Identifier,
-			line: t.line,
-			column: t.column,
-			name: "cborTextMap",
-		},
+		callee: bindSym("cborTextMap"),
 		arguments: [
 			{
 				kind: NodeKind.ArrayLiteral,
@@ -359,23 +363,13 @@ export macro cborEncode(t: Node): Node {
 		kind: NodeKind.CallExpr,
 		line: t.line,
 		column: t.column,
-		callee: {
-			kind: NodeKind.Identifier,
-			line: t.line,
-			column: t.column,
-			name: "encode",
-		},
+		callee: bindSym("encode"),
 		arguments: [
 			{
 				kind: NodeKind.CallExpr,
 				line: t.line,
 				column: t.column,
-				callee: {
-					kind: NodeKind.Identifier,
-					line: t.line,
-					column: t.column,
-					name: "cborValueOf",
-				},
+				callee: bindSym("cborValueOf"),
 				arguments: [t],
 			},
 		],
