@@ -69,3 +69,4 @@ import "./bug053";
 import "./bug054";
 import "./bug055";
 import "./bug056";
+import "./bug057";
