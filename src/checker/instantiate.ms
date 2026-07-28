@@ -114,15 +114,21 @@ export function lookupCtorDefaults(ctorFnName: string): CtorEntry {
 	return null as unknown as CtorEntry;
 }
 
+function pendingInstanceKey(node: Node, name: string): string {
+	const owner = node.resolvedSym !== null ? node.resolvedSym.modulePath : "";
+	return owner + "::" + name;
+}
+
 export function addPendingInstance(node: Node): void {
+	let key = "";
 	if (node.kind === NodeKind.FunctionDecl) {
-		const fd = node.data as FunctionDeclData;
-		if (_pendingNames.has(fd.fnName)) return;
-		_pendingNames.add(fd.fnName);
+		key = pendingInstanceKey(node, (node.data as FunctionDeclData).fnName);
 	} else if (node.kind === NodeKind.ClassDecl) {
-		const cd = node.data as ClassDeclData;
-		if (_pendingNames.has(cd.className)) return;
-		_pendingNames.add(cd.className);
+		key = pendingInstanceKey(node, (node.data as ClassDeclData).className);
+	}
+	if (key !== "") {
+		if (_pendingNames.has(key)) return;
+		_pendingNames.add(key);
 	}
 	_pendingInstances.push(node);
 }

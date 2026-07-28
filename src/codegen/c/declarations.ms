@@ -194,9 +194,9 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	// Generic instance deduplication (reference parity).
 	// First module to codegen an instance emits the body; others get forward decl only.
 	const isGenericInstance = d.fnName.indexOf("__") >= 0 && sym !== null && sym.name.indexOf("__") >= 0;
-	const instanceAlreadyEmitted = isGenericInstance && isInstanceEmitted(d.fnName);
+	const instanceAlreadyEmitted = isGenericInstance && isInstanceEmitted(name);
 	if (isGenericInstance && !instanceAlreadyEmitted) {
-		markInstanceEmitted(d.fnName);
+		markInstanceEmitted(name);
 	}
 
 	// Non-exported functions get static prefix (Standard implementation parity)
