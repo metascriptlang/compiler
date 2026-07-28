@@ -1085,16 +1085,24 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 								ni = ni + 1;
 							}
 							if (!found && engineNodeHasVirtualKey(objE, key)) found = true;
-							if (!found && d.keyLocations !== null && ki < d.keyLocations.length) {
-								const kl = d.keyLocations[ki];
-								addErrorRange(ctx, "'" + key + "' does not exist in type '" + containerName + "'", kl.line, kl.column, kl.column + key.length);
+							if (!found) {
+								if (d.keyLocations !== null && ki < d.keyLocations.length) {
+									const kl = d.keyLocations[ki];
+									addErrorRange(ctx, "'" + key + "' does not exist in type '" + containerName + "'", kl.line, kl.column, kl.column + key.length);
+								} else {
+									addError(ctx, "'" + key + "' does not exist in type '" + containerName + "'", node.location.line, node.location.column);
+								}
 							}
 							// Check duplicate: same key appeared earlier
 							let di = 0;
 							while (di < ki) {
-								if (d.keys[di] === key && d.keyLocations !== null && ki < d.keyLocations.length) {
-									const kl = d.keyLocations[ki];
-									addErrorRange(ctx, "field initialized twice: '" + key + "'", kl.line, kl.column, kl.column + key.length);
+								if (d.keys[di] === key) {
+									if (d.keyLocations !== null && ki < d.keyLocations.length) {
+										const kl = d.keyLocations[ki];
+										addErrorRange(ctx, "field initialized twice: '" + key + "'", kl.line, kl.column, kl.column + key.length);
+									} else {
+										addError(ctx, "field initialized twice: '" + key + "'", node.location.line, node.location.column);
+									}
 									break;
 								}
 								di = di + 1;
