@@ -13,9 +13,9 @@ import { findProjectRoot } from "./utils/path";
 import { join } from "std/fs/path";
 // Import the package manager hub for test discovery. Individual commands
 // (msc add, install, publish, ...) are wired up from this module as they land.
-// NOTE: imported for Bun test runner (finds inline tests). The C build path
-// (msc build/run src/index.ms) also compiles these modules; any link errors
-// from OTHER files in the working tree are pre-existing, not caused by this import.
+// NOTE: imported so test discovery finds these modules' inline tests; any link
+// errors from OTHER files in the working tree are pre-existing, not caused by
+// this import.
 import { cmdAdd, cmdRemove, cmdInstall, cmdLogin, cmdLogout, cmdWhoami, cmdPublish, cmdOrg } from "./compiler/package/index";
 import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compiler/upgrade";
 import { ensureVersionMarker } from "./compiler/cache";

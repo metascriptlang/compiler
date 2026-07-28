@@ -412,8 +412,6 @@ test "parse error in dependency doesn't block dependent" {
 }
 
 test "C header import synthesizes exports" {
-	// Requires native Aro C parser (msAroParse) — not available in Bun runtime.
-	// Passes when compiled via C backend. Skip gracefully under Bun.
 	// .h imports are inlined into the consuming module (reference parity)
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/lib.h", entrySource: "void foo(int x);" });

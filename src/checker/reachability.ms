@@ -20,7 +20,7 @@ interface ModuleIndex {
 	programs: Node[];
 }
 
-// Program lookup cache — parallel arrays (works in both Bun and C binary)
+// Program lookup cache — parallel arrays
 let _progCacheKeys: string[] = [];
 let _progCacheVals: Node[] = [];
 

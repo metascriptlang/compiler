@@ -2,7 +2,7 @@
 //
 // Unit tests live inside each phase file (token.ms, target.ms, type.ms,
 // error.ms, tokenize.ms, preprocess.ms). This file imports them so a
-// single `test-ms` invocation runs the whole suite, plus adds end-to-end
+// single `msc test` invocation runs the whole suite, plus adds end-to-end
 // integration tests for the public API in ../cimport/index.ms.
 
 import "./token";

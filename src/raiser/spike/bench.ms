@@ -11,7 +11,7 @@
 // This isolates the boxing-allocation overhead the spike targets.
 //
 // Run:
-//   rm -rf out && bun run run-ms src/raiser/spike/bench.ms
+//   msc run src/raiser/spike/bench.ms
 
 import {
 	RaiserOpcode, RaiserInstruction, raiserABC, raiserABx, raiserAx,

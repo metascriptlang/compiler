@@ -108,7 +108,7 @@ function httpsPost(host: string, path: string, body: string, contentType: string
 	});
 }
 
-// Busy-wait sleep (ms). Works in both Bun and compiled binary.
+// Busy-wait sleep (ms).
 function sleepMs(ms: number): void {
 	const start = performance.now();
 	while (performance.now() - start < ms) {

@@ -41,7 +41,7 @@ import { djb2 } from "std/hash";
 export function taHashString(s: string): int64 { return djb2(s); }
 
 // ===== Hash Combinators =====
-// Uses multiplication + modulo (not bitwise ops) for JS/Bun compatibility.
+// Uses multiplication + modulo (not bitwise ops) for JS-backend compatibility.
 // Bitwise <<, >>, ^ operate on signed int32 in JS, giving different results than C int64.
 
 const PRIME: number = 2147483647;

@@ -89,7 +89,7 @@ export function resolveRuntimeDir(): string {
 		base = dirname(base);
 		i = i + 1;
 	}
-	// Fallback: cwd (needed when argv[0] doesn't resolve, e.g. Bun)
+	// Fallback: cwd (needed when argv[0] doesn't resolve)
 	base = cwd();
 	if (exists(join(base, "std/core/system/index.ms"))) return base;
 	return "";

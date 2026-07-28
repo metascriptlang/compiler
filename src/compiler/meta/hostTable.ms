@@ -135,7 +135,7 @@ function _bridge_msFsRename(args: RaiserValue[]): RaiserValue {
 function _bridge_msFsReadDirEntries(args: RaiserValue[]): RaiserValue {
 	// C contract: returns lines separated by "\n", empty on error
 	// (caller polls errno). MS readDir returns string[]; join with "\n".
-	// Bun shim's readDir returns [] silently on failure — pre-check via
+	// readDir returns [] silently on failure — pre-check via
 	// exists+isDir so callers polling errno see a non-zero value when path
 	// is missing or not a directory.
 	const path = unboxString(args[0]);
@@ -227,10 +227,7 @@ function _bridge_msProcSpawnGetStderr(args: RaiserValue[]): RaiserValue {
 }
 
 // --- String bridges ---
-// Each bridge delegates to the host runtime's native JS String method
-// (verified: `.trim()` etc. in MS source within a bridge body dispatches
-// to JS String.prototype methods after Bun transpile, NOT the extern
-// stub). Bridges exist so `@comptime` code calling `s.trim()` etc. can
+// Bridges exist so `@comptime` code calling `s.trim()` etc. can
 // dispatch through the CallHost path without falling into "Unknown host
 // function" silent-nil. Full catalogue: docs/RAISER-GAP.md Phase 4.
 

@@ -112,8 +112,7 @@ function scanEscape(s: LexerState): string {
 		_ => {
 			// Unknown escape: pass the escaped character through verbatim. A
 			// multi-byte UTF-8 char must be consumed whole — slicing just the
-			// lead byte leaves continuation bytes behind and a lone lead byte
-			// is not representable on the Bun host.
+			// lead byte leaves continuation bytes behind.
 			if (esc < 0x80) return s.source.byteSlice(s.pos - 1, s.pos);
 			let tail = 1;
 			if (esc >= 0xF0) { tail = 3; }
@@ -133,10 +132,9 @@ export function scanString(s: LexerState, quote: number): void {
 	advanceChar(s); // skip opening quote
 	const rawStart = s.pos; // capture raw source start (after opening quote)
 
-	// Plain bytes are copied in RUNS, not one byte at a time: a single-byte
-	// byteSlice inside a multi-byte UTF-8 sequence is not representable as a
-	// string on the Bun host (lone bytes decode to U+FFFD). Runs only break at
-	// ASCII bytes (quote/backslash), so every slice stays on character bounds.
+	// Plain bytes are copied in RUNS, not one byte at a time. Runs only break
+	// at ASCII bytes (quote/backslash), so every slice stays on character
+	// bounds and multi-byte UTF-8 sequences are never split.
 	let runStart = s.pos;
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
@@ -205,8 +203,7 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 		}
 	}
 
-	// Run-copied for the same reason as scanString: single-byte slices of
-	// multi-byte UTF-8 are not representable on the Bun host.
+	// Run-copied for the same reason as scanString: never split multi-byte UTF-8.
 	let runStart = s.pos;
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);

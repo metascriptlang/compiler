@@ -868,4 +868,4 @@ function parseTypedef(ctx: ParseCtx, baseTy: CType): void {
 // ===== Tests =====
 
 // Parser tests live in the emitter's test suite (src/module/cimport/emit.ms)
-// and in the Bun test path (bun run test-ms src/module/cparse/parse.ms).
+// and in `msc test src/module/cparse/parse.ms`.

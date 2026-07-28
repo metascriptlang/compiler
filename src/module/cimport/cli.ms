@@ -1,7 +1,7 @@
 // cparse — Standalone CLI entry
 //
 // Usage:
-//   bun run run-ms run src/compiler/cparse/main.ms -- <header.h> [options]
+//   msc run src/compiler/cparse/main.ms -- <header.h> [options]
 //
 // Options:
 //   --target=<triple>   linux-x86_64 | linux-aarch64 | macos-x86_64 |

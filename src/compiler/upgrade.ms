@@ -142,8 +142,7 @@ export function maybeShowUpdateNotice(): void {
 
 // ===== Upgrade command =====
 
-// Windows detection via env vars (no std/os dependency — avoids Bun transpiler
-// parse errors on export-extern syntax during stage-1 hosting).
+// Windows detection via env vars (no std/os dependency).
 function isWindows(): boolean {
 	return env.get("OS") === "Windows_NT" || env.get("SystemRoot") !== "";
 }

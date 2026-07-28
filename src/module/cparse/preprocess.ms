@@ -256,8 +256,8 @@ function stringize(tok: CToken): string {
 	while (tok.kind !== CTokenKind.Eof) {
 		if (!first && tok.hasSpace) result = result + " ";
 		const s = tok.stringVal;
-		// Run-copied for multi-byte UTF-8 safety on the Bun host: plain bytes
-		// flush as spans, breaking only at the ASCII bytes that need escaping.
+		// Run-copied for multi-byte UTF-8 safety: plain bytes flush as spans,
+		// breaking only at the ASCII bytes that need escaping.
 		let runStart = 0;
 		let i = 0;
 		while (i < s.byteLength) {

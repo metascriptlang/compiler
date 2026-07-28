@@ -422,7 +422,7 @@ export function popBlock(p: CProc): CBlock {
 	// Push through the field chain, NOT a local alias: under value-array
 	// semantics `const parentParts = ...stmts.parts` copies {len, p}; growth
 	// reallocs through the copy and the parent's field keeps the freed buffer
-	// (Bun's reference arrays hide this — native msc read the stale pointer
+	// (reference-array semantics hide this — native msc read the stale pointer
 	// on the very next emit). Same disease as hashSetEnlarge.
 	const parentIdx = p.blocks.length - 1;
 	for (const s of block.locals.parts) p.blocks[parentIdx].stmts.parts.push(s);
@@ -634,8 +634,8 @@ export function moduleTemp(g: CGen): string {
 //
 // Windows paths like `C:\Users\foo\bar.ms` embedded in a C string literal cause
 // `\U`, `\f`, `\b` etc. to be parsed as escape sequences. Normalize `\` → `/`
-// at this boundary (matches Bun's path.replaceAll("\\", "/") in matchesGlob and
-// cwd normalization) — Windows accepts either separator and the C preprocessor
+// at this boundary (same normalization matchesGlob and cwd handling apply) —
+// Windows accepts either separator and the C preprocessor
 // is happy with forward slashes in #line paths.
 export function emitLineDir(g: CGen, p: CProc, node: Node): void {
 	if (node === null) return;

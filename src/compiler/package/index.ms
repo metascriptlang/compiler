@@ -6,7 +6,7 @@
 // are implemented.
 //
 // Importing this hub from src/index.ms ensures the submodules' inline tests
-// are discovered by the main test runner (bun run test-ms src/index.ms).
+// are discovered by the main test runner (msc test src/index.ms).
 
 export {
 	ParsedVersion,

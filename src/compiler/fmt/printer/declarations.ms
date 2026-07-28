@@ -437,7 +437,7 @@ export function printTestDecl(node: Node, options: FormatOptions): Doc {
 // unescapes `\"`, `\'`, `\\` etc. on the way in; we must reverse that.
 function escapeForQuote(s: string, quote: string): string {
 	let out = "";
-	// Run-copied for multi-byte UTF-8 safety on the Bun host (see fmt/printer/literals.ms).
+	// Run-copied for multi-byte UTF-8 safety (see fmt/printer/literals.ms).
 	const q = quote.byteAt(0);
 	let runStart = 0;
 	let i = 0;

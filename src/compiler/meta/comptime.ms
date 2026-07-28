@@ -353,7 +353,7 @@ test "Phase 8a: outer fn + extern via CallHost" {
 // Single-file checkProgram mode has no outer ExportRegistry, so cross-module
 // import inside @comptime returns Nil. Production path uses checkProgramWithRegistry
 // (orchestrator) which DOES set the registry; cross-module then works end-to-end.
-// Verified via `bun run run-ms`:
+// Verified via `msc run`:
 //   import { exec } from "std/process";
 //   const VERSION = @comptime { exec("echo v1.2.3").value };
 //   → VERSION = "v1.2.3\n" baked into binary
@@ -373,7 +373,7 @@ test "Phase 8b: cross-module unresolved in single-file mode (no registry)" {
 // --- CallHost smoke tests (Phase 6) ---
 // End-to-end: parse → check → transform → Raiser codegen (emits CallHost
 // from resolved extern Symbol) → VM dispatch → registered bridge → MS-level
-// std fn (Bun shim today) → result folded into AST literal.
+// std fn → result folded into AST literal.
 //
 // Each test asserts the @comptime block folds to the expected literal kind,
 // proving the entire CallHost pipeline works from user source to value.
@@ -529,9 +529,6 @@ test "comptime CallHost msFsReadDirEntries non-empty" {
 //     import { readFile } from "std/fs";          // module-level
 //     const CFG = @comptime { readFile("config.json") };
 //
-// Verify path này CHƯA test được trong session vì:
-//   1. Smoke helper _smokeCallHost bypasses @comptime block extraction.
-//   2. `bun run run-ms <file>` đang fail tại prelude std/serialize/json/decode.ms
-//      (WIP của anh). Compiler không reach được test file.
-// → Real cross-module @comptime usage = UNVERIFIED. Phase 8a hoặc anh fix
-// prelude trước khi confirm được.
+// Verify path này CHƯA test được trong session vì smoke helper _smokeCallHost
+// bypasses @comptime block extraction.
+// → Real cross-module @comptime usage = UNVERIFIED (Phase 8a).

@@ -13,9 +13,9 @@ export function printNumberLiteral(node: Node): Doc {
 // We must reverse that to produce valid source.
 function escapeString(s: string, quote: number): string {
 	let out = "";
-	// Plain bytes are copied in runs, not one at a time: a single-byte slice
-	// inside a multi-byte UTF-8 sequence is not representable on the Bun host.
-	// Escape-relevant bytes are all ASCII, so runs break on char boundaries.
+	// Plain bytes are copied in runs, not one at a time. Escape-relevant bytes
+	// are all ASCII, so runs break on character boundaries and multi-byte
+	// UTF-8 sequences are never split.
 	let runStart = 0;
 	let i = 0;
 	while (i < s.byteLength) {
