@@ -384,7 +384,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (node.resolvedSym !== null && node.resolvedSym.symbolKind === SymbolKind.EnumMember) {
 				node.nodeType = node.resolvedSym.symbolType; return;
 			}
-			const sym = lookupSymbol(ctx.table, d.name);
+			// bindSym: the macro pre-bound this identifier in its own module's
+			// scope — the user's scope must not re-resolve (or hijack) it.
+			const sym = (node.flags & NodeFlag.BoundSym) !== 0 && node.resolvedSym !== null
+				? node.resolvedSym
+				: lookupSymbol(ctx.table, d.name);
 			if (sym === null) {
 					addError(ctx, `Undefined variable '${d.name}'`, node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
@@ -2473,7 +2477,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 	// Check for overloads + set resolvedSym for direct calls
 	if (d.callee.kind === NodeKind.Identifier) {
 		const calleeName = (d.callee.data as IdentifierData).name;
-		const sym = lookupSymbol(ctx.table, calleeName);
+		const sym = (d.callee.flags & NodeFlag.BoundSym) !== 0 && d.callee.resolvedSym !== null
+			? d.callee.resolvedSym
+			: lookupSymbol(ctx.table, calleeName);
 		// Phase B+ eager: Bare-call macro invocation with inline expansion.
 		//
 		// When the callee resolves to a Macro symbol, run the macro RIGHT NOW
@@ -2497,8 +2503,17 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			const macroArgsRef = d.arguments;
 			checkJsxConsumed(ctx, macroArgsRef);
 			// Mutate node to MacroInvocation form so expandMacroInvocation can read it
+			// bindSym'd macro: read the bound symbol BEFORE node.data is replaced —
+			// the replacement destroys the old CallExprData and d.callee with it.
+			const boundCalleeSym = (d.callee.flags & NodeFlag.BoundSym) !== 0
+				? d.callee.resolvedSym
+				: null as unknown as Symbol;
 			node.kind = NodeKind.MacroInvocation;
 			node.data = { macroName: calleeName, macroArgs: macroArgsRef };
+			if (boundCalleeSym !== null) {
+				node.resolvedSym = boundCalleeSym;
+				node.flags = node.flags | NodeFlag.BoundSym;
+			}
 			// SERIALIZE A3 — Defer convention: if any arg has parametric type
 			// (contains GenericParam), DON'T eager-expand. The MacroInvocation
 			// persists through monomorphize (clone.ms:191 preserves it), where
@@ -4840,6 +4855,9 @@ function engineNodeHasVirtualKey(recvType: Type | null, key: string): boolean {
 	if (!isEngineCheckMode()) return false;
 	if (recvType === null || recvType.typeName !== "Node") return false;
 	if (key === "line" || key === "column" || key === "endLine" || key === "endColumn") return true;
+	// bindSym bake splices Identifier literals carrying the bound-symbol handle;
+	// valueToNode consumes it — never a real Node field.
+	if (key === "symHandle") return true;
 	if (recvType.typeNames === null || recvType.typeChildren === null) return false;
 	let dataType: Type | null = null;
 	let fi = 0;
