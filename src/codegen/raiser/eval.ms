@@ -137,7 +137,13 @@ function compileProgramIntoEngine(program: Node, seeds: Symbol[], wantFn: string
 	registerSeedSymbols(seeds);
 	const transformed = transformForEngine(program);
 	clearSeedSymbols();
-	return appendProgramToImage(_engine.image, _engine.funcMap, _engine.enumMap, transformed, wantFn);
+	// appendProgramToImage triggers on-demand helper compiles (ensureCompiledIntoEngine)
+	// whose nested transformForEngine overwrites _lastEngineCheckErrors — restore this
+	// program's own check errors so the caller reads them, not the last helper's (bug053).
+	const ownErrors = _lastEngineCheckErrors;
+	const idx = appendProgramToImage(_engine.image, _engine.funcMap, _engine.enumMap, transformed, wantFn);
+	_lastEngineCheckErrors = ownErrors;
+	return idx;
 }
 
 export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string): EngineMacroResult {
@@ -642,4 +648,28 @@ const filler = "anything";
 return k;
 `);
 	assert ctx.lastResult.intVal === 76;
+}
+
+// bug053 guard: the wrapper's own check errors must survive on-demand helper
+// compiles. appendProgramToImage lazily compiles `helper` (a seed from the
+// outer ctx) via ensureCompiledIntoEngine, whose nested transformForEngine
+// used to overwrite _lastEngineCheckErrors before compileMacroIntoEngine
+// read it — swallowing the wrapper's member error entirely.
+test "engine: macro body errors survive on-demand helper compiles" {
+	const outerPr = parseSource("export function helper(x: number): number { return x; }");
+	assert outerPr.ok;
+	const outerCtx = checkProgram(outerPr.value);
+	const wrapperPr = parseSource(`
+function __macroBody(t: string): number {
+	const z = t.noSuchMemberAnywhere;
+	return helper(1);
+}
+`);
+	assert wrapperPr.ok;
+	const r = compileMacroIntoEngine(wrapperPr.value, outerCtx, "__macroBody");
+	let found = false;
+	for (const e of r.errors) {
+		if (e.message.indexOf("noSuchMemberAnywhere", 0) >= 0) found = true;
+	}
+	assert found;
 }
