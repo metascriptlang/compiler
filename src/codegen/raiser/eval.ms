@@ -5,7 +5,7 @@
 import { Node, Symbol, createNode, NodeKind, ProgramData } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
-import { ExportRegistry, CheckerContext, CheckerError, setEngineCheckMode } from "../../checker/context";
+import { ExportRegistry, CheckerContext, CheckerError, Severity, setEngineCheckMode } from "../../checker/context";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
 import { createTransformContextWithChecker } from "../../transform/context";
@@ -57,6 +57,11 @@ function raiserPreludeCtx(): CheckerContext {
 }
 
 let _lastEngineCheckErrors: CheckerError[] = [];
+
+// On-demand helper compiles (ensureCompiledIntoEngine) run their own check pass
+// whose errors belong to no wrapper. Without this queue a type-broken helper
+// becomes garbage bytecode with no diagnostic (BUGS.md §2 row 9).
+let _pendingHelperErrors: CheckerError[] = [];
 
 // Check + refineTypes + transformForRaiser over a synthetic Program, ready for
 // bytecode generation. Runs the inner pipeline destructively, so the caller must
@@ -159,8 +164,13 @@ export function compileMacroIntoEngine(program: Node, token: CheckerContext, mac
 			for (const s of moduleScopeSymbols(declCtx.table)) seeds.push(s);
 		}
 	}
+	_pendingHelperErrors = [];
 	const funcIdx = compileProgramIntoEngine(program, seeds, macroFnName);
-	return { vm: _engine.vm, funcIdx, errors: _lastEngineCheckErrors };
+	const errors: CheckerError[] = [];
+	for (const e of _lastEngineCheckErrors) errors.push(e);
+	for (const e of _pendingHelperErrors) errors.push(e);
+	_pendingHelperErrors = [];
+	return { vm: _engine.vm, funcIdx, errors };
 }
 
 registerMacroEngineCompiler(compileMacroIntoEngine);
@@ -191,7 +201,16 @@ function ensureCompiledIntoEngine(sym: Symbol): number {
 	const clone = cloneNodeForCheck(sym.declNode);
 	const decls: Node[] = [clone];
 	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
-	return compileProgramIntoEngine(program, seeds, name);
+	const idx = compileProgramIntoEngine(program, seeds, name);
+	for (const e of _lastEngineCheckErrors) {
+		if (e.severity !== Severity.Error) continue;
+		_pendingHelperErrors.push({
+			message: `helper '${name}': ${e.message}`,
+			line: e.line, column: e.column, endLine: e.endLine, endColumn: e.endColumn,
+			fatal: e.fatal, severity: e.severity, tags: e.tags,
+		});
+	}
+	return idx;
 }
 
 registerRaiserOnDemand(ensureCompiledIntoEngine);
