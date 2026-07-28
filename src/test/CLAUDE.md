@@ -327,10 +327,11 @@ done
 ```bash
 # === PRIMARY: msc test — compiles a C test binary and runs it ===
 # Full suite (lang + c + js + handoff + fixedbugs)
-# ⚠ KNOWN RED (2026-07-27): 74 latent type errors — this entry predates the
-# native runner and has never passed native type-check. Verified identical at
-# clean HEAD c227ded, so not caused by any working-tree WIP. Migration
-# campaign: §7 P1.
+# ⚠ PARTIALLY RED (2026-07-28): the 74 latent type errors are GONE — this entry
+# now passes the checker clean. It fails later, in C codegen, on 14 files (6 of
+# them one generic-instantiation root cause). Pre-existing latents that the old
+# checker abort was hiding, not regressions — verified by identical errors under
+# binaries built before and after. Inventory: docs/TSGAP.md "G1-gate".
 msc test src/test/index.ms
 
 # Compiler internal tests (inline `test {}` blocks across src/)
@@ -363,65 +364,79 @@ to a C binary and runs it.
 
 ---
 
-### 5.1. Cost model — run the smallest loop that can actually fail
+### 5.1. Cost model — the build dominates, so just run the whole battery
 
-Measured 2026-07-27 (gen-10 `msc`, warm filesystem). Re-measure before trusting
-these numbers after a toolchain change; the SHAPE is what matters, not ±20%.
+**Re-measured 2026-07-28, and it INVERTS the previous advice.** Sharing prelude
+contexts (commits `2c0c677`, `76a7222`) cut test EXECUTION by ~14×, which left
+compiling the test binary as almost the entire cost of any `msc test`. Picking a
+smaller entry no longer buys much, because you still pay a build.
 
-| command | what it loads | wall time |
-|---|---|---|
-| `msc test src/compiler/meta/expand.ms` | that module + its imports | **11s** |
-| `msc test src/checker/checkExprPass.ms` | that module + its imports | **13s** |
-| `msc test src/test/fixedbugs/bugNNN.ms` | whole pipeline (via `helpers.ms`) | **240s** |
-| `msc test src/test/c/json.ms` | whole pipeline | **~250s** |
-| `msc test src/index.ms` — 163 files / 3342 tests | whole compiler | **276-289s** |
+| command | build | run | wall |
+|---|---|---|---|
+| `msc test src/test/fixedbugs/bug048.ms` (14 files) | ~18s | 2.7s | **20s** |
+| `msc test src/compiler/meta/expand.ms` (69 files) | ~45s | 4.8s | **49s** |
+| `msc test src/index.ms` — 163 files / 3342 tests | ~21s | 17-19s | **40s** |
+| ↑ same, first run after a large tree change | ~51s | 17s | **69s** |
 
-**The rule that explains every number above:** `msc test <file>` runs EVERY inline
-test in that file's transitive dependency closure, not just the tests in the file
-you named. Cost tracks the closure, never the handful of assertions you care
-about. Anything under `src/test/**` imports `helpers.ms`, which pulls
-parse→check→mono→transform→analyze→codegen for BOTH backends — roughly 2760
-foreign tests come along for the ride. Read any guard run and you can see it:
-`codegen/js/jsgen.ms (43) 59793ms`, `analyzer/inject.ms (48) 37902ms` — about 100
-of those 240 seconds are inline tests with no relationship to your guard.
+Yes, that table is right: the **full battery (40s) beats a single-module test
+(49s)**. A narrower entry links a different binary whose cache entries are colder,
+and the tests it skips were cheap anyway. So:
 
-**Corollary that should decide your workflow: one e2e guard costs about the same
-as the ENTIRE battery.** Never run two or three guards individually "to save
-time" — at that price, run `msc test src/index.ms` and get all 3342 instead.
-The only real saving is staying inside a module's own closure (10-15s).
+**Default to `msc test src/index.ms`.** Reach for a single entry only when you
+want a focused failure list, not to save time.
+
+`msc test <file>` still runs EVERY inline test in that file's transitive
+dependency closure — that part of the old model holds. What changed is that the
+closure's tests are no longer the expensive part.
 
 | you changed | run | why |
 |---|---|---|
-| one compiler module, no rule change | `msc test <that module>` | 10-15s edit loop |
+| any compiler module | `msc test src/index.ms` | 40s, covers everything, usually the cheapest option anyway |
 | a checker / codegen RULE | `msc test src/test/fixedbugs/bugNNN.ms` | runs the SOURCE checker, so it proves RED/GREEN *before* any rebuild (dodges the bootstrap trap) |
-| anything, before saying "done" | `msc test src/index.ms` | same price as one guard, covers everything |
 | `std/`, or anything users compile against | rebuild + `tools/sync-local-binary.sh`, then re-run downstream suites | the installed `msc` resolves `std/` from `~/.metascript`, NOT from this repo — a repo-only edit measures nothing |
 
 Traps, all measured rather than assumed:
 
-- **`out/` does not cache `msc test`.** Cold (`rm -rf out`) 240s vs warm 237s — the
-  difference is noise. So `rm -rf out` before a test costs nothing, and equally
-  buys nothing; keep it before `build` / `run` after touching compiler or std
-  source, where artifacts really are reused.
-- **`msc check` is not a fast gate.** On this repo it fails to resolve relative
-  imports (`Cannot resolve module './compiler/upgrade'`) and did NOT report a
-  deliberately planted type error. It exits quietly. Never use it to decide
-  whether you are green.
+- **`out/` DOES cache `msc test`** — this reverses the previous note. A no-change
+  re-run rebuilds in 21s versus 51s after a large tree change (2.5×). The old
+  "cold 240s vs warm 237s" reading was taken when per-test prelude rebuilding
+  swamped everything; with that gone, the object cache is clearly visible. **Do
+  not `rm -rf out` before a suite** — besides losing the cache it triggers the
+  cold-build link race below.
+- **Cold-build link race.** `rm -rf out` followed by a suite fails with
+  `undefined symbol: __ms_tests_…` or `failed to deduplicate literals`. Re-running
+  warm is clean. Any red that names a DIFFERENT file each run is this, not your
+  change.
+- **Timings swing 6-8× with machine load.** Another session's `zig` build put the
+  8-core machine at load 28 and turned a 29s suite into 251s, and flipped
+  individual files between pass and `link failed`. Check `uptime` before trusting
+  any number, and never conclude from single runs — one such pair suggested a
+  fresh binary was 2.3× slower than the installed one; a controlled A/B (`rm -rf
+  out` on both sides, same minute) showed 32.47s vs 32.25s, i.e. identical.
+- **`msc check` is not a fast gate.** It exits quietly on this repo's relative
+  imports and has missed a deliberately planted type error. Never use it to
+  decide whether you are green.
 - **`msc test` accepts exactly one file** — no directories, no globs, no
-  `--filter`. Grouping is only possible through an aggregator module...
-- **...and both aggregators are RED today**: `src/test/index.ms` (74 latent type
-  errors, §7 P1) and `src/test/fixedbugs/index.ms` (bug006 / bug008 / bug010 /
-  bug047 fail C codegen when bundled together, though each passes standalone).
-  Until one is fixed, guards can only be run one at a time.
+  `--filter`. Grouping is only possible through an aggregator module.
+- **Aggregator status**: `src/test/index.ms` now type-checks clean but 14 files
+  fail C codegen (see the banner in §5 and docs/TSGAP.md "G1-gate");
+  `src/test/fixedbugs/index.ms` is red for the same reason (bug006 / bug008 /
+  bug010 / bug047 are 4 of those 14, each passing standalone).
 
-Levers to make this better, highest payoff first:
+Where the remaining time actually goes, if you want to attack it:
 
-1. **`msc test <file> --filter=<pattern>` / `--only-entry`** — would take a guard
-   from 240s to seconds and make per-guard TDD viable. Compiler change; by far
-   the biggest win available.
-2. **Fix `fixedbugs/index.ms`** — turns N guards × 240s into a single 240s pass.
-3. **Split `helpers.ms`** so C-only guards stop pulling `codegen/js` — worth
-   roughly 60s off every guard run.
+1. **`orchestrator.ms` is ~16s of the ~20s run time** — its 19 tests each call
+   `checkModuleGraph`, which builds a fresh prelude BY DESIGN (it stamps
+   `targetOs` on that context). Fixable by adding `targetOs` to the prelude cache
+   key, which would let the production build path share too — deliberately NOT
+   done: it is the build path, and ~16s of test time is a poor trade for a
+   cross-compilation state-leak risk.
+2. **~21s of build floor on a no-change re-run** — the object cache skips
+   codegen/clang, but the front end still re-loads and re-checks all 283 modules
+   every run. Removing it means caching checked ASTs across processes (what
+   `TransAmDb` does for the LSP). Real project, not a tweak.
+3. **`msc test <file> --filter=<pattern>`** — still worth having for focused
+   failure lists, but no longer a performance lever.
 
 ---
 
