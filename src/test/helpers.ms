@@ -21,7 +21,10 @@ import { analyzeProgram } from "../analyzer/index";
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
 import { AliveSet, createAliveSet } from "../codegen/c/context";
 import { generateJS } from "../codegen/js/jsgen";
-import { MapEntry, createMapProvider, loadModuleGraph, canonicalModulePath } from "../module/loader";
+import { MapEntry, createMapProvider, loadModuleGraph, loadModuleGraphWithConfig, canonicalModulePath } from "../module/loader";
+import { createDefaultConfig, Backend } from "../module/resolver";
+import { resolveRuntimeDir } from "../utils/path";
+import { join } from "std/fs/path";
 import { Module, ModuleGraph, findModule } from "../module/graph";
 import { Node } from "../ast/node";
 // Side-effect import — registers the Raiser-VM-backed macro evaluator so
@@ -72,6 +75,49 @@ export function compileToC(source: string): CompileResult {
 
 	// SERIALIZE A2: program-wide macro expansion runs after mono in main pipeline
 	// (compile.ms:934). Mirror it here so module-top SpliceMany splices fire.
+	const macroExpanded = expandMacros(monoed, checkerCtx);
+
+	const transformed = transformProgram(macroExpanded, checkerCtx, false);
+	const nativeCtx = createTransformContextWithChecker(checkerCtx);
+	const nativeTransformed = transformForNative(transformed, nativeCtx);
+	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
+	const aliveSet = createAliveSet();
+	return Result.ok(generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false));
+}
+
+// Like compileToC but with std/ library resolution enabled (stdPath from the
+// repo root), so sources may `import { Node } from "std/meta"` etc. The plain
+// compileToC keeps stdPath empty — std imports resolve only via prelude there.
+export function compileToCWithStd(source: string): CompileResult {
+	resetAllSideChannels();
+	const modPath = canonicalModulePath("test/e2e.ms");
+	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
+	const provider = createMapProvider(entries);
+	// Map provider alone never touches disk — std modules must load from the
+	// real filesystem (entries win first, so the in-memory entry still shadows).
+	provider.useFileSystem = true;
+	const root = resolveRuntimeDir();
+	const stdPath = root !== "" ? join(root, "std") : "std";
+	const config = createDefaultConfig(Backend.C, stdPath);
+	const graph = loadModuleGraphWithConfig(modPath, provider, config);
+
+	const registry = checkModuleGraph(graph, stdPath);
+	const preludeCtx = getPreludeContext();
+
+	const mod = findModule(graph, modPath);
+	if (mod === null) return Result.err("module not found");
+
+	const pr = parseSource(mod.source);
+	if (!pr.ok) return Result.err(`parse: ${pr.error}`);
+
+	const checkerCtx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
+
+	const monoed = monomorphizeProgram(pr.value, checkerCtx);
+
+	validateTypedAST(checkerCtx, monoed);
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "validate:"));
+
 	const macroExpanded = expandMacros(monoed, checkerCtx);
 
 	const transformed = transformProgram(macroExpanded, checkerCtx, false);
