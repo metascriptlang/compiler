@@ -233,6 +233,94 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	return `${combined}\n${dispatcher}`;
 }
 
+function isEntryPath(entries: MapEntry[], modPath: string): boolean {
+	for (const e of entries) {
+		if (e.entryPath === modPath) return true;
+	}
+	return false;
+}
+
+// Like compileProjectToC but with std/ resolution enabled (see compileToCWithStd).
+// Codegen covers only the in-memory entry modules — std modules load for
+// checking/macros but are not emitted, mirroring compileToCWithStd. expandMacros
+// runs post-mono in BOTH loops so macro-emitted callees (e.g. bindSym targets)
+// reach the alive set.
+export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string): string {
+	resetAllSideChannels();
+	const canonEntries: MapEntry[] = [];
+	for (const e of entries) {
+		canonEntries.push({ entryPath: canonicalModulePath(e.entryPath), entrySource: e.entrySource });
+	}
+	entryPath = canonicalModulePath(entryPath);
+	const provider = createMapProvider(canonEntries);
+	provider.useFileSystem = true;
+	const root = resolveRuntimeDir();
+	const stdPath = root !== "" ? join(root, "std") : "std";
+	const config = createDefaultConfig(Backend.C, stdPath);
+	const graph = loadModuleGraphWithConfig(entryPath, provider, config);
+	if (graph.errors.length > 0) {
+		let msg = "ERROR: graph:";
+		for (const e of graph.errors) {
+			msg = `${msg} ${e}`;
+		}
+		return msg;
+	}
+
+	const registry = checkModuleGraph(graph, stdPath);
+	const preludeCtx = getPreludeContext();
+
+	const monoed_programs: Node[] = [];
+	const monoed_paths: string[] = [];
+	for (const modPath of graph.loadOrder) {
+		if (!isEntryPath(canonEntries, modPath)) continue;
+		const mod = findModule(graph, modPath);
+		if (mod === null) continue;
+		const pr = parseSource(mod.source);
+		if (!pr.ok) continue;
+		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
+		ctx.errors = [];
+		const monoed = monomorphizeProgram(pr.value, ctx);
+		monoed_programs.push(expandMacros(monoed, ctx));
+		monoed_paths.push(modPath);
+	}
+	const aliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, false);
+
+	let combined = "";
+	for (const modPath of graph.loadOrder) {
+		if (!isEntryPath(canonEntries, modPath)) continue;
+		const mod = findModule(graph, modPath);
+		if (mod === null) continue;
+
+		const pr = parseSource(mod.source);
+		if (!pr.ok) return `ERROR: parse [${modPath}]: ${pr.error}`;
+
+		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
+		if (hasErrors(ctx)) {
+			let msg = `ERROR: check [${modPath}]:`;
+			for (const err of ctx.errors) {
+				msg = `${msg} ${err.message}`;
+			}
+			return msg;
+		}
+
+		const monoed = monomorphizeProgram(pr.value, ctx);
+		const macroExpanded = expandMacros(monoed, ctx);
+		validateTypedAST(ctx, macroExpanded);
+		if (hasErrors(ctx)) {
+			ctx.errors = [];
+		}
+
+		const transformed = transformProgram(macroExpanded, ctx, false);
+		const nativeCtx = createTransformContextWithChecker(ctx);
+		const nativeTransformed = transformForNative(transformed, nativeCtx);
+		const analyzed = analyzeProgram(nativeTransformed, ctx);
+		combined = combined + generateCModule(analyzed, ctx, modPath, aliveSet, false, false);
+	}
+
+	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, false, "void", "", false);
+	return `${combined}\n${dispatcher}`;
+}
+
 // Compile project to JS
 export function compileProjectToJS(entries: MapEntry[], entryPath: string): string {
 	resetAllSideChannels();
