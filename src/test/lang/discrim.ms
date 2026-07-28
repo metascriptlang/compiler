@@ -284,3 +284,82 @@ test "Variant struct sharing across distinct outer DUs" {
 		assert r.value === 4;
 	}
 }
+
+// =====================================================================
+// Flow-merge identity — a narrowing must not outlive its sub-expression
+// =====================================================================
+// `const c = d.kind === K.A && …` narrows `d` inside the right operand of
+// `&&` only. At the end of the expression both edges (lhs-true, lhs-false)
+// merge back to the declared union. The merge dedups antecedent types by
+// identity; identity computed by NAME alone makes the two anonymous
+// variants indistinguishable, collapsing the merge to the true-branch
+// variant — every later disc read then routes to the wrong variant.
+
+enum FmK { Alpha, Beta }
+type FmEnumDU = match (kind: FmK) { FmK.Alpha => { a: int32 }, FmK.Beta => { b: string } };
+type FmBoolDU = match (ok: boolean) { true => { value: int32 }, false => { error: string } };
+
+function fmAlpha(): FmEnumDU { return { kind: FmK.Alpha, a: 7 }; }
+function fmBeta(): FmEnumDU { return { kind: FmK.Beta, b: "beta" }; }
+function fmOk(): FmBoolDU { return { ok: true, value: 5 }; }
+function fmErr(): FmBoolDU { return { ok: false, error: "no" }; }
+
+function fmAfterAnd(d: FmEnumDU): int32 {
+	const probe = (d.kind === FmK.Alpha) && true;
+	if (d.kind === FmK.Beta) return 2;
+	return 1;
+}
+
+function fmAfterOr(d: FmEnumDU): int32 {
+	const probe = (d.kind === FmK.Alpha) || false;
+	if (d.kind === FmK.Beta) return 2;
+	return 1;
+}
+
+function fmAfterTernary(d: FmEnumDU): int32 {
+	const probe = d.kind === FmK.Alpha ? 1 : 0;
+	if (d.kind === FmK.Beta) return 2;
+	return 1;
+}
+
+function fmAfterIf(d: FmEnumDU): int32 {
+	if (d.kind === FmK.Alpha) {
+		const inner = d.a;
+	}
+	if (d.kind === FmK.Beta) return 2;
+	return 1;
+}
+
+function fmBoolAfterAnd(e: FmBoolDU): int32 {
+	const probe = e.ok && true;
+	if (e.ok) return e.value;
+	return -1;
+}
+
+test "flow merge: && does not leak the narrowed variant" {
+	assert fmAfterAnd(fmBeta()) === 2;
+	assert fmAfterAnd(fmAlpha()) === 1;
+}
+
+test "flow merge: || does not leak the narrowed variant" {
+	assert fmAfterOr(fmBeta()) === 2;
+	assert fmAfterOr(fmAlpha()) === 1;
+}
+
+test "flow merge: ternary condition does not leak" {
+	assert fmAfterTernary(fmBeta()) === 2;
+	assert fmAfterTernary(fmAlpha()) === 1;
+}
+
+test "flow merge: if-without-return does not leak past the block" {
+	assert fmAfterIf(fmBeta()) === 2;
+	assert fmAfterIf(fmAlpha()) === 1;
+}
+
+// Coverage only — NOT red-capable: both bool-disc variants carry `ok` at the
+// same offset, so a leaked narrow still emits valid, correct C. The enum-disc
+// cases above are the ones that fail when the merge collapses.
+test "flow merge: bool-disc && does not leak" {
+	assert fmBoolAfterAnd(fmErr()) === -1;
+	assert fmBoolAfterAnd(fmOk()) === 5;
+}
