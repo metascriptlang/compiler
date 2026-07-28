@@ -2141,18 +2141,25 @@ function checkProgramCore(
 
 // ===== Public API =====
 
+// Discover the stdPath from the compiler's install location so prelude
+// (console, print, Result, etc.) loads for `msc check` regardless of cwd.
+let _standalonePreludeCtx: CheckerContext | null = null;
+function standalonePreludeCtx(): CheckerContext {
+	if (_standalonePreludeCtx === null) {
+		const root = resolveRuntimeDir();
+		const stdPath = root !== "" ? join(root, "std") : "";
+		_standalonePreludeCtx = buildPreludeContext(stdPath);
+	}
+	return _standalonePreludeCtx;
+}
+
 // Convenience wrapper — creates empty registry. For inline tests and CLI tools
 // that don't need cross-module resolution.
 export function checkProgram(program: Node): CheckerContext {
-	// Discover the stdPath from the compiler's install location so prelude
-	// (console, print, Result, etc.) loads for `msc check` regardless of cwd.
-	const root = resolveRuntimeDir();
-	const stdPath = root !== "" ? join(root, "std") : "";
-	const preludeCtx = buildPreludeContext(stdPath);
 	// Phase 8a POC: expose outer Program to @comptime evaluator so it can
 	// see module-level FunctionDecls/ImportDecls beyond the @comptime body.
 	setOuterProgramForComptime(program);
-	return checkProgramCore(program, preludeCtx, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, null as unknown as CancelCtx, 0);
+	return checkProgramCore(program, standalonePreludeCtx(), null, null, null, null, 0);
 }
 
 export function checkProgramWithRegistry(program: Node, registry: ExportRegistry, graph: ModuleGraph, mod: Module, preludeCtx: CheckerContext): CheckerContext {
