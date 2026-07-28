@@ -619,7 +619,7 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 	}
 	if (uniq.length === 0) return flowType(state.declaredType, anyIncomplete);
 	if (uniq.length === 1) return flowType(uniq[0], anyIncomplete);
-	return flowType(createUnion(uniq), anyIncomplete);
+	return flowType(joinNarrowedTypes(state.declaredType, uniq), anyIncomplete);
 }
 
 // ===== Loop label fixed-point =====
@@ -662,7 +662,7 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 		// The types.length===0 case means the first antecedent cycled back
 		// before producing any narrowing — conservatively return declared type.
 		if (existing.types.length > 0) {
-			return flowType(unionOfTypes(existing.types), true);
+			return flowType(unionOfTypes(existing.types, state.declaredType), true);
 		}
 		return flowType(state.declaredType, true);
 	}
@@ -705,7 +705,7 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 	if (info.types.length === 0) {
 		return flowType(state.declaredType, false);
 	}
-	const joined = unionOfTypes(info.types);
+	const joined = unionOfTypes(info.types, state.declaredType);
 	// Incomplete iff the first (non-looping) antecedent was itself incomplete.
 	const incomplete = firstAnteType !== null && firstAnteType.incomplete;
 	return flowType(joined, incomplete);
@@ -720,7 +720,14 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 // (looser). Our implementation always uses structural dedup, producing a
 // potentially coarser union. This is SOUND (supertype) but less precise.
 // Phase 6 can tighten once we add `initialType` and an `isSubsetOf` helper.
-function unionOfTypes(types: Type[]): Type {
+function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
+	if (parent !== null && parent.kind === TypeKind.Union) {
+		return unionPreservingDiscriminant(parent, members);
+	}
+	return createUnion(members);
+}
+
+function unionOfTypes(types: Type[], parent: Type | null): Type {
 	if (types.length === 0) return unknownType();
 	if (types.length === 1) return types[0];
 	const uniq: Type[] = [];
@@ -736,7 +743,7 @@ function unionOfTypes(types: Type[]): Type {
 	}
 	if (uniq.length === 0) return unknownType();
 	if (uniq.length === 1) return uniq[0];
-	return createUnion(uniq);
+	return joinNarrowedTypes(parent, uniq);
 }
 
 // ===== narrowType dispatch =====

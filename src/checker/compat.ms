@@ -499,6 +499,45 @@ export enum TypeRelation {
 	Exact,          // 6 - exact match
 }
 
+function pairwiseExact(a: Type[], b: Type[]): boolean {
+	if (a === null && b === null) return true;
+	if (a === null || b === null) return false;
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (typeRelation(a[i], b[i]) !== TypeRelation.Exact) return false;
+	}
+	return true;
+}
+
+function sameAnonStructShape(a: Type, b: Type): boolean {
+	if (a.typeFlags !== b.typeFlags) return false;
+	if (a.typeNames === null || b.typeNames === null) return false;
+	if (a.typeNames.length !== b.typeNames.length) return false;
+	for (let i = 0; i < a.typeNames.length; i += 1) {
+		if (a.typeNames[i] !== b.typeNames[i]) return false;
+	}
+	return pairwiseExact(a.typeChildren, b.typeChildren);
+}
+
+function unionMembersFit(formal: Type, actual: Type): boolean {
+	if (formal.typeChildren === null || actual.typeChildren === null) return false;
+	for (const m of actual.typeChildren) {
+		let fits = false;
+		for (const f of formal.typeChildren) {
+			if (typeRelation(f, m) !== TypeRelation.None) { fits = true; break; }
+		}
+		if (!fits) return false;
+	}
+	return true;
+}
+
+function sameFunctionShape(a: Type, b: Type): boolean {
+	if (!pairwiseExact(a.typeChildren, b.typeChildren)) return false;
+	if (a.typeReturn === null && b.typeReturn === null) return true;
+	if (a.typeReturn === null || b.typeReturn === null) return false;
+	return typeRelation(a.typeReturn, b.typeReturn) === TypeRelation.Exact;
+}
+
 let _relationDepth = 0;
 export function typeRelation(formal: Type | null, actual: Type | null): TypeRelation {
 	if (_relationDepth > 20) return TypeRelation.Generic;
@@ -524,7 +563,11 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	if (formal.kind === actual.kind) {
 		return match (formal.kind) {
 			TypeKind.Struct => {
-				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
+				if (formal.typeName !== "" && formal.typeName === actual.typeName) return TypeRelation.Exact;
+				if (formal.typeName === "" && actual.typeName === ""
+					&& sameAnonStructShape(formal, actual)) {
+					return TypeRelation.Exact;
+				}
 				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
 				return TypeRelation.None;
 			},
@@ -564,6 +607,36 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 					if (argRel === TypeRelation.None) return TypeRelation.None;
 				}
 				return TypeRelation.Exact;
+			},
+			TypeKind.StringLiteral | TypeKind.BooleanLiteral => {
+				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
+				return TypeRelation.None;
+			},
+			TypeKind.Union => {
+				if (pairwiseExact(formal.typeChildren, actual.typeChildren)) return TypeRelation.Exact;
+				if (unionMembersFit(formal, actual)) return TypeRelation.Subtype;
+				return TypeRelation.None;
+			},
+			TypeKind.Function => {
+				if (sameFunctionShape(formal, actual)) return TypeRelation.Exact;
+				return TypeRelation.Subtype;
+			},
+			TypeKind.Tuple => {
+				if (pairwiseExact(formal.typeChildren, actual.typeChildren)) return TypeRelation.Exact;
+				return TypeRelation.Subtype;
+			},
+			TypeKind.Borrow | TypeKind.Var => {
+				if (formal.typeReturn === null && actual.typeReturn === null) return TypeRelation.Exact;
+				if (formal.typeReturn === null || actual.typeReturn === null) return TypeRelation.None;
+				return typeRelation(formal.typeReturn, actual.typeReturn);
+			},
+			TypeKind.Varargs | TypeKind.Conditional => {
+				if (pairwiseExact(formal.typeChildren, actual.typeChildren)) return TypeRelation.Exact;
+				return TypeRelation.None;
+			},
+			TypeKind.GenericParam => {
+				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
+				return TypeRelation.Generic;
 			},
 			_ => TypeRelation.Exact,
 		};
