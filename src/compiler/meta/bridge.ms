@@ -478,6 +478,17 @@ function setStrs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number,
 	heapObjectSetField(objHeap, h, name, v);
 }
 
+function setLocs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, locs: SourceLocation[]): void {
+	const outer = heapAllocArray(arrHeap);
+	for (const l of locs) {
+		const lh = heapAllocObject(objHeap);
+		heapObjectSetField(objHeap, lh, "line", raiserInt(l.line));
+		heapObjectSetField(objHeap, lh, "column", raiserInt(l.column));
+		heapArrayPush(arrHeap, outer, raiserObject(lh));
+	}
+	heapObjectSetField(objHeap, h, name, raiserArray(outer));
+}
+
 // V2 — serialize Node[][] as an array-of-arrays. Each inner array becomes a
 // heap array containing serialized Node values; the outer array contains
 // references to those inner arrays.
@@ -599,6 +610,9 @@ export function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: Rais
 			const d = node.data as ObjectLiteralData;
 			setNodes(objHeap, arrHeap, handle, "properties", d.properties);
 			setStrs(objHeap, arrHeap, handle, "keys", d.keys);
+			if (d.keyLocations !== null) {
+				setLocs(objHeap, arrHeap, handle, "keyLocations", d.keyLocations);
+			}
 		},
 		NodeKind.ArrayLiteral => {
 			const d = node.data as ArrayLiteralData;
@@ -1130,6 +1144,23 @@ function readStrs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number
 	return result;
 }
 
+function readLocs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string): SourceLocation[] {
+	const v = heapObjectGetField(objHeap, h, name);
+	const result: SourceLocation[] = [];
+	if (v.kind !== RaiserValueKind.Array) return result;
+	const handle = v.intVal;
+	const len = heapArrayLen(arrHeap, handle);
+	let i = 0;
+	while (i < len) {
+		const elem = heapArrayGet(arrHeap, handle, i);
+		if (elem.kind === RaiserValueKind.Object) {
+			result.push(readLoc(objHeap, elem.intVal));
+		}
+		i = i + 1;
+	}
+	return result;
+}
+
 function readLoc(objHeap: RaiserObjectHeap, h: number): SourceLocation {
 	const loc = makeLoc(readInt(objHeap, h, "line"), readInt(objHeap, h, "column"));
 	const el = readInt(objHeap, h, "endLine");
@@ -1272,7 +1303,8 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.ObjectLiteral => {
 			const properties = readNodes(objHeap, arrHeap, h, "properties", loc);
 			const keys = readStrs(objHeap, arrHeap, h, "keys");
-			return createNodeAt(NodeKind.ObjectLiteral, { properties, keys, keyLocations: [] }, loc);
+			const keyLocations = readLocs(objHeap, arrHeap, h, "keyLocations");
+			return createNodeAt(NodeKind.ObjectLiteral, { properties, keys, keyLocations }, loc);
 		},
 		NodeKind.ArrayLiteral => {
 			const elements = readNodes(objHeap, arrHeap, h, "elements", loc);
@@ -3076,4 +3108,25 @@ test "nodeToValue — child Nodes' resolvedSym cascades through dispatch" {
 	const rightSym = heapObjectGetField(objH, rightVal.intVal, "resolvedSym");
 	const rightKind = heapObjectGetField(objH, rightSym.intVal, "kind");
 	assert rightKind.intVal === SymbolKind.Function as number;
+}
+
+test "ObjectLiteral keyLocations survive the node→value→node round-trip" {
+	const objHeap = createStructHeap();
+	const arrHeap = createArrayHeap();
+	const loc = makeLoc(3, 1);
+	const node = createNodeAt(NodeKind.ObjectLiteral, {
+		properties: [mkNumber(1, makeLoc(4, 9)), mkNumber(2, makeLoc(5, 9))],
+		keys: ["width", "height"],
+		keyLocations: [makeLoc(4, 2), makeLoc(5, 2)],
+	}, loc);
+	const val = nodeToValue(node, objHeap, arrHeap);
+	const back = valueToNode(val, objHeap, arrHeap, loc);
+	assert back.kind === NodeKind.ObjectLiteral;
+	const d = back.data as ObjectLiteralData;
+	assert d.keys.length === 2;
+	assert d.keyLocations.length === 2;
+	assert d.keyLocations[0].line === 4;
+	assert d.keyLocations[0].column === 2;
+	assert d.keyLocations[1].line === 5;
+	assert d.keyLocations[1].column === 2;
 }
