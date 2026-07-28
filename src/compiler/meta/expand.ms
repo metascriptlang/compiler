@@ -1571,10 +1571,15 @@ interface CompiledMacro {
 // Cache keyed on CheckerContext identity so it resets per compilation.
 let _compiledMacros: HashMap<string, CompiledMacro> = new HashMap<string, CompiledMacro>();
 let _compiledMacrosCtx: CheckerContext = null as unknown as CheckerContext;
+// A macro whose body or helpers failed to check is never executed: its bytecode
+// is garbage, and running it turns one precise diagnostic into a VM panic or a
+// wrong AST. Reported once, then refused silently for every later call site.
+let _failedMacros: HashMap<string, boolean> = new HashMap<string, boolean>();
 
 function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroName: string, body: Node, params: string[], typeArg: string): CompiledMacro {
 	if (_compiledMacrosCtx !== ctx) {
 		_compiledMacros = new HashMap<string, CompiledMacro>();
+		_failedMacros = new HashMap<string, boolean>();
 		_compiledMacrosCtx = ctx;
 	}
 	// Cache key carries the declaring module (two modules' same-named macros —
@@ -1585,6 +1590,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroNam
 		+ (typeArg === "" ? macroName : macroName + "<" + typeArg + ">");
 	const existing = _compiledMacros.get(cacheKey);
 	if (existing !== null) return existing;
+	if (_failedMacros.get(cacheKey) !== null) return null as unknown as CompiledMacro;
 
 	// Bake into a CLONE when the call site supplies a type argument: the registry
 	// body is shared by every call site, and getTypeArg() resolves per site.
@@ -1636,11 +1642,17 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroNam
 	setMacroDeclModulePath(declModulePath !== null ? declModulePath : "");
 	const result = callMacroEngineCompiler(program, ctx, "__macroBody");
 	if (result === null as unknown as EngineMacroResult || result.funcIdx < 0) return null as unknown as CompiledMacro;
+	let broken = false;
 	if (result.errors !== null && result.errors.length > 0) {
 		for (const e of result.errors) {
 			if (e.severity !== Severity.Error) continue;
 			addError(ctx, `Macro '${macroName}' body: ${e.message}`, e.line, e.column);
+			broken = true;
 		}
+	}
+	if (broken) {
+		_failedMacros.set(cacheKey, true);
+		return null as unknown as CompiledMacro;
 	}
 
 	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx };
