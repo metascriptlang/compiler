@@ -4,7 +4,7 @@
 // Each coercion is verified against standard reference behavior.
 
 import { Type, TypeKind } from "../../ast/node";
-import { createStruct, createRef, createEnum, createArray, createSpan, numberType, stringType, int32Type, float64Type } from "../../checker/types";
+import { createStruct, createRef, createEnum, createArray, createSpan, createUnion, createPrimitive, numberType, stringType, int32Type, float64Type, booleanType } from "../../checker/types";
 import { isAssignable, isReinterpretUnsafe } from "../../checker/compat";
 
 // ===== Ref<T> → T auto-deref =====
@@ -85,4 +85,60 @@ test "isReinterpretUnsafe: nested int32[][] → number[][]" {
 
 test "isReinterpretUnsafe: int32-span → number-span is unsafe" {
 	assert isReinterpretUnsafe(createSpan(int32Type()), createSpan(numberType()));
+}
+
+// ===== Struct field repr (neon+yoga 2026-07-27: Style raw-cast into FlexStyle) =====
+// Structural object assign is a raw ref/value cast — no per-field conversion — so
+// shared fields whose union/numeric repr differs reinterpret both tag and payload.
+
+function numStrField(name: string): Type {
+	return createStruct(name, ["w"], [createUnion([numberType(), stringType()])], true);
+}
+
+function f32StrField(name: string): Type {
+	return createStruct(name, ["w"], [createUnion([createPrimitive(TypeKind.Float32), stringType()])], true);
+}
+
+test "isReinterpretUnsafe: struct field union(number|string) → union(float32|string) is unsafe" {
+	assert isReinterpretUnsafe(numStrField("A"), f32StrField("B"));
+}
+
+test "isAssignable: struct field union repr mismatch rejected" {
+	assert !isAssignable(numStrField("A"), f32StrField("B"));
+}
+
+test "isReinterpretUnsafe: identical union field across names is safe" {
+	assert !isReinterpretUnsafe(numStrField("A"), numStrField("B"));
+}
+
+test "isAssignable: identical union field across names still structural" {
+	assert isAssignable(numStrField("A"), numStrField("B"));
+}
+
+test "isReinterpretUnsafe: union member-count mismatch in field is unsafe" {
+	const a = createStruct("A", ["w"], [createUnion([numberType(), stringType()])], true);
+	const b = createStruct("B", ["w"], [createUnion([numberType(), stringType(), booleanType()])], true);
+	assert isReinterpretUnsafe(a, b);
+}
+
+test "isReinterpretUnsafe: numeric field width mismatch is unsafe" {
+	const a = createStruct("A", ["n"], [int32Type()], true);
+	const b = createStruct("B", ["n"], [numberType()], true);
+	assert isReinterpretUnsafe(a, b);
+}
+
+test "isReinterpretUnsafe: disjoint field names stay safe" {
+	const a = createStruct("A", ["value", "present"], [createUnion([numberType(), stringType()]), booleanType()], true);
+	const b = createStruct("B", ["other"], [numberType()], true);
+	assert !isReinterpretUnsafe(a, b);
+}
+
+test "isReinterpretUnsafe: same-named struct types skip the field walk" {
+	assert !isReinterpretUnsafe(numStrField("Same"), f32StrField("Same"));
+}
+
+test "isReinterpretUnsafe: nested struct field with union repr mismatch is unsafe" {
+	const a = createStruct("OuterA", ["inner"], [numStrField("MA")], true);
+	const b = createStruct("OuterB", ["inner"], [f32StrField("MB")], true);
+	assert isReinterpretUnsafe(a, b);
 }
