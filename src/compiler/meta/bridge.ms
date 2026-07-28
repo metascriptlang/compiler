@@ -24,7 +24,7 @@ import {
 	// Type system (for mapTypeToAst — Phase A1 SERIALIZE)
 	Type, TypeKind, TypeFlag, CallingConvention,
 	// Symbol — Day 9 SERIALIZE: surface name + kind to macro VM
-	Symbol, SymbolKind, SymbolState,
+	Symbol, SymbolKind, SymbolState, NodeFlag,
 	// Literals
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BigIntLiteralData, RegexLiteralData,
@@ -501,6 +501,18 @@ function setNodeArrays(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: n
 	heapObjectSetField(objHeap, h, name, raiserArray(outerHandle));
 }
 
+// bindSym (Nim semBindSym model): bake-time resolves a name in the macro's
+// declaring module and registers the real Symbol here; the baked literal
+// carries the index as `symHandle` and valueToNode rebinds it on the way out.
+// Append-only, never reset — a shared macro body baked in an earlier
+// compilation may still hold old handles.
+let _boundSyms: Symbol[] = [];
+
+export function registerBoundSym(sym: Symbol): number {
+	_boundSyms.push(sym);
+	return _boundSyms.length - 1;
+}
+
 // Day 9 — minimal Symbol → RaiserValue. Surfaces name + kind only.
 // `declNode` skipped to avoid Symbol↔Node cycle; V2 if codecs need decl site.
 function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {
@@ -566,6 +578,9 @@ export function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: Rais
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
 			setStr(objHeap, handle, "name", d.name);
+			if (node.resolvedSym !== null && (node.flags & NodeFlag.BoundSym) !== 0) {
+				heapObjectSetField(objHeap, handle, "symHandle", raiserInt(registerBoundSym(node.resolvedSym)));
+			}
 		},
 
 		// === Binary/Unary/Update ===
@@ -1257,7 +1272,13 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 
 		// === Identifier ===
 		NodeKind.Identifier => {
-			return createNodeAt(NodeKind.Identifier, { name: readStr(objHeap, h, "name") }, loc);
+			const n = createNodeAt(NodeKind.Identifier, { name: readStr(objHeap, h, "name") }, loc);
+			const hv = heapObjectGetField(objHeap, h, "symHandle");
+			if (hv.kind === RaiserValueKind.Int && hv.intVal >= 0 && hv.intVal < _boundSyms.length) {
+				n.resolvedSym = _boundSyms[hv.intVal];
+				n.flags = n.flags | NodeFlag.BoundSym;
+			}
+			return n;
 		},
 
 		// === Binary/Unary/Update ===
