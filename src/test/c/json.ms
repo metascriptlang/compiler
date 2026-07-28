@@ -209,11 +209,13 @@ function main(): void {
 }
 
 // Entry-level std/ imports need compileToCWithStd (plain compileToC leaves
-// stdPath empty). The import list carries every identifier the encode macro
-// emits unqualified — the documented codec ergonomics gap (SERIALIZE.md §11).
+// stdPath empty). Every name the encode macros emit is bindSym-bound in the
+// macro's own module — builders, the recursive cborValueOf MACRO (bindSym V2),
+// and encode (moved to encoder.ms so binding it cannot cycle the index hub).
+// The user imports exactly ONE name: the entry macro.
 test "E2E C: CBOR literal-string disc field (Bug A mirror)" {
 	const src = `
-import { cborEncode, cborValueOf, encode, cborInt, cborText, cborBool, cborTextMap } from "std/serialize/cbor";
+import { cborEncode } from "std/serialize/cbor";
 
 interface Circle { kind: "circle"; r: int32; }
 
@@ -228,7 +230,7 @@ function main(): void {
 
 test "E2E C: CBOR literal-bool disc field (Bug A mirror)" {
 	const src = `
-import { cborEncode, cborValueOf, encode, cborInt, cborText, cborBool, cborTextMap } from "std/serialize/cbor";
+import { cborEncode } from "std/serialize/cbor";
 
 interface OkBag { ok: true; val: int32; }
 
