@@ -4,7 +4,7 @@
 // Without that fix, `Result.ok({...})` synthesized by `__jsonParse_T` failed
 // to stamp the inner literal as T — emitting `T* = anon_struct` C errors.
 
-import { compileToC } from "../helpers";
+import { compileToC, compileToCWithStd } from "../helpers";
 
 test "E2E C: JSON.parse<Person> typed parse compiles" {
 	const src = `
@@ -106,9 +106,10 @@ function main(): void {
 	assert c.ok;
 }
 
-test "E2E C: JSON.stringify rejects unsupported field type" {
-	// Array field has no JSON synthesis support yet — must produce explicit
-	// compile error (regression for the silent `_ => jsonNumber` fallback).
+test "E2E C: JSON.stringify supports atomic array fields (V1.5)" {
+	// Originally asserted rejection — atomic-element arrays were unsupported
+	// pre-V1.5. std/serialize shipped jsonArrayOf* helpers (SERIALIZE.md V1.5),
+	// so this struct now compiles; keep it as positive coverage.
 	const src = `
 interface WithArr { items: number[]; }
 
@@ -118,7 +119,7 @@ function main(): void {
 }
 `;
 	const c = compileToC(src);
-	assert !c.ok;  // expect explicit error, not silent miscompile
+	assert c.ok;
 }
 
 // ===== Stdlib helper sanity tests =====
@@ -154,7 +155,7 @@ function main(): void {
 	const _ref = detectUnionDisc;
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -208,9 +209,12 @@ function main(): void {
 	assert c.ok;
 }
 
+// Entry-level std/ imports need compileToCWithStd (plain compileToC leaves
+// stdPath empty). The import list carries every identifier the encode macro
+// emits unqualified — the documented codec ergonomics gap (SERIALIZE.md §11).
 test "E2E C: CBOR literal-string disc field (Bug A mirror)" {
 	const src = `
-import { cborEncode } from "std/serialize/cbor";
+import { cborEncode, cborValueOf, encode, cborInt, cborText, cborBool, cborTextMap } from "std/serialize/cbor";
 
 interface Circle { kind: "circle"; r: int32; }
 
@@ -219,13 +223,13 @@ function main(): void {
 	const bytes = cborEncode(c);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
 test "E2E C: CBOR literal-bool disc field (Bug A mirror)" {
 	const src = `
-import { cborEncode } from "std/serialize/cbor";
+import { cborEncode, cborValueOf, encode, cborInt, cborText, cborBool, cborTextMap } from "std/serialize/cbor";
 
 interface OkBag { ok: true; val: int32; }
 
@@ -234,6 +238,6 @@ function main(): void {
 	const bytes = cborEncode(o);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
