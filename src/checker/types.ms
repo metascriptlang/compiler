@@ -1181,7 +1181,7 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 
 // ===== System Types (Standard reference parity) =====
 // Pre-allocated primitive types indexed by TypeKind ordinal. O(1) lookup, no allocation.
-// Under Bun: module-level array initialized once. Replaces per-call createPrimitive.
+// Module-level array initialized once; replaces per-call createPrimitive.
 
 const _sysTypes: Type[] = [];
 function initSysTypes(): void {
