@@ -514,35 +514,20 @@ Current baseline: full native suite green — `msc test src/index.ms` **3338/0**
   the complete rendered diagnostic (code, span, message) is snapshotted.
   Changing one character of an error message becomes a deliberate,
   reviewed act.
-- [ ] 🔲 Disc-read on narrowed DU variant — `if (n.kind === A) return; n.kind`
-  (residual union) and disc reads after full narrow both fail: flow narrowing
-  drops the union's discriminant metadata AND member-emit only routes
-  disc→`_tag` for the full union. Needs a coordinated checker+codegen fix
-  (checker stamps a disc-read marker; codegen stays dumb). Checker-only fix
-  attempted and REVERTED 2026-07-27 — type-check went green but codegen
-  emitted `n->v2.kind` (payload-relative, miscompile). Reference for the
-  narrowing semantics: the TS checker (flow.ms already tracks its
-  getTypeOfDottedName family); tsc types the residual disc as a union of
-  literal types. lang/discrim.ms evalNode is split per-variant until this
-  lands. SAME FAMILY, worse: match-type BOOL-disc DU `if (r.ok)` miscompiles
-  too (emits payload-relative `.v0.ok` then stringTruthiness wraps it in
-  `.byteLength` — SHAPE 4 never compiled natively either), and match-type
-  string-field `===` on a narrowed variant emits raw C `==` (known bug,
-  separate memory w/ 20-line repro). discrim.ms is the gate's stop point
-  until this DU-codegen campaign lands — both errors reproduce at clean
-  HEAD c227ded with the installed msc, so they are NOT caused by any
-  2026-07-27 change.
+- [x] ✅ Disc-read on narrowed DU variant — LANDED 2026-07-27 (`eedc6d2`
+  checker, `4499aef` codegen disc contract, `f7cefed` BooleanLiteral
+  truthiness, `99b2892` nested-GI alias bodies). `lang/discrim.ms` is the
+  regression guard: `evalNode` is back to a sequential `if` chain
+  (`bea5869`) and the file is green 294/294 under drc AND orc.
 - [ ] 🔲 Codegen baseline tests — for critical patterns (DU layout, Result lowering, closure lifting) commit expected `.c` snippets in `src/test/c/snapshots/` and diff on regen.
-- [ ] 🔲 Native-checker migration of `src/test/index.ms` — 74 latent type
-  errors predating the native runner (this entry was never type-checked).
-  Three buckets:
-  TS-isms the checker doesn't cover (block-local type aliases,
-  intersection/branded types — parser skipIntersectionTail discards `&`
-  tails), plain MS-invalid test code (`.includes` on string, stale field
-  names, assert outside test blocks), and suspected real checker gaps
-  (NodeData alias resolution shows type '' in fixedbugs/bug028;
-  compileProjectToC Array-arg mismatches ×8 — root-cause before touching
-  tests). Until green, the native full-suite gate does not exist.
+- [ ] 🔲 Native full-suite gate `src/test/index.ms` — **the type errors are
+  gone** (74 → 0; the last two, `jsonValueOf`'s `got Node, expected Node`,
+  fell to the structural `typeRelation` work). It now fails in C codegen on
+  14 files, 6 of which share one generic-instantiation root cause. They are
+  pre-existing latents the old checker abort was hiding — identical errors
+  under binaries built before and after. Inventory + error-class census:
+  docs/TSGAP.md "G1-gate". Fix those and this gate joins the standing
+  ladder.
 
 ### P2 — Coverage & infrastructure
 
