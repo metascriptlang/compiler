@@ -1,10 +1,9 @@
 // Language tests: JSON stringify + untyped parse via JsonValue accessors.
 //
 // Runtime caveat: JSON.parse<T> (typed) is a C-backend-only feature — the
-// checker synthesizes per-type `__jsonParse_T` helpers that the Bun
-// transpiler doesn't reproduce. Typed-parse coverage lives in
-// `src/test/c/json.ms` (compile-check). Here we exercise the paths that
-// work uniformly across backends.
+// checker synthesizes per-type `__jsonParse_T` helpers. Typed-parse coverage
+// lives in `src/test/c/json.ms` (compile-check). Here we exercise the paths
+// that work uniformly across backends.
 
 interface Person {
 	name: string;

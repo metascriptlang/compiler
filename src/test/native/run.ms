@@ -5,8 +5,8 @@
 // For every case in manifest.ms, builds the program to a native binary under BOTH
 // --gc=drc and --gc=orc, runs it under `/usr/bin/time -l`, and asserts: process
 // exit == expectExit, peak RSS < maxRssMb (leak guard), and (if set) stdout
-// contains expectStdout. Replaces bun/test-native.ts — no Bun; the test infra is
-// itself MetaScript, compiled + run by msc. It dogfoods std/process (exec).
+// contains expectStdout. The test infra is itself MetaScript, compiled + run
+// by msc. It dogfoods std/process (exec).
 
 import { CASES, NativeCase } from "./manifest";
 import { exec, exit, env } from "std/process";

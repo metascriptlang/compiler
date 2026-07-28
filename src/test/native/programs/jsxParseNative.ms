@@ -2,7 +2,7 @@
 // Runs lex() + parseExpression() 5000 times on a JSX expression with a text child, an expr
 // container, and a nested element, asserting it builds a 3-child JSXElement under the C
 // runtime — catches over-free / UAF in JSX node construction (jsxChildren / jsxAttrs arrays,
-// Result/try temporaries, nested nodes) that exit 0 on the Bun transpiler.
+// Result/try temporaries, nested nodes) that a type-level test cannot observe.
 //
 // NOT a leak guard: parseExpression accumulates per call (the parser, like most compiler
 // front-ends, frees per-compilation memory at process exit, not per call — confirmed

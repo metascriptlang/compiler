@@ -5,8 +5,7 @@
 // TypeInfo.destroyFn was never wired — so a->state (and its heap string) leaked on
 // every teardown. Two coordinated fixes: codegen wires destroyFn (expressions.ms
 // passes the inner type), runtime msActorDestroyWithReason frees a->state via that
-// destroyFn. Now ~8MB. Invisible to test-ms (Bun JS-GC) — only the native binary
-// exercises msActorDestroyWithReason.
+// destroyFn. Now ~8MB. Only the native binary exercises msActorDestroyWithReason.
 
 import { stop, ExitReason } from "std/actor";
 

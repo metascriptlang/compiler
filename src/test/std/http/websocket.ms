@@ -426,9 +426,9 @@ function main(): boolean {
 // These need a live ws:// endpoint. To enable, run with the proper env set
 // and a local server up:
 //
-//   WS_ECHO_TEST=1 bun run test-ms src/test/std/http/websocket.ms
+//   WS_ECHO_TEST=1 msc test src/test/std/http/websocket.ms
 //   WS_SURREAL_TEST=1 surreal start --user root --pass root memory &  \
-//     bun run test-ms src/test/std/http/websocket.ms
+//     msc test src/test/std/http/websocket.ms
 //
 // Until the harness can run compiled-C E2E tests inline (no helper exists
 // yet), these are placeholders that just verify the patterns *compile* —

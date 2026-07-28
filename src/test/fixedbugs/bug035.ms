@@ -29,9 +29,7 @@
 //             fillBody(c, t.elementType, body, x, y)`. Identical
 //             recursive-unwrap pattern.
 //
-// Note: `distinct type` syntax is NOT handled by the Bun transpiler
-//       (bun/transform.ts), so this regression cannot use the inline
-//       runtime-test pattern. Instead we use the compile-level test
+// Note: This regression uses the compile-level test pattern
 //       (mirroring src/test/c/*.ms) that verifies the analyzer emits
 //       the correct destroy function name. The runtime crash is
 //       additionally guarded by drc_array/scenarios/bug3Family.ms

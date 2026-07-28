@@ -4,7 +4,7 @@
 // because fieldEqExpr had no Tuple case — it now routes to the generated msTuple_<hash>Eq;
 // (2) without named tuple hooks the field's heap strings leaked on every drop (same root as
 // map-tuple-value-leak). Fix: fieldEqExpr Tuple case + ensureTupleEq, plus the first-class
-// tuple DRC hooks. Builds + flat ~2.2MB drc+orc. Invisible to test-ms (Bun JS-GC + no C ==).
+// tuple DRC hooks. Builds + flat ~2.2MB drc+orc.
 
 interface Holder { pair: [string, string]; tag: int32; }
 

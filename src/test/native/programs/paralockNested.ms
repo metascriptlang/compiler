@@ -2,8 +2,7 @@
 //
 // docs/PARALOCK.md locks the unified model: spawn (parallel tasks), actor
 // (isolated state), await (one keyword). They interleave on ONE shared worker
-// pool. The existing paralock/*.ms scenarios run only through Bun (test-ms),
-// which never exercises the C pool / actor scheduler / DRC across awaits.
+// pool.
 //
 // This runs all three crossed in a massive loop on the real native runtime,
 // under both --gc=drc and --gc=orc, asserting: correct results (exit 0) AND

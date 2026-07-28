@@ -8,8 +8,8 @@
 // All three dropped references; index-store (arr[i]=x) and .pop() were already correct
 // (DRC-injected decref-old / ownership transfer to the receiver). The Raiser VM trips
 // shrink on every script function return (vmHandleRet pops the call-frame array via
-// items.length=len-1) — the leak that surfaced this. Invisible to test-ms (Bun JS-GC)
-// and to every prior native case (none shrank/spliced a ref array). Was 63MB+, now flat.
+// items.length=len-1) — the leak that surfaced this. Invisible to every prior
+// native case (none shrank/spliced a ref array). Was 63MB+, now flat.
 
 interface Frame { name: string; depth: number; }
 

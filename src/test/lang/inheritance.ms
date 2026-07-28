@@ -3,7 +3,7 @@
 // Covers Bug 1 deferred (object intersection in type aliases), Bug 4 (interface
 // multi-extend), and class inheritance with super. struct/struct-intersection
 // forms are exercised via native-compile probes (`/tmp/ms-bug2/p2-*.ms`) since
-// the bun-hosted JS test runner doesn't transpile `struct extends` / `struct = T`.
+// the JS backend does not support `struct extends` / `struct = T`.
 //
 // Two-tier representation:
 //   - interface/struct/type alias: flatten parent fields into typeChildren

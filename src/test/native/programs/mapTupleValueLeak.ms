@@ -6,7 +6,7 @@
 // Fix (first-class tuple value type): destructorLifting ensureTupleHooks generates
 // msTuple_<hash>{Destroy,Copy,Sink,WasMoved}, classify.ms returns Named(tupleTypeName),
 // forward.ms emits the cross-module proto. Was 504MB @ 200k, now ~2.3MB drc+orc.
-// Invisible to test-ms (Bun JS-GC); only the native binary runs the C lifecycle hooks.
+// Only the native binary runs the C lifecycle hooks.
 
 import { Map } from "std/core/struct";
 

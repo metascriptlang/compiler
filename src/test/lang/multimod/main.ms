@@ -1,5 +1,5 @@
 // Cross-module test — imports from sibling module
-// Run: bun run-ms run examples/testMultiMod/main.ms
+// Run: msc run examples/testMultiMod/main.ms
 
 import { Level, Message, makeMsg, formatMsg, levelName, maxNum, minNum, clamp, repeatStr, padLeft } from "./utils";
 

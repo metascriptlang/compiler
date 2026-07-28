@@ -25,7 +25,6 @@
 //             std/serialize/discDetect.ms           (extractVariantKey reads .value/.boolValue)
 
 // CBOR equivalent tests live in src/test/c/json.ms (compileToC E2E).
-// Bun TS transpile doesn't fully support cborEncode macro — use run-ms path.
 
 interface Circle { kind: "circle"; r: int32; }
 interface OkBag { ok: true; val: int32; }

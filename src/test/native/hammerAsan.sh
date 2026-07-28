@@ -25,9 +25,9 @@ for GC in drc orc; do
 	BIN="$OUTDIR/guard-$GC"
 	echo "== build guard [$GC + ASAN + slab-off] =="
 	# Cold cache can race an empty/missing .o on config switch — retry once.
-	if ! bun "$ROOT/bun/run.ts" build "$PROG" --gc="$GC" --cc=clang \
+	if ! msc build "$PROG" --gc="$GC" --cc=clang \
 		--passC="$CC_FLAGS" --passL="$LD_FLAGS" --output="$BIN" >/dev/null 2>&1; then
-		bun "$ROOT/bun/run.ts" build "$PROG" --gc="$GC" --cc=clang \
+		msc build "$PROG" --gc="$GC" --cc=clang \
 			--passC="$CC_FLAGS" --passL="$LD_FLAGS" --output="$BIN" >/dev/null 2>&1
 	fi
 	if [ ! -x "$BIN" ]; then echo "FAIL: build [$GC]"; RC=1; continue; fi

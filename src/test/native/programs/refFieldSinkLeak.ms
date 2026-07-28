@@ -6,7 +6,7 @@
 // dest, then assign). The cyclic write-barrier ordering Nim uses under gcOrc is unnecessary
 // here because our ORC defers collection (runtime/drc.h), so decref-first is safe drc+orc.
 // Was 119MB @ 50k (struct) / 135MB (tuple-of-array), now ~2.3MB drc+orc; ASAN clean.
-// Invisible to test-ms (Bun JS-GC) — only the native binary runs the C =sink hook.
+// Only the native binary runs the C =sink hook.
 
 struct Holder { arr: string[]; tag: int32; }
 

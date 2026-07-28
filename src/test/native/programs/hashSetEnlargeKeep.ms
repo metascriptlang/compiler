@@ -4,10 +4,10 @@
 // and every enlarge silently EMPTIED the live table: all prior keys lost, size
 // counting phantoms, and heavy users degrade into runaway growth on garbage
 // tables. hashMapEnlarge/orderedMapEnlarge/orderedSetEnlarge write through the
-// field — hashSetEnlarge now mirrors them. Bun runs JS reference arrays where
-// the alias DOES form, so test-ms was structurally blind; msc stage-2 hit it
-// through the gen-destroy-hook name registry (HashSet<string>) as a probe-loop
-// hang / range-error / segfault. The marker only prints if every key survives
+// field — hashSetEnlarge now mirrors them. Only the C backend's value-array
+// copy makes the store a deep copy, so msc stage-2 hit it through the
+// gen-destroy-hook name registry (HashSet<string>) as a probe-loop hang /
+// range-error / segfault. The marker only prints if every key survives
 // all enlarges and size is honest.
 
 function main(): void {

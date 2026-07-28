@@ -148,9 +148,8 @@ test "bug005: 3-level inheritance with super() chain" {
 // `this: void*` in the `_init` signature → `(*this).field` fails at the
 // C compile step with `"no member named 'field' in struct <MangledClass>"`.
 //
-// We don't have an inline test here — the bun transpiler that runs this
-// file's tests doesn't always agree with our C runtime on generic-class
-// initialiser semantics, so the assertion path is unstable. The fix is
+// We don't have an inline test here — the assertion path was unstable on
+// the retired JS test harness. The fix is
 // covered end-to-end by `examples/`-style probes (see probe2-generic
 // in /tmp/ms-bugs/) and indirectly by std/core/struct.ms's HashMap/HashSet
 // generics that flow through the same path and are exercised by the rest

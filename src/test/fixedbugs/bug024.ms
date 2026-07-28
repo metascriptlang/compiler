@@ -29,10 +29,8 @@
 //             Plus library-side decode.ms macro emits bare `null` witness
 //             (no `as <Elem> | null` annotation needed).
 //
-// Note:      JSON.parse<T> end-to-end test deferred to run-ms (bun
-//            transpiler can't narrow generic Result through macro path —
-//            SERIALIZE.md Bug 17). This file tests the underlying checker
-//            mechanism directly via minimal generic function calls.
+// Note:      This file tests the underlying checker mechanism directly via
+//            minimal generic function calls (SERIALIZE.md Bug 17).
 
 enum Color { Red, Green, Blue }
 type UserId = int32;

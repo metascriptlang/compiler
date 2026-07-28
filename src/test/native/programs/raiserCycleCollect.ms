@@ -1,7 +1,7 @@
 // Raiser ORC cycle collector (src/raiser/orc.ms) running AS COMPILED C. ARC alone
 // cannot reclaim a reference cycle (a.next=b, b.next=a → each rc=1, reachable only
-// via the other); the Bacon trial-deletion collector must. test-ms exercises the
-// collector as MS-on-Bun; this is the only tier that runs it through the C backend.
+// via the other); the Bacon trial-deletion collector must. This is the only
+// tier that runs it through the C backend.
 // Builds a garbage cycle each round and collects it (heap free-list must recycle →
 // bounded), while a keeper cycle held by an external ref must SURVIVE every round
 // (guards over-collection → UAF). If the collector regressed: garbage cycles leak

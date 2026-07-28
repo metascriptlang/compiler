@@ -10,7 +10,7 @@
 // result is dropped (atomic decref): concurrent owning rc traffic on one shared Arc.
 // Exit 0 + flat RSS proves the box + pointee free exactly once under contention (no
 // over-free, no leak); the deterministic sum proves the value round-trips. Invisible
-// to test-ms — Bun never runs the atomic C rc.
+// only exercised by the native binary.
 
 struct Payload { buf: string; n: int32; }
 

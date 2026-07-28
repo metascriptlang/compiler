@@ -1,6 +1,6 @@
 // E2E: actor model → C output
 // Migrated/scaled-down from examples/benchActor* — actor runtime requires
-// the C event loop + scheduler, so Bun-transpiled lang tests can't exercise
+// the C event loop + scheduler, which lang tests can't exercise
 // it. Runtime correctness is covered by examples/benchActor1M.ms and
 // examples/benchActorScale.ms (manual benchmarks). Here we only verify the
 // pipeline compiles for the canonical actor patterns at small scale (100

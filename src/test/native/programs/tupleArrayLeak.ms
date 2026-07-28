@@ -3,7 +3,7 @@
 // destroyFn fell to the free-only msNumberArrayDestroy. Routing it to the per-type
 // msTuple_<hash>ArrayDestroy walker then exposed a second hole — DCE removed the generated
 // walker because isDrcLifecycleName read its ms-prefixed name as a runtime-provided family.
-// Was 386MB @ 100k, now ~2.4MB drc+orc. Invisible to test-ms (Bun JS-GC).
+// Was 386MB @ 100k, now ~2.4MB drc+orc.
 
 type Pair = [number, string];
 

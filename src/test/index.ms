@@ -1,6 +1,6 @@
 // Unified Test Suite
 //
-// Run all: bun run test-ms src/test/index.ms
+// Run all: msc test src/test/index.ms
 //
 // Structure:
 //   lang/    — Language feature tests (runtime behavior)
@@ -27,10 +27,9 @@ import "./lang/trycatch";
 import "./lang/recursion";
 import "./lang/advanced";
 import "./lang/async";
-// comptime.ms uses @comptime block syntax which the Bun transpiler doesn't
-// handle. Run end-to-end via `bun run run-ms run src/test/lang/comptime.ms`
-// instead; regression-prevention guard for the underlying buildExportInfo
-// behavior lives in fixedbugs/bug028.ms.
+// comptime.ms runs end-to-end via `msc test src/test/lang/comptime.ms`;
+// regression-prevention guard for the underlying buildExportInfo behavior
+// lives in fixedbugs/bug028.ms.
 // import "./lang/comptime";
 import "./lang/syntax";
 import "./lang/multimod/main";

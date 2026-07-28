@@ -6,7 +6,7 @@
 // codegen in agreement with the analyzer: destructorLifting skips RC ops on actor-typed
 // Ref fields + actor-element arrays, and the ref-array box destroyFn for an actor
 // element is the free-only msNumberArrayDestroy (no per-element decref). Pre-fix this
-// double-freed (ASAN heap-use-after-free / malloc abort). Invisible to test-ms.
+// double-freed (ASAN heap-use-after-free / malloc abort).
 
 import { stop, ExitReason } from "std/actor";
 

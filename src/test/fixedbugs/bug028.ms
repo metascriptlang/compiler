@@ -3,7 +3,7 @@
 //
 // Symptom:  After widening `buildExportInfo` (src/checker/context.ms) to
 //           also preserve InterfaceDecl/TypeAliasDecl/ClassDecl/ActorDecl
-//           in `exportInfo.declNode`, `bun run-ms run src/index.ms` emitted
+//           in `exportInfo.declNode`, compiling src/index.ms emitted
 //           30+ type errors like:
 //             "Type 'JsonValueData.Null | ... | JsonValueData.Int' is not
 //              assignable to type 'SourceLocation' for field 'location'"
@@ -43,9 +43,9 @@
 //           defining module's symbol without setting the importer's
 //           sym.declNode.
 //
-// Verification: `bun run-ms run src/index.ms` drops back to the project's
-//           baseline (3 unrelated type errors in anh's WIP), `bun run-ms run`
-//           on a fixture using cross-module `readFile` inside `@comptime`
+// Verification: compiling src/index.ms drops back to the project's
+//           baseline (3 unrelated type errors in anh's WIP), and a fixture
+//           using cross-module `readFile` inside `@comptime`
 //           still folds correctly, AND `JsonValueData` no longer appears
 //           in type-error output.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Differential test — C vs JS observable-behavior parity. Native msc, no Bun.
+# Differential test — C vs JS observable-behavior parity.
 #
 # The backends use different internal representations (C: Maybe struct for T|null;
 # JS: native null via the maybeUnwrap pass). That divergence is correct — each

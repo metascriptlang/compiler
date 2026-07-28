@@ -126,11 +126,10 @@ function main(): void {
 //
 // These tests exist because of a 2026-05-15 incident where:
 //   - Em refactored encode.ms to use a new discDetect.ms helper
-//   - test-ms (Bun TS transpile) reported all-pass
-//   - run-ms (full MS compile) reported 30 type errors
-//   - The test-ms vs run-ms gap hid stdlib type errors for several hours
+//   - A type-level-only run reported all-pass while a full MS compile
+//     reported 30 type errors — the gap hid stdlib type errors for hours
 //
-// Lesson: stdlib changes need pipeline tests via compileToC, not test-ms only.
+// Lesson: stdlib changes need pipeline tests via compileToC.
 // compileToC exercises the full MS pipeline (parse → check → mono → ... → codegen)
 // including loading the prelude + std/serialize. Type errors in any prelude
 // file (e.g., missing transitive imports in discDetect.ms) surface here.

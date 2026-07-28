@@ -3,7 +3,7 @@
 // Ref-with-field-defaults branch (already passes innerType to ensureTypeInfoDef), so
 // its state TypeInfo.destroyFn is wired and the runtime msActorDestroyWithReason frees
 // the state's heap fields. Without the runtime free this leaked the heap array on every
-// teardown. Churn create+stop and bound RSS. Invisible to test-ms (Bun JS-GC).
+// teardown. Churn create+stop and bound RSS.
 
 import { stop, ExitReason } from "std/actor";
 

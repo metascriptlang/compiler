@@ -3,7 +3,7 @@
 // Original symptom: a function returning `(() => T)[]` printed correct values
 // then PANICKED on cleanup (misaligned msRefHeader access — msArrayRefDestroy
 // read inline 16B msClosure structs as 8B void*). The existing fixedbugs/bug033
-// "no crash" test runs on Bun, which never executes the C destroy path — so it
+// inline "no crash" test never executes the C destroy path — so it
 // guards nothing for the actual fix. This runs the real native binary through
 // C DRC, where the crash actually lived. Looped so a regression also shows as
 // RSS growth, not just a one-shot crash. Accumulator bounded (% ...) so a

@@ -46,7 +46,7 @@ test "bug009: closure captures let inside test block (single)" {
 	// missing → C compile error `_env2_ undeclared`. The .length probe
 	// is the load-bearing check (covers the env-write path); the
 	// captured-element assertion is in `bug009-probe.ms` because the
-	// bun-test transpiler runtime doesn't always agree with the MS C
+	// JS backend does not always agree with the MS C
 	// runtime on captured-array index reads.
 	let captured: string[] = [];
 	const s = new Slot();
@@ -73,7 +73,7 @@ test "bug009: closure captures let inside test block (mutating counter)" {
 
 // Edge cases — multi-closure / multi-capture / nested-control-flow shapes —
 // are exercised by `/tmp/ms-bugs/bug009-probe.ms` via the MS C compiler.
-// They aren't reliable through the bun-test transpiler runtime that runs
+// They are not reliable through the JS backend that runs
 // this file (transpiled JS handles closure-over-let captures slightly
 // differently from the C runtime when state pollutes across test cases).
 // The fix in `lambdaLifting.ms` is verified end-to-end by the probe.
