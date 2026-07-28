@@ -187,6 +187,7 @@ export enum NodeFlag {
 	ExportDefault = 2048, // parser: export default declaration
 	WasAsync = 4096,      // transform: function was async before asyncDesugar rewrote to generator
 	ExternC = 8192,       // parser: extern interface — type defined in C header, skip codegen emission
+	BoundSym = 16384,     // macro bindSym: resolvedSym pre-bound in the macro's module — checker must not re-lookup
 }
 
 // ===== Node Kind Enum =====
