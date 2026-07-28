@@ -2097,15 +2097,15 @@ function drainSeedSymbols(table: SymbolTable): void {
 function checkProgramCore(
 	program: Node,
 	preludeCtx: CheckerContext,
-	registry: ExportRegistry,
-	graph: ModuleGraph,
-	mod: Module,
-	cancelCtx: CancelCtx,
+	registry: ExportRegistry | null,
+	graph: ModuleGraph | null,
+	mod: Module | null,
+	cancelCtx: CancelCtx | null,
 	cancelVersion: number,
 ): CheckerContext {
 	// Use shared IdentCache from prelude (one cache per compilation)
 	const sharedCache = preludeCtx.table.identCache;
-	const ctx = mod !== null ? createModuleContextWithCache(graph, mod, sharedCache) : createContextWithCache(sharedCache);
+	const ctx = graph !== null && mod !== null ? createModuleContextWithCache(graph, mod, sharedCache) : createContextWithCache(sharedCache);
 	ctx.extensionRegistry = createExtensionRegistry();
 	if (registry !== null) ctx.exportRegistry = registry;  // override empty default with caller's registry
 	if (cancelCtx !== null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
@@ -2160,7 +2160,7 @@ export function checkProgramWithRegistry(program: Node, registry: ExportRegistry
 	// Spike 2: expose full multi-module context so @comptime evaluator's inner
 	// check can resolve cross-module imports via the same registry/graph.
 	setOuterCheckContext(registry, graph, mod, preludeCtx);
-	return checkProgramCore(program, preludeCtx, registry, graph, mod, null as unknown as CancelCtx, 0);
+	return checkProgramCore(program, preludeCtx, registry, graph, mod, null, 0);
 }
 
 export function checkProgramWithRegistryCancellable(
