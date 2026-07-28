@@ -7,7 +7,7 @@ import { unknownType, numberType, int32Type, float64Type, isFloatType, stringTyp
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorExt, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
-	isAssignable, isReinterpretUnsafe, needsStdConv, findFirstMismatch,
+	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore,
 } from "./compat";
@@ -1841,17 +1841,37 @@ function coercionMethodName(t: Type): string {
 // for `expr` at its slot. Result type matches targetType exactly.
 function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType: Type, targetType: Type): Node {
 	if (ctx.extensionRegistry === null) return null as unknown as Node;
+	// Nullable-ref target (`X | null`): coerce to the non-null member — the
+	// synthesized X then flows into X|null via the normal member rule. Interface
+	// members sit behind an unnamed Ref wrapper — peel it for the method name.
+	if (targetType.kind === TypeKind.Union) {
+		let nn = nonNullMemberOfNullable(targetType);
+		if (nn !== null && (nn.kind === TypeKind.Ref || nn.kind === TypeKind.Ptr) && nn.typeReturn !== null) {
+			nn = nn.typeReturn;
+		}
+		if (nn !== null && nn.kind !== TypeKind.Unknown) targetType = nn;
+	}
 	const methodName = coercionMethodName(targetType);
 	if (methodName === "") return null as unknown as Node;
 	const exts = findAllExtensionsByName(ctx.extensionRegistry, methodName);
 	if (exts.length === 0) return null as unknown as Node;
-	const ext = findFirstMatchingExt(exts, srcType);
+	// Receiver and declared return may sit behind unnamed Ref wrappers
+	// (interface values) — peel for matching, same as the target peel above.
+	let srcForMatch = srcType;
+	if ((srcForMatch.kind === TypeKind.Ref || srcForMatch.kind === TypeKind.Ptr) && srcForMatch.typeReturn !== null) {
+		srcForMatch = srcForMatch.typeReturn;
+	}
+	const ext = findFirstMatchingExt(exts, srcForMatch);
 	if (ext === null) return null as unknown as Node;
 	// Verify return type matches target exactly (asInt32 vs asInt64 disambiguation).
 	const extFnT = getExtFnType(ext);
-	if (extFnT.typeReturn === null) return null as unknown as Node;
-	if (extFnT.typeReturn.kind !== targetType.kind) return null as unknown as Node;
-	if (targetType.typeName !== "" && extFnT.typeReturn.typeName !== targetType.typeName) {
+	let extRet = extFnT.typeReturn;
+	if (extRet !== null && (extRet.kind === TypeKind.Ref || extRet.kind === TypeKind.Ptr) && extRet.typeReturn !== null) {
+		extRet = extRet.typeReturn;
+	}
+	if (extRet === null) return null as unknown as Node;
+	if (extRet.kind !== targetType.kind) return null as unknown as Node;
+	if (targetType.typeName !== "" && extRet.typeName !== targetType.typeName) {
 		return null as unknown as Node;
 	}
 	const loc = expr.location;
