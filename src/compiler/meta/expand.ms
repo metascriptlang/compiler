@@ -51,7 +51,7 @@ import {
 	TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ActorDeclData, ExternDeclData, MacroDeclData,
 	TestDeclData, AssertStmtData,
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
-	SymbolKind,
+	SymbolKind, NodeFlag, Symbol,
 } from "../../ast/node";
 import { CheckerContext, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
@@ -64,7 +64,8 @@ import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { RaiserVM, vmCallFunction } from "../../raiser/vm";
-import { valueToNode, nodeToValue, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst } from "./bridge";
+import { valueToNode, nodeToValue, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym } from "./bridge";
+import { ensureShaped } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
 
@@ -217,6 +218,10 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation): Node {
 		values.push(createNodeAt(NodeKind.ObjectLiteral, {
 			properties: symValues, keys: symKeys, keyLocations: [],
 		}, loc));
+	}
+	if (node.resolvedSym !== null && (node.flags & NodeFlag.BoundSym) !== 0) {
+		keys.push("symHandle");
+		values.push(mkNumber(registerBoundSym(node.resolvedSym), loc));
 	}
 
 	return createNodeAt(NodeKind.ObjectLiteral, {
@@ -1389,7 +1394,10 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 		const cd = node.data as CallExprData;
 		if (cd.callee.kind === NodeKind.Identifier) {
 			const calleeName = (cd.callee.data as IdentifierData).name;
-			if (ctx.macroBodyRegistry.has(calleeName)) {
+			const calleeBound = (cd.callee.flags & NodeFlag.BoundSym) !== 0
+				&& cd.callee.resolvedSym !== null
+				&& cd.callee.resolvedSym.symbolKind === SymbolKind.Macro;
+			if (ctx.macroBodyRegistry.has(calleeName) || calleeBound) {
 				// Recurse into args first — nested macro calls inside args
 				// also need the rewrite.
 				let i = 0;
@@ -1397,9 +1405,16 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 					cd.arguments[i] = rewriteCallExprToMacroInvocation(cd.arguments[i], ctx);
 					i = i + 1;
 				}
-				// Mutate in place: CallExpr → MacroInvocation.
+				// Mutate in place: CallExpr → MacroInvocation. Read the bound sym
+				// BEFORE replacing node.data — the old CallExprData (and its
+				// callee) is destroyed by the assignment.
+				const boundSym = calleeBound ? cd.callee.resolvedSym : null as unknown as Symbol;
 				node.kind = NodeKind.MacroInvocation;
 				node.data = { macroName: calleeName, macroArgs: cd.arguments };
+				if (boundSym !== null) {
+					node.resolvedSym = boundSym;
+					node.flags = node.flags | NodeFlag.BoundSym;
+				}
 				return node;
 			}
 		}
@@ -1419,17 +1434,66 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 // Safe to bake into the shared body: the compiled-macro cache is keyed by macro
 // name, and a named type does not vary per call site. Mutation is idempotent —
 // a second pass finds literals, not calls.
-function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroName: string, typeArg: string): Node {
+function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerContext, macroName: string, typeArg: string): Node {
 	if (node === null) return node;
 	if (node.kind === NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
+		// bindSym("name") — Nim semBindSym model: resolve the name in the macro's
+		// DECLARING module scope at bake time, register the real Symbol, and
+		// splice an Identifier literal carrying its handle. valueToNode rebinds
+		// the Symbol on the way out; the checker sees NodeFlag.BoundSym and skips
+		// the user-scope lookup — no imports needed, no user-local name capture.
+		if (cd.callee.kind === NodeKind.Identifier
+				&& (cd.callee.data as IdentifierData).name === "bindSym") {
+			if (cd.arguments.length !== 1 || cd.arguments[0].kind !== NodeKind.StringLiteral) {
+				addError(ctx, `Macro '${macroName}': bindSym expects a single string literal`, node.location.line, node.location.column);
+				return node;
+			}
+			const symName = (cd.arguments[0].data as StringLiteralData).value;
+			let bindCtx = ctx;
+			const bindDeclPath = regCtx.macroDeclModuleRegistry.get(macroName);
+			if (bindDeclPath !== null && bindDeclPath !== "") {
+				const mc = lookupModuleCtx(bindDeclPath);
+				if (mc !== null) bindCtx = mc;
+			}
+			const boundSym = lookupSymbol(bindCtx.table, symName);
+			if (boundSym === null) {
+				addError(ctx, `Macro '${macroName}': bindSym cannot resolve '${symName}' in the macro's module scope`, node.location.line, node.location.column);
+				return node;
+			}
+			if (boundSym.symbolKind !== SymbolKind.Macro) {
+				ensureShaped(boundSym, bindCtx);
+			}
+			if (hasGenericParams(boundSym.symbolType)) {
+				addError(ctx, `Macro '${macroName}': bindSym('${symName}') refers to a generic symbol — bind a concrete one (V1)`, node.location.line, node.location.column);
+				return node;
+			}
+			// Bound MACRO: expandMacroInvocation finds the declaring module's
+			// registries through modulePath — collectMacro never sets it.
+			if (boundSym.symbolKind === SymbolKind.Macro && boundSym.modulePath === "") {
+				const bmp = bindCtx.macroDeclModuleRegistry.get(symName);
+				boundSym.modulePath = bmp !== null && bmp !== ""
+					? bmp
+					: (bindDeclPath !== null ? bindDeclPath : "");
+			}
+			const bloc = node.location;
+			const bkeys: string[] = ["kind", "line", "column", "name", "symHandle"];
+			const bvalues: Node[] = [
+				mkNumber(NodeKind.Identifier as number, bloc),
+				mkNumber(bloc.line, bloc),
+				mkNumber(bloc.column, bloc),
+				mkString(symName, bloc),
+				mkNumber(registerBoundSym(boundSym), bloc),
+			];
+			return createNodeAt(NodeKind.ObjectLiteral, { properties: bvalues, keys: bkeys, keyLocations: [] }, bloc);
+		}
 		if (cd.callee.kind === NodeKind.Identifier
 				&& (cd.callee.data as IdentifierData).name === "getTypeImpl"
 				&& cd.arguments.length === 1
 				&& cd.arguments[0].kind === NodeKind.Identifier) {
 			const typeName = (cd.arguments[0].data as IdentifierData).name;
 			let declCtx = ctx;
-			const declPath = ctx.macroDeclModuleRegistry.get(macroName);
+			const declPath = regCtx.macroDeclModuleRegistry.get(macroName);
 			if (declPath !== null && declPath !== "") {
 				const mc = lookupModuleCtx(declPath);
 				if (mc !== null) declCtx = mc;
@@ -1491,7 +1555,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroName: string, 
 			}, node.location);
 		}
 	}
-	mapChildren(node, (child: Node): Node => bakeTypeIntrinsics(child, ctx, macroName, typeArg));
+	mapChildren(node, (child: Node): Node => bakeTypeIntrinsics(child, ctx, regCtx, macroName, typeArg));
 	return node;
 }
 
@@ -1508,14 +1572,17 @@ interface CompiledMacro {
 let _compiledMacros: HashMap<string, CompiledMacro> = new HashMap<string, CompiledMacro>();
 let _compiledMacrosCtx: CheckerContext = null as unknown as CheckerContext;
 
-function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, params: string[], typeArg: string): CompiledMacro {
+function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroName: string, body: Node, params: string[], typeArg: string): CompiledMacro {
 	if (_compiledMacrosCtx !== ctx) {
 		_compiledMacros = new HashMap<string, CompiledMacro>();
 		_compiledMacrosCtx = ctx;
 	}
-	// A macro reading getTypeArg() compiles to a DIFFERENT body per instantiation,
-	// so the cache key carries the type argument.
-	const cacheKey = macroName;
+	// Cache key carries the declaring module (two modules' same-named macros —
+	// reachable via bindSym — must not share a compiled body) and the type
+	// argument (getTypeArg() bakes per call site).
+	const declKey = regCtx.macroDeclModuleRegistry.get(macroName);
+	const cacheKey = (declKey !== null ? declKey : "") + "::"
+		+ (typeArg === "" ? macroName : macroName + "<" + typeArg + ">");
 	const existing = _compiledMacros.get(cacheKey);
 	if (existing !== null) return existing;
 
@@ -1523,7 +1590,7 @@ function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, p
 	// body is shared by every call site, and getTypeArg() resolves per site.
 	let workBody = body;
 	if (typeArg !== "") workBody = cloneNodeForCheck(body);
-	bakeTypeIntrinsics(workBody, ctx, macroName, typeArg);
+	bakeTypeIntrinsics(workBody, ctx, regCtx, macroName, typeArg);
 	body = workBody;
 
 	const loc = body.location;
@@ -1543,7 +1610,7 @@ function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, p
 		si = si + 1;
 	}
 	const fnBody = createNode(NodeKind.BlockStmt, { statements: fnBodyStmts }, synthToken(loc));
-	const declParamTypes = ctx.macroParamTypesRegistry.get(macroName);
+	const declParamTypes = regCtx.macroParamTypesRegistry.get(macroName);
 	const paramTypes: string[] = [];
 	let pti = 0;
 	while (pti < params.length) {
@@ -1565,7 +1632,7 @@ function getOrCompileMacro(ctx: CheckerContext, macroName: string, body: Node, p
 
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
 
-	const declModulePath = ctx.macroDeclModuleRegistry.get(macroName);
+	const declModulePath = regCtx.macroDeclModuleRegistry.get(macroName);
 	setMacroDeclModulePath(declModulePath !== null ? declModulePath : "");
 	const result = callMacroEngineCompiler(program, ctx, "__macroBody");
 	if (result === null as unknown as EngineMacroResult || result.funcIdx < 0) return null as unknown as CompiledMacro;
@@ -1587,11 +1654,24 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	// Built-in directives pass through unchanged
 	if (isBuiltinDirective(d.macroName)) return node;
 
+	// Bound macro (bindSym): fetch the DECLARING module's registries — the
+	// caller never imported this macro, so the user ctx has no entry for it.
+	let regCtx = ctx;
+	if ((node.flags & NodeFlag.BoundSym) !== 0 && node.resolvedSym !== null
+			&& node.resolvedSym.symbolKind === SymbolKind.Macro && node.resolvedSym.modulePath !== "") {
+		const bmc = lookupModuleCtx(node.resolvedSym.modulePath);
+		if (bmc !== null) regCtx = bmc;
+	}
 	// Look up the macro body
 	// Not a known user macro — leave it alone (could be parsed but undefined)
-	const body = ctx.macroBodyRegistry.get(d.macroName);
-	if (body === null) return node;
-	const params = ctx.macroParamsRegistry.get(d.macroName);
+	const body = regCtx.macroBodyRegistry.get(d.macroName);
+	if (body === null) {
+		if (regCtx !== ctx) {
+			addError(ctx, "bound macro '" + d.macroName + "' has no body registered in its declaring module", node.location.line, node.location.column);
+		}
+		return node;
+	}
+	const params = regCtx.macroParamsRegistry.get(d.macroName);
 	if (params === null) return node;
 
 	// Phase D: Preprocess the body to rewrite NodeKind.X / DeclKind.X member
@@ -1621,7 +1701,7 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		}
 	}
 
-	const cm = getOrCompileMacro(ctx, d.macroName, body, params, node.typeArg);
+	const cm = getOrCompileMacro(ctx, regCtx, d.macroName, body, params, node.typeArg);
 	if (cm === null as unknown as CompiledMacro) {
 		addError(ctx, `Macro '${d.macroName}' evaluator unavailable`, node.location.line, node.location.column);
 		return node;
