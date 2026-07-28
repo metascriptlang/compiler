@@ -2038,7 +2038,7 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	// rejection is intentionally NOT applied — see NIM-REF.md row 72 (terminal
 	// design; two intentional divergences: TS non-null types + Ref→Ptr cursor).
 	if (isReinterpretUnsafe(exprType, formal)) {
-		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — array elements differ in memory layout; a raw cast would reinterpret, not convert (annotate or map the elements)", expr.location.line, expr.location.column);
+		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — memory layout differs (array element or shared field repr); a raw cast would reinterpret, not convert (convert explicitly or provide an as" + (formal.typeName !== "" ? formal.typeName.slice(0, 1).toUpperCase() + formal.typeName.slice(1, formal.typeName.length) : "X") + " extension)", expr.location.line, expr.location.column);
 	}
 	return expr;
 }

@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion } from "./types";
 
 
 // ===== Assignability =====
@@ -18,17 +18,40 @@ function sameElementRepr(a: Type | null, b: Type | null): boolean {
 	return aDouble && bDouble;
 }
 
-// True only when source→target would raw-cast a container whose numeric element
-// repr differs (int32[] → number[]) — a reinterpret, not a conversion → OOB.
-// Walks Ref/Array/Span/Ptr/SizedArray in lockstep; ignores every non-container
-// mismatch (unions, nominal structs, scalars) so it does not double as a general
-// assignability gate.
+// True only when source→target would raw-cast memory whose repr differs — a
+// reinterpret, not a conversion. Two classes, same argument (no per-element /
+// per-field conversion runs on a raw cast):
+//  - container elements: int32[] → number[] (4B stride read as 8B → OOB)
+//  - structurally-assigned object fields SHARED BY NAME: a union field's C tag
+//    is the member index and its payload width is the member repr, so
+//    union(number|string) → union(float32|string) reinterprets both; numeric
+//    fields must share C width. Fields present on only one side are ignored —
+//    this must not become a general assignability gate (terminal fitNode scope).
+let _reprDepth = 0;
 export function isReinterpretUnsafe(source: Type | null, target: Type | null): boolean {
+	if (_reprDepth > 12) return false;
+	_reprDepth = _reprDepth + 1;
+	const result = isReinterpretUnsafeInner(source, target);
+	_reprDepth = _reprDepth - 1;
+	return result;
+}
+
+function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boolean {
 	source = skipModifier(source);
 	target = skipModifier(target);
 	if (source === null || target === null) return false;
 	if (source.kind === TypeKind.Ref && target.kind === TypeKind.Ref) {
 		return isReinterpretUnsafe(source.typeReturn, target.typeReturn);
+	}
+	// Nullable-ref (`X | null`) stores/reads the pointer as X — peel to the
+	// non-null member so enforcement reaches through nullable fields/slots.
+	if (target.kind === TypeKind.Union && source.kind !== TypeKind.Union && source.kind !== TypeKind.Null) {
+		const tn = nonNullMemberOfNullable(target);
+		if (tn !== null) return isReinterpretUnsafe(source, tn);
+	}
+	if (source.kind === TypeKind.Union && target.kind !== TypeKind.Union) {
+		const sn = nonNullMemberOfNullable(source);
+		if (sn !== null) return isReinterpretUnsafe(sn, target);
 	}
 	if (source.kind !== target.kind) return false;
 	if (source.kind === TypeKind.Array || source.kind === TypeKind.Span
@@ -36,6 +59,93 @@ export function isReinterpretUnsafe(source: Type | null, target: Type | null): b
 		if (!sameElementRepr(source.typeReturn, target.typeReturn)) return true;
 		return isReinterpretUnsafe(source.typeReturn, target.typeReturn);
 	}
+	if (source.kind === TypeKind.Struct) {
+		if (source === target) return false;
+		if (source.typeName !== "" && source.typeName === target.typeName) return false;
+		const sNames = source.typeNames;
+		const sChildren = source.typeChildren;
+		const tChildren = target.typeChildren;
+		let ti = 0;
+		for (const tProp of target.typeNames) {
+			let si = 0;
+			for (const sProp of sNames) {
+				if (sProp === tProp && si < sChildren.length && ti < tChildren.length) {
+					if (fieldReprMismatch(sChildren[si], tChildren[ti])) return true;
+					if (isReinterpretUnsafe(sChildren[si], tChildren[ti])) return true;
+				}
+				si += 1;
+			}
+			ti += 1;
+		}
+		return false;
+	}
+	return false;
+}
+
+// msString-repr family: string, string literals, and pure string-literal unions
+// (codegen collapses the latter to msString — genUnionType allStrLit arm).
+function isStringRepr(t: Type): boolean {
+	return t.kind === TypeKind.String || t.kind === TypeKind.StringLiteral || isAllStringLiteralUnion(t);
+}
+
+// The non-null member of a 2-member `X | null` union, or null if not that shape.
+export function nonNullMemberOfNullable(t: Type | null): Type | null {
+	if (t === null || t.kind !== TypeKind.Union) return null;
+	if (t.typeChildren.length !== 2) return null;
+	const a = t.typeChildren[0];
+	const b = t.typeChildren[1];
+	if (a === null || b === null) return null;
+	if (b.kind === TypeKind.Null && a.kind !== TypeKind.Null) return a;
+	if (a.kind === TypeKind.Null && b.kind !== TypeKind.Null) return b;
+	return null;
+}
+
+// A union slot's repr: tag = member index, payload = member C type. Members must
+// pair up kind-for-kind (literal kinds collapse to their runtime kind; number ≡
+// float64) or the blit re-tags into a different layout.
+function unionSlotReprMismatch(a: Type | null, b: Type | null): boolean {
+	a = skipModifier(a);
+	b = skipModifier(b);
+	if (a === null || b === null) return false;
+	if (isStringRepr(a) && isStringRepr(b)) return false;
+	if (isNumeric(a) && isNumeric(b)) return !sameElementRepr(a, b);
+	const ak = a.kind === TypeKind.StringLiteral ? TypeKind.String
+		: (a.kind === TypeKind.BooleanLiteral ? TypeKind.Boolean : a.kind);
+	const bk = b.kind === TypeKind.StringLiteral ? TypeKind.String
+		: (b.kind === TypeKind.BooleanLiteral ? TypeKind.Boolean : b.kind);
+	if (ak !== bk) return true;
+	if (a.kind === TypeKind.Union) {
+		if (a.typeChildren.length !== b.typeChildren.length) return true;
+		let i = 0;
+		while (i < a.typeChildren.length) {
+			if (unionSlotReprMismatch(a.typeChildren[i], b.typeChildren[i])) return true;
+			i += 1;
+		}
+		return false;
+	}
+	if (a.kind === TypeKind.Struct) return isReinterpretUnsafe(a, b);
+	return false;
+}
+
+// Field-level repr gate for structurally-compatible objects. Lenient outside the
+// union/numeric classes — everything else is either caught by the recursive
+// isReinterpretUnsafe walk or is an intentional divergence (Ref→Ptr cursor).
+function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
+	a = skipModifier(a);
+	b = skipModifier(b);
+	if (a === null || b === null) return false;
+	if (isStringRepr(a) && isStringRepr(b)) return false;
+	if (a.kind === TypeKind.Union && b.kind === TypeKind.Union) {
+		if (a.typeChildren.length !== b.typeChildren.length) return true;
+		let i = 0;
+		while (i < a.typeChildren.length) {
+			if (unionSlotReprMismatch(a.typeChildren[i], b.typeChildren[i])) return true;
+			i += 1;
+		}
+		return false;
+	}
+	if (a.kind === TypeKind.Union || b.kind === TypeKind.Union) return true;
+	if (isNumeric(a) && isNumeric(b)) return !sameElementRepr(a, b);
 	return false;
 }
 
@@ -359,6 +469,12 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 				found = true;
 				if (si < sChildren.length && targetIdx < tChildren.length) {
 					if (!isAssignable(sChildren[si], tChildren[targetIdx])) {
+						return false;
+					}
+					// Structural assign raw-casts the object — shared fields whose
+					// union/numeric repr differs would reinterpret (mirror of the
+					// sameElementRepr gate on Array/Span/Ptr elements above).
+					if (fieldReprMismatch(sChildren[si], tChildren[targetIdx])) {
 						return false;
 					}
 				}
