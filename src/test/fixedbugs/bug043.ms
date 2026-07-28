@@ -53,9 +53,7 @@ test "bug043: umbrella header with <lib/...> transitive includes resolves symbol
 	// the preprocessor (copyLine EOF), independently of the include-path fix.
 	writeFile("/tmp/msbug043/mylib/b.h", "int bug043B(Bug043Ref r);\n#define BUG043_TAIL(x) x");
 	writeFile("/tmp/msbug043/mylib/Umbrella.h", "#include <mylib/a.h>\n#include <mylib/b.h>\n");
-	// Specifier assembled by concatenation: the bun test harness transpiler
-	// regex-rewrites `from "<spec>"` occurrences even inside string literals.
-	const source = "import { bug043A, bug043B } from " + "\"./mylib/Umbrella.h\";\n";
+	const source = "import { bug043A, bug043B } from \"./mylib/Umbrella.h\";\n";
 	const inlined = inlineHeaderImports(source, "/tmp/msbug043/main.ms", createFileSystemProvider());
 	assert inlined.indexOf("extern function bug043A") >= 0;
 	assert inlined.indexOf("extern function bug043B") >= 0;

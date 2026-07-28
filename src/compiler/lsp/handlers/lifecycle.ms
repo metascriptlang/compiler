@@ -732,16 +732,11 @@ test "exception hint has paddingLeft" {
 test "try-expr in var-decl produces no duplicate hints (real pipeline)" {
 	// Real-pipeline regression guard for VSCode duplicate-hint reports.
 	// Source mirrors std/fs/index.cms readLines shape.
-	// Concat-trick on `tr`+`y`: bun/transform.ts (test runtime, NOT the msc
-	// binary) rewrites the `try` keyword inside string literals via a regex
-	// that doesn't respect string boundaries. The split keeps the literal
-	// intact so the MS parser sees what msc on disk would see.
-	const tryKw = "tr" + "y";
 	const src = "import { Result } from \"std/core/system\";\n"
 		+ "interface IoError { msg: string; }\n"
 		+ "function readFile(p: string): Result<string, IoError> { return Result.ok(\"\"); }\n"
 		+ "export function readLines(path: string): Result<string[], IoError> {\n"
-		+ "\tconst content = " + tryKw + " readFile(path);\n"
+		+ "\tconst content = try readFile(path);\n"
 		+ "\treturn Result.ok([]);\n"
 		+ "}";
 	const db = testDb("file:///test.ms", src);
