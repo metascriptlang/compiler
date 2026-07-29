@@ -25,6 +25,8 @@ export class Array<T> {
  * Appends new elements to the end of an array, and returns the new length of the array.
  * @param value New element to add to the array.
  */
+export extern function push(this arr: uint8[], value: uint8): void from "&msUint8ArrayPush";
+
 export extern function push(this arr: number[], value: number): void from "&msNumberArrayPush";
 
 /**
