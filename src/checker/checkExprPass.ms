@@ -2906,6 +2906,19 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		}
 		return spawnRet;
 	}
+	// A nullable function is a carrier struct, not something callable. Without this the
+	// call falls past the Function branch below undiagnosed and codegen emits the struct
+	// in call position ("called object type ... is not a function"). tsc rejects the same
+	// shape (ts2722), so the payload must be unwrapped at the call site.
+	if (calleeType !== null && isMaybeType(calleeType)
+		&& calleeType.typeReturn !== null && calleeType.typeReturn.kind === TypeKind.Function) {
+		addError(ctx, "callee is possibly null (" + typeDisplayName(calleeType.typeReturn) + " | null) — unwrap with '!' or a null check first",
+			node.location.line, node.location.column);
+		const nullableRet = calleeType.typeReturn.typeReturn !== null ? calleeType.typeReturn.typeReturn : unknownType();
+		node.nodeType = nullableRet;
+		return nullableRet;
+	}
+
 	// Check argument types + infer generic return
 	// @builtin("Echo"): accept any number of args of any type (reference echo parity)
 	const isEchoBuiltin = node.resolvedSym !== null && node.resolvedSym.builtinKind === "Echo";
