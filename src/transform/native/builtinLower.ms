@@ -175,10 +175,7 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	}
 
 	if (builtinKind === "AsBytes") {
-		return rewriteZeroCopyBridge(node, true);
-	}
-	if (builtinKind === "AsString") {
-		return rewriteZeroCopyBridge(node, false);
+		return rewriteZeroCopyBridge(node);
 	}
 
 	if (builtinKind === "ResultOk") {
@@ -215,18 +212,17 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	return node;
 }
 
-// Zero-copy string ↔ uint8[] bridge: rewrite call to HiddenStdConv with Cursor flag.
-// AsBytes: string → uint8[] (bit-cast, same memory layout)
-// AsString: uint8[] → string (bit-cast, same memory layout)
-// The Cursor flag tells DRC to skip destroy on the result (it's a borrow).
-function rewriteZeroCopyBridge(node: Node, toBytes: boolean): Node {
+// Zero-copy string → uint8[] borrow: rewrite call to HiddenStdConv with Cursor flag
+// (bit-cast, same memory layout; Cursor tells DRC to skip destroy on the result).
+// The reverse direction (AsString) is NOT intercepted: a Cursor borrow escaping the
+// array's scope dangles (bug065), so the call falls through to the plain extern
+// msAsString — a copying kernel (cstrToNimstr shape) returning a fresh owned string.
+function rewriteZeroCopyBridge(node: Node): Node {
 	const cd = node.data as CallExprData;
 	if (cd.arguments.length < 1) return node;
 	const receiver = cd.arguments[0];
 	const loc = node.location;
-	const targetType = toBytes
-		? createArray(createPrimitive(TypeKind.Uint8))
-		: stringType();
+	const targetType = createArray(createPrimitive(TypeKind.Uint8));
 	const conv = makeHiddenStdConv(receiver, targetType, loc);
 	conv.flags = conv.flags | NodeFlag.Cursor;
 	return conv;
