@@ -5,6 +5,8 @@
 //
 // @xfail(c): bare `number | null` Maybe-carrier miscompiles (double != void*) — open G1 cluster, docs/TSGAP.md "G1-gate" (siblings bug010/bug047). XPASS fires loud when the fix lands.
 // @xfail(san): same G1 carrier — the san cell builds the same C (drc) and fails identically.
+// @xfail(orc): same G1 carrier — the gap is in the C backend, not the GC mode.
+// @xfail(danger): same G1 carrier — the gap is in the C backend, not the opt level.
 
 interface Box { label: string; }
 
