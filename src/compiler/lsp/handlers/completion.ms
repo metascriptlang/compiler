@@ -1,6 +1,7 @@
 // LSP Handlers — Completion, completion resolve, import path/name completion.
 
-import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbEnsureModuleExports, dbResolveImport } from "../../transam/index";
+import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbEnsureModuleExports, dbResolveImport, dbSetStdPath } from "../../transam/index";
+import { resolveRuntimeDir } from "../../../utils/path";
 import { readDir } from "std/fs";
 import {
 	lspJsonString,
@@ -15,12 +16,13 @@ import {
 	sgTypeToString, sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates,
 	sgExtractDocComment, sgBuiltinDoc,
 	sgFindImportBySource, sgExtractImportPath, sgExtractImportSource, sgExtractExistingImportNames,
-	sgComputeImportEdit, sgQueryAtPosition, sgObjectFieldPathAST, sgCompleteObjectFields,
+	sgComputeImportEdit, sgQueryAtPosition, sgQueryContextualTypeAt, sgObjectFieldPathAST, sgCompleteObjectFields,
 	findEnclosingObjectLiteral, findNodeAtPosition,
 	sgGetLineOffset,
 	SgSuggest, SgCompletionKind
 } from "../../../checker/suggest";
 import { CheckerContext, findModuleExports } from "../../../checker/context";
+import { handleDidOpen, handleDidChange } from "./lifecycle";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { createTypeRef } from "../../../checker/types";
 import { Node, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, Type, SymbolKind } from "../../../ast/node";
@@ -332,7 +334,10 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 			// declaration walk below stays as the fallback.
 			const innerObj = findEnclosingObjectLiteral(program, pos.line, pos.col + 1);
 			if (innerObj !== null) {
-				const innerSg = sgQueryAtPosition(ctx, innerObj.location.line, innerObj.location.column);
+				let innerSg = sgQueryContextualTypeAt(ctx, innerObj.location.line, innerObj.location.column);
+				if (innerSg === null) {
+					innerSg = sgQueryAtPosition(ctx, innerObj.location.line, innerObj.location.column);
+				}
 				if (innerSg !== null && innerSg.symType !== null) {
 					const innerKeys = (innerObj.data as ObjectLiteralData).keys;
 					const emptyPath: string[] = [];
@@ -764,4 +769,142 @@ test "object completion: argument with no enclosing variable" {
 test "object completion: return position" {
 	const r = completionFixtureAt("function give(): Style { return {  }; }\n", 4, 33);
 	assert r.indexOf("colorX", 0) >= 0;
+}
+
+// Cross-module macro-arg completion — the Neon createStyles shape. The macro
+// rewrites each entry to styleOfX(entry); its body references Node/NodeKind
+// imported by the DECLARING module, so the engine compile needs that module's
+// ctx registered (lookupModuleCtx) — batch registers it in checkProgram, the
+// db must full-check macro-declaring deps on demand.
+
+const MACRO_MOD_FIXTURE = `import { Node, NodeKind } from "std/meta";
+export interface StyleX { colorX: string; widthX: number; }
+export function styleOfX(s: StyleX): StyleX { return s; }
+export macro sheetX(node: Node): Node {
+	let entries: Node[] = [];
+	for (const v of node.properties) {
+		entries.push({
+			kind: NodeKind.CallExpr, line: v.line, column: v.column,
+			callee: { kind: NodeKind.Identifier, line: v.line, column: v.column, name: "styleOfX" },
+			arguments: [v],
+		});
+	}
+	return {
+		kind: NodeKind.ObjectLiteral, line: node.line, column: node.column,
+		properties: entries, keys: node.keys, keyLocations: node.keyLocations,
+	};
+}
+`;
+
+const MACRO_USE_FIXTURE = `import { sheetX, styleOfX } from "./macmod";
+
+const s = sheetX({ box: {  } });
+`;
+
+function macroFixtureDb(): TransAmDb {
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, lspUriToPath("file:///macmod.ms"), MACRO_MOD_FIXTURE);
+	dbSetFileText(db, lspUriToPath("file:///macuse.ms"), MACRO_USE_FIXTURE);
+	dbEnsureModuleExports(db, lspUriToPath("file:///macmod.ms"));
+	return db;
+}
+
+test "cross-module macro body compiles in LSP db" {
+	const db = macroFixtureDb();
+	const ctx = dbTypeCheck(db, lspUriToPath("file:///macuse.ms"));
+	assert ctx !== null;
+	let bad = false;
+	for (const e of ctx.errors) {
+		if (e.message.indexOf("evaluator unavailable", 0) >= 0) bad = true;
+		if (e.message.indexOf("Unresolved type", 0) >= 0) bad = true;
+	}
+	assert !bad;
+}
+
+test "object completion: macro argument literal (Neon createStyles shape)" {
+	const db = macroFixtureDb();
+	const params = `{"textDocument":{"uri":"file:///macuse.ms"},"position":{"line":2,"character":25}}`;
+	const r = handleCompletion("1", params, db, createCompletionCache());
+	assert r.indexOf("colorX", 0) >= 0;
+}
+
+// JSX shape (Neon element macro): the style attr literal is re-emitted as a call
+// argument by the macro; its position must survive and complete against the
+// param type. Callee stamped at the TAG position (no literal-position collision).
+
+const JSX_MACRO_FIXTURE = `import { Node, NodeKind } from "std/meta";
+export interface StyleX { colorX: string; widthX: number; }
+export function styleOfX(s: StyleX): StyleX { return s; }
+export macro jelX(node: Node): Node {
+	let args: Node[] = [];
+	for (const a of node.jsxAttrs) {
+		if (a.jsxAttrName === "style") {
+			args.push(a.jsxAttrValue);
+		}
+	}
+	return {
+		kind: NodeKind.CallExpr, line: node.line, column: node.column,
+		callee: { kind: NodeKind.Identifier, line: node.line, column: node.column, name: "styleOfX" },
+		arguments: args,
+	};
+}
+`;
+
+const JSX_USE_FIXTURE = `import { jelX, styleOfX } from "./jelmod";
+
+const t = jelX(<div style={{  }}></div>);
+`;
+
+test "object completion: JSX style attribute literal (Neon element shape)" {
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, lspUriToPath("file:///jelmod.ms"), JSX_MACRO_FIXTURE);
+	dbSetFileText(db, lspUriToPath("file:///jeluse.ms"), JSX_USE_FIXTURE);
+	dbEnsureModuleExports(db, lspUriToPath("file:///jelmod.ms"));
+	const params = `{"textDocument":{"uri":"file:///jeluse.ms"},"position":{"line":2,"character":28}}`;
+	const r = handleCompletion("1", params, db, createCompletionCache());
+	assert r.indexOf("colorX", 0) >= 0;
+}
+
+// Lifecycle parity matters: didOpen records the user file's import edges, and
+// didChange's invalidation reaches dependents THROUGH those edges. Raw
+// dbSetFileText without a prior didOpen leaves the dependent green and stale.
+test "object completion: macro module edit refreshes the expansion" {
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	handleDidOpen(`{"textDocument":{"uri":"file:///macmod.ms","text":${lspJsonString(MACRO_MOD_FIXTURE)}}}`, db);
+	handleDidOpen(`{"textDocument":{"uri":"file:///macuse.ms","text":${lspJsonString(MACRO_USE_FIXTURE)}}}`, db);
+	const params = `{"textDocument":{"uri":"file:///macuse.ms"},"position":{"line":2,"character":25}}`;
+	const r1 = handleCompletion("1", params, db, createCompletionCache());
+	assert r1.indexOf("colorX", 0) >= 0;
+	assert r1.indexOf("padX", 0) < 0;
+	const v2 = MACRO_MOD_FIXTURE.replace("colorX: string;", "colorX: string; padX: number;");
+	handleDidChange(`{"textDocument":{"uri":"file:///macmod.ms"},"contentChanges":[{"text":${lspJsonString(v2)}}]}`, db);
+	const r2 = handleCompletion("2", params, db, createCompletionCache());
+	assert r2.indexOf("padX", 0) >= 0;
+}
+
+test "mutually importing macro modules terminate" {
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	const cycA = `import { mB } from "./cycb";
+import { Node } from "std/meta";
+export macro mA(node: Node): Node { return node; }
+`;
+	const cycB = `import { mA } from "./cyca";
+import { Node } from "std/meta";
+export macro mB(node: Node): Node { return node; }
+`;
+	dbSetFileText(db, lspUriToPath("file:///cyca.ms"), cycA);
+	dbSetFileText(db, lspUriToPath("file:///cycb.ms"), cycB);
+	dbEnsureModuleExports(db, lspUriToPath("file:///cyca.ms"));
+	dbEnsureModuleExports(db, lspUriToPath("file:///cycb.ms"));
+	const use = `import { mA } from "./cyca";
+
+const z = mA({ a: 1 });
+`;
+	dbSetFileText(db, lspUriToPath("file:///cycuse.ms"), use);
+	const ctx = dbTypeCheck(db, lspUriToPath("file:///cycuse.ms"));
+	assert ctx !== null;
 }

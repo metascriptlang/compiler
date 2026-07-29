@@ -152,6 +152,35 @@ export function sgQueryAtPosition(ctx: CheckerContext, line: number, col: number
 	return null as unknown as SgSuggest;
 }
 
+// Contextual-type variant: only the ObjectLiteral side-channel records
+// (sym === null, kind Interface). A macro-emitted call stamps its callee at the
+// literal's own position — that function record must not shadow the literal's
+// contextual type when completing object fields.
+export function sgQueryContextualTypeAt(ctx: CheckerContext, line: number, col: number): SgSuggest {
+	if (ctx.symRecords === null || ctx.symRecords.length === 0) return null as unknown as SgSuggest;
+	const records = ctx.symRecords;
+	let lo = 0;
+	let hi = records.length - 1;
+	while (lo <= hi) {
+		const mid = (lo + hi) as int32 >> 1;
+		if (records[mid].line < line) {
+			lo = mid + 1;
+		} else {
+			hi = mid - 1;
+		}
+	}
+	let i = lo;
+	while (i < records.length && records[i].line === line) {
+		const rec = records[i];
+		if (rec.sym === null && rec.kind === SymbolKind.Interface && rec.symType !== null
+				&& col >= rec.col && col < rec.colEnd) {
+			return sgSuggestFromRecord(rec);
+		}
+		i = i + 1;
+	}
+	return null as unknown as SgSuggest;
+}
+
 function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
 	// Use sym.location if valid, otherwise fall back to record's own position.
 	// Catches symbols created with default location {0, 0} (e.g. synthetic field syms).
