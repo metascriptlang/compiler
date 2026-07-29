@@ -2,6 +2,9 @@
 // C and JS. C represents nullable value types as a Maybe struct { value, present };
 // JS uses native null (maybeUnwrap pass). This program's stdout is the contract:
 // the two backends must print byte-identical output.
+//
+// @xfail(c): bare `number | null` Maybe-carrier miscompiles (double != void*) — open G1 cluster, docs/TSGAP.md "G1-gate" (siblings bug010/bug047). XPASS fires loud when the fix lands.
+// @xfail(san): same G1 carrier — the san cell builds the same C (drc) and fails identically.
 
 interface Box { label: string; }
 
