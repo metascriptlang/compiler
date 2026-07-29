@@ -316,8 +316,8 @@ PROVEN RED against the drift it targets. Methodology and ledger details:
 
 ### 4.1 Orphan test files — audited 2026-07-28
 
-**22 test files are not imported by any entry** (excluding `guard/`, which
-has its own `run.sh`). None carry an `xfail`/parked marker, so this is
+**25 test files are not imported by any entry** (22 below + 3 found by the
+2026-07-29 corpus migration; excluding `guard/`, which has its own `run.sh`). None carry an `xfail`/parked marker, so this is
 neglect, not policy. The worst case is `fixedbugs/bug048.ms` — it guards a
 real self-host regression (collectPass hoisting test-block-local `const`
 to module scope) and it **passes today**, so the guard exists but has
