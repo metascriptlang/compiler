@@ -1764,9 +1764,15 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		truncResults(ctx, cc);
 		const d = node.data as HiddenStdConvData;
 		const targetC = getTypeDesc(g, d.convType);
-		// Zero-copy string ↔ uint8[] bridge: pointer cast (same memory layout)
+		// Zero-copy string ↔ uint8[] bridge (same memory layout): string is a
+		// fat value (msString), arrays are pointers (msUint8Array*) — each
+		// direction needs its own cast shape.
 		if ((node.flags & NodeFlag.Cursor) !== 0) {
-			ctx.results.push(`*((${targetC}*)&(${inner}))`);
+			if (d.convType.kind === TypeKind.Array) {
+				ctx.results.push(`((${targetC}*)&(${inner}))`);
+			} else {
+				ctx.results.push(`*((${targetC}*)(${inner}))`);
+			}
 			return;
 		}
 		// Variant struct → discriminated union: construct with tag + variant slot.
