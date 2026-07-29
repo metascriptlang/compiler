@@ -9,7 +9,7 @@ import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, f
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
-	CandidateScore,
+	CandidateScore, sameType,
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
@@ -3835,22 +3835,43 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	}
 	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths);
 	if (idx === -2) {
-		// Tiebreaker: prefer concrete extension over generic
-		let concreteIdx = -1;
-		let concreteCount = 0;
-		let ti = 0;
-		while (ti < exts.length) {
-			if (!hasGenericParams(getExtFnType(exts[ti]))) {
-				concreteIdx = ti;
-				concreteCount = concreteCount + 1;
+		// Tiebreaker: an exact receiver beats a widening one — `this uint8[]`
+		// wins over `this number[]` on a uint8[] object instead of tying.
+		if (objType !== null && objType.kind !== TypeKind.Unknown) {
+			let exactIdx = -1;
+			let exactCount = 0;
+			let xi = 0;
+			while (xi < exts.length) {
+				const xft = getExtFnType(exts[xi]);
+				if (!exts[xi].isStatic && xft.kind === TypeKind.Function && xft.typeChildren.length > 0
+						&& sameType(xft.typeChildren[0], objType)) {
+					exactIdx = xi;
+					exactCount = exactCount + 1;
+				}
+				xi = xi + 1;
 			}
-			ti = ti + 1;
+			if (exactCount === 1) {
+				idx = exactIdx;
+			}
 		}
-		if (concreteCount === 1) {
-			idx = concreteIdx;
-		} else {
-			addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'", callNode.location.line, callNode.location.column);
-			return getReturnType(candidates[0]);
+		// Tiebreaker: prefer concrete extension over generic
+		if (idx === -2) {
+			let concreteIdx = -1;
+			let concreteCount = 0;
+			let ti = 0;
+			while (ti < exts.length) {
+				if (!hasGenericParams(getExtFnType(exts[ti]))) {
+					concreteIdx = ti;
+					concreteCount = concreteCount + 1;
+				}
+				ti = ti + 1;
+			}
+			if (concreteCount === 1) {
+				idx = concreteIdx;
+			} else {
+				addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'", callNode.location.line, callNode.location.column);
+				return getReturnType(candidates[0]);
+			}
 		}
 	}
 	if (idx === -1) {
