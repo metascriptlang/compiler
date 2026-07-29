@@ -66,14 +66,19 @@ test "bug010: Map<string, FunctionType> with custom return type" {
 // somehow linked — got a bogus closure pointer. Asserting on a side-effect
 // the stored closure produces is what catches a wrong-closure regression
 // (which `.has()` / `.size` checks would silently let through).
+//
+// `get()` returns `V | null`, so the retrieved closure needs `!` before it can
+// be invoked — calling a possibly-null callee is now a checker error (tsc
+// ts2722 parity). The bug shape is unchanged: what is under test is that the
+// closure survives the round-trip through the map.
 type IntCmp = (a: int32, b: int32) => int32;
 
 test "bug010: Map<string, FunctionType> round-trip — retrieve and invoke" {
 	const cmps: Map<string, IntCmp> = new Map<string, IntCmp>();
 	cmps.set("min", (a, b) => (a < b ? a : b) as int32);
 	cmps.set("max", (a, b) => (a > b ? a : b) as int32);
-	const minFn = cmps.get("min");
-	const maxFn = cmps.get("max");
+	const minFn = cmps.get("min")!;
+	const maxFn = cmps.get("max")!;
 	assert minFn(3, 7) === 3;
 	assert maxFn(3, 7) === 7;
 	assert minFn(10, 2) === 2;
