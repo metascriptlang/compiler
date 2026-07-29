@@ -94,8 +94,8 @@ export function msStringEquals(a: string, b: string): boolean {
 // ===== String Extension Methods (after lowering: s.method(args) → method(s, args)) =====
 // Pure MetaScript on byte arrays — shared logic with C backend.
 
-export function byteLength(this s: string): int32 {
-	return s.asBytes().length;
+export function byteLength(this s: string): int64 {
+	return s.asBytes().length as int64;
 }
 
 export function byteAt(this s: string, idx: int64): int32 {
@@ -175,11 +175,13 @@ export function indexOf(this s: string, sub: string, start: int64 = 0): int64 {
 	return -1;
 }
 
-export function lastIndexOf(this s: string, sub: string): int32 {
+export function lastIndexOf(this s: string, sub: string, startIdx: int64 = -1): int64 {
 	const sb = s.asBytes();
 	const xb = sub.asBytes();
-	if (xb.length === 0) return sb.length;
+	if (xb.length === 0) return sb.length as int64;
+	if (xb.length > sb.length) return -1;
 	let i = sb.length - xb.length;
+	if (startIdx >= 0 && startIdx < i) i = startIdx;
 	while (i >= 0) {
 		let found = true;
 		let j = 0;
@@ -187,7 +189,7 @@ export function lastIndexOf(this s: string, sub: string): int32 {
 			if (sb[i + j] !== xb[j]) { found = false; break; }
 			j = j + 1;
 		}
-		if (found) return i;
+		if (found) return i as int64;
 		i = i - 1;
 	}
 	return -1;
@@ -198,8 +200,8 @@ export function trim(this s: string): string {
 	if (sb.length === 0) return "";
 	let a = 0;
 	let b = sb.length - 1;
-	while (a <= b && (sb[a] === " ".code || (sb[a] >= "\t".code && sb[a] <= "\r".code))) { a = a + 1; }
-	while (b >= a && (sb[b] === " ".code || (sb[b] >= "\t".code && sb[b] <= "\r".code))) { b = b - 1; }
+	while (a <= b && isSpaceByte(sb[a])) { a = a + 1; }
+	while (b >= a && isSpaceByte(sb[b])) { b = b - 1; }
 	return s.byteSlice(a, b + 1);
 }
 
@@ -210,29 +212,259 @@ export function slice(this s: string, start: int64, end: int64): string {
 }
 
 export function split(this s: string, delimiter: string): string[] {
-	const js = toJSStr(s);
-	const jd = toJSStr(delimiter);
-	@emit(`var parts = ${js}.split(${jd}); var r = []; for (var i = 0; i < parts.length; i++) r.push(fromJSStr(parts[i])); return r;`);
-	unreachable;
+	const sb = s.asBytes();
+	const db = delimiter.asBytes();
+	const parts: string[] = [];
+	if (sb.length === 0) { parts.push(""); return parts; }
+	if (db.length === 0) {
+		let c = 0;
+		while (c < sb.length) { parts.push(s.byteSlice(c, c + 1)); c = c + 1; }
+		return parts;
+	}
+	let pos = 0;
+	while (pos <= sb.length) {
+		const found = s.indexOf(delimiter, pos);
+		if (found < 0) { parts.push(s.byteSlice(pos, sb.length)); break; }
+		parts.push(s.byteSlice(pos, found));
+		pos = found + db.length;
+	}
+	return parts;
 }
 
 export function toLowerCase(this s: string): string {
-	@emit(`return fromJSStr(toJSStr(${s}).toLowerCase());`);
-	unreachable;
+	const sb = s.asBytes();
+	const result: uint8[] = [];
+	let i = 0;
+	while (i < sb.length) { result.push(asciiLower(sb[i])); i = i + 1; }
+	return result.asString();
 }
 
 export function toUpperCase(this s: string): string {
-	@emit(`return fromJSStr(toJSStr(${s}).toUpperCase());`);
-	unreachable;
+	const sb = s.asBytes();
+	const result: uint8[] = [];
+	let i = 0;
+	while (i < sb.length) { result.push(asciiUpper(sb[i])); i = i + 1; }
+	return result.asString();
 }
 
 export function replace(this s: string, search: string, replacement: string): string {
-	@emit(`return fromJSStr(toJSStr(${s}).replace(toJSStr(${search}), toJSStr(${replacement})));`);
-	unreachable;
+	const sb = s.asBytes();
+	const xb = search.asBytes();
+	if (sb.length === 0 || xb.length === 0) return s.byteSlice(0, sb.length);
+	const pos = s.indexOf(search, 0);
+	if (pos < 0) return s.byteSlice(0, sb.length);
+	const rb = replacement.asBytes();
+	const result: uint8[] = [];
+	let i = 0;
+	while (i < pos) { result.push(sb[i]); i = i + 1; }
+	let j = 0;
+	while (j < rb.length) { result.push(rb[j]); j = j + 1; }
+	i = pos + xb.length;
+	while (i < sb.length) { result.push(sb[i]); i = i + 1; }
+	return result.asString();
 }
 
 export function equals(this s: string, other: string): boolean {
 	return msStringEquals(s, other);
+}
+
+function asciiLower(b: int32): int32 {
+	if (b >= "A".code && b <= "Z".code) return b + 32;
+	return b;
+}
+
+function asciiUpper(b: int32): int32 {
+	if (b >= "a".code && b <= "z".code) return b - 32;
+	return b;
+}
+
+function isSpaceByte(b: int32): boolean {
+	return b === " ".code || (b >= "\t".code && b <= "\r".code);
+}
+
+export function equalsIgnoreCase(this s: string, other: string): boolean {
+	const ab = s.asBytes();
+	const bb = other.asBytes();
+	if (ab.length !== bb.length) return false;
+	let i = 0;
+	while (i < ab.length) {
+		if (asciiLower(ab[i]) !== asciiLower(bb[i])) return false;
+		i = i + 1;
+	}
+	return true;
+}
+
+// Non-overlapping occurrences. An empty needle counts every gap: byteLength + 1.
+export function count(this s: string, sub: string): int64 {
+	const sb = s.asBytes();
+	const xb = sub.asBytes();
+	if (xb.length === 0) return (sb.length + 1) as int64;
+	let n: int64 = 0;
+	let pos = 0;
+	while (pos <= sb.length - xb.length) {
+		const found = s.indexOf(sub, pos);
+		if (found < 0) break;
+		n = n + 1;
+		pos = found + xb.length;
+	}
+	return n;
+}
+
+export function substring(this s: string, start: int64, end: int64): string {
+	return s.slice(start, end);
+}
+
+export function trimStart(this s: string): string {
+	const sb = s.asBytes();
+	if (sb.length === 0) return "";
+	let a = 0;
+	while (a < sb.length && isSpaceByte(sb[a])) { a = a + 1; }
+	return s.byteSlice(a, sb.length);
+}
+
+export function trimEnd(this s: string): string {
+	const sb = s.asBytes();
+	if (sb.length === 0) return "";
+	let b = sb.length;
+	while (b > 0 && isSpaceByte(sb[b - 1])) { b = b - 1; }
+	return s.byteSlice(0, b);
+}
+
+export function repeat(this s: string, count: int32): string {
+	const sb = s.asBytes();
+	if (count <= 0 || sb.length === 0) return "";
+	const result: uint8[] = [];
+	let i = 0;
+	while (i < count) {
+		let j = 0;
+		while (j < sb.length) { result.push(sb[j]); j = j + 1; }
+		i = i + 1;
+	}
+	return result.asString();
+}
+
+export function replaceAll(this s: string, search: string, replacement: string): string {
+	const sb = s.asBytes();
+	const xb = search.asBytes();
+	if (sb.length === 0 || xb.length === 0) return s.byteSlice(0, sb.length);
+	const rb = replacement.asBytes();
+	const result: uint8[] = [];
+	let pos = 0;
+	while (pos <= sb.length - xb.length) {
+		const found = s.indexOf(search, pos);
+		if (found < 0) break;
+		let k = pos;
+		while (k < found) { result.push(sb[k]); k = k + 1; }
+		let j = 0;
+		while (j < rb.length) { result.push(rb[j]); j = j + 1; }
+		pos = found + xb.length;
+	}
+	while (pos < sb.length) { result.push(sb[pos]); pos = pos + 1; }
+	return result.asString();
+}
+
+// Byte reverse, matching msStringReverse — mangles multi-byte UTF-8 on both backends.
+export function reverse(this s: string): string {
+	const sb = s.asBytes();
+	const result: uint8[] = [];
+	let i = sb.length - 1;
+	while (i >= 0) { result.push(sb[i]); i = i - 1; }
+	return result.asString();
+}
+
+export function padStart(this s: string, targetLen: int64, pad: string): string {
+	const sb = s.asBytes();
+	const pb = pad.asBytes();
+	if (sb.length >= targetLen || pb.length === 0) return s.byteSlice(0, sb.length);
+	const result: uint8[] = [];
+	const padTotal = targetLen - sb.length;
+	let pos = 0;
+	let pi = 0;
+	while (pos < padTotal) {
+		result.push(pb[pi]);
+		pi = pi + 1;
+		if (pi >= pb.length) pi = 0;
+		pos = pos + 1;
+	}
+	let i = 0;
+	while (i < sb.length) { result.push(sb[i]); i = i + 1; }
+	return result.asString();
+}
+
+export function padEnd(this s: string, targetLen: int64, pad: string): string {
+	const sb = s.asBytes();
+	const pb = pad.asBytes();
+	if (sb.length >= targetLen || pb.length === 0) return s.byteSlice(0, sb.length);
+	const result: uint8[] = [];
+	let i = 0;
+	while (i < sb.length) { result.push(sb[i]); i = i + 1; }
+	const padTotal = targetLen - sb.length;
+	let pos = 0;
+	let pi = 0;
+	while (pos < padTotal) {
+		result.push(pb[pi]);
+		pi = pi + 1;
+		if (pi >= pb.length) pi = 0;
+		pos = pos + 1;
+	}
+	return result.asString();
+}
+
+// strtod/strtoll parity: unparseable input is 0, never NaN.
+export function parseFloat(this s: string): number {
+	const js = toJSStr(s);
+	@emit(`var v = Number.parseFloat(${js}); return Number.isNaN(v) ? 0 : v;`);
+	unreachable;
+}
+
+export function parseInt(this s: string): int64 {
+	const js = toJSStr(s);
+	@emit(`var v = Number.parseInt(${js}, 10); return Number.isNaN(v) ? 0 : v;`);
+	unreachable;
+}
+
+// JS arrays carry no separate allocation, so capacity is always the live length.
+export function capacity(this s: string): int64 {
+	return s.asBytes().length as int64;
+}
+
+export function setLength(this s: string, newLen: int64): void {
+	const b = s.asBytes();
+	while (b.length > newLen) { b.pop(); }
+	while (b.length < newLen) { b.push(0); }
+}
+
+export function append(this s: string, other: string): void {
+	msStringAppend(s, other);
+}
+
+export function setSlice(this s: string, start: number, end: number): void {
+	const b = s.asBytes();
+	let a = start;
+	let e = end;
+	if (a < 0) a = 0;
+	if (e > b.length) e = b.length;
+	if (a >= e) { s.setLength(0); return; }
+	const n = e - a;
+	let i = 0;
+	while (i < n) { b[i] = b[a + i]; i = i + 1; }
+	s.setLength(n);
+}
+
+export function stripInPlace(this s: string): void {
+	const b = s.asBytes();
+	if (b.length === 0) return;
+	let first = 0;
+	let last = b.length - 1;
+	while (first <= last && isSpaceByte(b[first])) { first = first + 1; }
+	while (last >= first && isSpaceByte(b[last])) { last = last - 1; }
+	s.setSlice(first, last + 1);
+}
+
+export function fromCodePoint(cp: number): string {
+	@emit(`if (${cp} < 0 || ${cp} > 1114111) return [];`);
+	@emit(`return fromJSStr(String.fromCodePoint(${cp}));`);
+	unreachable;
 }
 
 // Number/bool to string (called by builtinLower .toString())
