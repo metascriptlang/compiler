@@ -197,6 +197,13 @@ function removeExportEntry(registry: ExportRegistry, path: string): void {
 				registry.entries[j] = registry.entries[j + 1];
 			}
 			registry.entries.pop();
+			// moduleIndex must follow: drop the removed path and re-point every
+			// shifted entry, or findModuleExports serves ANOTHER module's exports
+			// (or reads out of bounds) after any edit-triggered invalidation.
+			registry.moduleIndex.delete(path);
+			for (let k = i; k < registry.entries.length; k = k + 1) {
+				registry.moduleIndex.set(registry.entries[k].modulePath, k);
+			}
 			return;
 		}
 	}
