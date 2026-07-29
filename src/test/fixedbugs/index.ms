@@ -76,3 +76,6 @@ import "./bug060_assert_message_expr_unwalked";
 import "./bug061_maybe_carrier_bare_position";
 import "./bug063_asbytes_zero_copy_bridge";
 import "./bug064_uint8_push_number_dispatch";
+import "./bug065_asstring_exit_uaf";
+import "./bug066_asbytes_rvalue_receiver";
+import "./bug067_literal_view_push_static_clobber";
