@@ -13,10 +13,10 @@
 // In expression position, C codegen handles it (GNU statement expressions
 // or codegen-level temp insertion).
 
-import { Node, NodeKind, DeclKind, ExprStmtData, CallExprData, MemberExprData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExprStmtData, CallExprData, MemberExprData, VariableDeclData } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { unknownType } from "../../checker/types";
-import { walkNode } from "../walker";
+import { walkNode, walkExpandBlocks } from "../walker";
 import { makeVarDecl, makeIdent, makeIdentResolved, makeCall, makeMember, makeExprStmt, makeBlock } from "../util";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
 
@@ -72,6 +72,57 @@ function lowerRvalueNode(node: Node, ctx: TransformContext): Node {
 	stmts.push(tmpDecl);
 	stmts.push(newExprStmt);
 	return makeBlock(stmts, loc);
+}
+
+// ===== AsBytes Bridge Receiver Hoist =====
+// The zero-copy bridge emits `((msUint8Array*)&(receiver))` — the receiver must
+// be addressable in C. Hoist an rvalue receiver into a peer temp statement
+// (flat walkExpandBlocks splice like callHoist — a block would scope a
+// VariableDecl away from its followers). Gated on the AsBytes builtin only:
+// the general all-methods hoist (lowerRvalue above) is still unwired (bug066).
+
+function isAsBytesCallOnRvalue(expr: Node): boolean {
+	if (expr.kind !== NodeKind.CallExpr) return false;
+	const call = expr.data as CallExprData;
+	if (call.callee.kind !== NodeKind.MemberExpr) return false;
+	if (call.callee.resolvedSym === null || call.callee.resolvedSym.builtinKind !== "AsBytes") return false;
+	return isRvalue((call.callee.data as MemberExprData).object);
+}
+
+function hoistBridgeReceiver(callNode: Node, ctx: TransformContext): Node {
+	const member = (callNode.data as CallExprData).callee.data as MemberExprData;
+	const loc = callNode.location;
+	const rvalType = member.object.nodeType !== null ? member.object.nodeType : unknownType();
+	const sym = freshTempSym(ctx, "rval", rvalType);
+	const tmpDecl = makeVarDecl(sym.name, member.object, DeclKind.Const, loc);
+	tmpDecl.resolvedSym = sym;
+	tmpDecl.nodeType = rvalType;
+	const ref = makeIdentResolved(sym, loc);
+	ref.nodeType = rvalType;
+	member.object = ref;
+	return tmpDecl;
+}
+
+function expandBridgeStmt(stmt: Node, ctx: TransformContext): Node[] {
+	if (stmt.kind === NodeKind.VariableDecl) {
+		const d = stmt.data as VariableDeclData;
+		if (d.initializer !== null && isAsBytesCallOnRvalue(d.initializer)) {
+			return [hoistBridgeReceiver(d.initializer, ctx), stmt];
+		}
+		return [stmt];
+	}
+	if (stmt.kind === NodeKind.ExprStmt) {
+		const sd = stmt.data as ExprStmtData;
+		if (sd.expr !== null && isAsBytesCallOnRvalue(sd.expr)) {
+			return [hoistBridgeReceiver(sd.expr, ctx), stmt];
+		}
+	}
+	return [stmt];
+}
+
+export function lowerRvalueBridge(program: Node, ctx: TransformContext): Node {
+	walkExpandBlocks(program, expandBridgeStmt, ctx);
+	return program;
 }
 
 // ===== Entry Point =====
