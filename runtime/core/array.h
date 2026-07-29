@@ -188,6 +188,7 @@ void msUint8ArrayDestroy(msUint8Array* arr);
 void msUint8ArrayPush(msUint8Array* arr, uint8_t value);
 uint8_t msUint8ArrayAt(msUint8Array* arr, int64_t idx);
 msUint8Array msUint8ArrayNew(int64_t cap);
+msString msAsString(msUint8Array* arr);
 
 /* ===== Generic Typed Array Macro (Standard reference sequence pattern) ===== */
 /* Generates per-type array struct: { int64_t len; struct { int64_t cap; T data[]; }* p; }
