@@ -31,14 +31,39 @@ void* msArrayPayloadNewUninit(int64_t cap, int64_t elemSize) {
 	return p;
 }
 
+/* A payload whose cap carries string flag bits reached us through the byte-view
+   bridge (string literal = static memory, or lazily ASCII-cached heap string).
+   It is NOT uniquely owned: copy the live prefix to a fresh payload — never
+   realloc, never free the source (Nim prepareSeqAddUninit copy-on-flag parity).
+   Stale ASCII-cache bits are dropped with the copy. */
+static void* msArrayPayloadCopyFlagged(int64_t len, void* p, int64_t needed, int64_t elemSize, bool zeroTail) {
+	int64_t headerSize = sizeof(msArrayPayloadBase);
+	int64_t oldCap = ((msArrayPayloadBase*)p)->cap & MS_CAP_MASK;
+	int64_t newCap = msArrayResizeCap(oldCap);
+	if (newCap < needed) newCap = needed;
+	int64_t newSize = headerSize + newCap * elemSize;
+	msArrayPayloadBase* q = (msArrayPayloadBase*)malloc(newSize);
+	if (q) {
+		memcpy((char*)q + headerSize, (char*)p + headerSize, len * elemSize);
+		if (zeroTail) {
+			memset((char*)q + headerSize + len * elemSize, 0, newSize - headerSize - len * elemSize);
+		}
+		q->cap = newCap;
+	}
+	return q;
+}
+
 void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize) {
 	int64_t headerSize = sizeof(msArrayPayloadBase);
 	if (addLen <= 0) return p;
 	if (p == NULL) {
 		return msArrayPayloadNew(len + addLen, elemSize);
 	}
-	/* Payload is uniquely owned — safe to realloc in place */
 	msArrayPayloadBase* base = (msArrayPayloadBase*)p;
+	if ((base->cap & ~MS_CAP_MASK) != 0) {
+		return msArrayPayloadCopyFlagged(len, p, len + addLen, elemSize, true);
+	}
+	/* Payload is uniquely owned — safe to realloc in place */
 	int64_t oldCap = base->cap;
 	int64_t needed = len + addLen;
 	if (needed <= oldCap) return p;
@@ -220,8 +245,11 @@ void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elem
 		if (q) q->cap = cap;
 		return q;
 	}
-	/* Payload is uniquely owned — safe to realloc in place */
 	msArrayPayloadBase* base = (msArrayPayloadBase*)p;
+	if ((base->cap & ~MS_CAP_MASK) != 0) {
+		return msArrayPayloadCopyFlagged(len, p, len + addLen, elemSize, false);
+	}
+	/* Payload is uniquely owned — safe to realloc in place */
 	int64_t oldCap = base->cap;
 	int64_t needed = len + addLen;
 	if (needed <= oldCap) return p;
@@ -522,7 +550,11 @@ void msUint8ArrayDestroy(msUint8Array* arr) {
 }
 
 void msUint8ArrayPush(msUint8Array* arr, uint8_t value) {
-	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+	/* Masked compare + flag divert: a byte view of a string carries flag bits in
+	   cap (raw compare reads them as astronomically large capacity and writes
+	   in place — into static memory for a literal). */
+	if (arr->p == NULL || (arr->p->cap & ~MS_CAP_MASK) != 0
+		|| (arr->p->cap & MS_CAP_MASK) < arr->len + 1) {
 		arr->p = (msUint8Payload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(uint8_t));
 	}
 	arr->p->data[arr->len] = value;
