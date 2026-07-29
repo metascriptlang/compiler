@@ -33,6 +33,15 @@ Note: at an arbitrary historical commit, runtime/std/net/etc. uncommitted change
 msc test src/index.ms                 # full compiler suite, native
 msc test src/utils/string.ms          # one file (+ its deps)
 
+# Corpus tier — real binaries per program, two SEPARATE lane runs (both must
+# be green to ship). The runners test ./msc (the freshly built binary) when it
+# exists, else the installed msc; MSC=<path> overrides. Which command when:
+# src/test/CLAUDE.md §5.0.
+msc run src/test/corpus/run.ms                 # parity (C↔JS) + RSS (drc/orc), ~19 min
+MSCORPUS_SAN=1 msc run src/test/corpus/run.ms  # ASan + DRC ledger, ~10 min
+MSCORPUS_FILTER=leak msc run src/test/corpus/run.ms   # substring subset
+src/test/guard/run.sh                          # lifecycle guards (proven-red)
+
 # Run without tests (build + run natively)
 msc run src/index.ms
 

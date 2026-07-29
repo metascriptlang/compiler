@@ -244,6 +244,13 @@ lines), and ALL determinism obligations live on the program:
     reported loud so a stale marker cannot lie silently.
   - `// @serial` — contention-sensitive (actor/spawn stress): its run
     cells execute one at a time after the parallel drain.
+  - `// @ledger-slack(<MangledType>): <N>` — san lane only: exactly N
+    objects of that type legitimately survive exit (module-level RC
+    values are NOT destroyed at exit — probe-verified 2026-07-29; the
+    compiler-side question is open). EXACT-match: a diff other than N
+    fails, and diff 0 with slack declared fails as "slack unused" so the
+    marker self-cleans if global-destroy ever lands. Never use @xfail for
+    a survivor — it would mask every future real leak in that program.
 - **Programs WITHOUT `@maxrss` are parity programs**: run through C and
   (unless `@skip-js`) JS-on-node, outputs byte-compared pairwise — no
   golden files, nothing to bless, nothing to drift.
@@ -343,10 +350,10 @@ Wire the passing ones; give each failing one a header saying what it
 proves and why it is parked, or delete it. Re-run the audit with:
 
 ```bash
-cd src/test && for f in $(find . -name '*.ms' -not -path './native/programs/*' \
-  -not -path './differential/programs/*' -not -path './guard/*' -not -name 'run.ms' \
+cd src/test && for f in $(find . -name '*.ms' -not -path './corpus/programs/*' \
+  -not -path './native/programs/*' -not -path './guard/*' -not -name 'run.ms' \
   | sed 's|^\./||'); do base=$(basename $f .ms)
-  n=$(rg -l "/${base}\"|\./${base}\"" --glob '*.ms' . | grep -v "^\./$f$" | wc -l)
+  n=$(rg -l "/${base}\"|\./${base}\"" --glob '*.ms' . | grep -v "^\./$f$" | wc -l | tr -d ' ')
   [ "$n" = "0" ] && [ "$base" != "index" ] && echo "$f"
 done
 ```
@@ -354,6 +361,78 @@ done
 ---
 
 ## 5. Running Tests
+
+### 5.0 Which command, when — read this first
+
+| Situation | Command | Cost |
+|---|---|---|
+| **Inner loop** — any compiler edit | `msc test src/index.ms` | ~40s |
+| Same, under the cycle collector | `msc test src/index.ms --gc=orc` | ~40s |
+| Touched **codegen / DRC / runtime / transform** | + `msc run src/test/corpus/run.ms` | ~19 min |
+| Touched **DRC hooks, lifetimes, ownership** | + `MSCORPUS_SAN=1 msc run src/test/corpus/run.ms` | ~10 min |
+| Same, targeted lifecycle invariants | + `src/test/guard/run.sh` | ~2 min |
+| Touched **std/** or anything users compile against | rebuild + `tools/sync-local-binary.sh` first, then re-run the above | — |
+| Before shipping / after a risky refactor | the full ladder below | ~35 min |
+
+**Pre-ship ladder** — run in this order, stop at the first red:
+
+```bash
+msc build src/index.ms --gc=drc --danger --cc=clang --output=msc  # 0. build the candidate → ./msc
+msc test src/index.ms                                             # 1. inline suite (baseline 3346/0)
+msc test src/index.ms --gc=orc                                    # 2. same under ORC
+msc run src/test/corpus/run.ms                                    # 3. corpus: parity + RSS lanes
+MSCORPUS_SAN=1 msc run src/test/corpus/run.ms                     # 4. corpus: SAN lane
+src/test/guard/run.sh                                             # 5. lifecycle guards
+./tools/sync-local-binary.sh                                      # 6. only once green: publish
+```
+
+The two corpus lanes are **deliberately two separate runs**, not one merged
+invocation (same split as the reference frame's plain/sanitized lanes):
+they assert different things, and they run on different cadences — the SAN
+lane is a ship gate, while the RSS cells are the slow backstop that may run
+in the background (§T1.1 in `docs/TESTGAP.md`). Both must be green to ship.
+
+### Which compiler is under test — the two-tree convention
+
+A compiler resolves `std/` and `runtime/` **relative to its own location**
+(verified, not assumed), so the binary you run decides which support trees
+come with it:
+
+| binary | is | reads std/ + runtime/ from |
+|---|---|---|
+| `./msc` (repo root) | the candidate you just built | **this repo** — your edits |
+| `msc` (PATH → `~/.metascript/bin/msc`) | the last PUBLISHED build | `~/.metascript/` — the last sync |
+
+So the loop is: edit the repo → `msc build … --output=msc` (the published
+compiler builds the candidate) → **test the candidate** → `./tools/sync-local-binary.sh`
+only once green (publish: candidate + repo std/runtime become the installed
+ones). Between build and sync the two trees legitimately differ — that gap is
+the whole reason the runners must be told which compiler to exercise.
+
+Convention, applied by `corpus/run.ms` and `guard/run.sh` alike:
+
+- **Default = `./msc` when it exists**, else the installed `msc`. Plain
+  `msc run src/test/corpus/run.ms` therefore tests what you just built, with
+  no ceremony.
+- **`MSC=<path>` overrides** (e.g. `MSC=msc` to check the published build,
+  or a release binary for a bisect).
+- The chosen binary is **printed in the runner header** — never silent.
+- Two roles, two binaries, on purpose: `msc run <runner>` compiles/executes
+  the *harness* (use the stable published one — a broken candidate must not
+  stop the harness from starting), while `MSC` names the *subject under test*.
+  Running `./msc run <runner>` alone inverts this: the harness gets the new
+  compiler while every corpus program is still built by the old one.
+
+Other rules that make these numbers real:
+
+- **Never `rm -rf out` first.** It throws away the object cache AND triggers
+  the cold-build link race (§5.2).
+- **Never run two `msc` builds concurrently** — including from another
+  terminal or another agent session. Concurrent builds race the shared
+  `out/` object cache; that is the single biggest source of "red that names
+  a different file every run". Check `uptime` before trusting any timing.
+
+### 5.1 Commands in detail
 
 ```bash
 # === PRIMARY: msc test — compiles a C test binary and runs it ===
@@ -379,11 +458,19 @@ msc run examples/foo.ms
 # programs (@maxrss) as real binaries under BOTH --gc=drc and --gc=orc with
 # peak-RSS bounds; parity programs through C + JS-on-node, byte-compared.
 # msc builds are serial (out/ cache race), runs are parallel (except @serial),
-# progress streams to stderr. Point MSC at a HEAD-matched binary so a stale
-# installed msc can't cause false build-fails. ~19 min full (was >40).
-MSC=./msc msc run src/test/corpus/run.ms
-MSCORPUS_FILTER=leak MSC=./msc msc run src/test/corpus/run.ms  # substring subset
-MSCORPUS_JOBS=4                                                # run slots
+# progress streams to stderr. Tests ./msc by default (see the two-tree
+# convention above); MSC=<path> overrides. ~19 min full (was >40).
+msc run src/test/corpus/run.ms
+MSCORPUS_FILTER=leak msc run src/test/corpus/run.ms  # substring subset
+MSCORPUS_JOBS=4                                      # run slots
+MSC=msc msc run src/test/corpus/run.ms               # test the PUBLISHED build instead
+
+# === SAN lane — same corpus, every program built once (drc) with ASan +
+# slab-off + the DRC ledger; asserts exit + @stdout + no ASan report + no
+# DOUBLE-DESTROY + per-type ledger balance (@ledger-slack for exit
+# survivors). ~10 min full. The ledger IS the leak signal here (no LSan on
+# this platform); RSS cells backstop the destroy==0 blind spot. ===
+MSCORPUS_SAN=1 msc run src/test/corpus/run.ms
 
 # === nim-guard lifecycle tier — DRC-ledger builds; see guard/README.md ===
 src/test/guard/run.sh
@@ -394,7 +481,7 @@ to a C binary and runs it.
 
 ---
 
-### 5.1. Cost model — the build dominates, so just run the whole battery
+### 5.2. Cost model — the build dominates, so just run the whole battery
 
 **Re-measured 2026-07-28, and it INVERTS the previous advice.** Sharing prelude
 contexts (commits `2c0c677`, `76a7222`) cut test EXECUTION by ~14×, which left
@@ -551,9 +638,19 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
   the runner. New programs should prefer parity (no @stdout) over
   @stdout-contains; strip @stdout from migrated deterministic programs
   over time to upgrade them to byte-compare.
-- [ ] 🔲 Matrix lanes in corpus/run.ms: + C-drc vs C-orc parity, + -O0 vs
-  --danger; sanitizer lane (`MSDIFF_SAN=1`: ASan + `-DMS_DRC_LEDGER`,
-  every ledger must balance) over the same corpus.
+- [x] ✅ SAN lane — SHIPPED 2026-07-29 (`MSCORPUS_SAN=1`): whole corpus
+  under ASan + slab-off + DRC ledger, 61 pass · 3 fail (the 3 = the same
+  externally-reproduced reds: 010 G1 carrier, 701/702 macro-WIP). Proven
+  RED end-to-end via a fake-imbalance probe before being trusted. Ledger
+  balance is slack-aware (`@ledger-slack`, §3.6) because module-level RC
+  values are NOT destroyed at exit (probe-verified; compiler-side question
+  OPEN — when resolved, every slack marker goes red as "slack unused" and
+  gets removed). Ledger set size is overridable (`-DMS_LEDGER_SET_SIZE`,
+  runtime/drc.c #ifndef) since ASan's freed-address quarantine makes the
+  finalized-pointer set append-only — the 1M default overflows on
+  3M-churn programs. Build flake-retry ported from guard/run.sh.
+- [ ] 🔲 Remaining matrix lanes in corpus/run.ms: + C-drc vs C-orc parity,
+  + -O0 vs --danger over the same corpus.
 - [ ] 🔲 JS-lane tier auto-discovery — attempt EVERY corpus program through
   the JS backend instead of hand-picking; a refusal must be a loud
   diagnostic naming the first unsupported construct (never silently-wrong
