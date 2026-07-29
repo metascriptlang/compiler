@@ -75,3 +75,35 @@ console.log(x);
 	assert js.contains("expanded-x");
 	assert !js.contains("unsupported: MacroInvocation");
 }
+
+// The JS string surface drifted ~19 exports behind the C one and Neon's browser
+// code hit it one name at a time. Every name below is declared in index.cms; a
+// missing or misdeclared .jms counterpart fails the graph check, not codegen.
+test "E2E JS: std string surface matches the C backend" {
+	const src = `let s = "  Hello World  ";
+const a: boolean = s.equalsIgnoreCase("x");
+const b: int64 = s.count("l");
+const c: string = s.substring(0, 3);
+const d: string = s.trimStart();
+const e: string = s.trimEnd();
+const f: string = s.repeat(2);
+const g: string = s.replaceAll("l", "L");
+const h: string = s.reverse();
+const i: string = s.padStart(20, ".");
+const j: string = s.padEnd(20, ".");
+const k: number = "3.5".parseFloat();
+const l: int64 = "42".parseInt();
+const m: int64 = s.capacity();
+const n: string = fromCodePoint(65);
+const o: int64 = s.lastIndexOf("l", 10);
+s.setLength(4);
+s.append("z");
+s.setSlice(0, 2);
+s.stripInPlace();
+`;
+	const entries: MapEntry[] = [
+		{ entryPath: "test/strParity.ms", entrySource: src },
+	];
+	const js = compileProjectToJSWithStd(entries, "test/strParity.ms");
+	assert js.indexOf("ERROR", 0) < 0;
+}
