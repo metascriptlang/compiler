@@ -7,12 +7,12 @@
 # modes, so a regression that reopens the window (e.g. a new spawn variant that
 # skips the submit-time incref) fails deterministically.
 #
-# Usage: src/test/native/hammerAsan.sh [iterations]   (default 200)
+# Usage: src/test/corpus/hammerAsan.sh [iterations]   (default 200)
 set -u
 
 ITERS="${1:-200}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-PROG="$ROOT/src/test/native/programs/awaitStructSpawnStored.ms"
+PROG="$ROOT/src/test/corpus/programs/410-awaitStructSpawnStored.ms"
 OUTDIR="$(mktemp -d)"
 EXPECT="await-struct-spawn-stored acc=380000"
 CC_FLAGS="-O0 -g -fsanitize=address -DMS_SLAB_MAX=0"
