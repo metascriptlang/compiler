@@ -21,7 +21,9 @@
 /* Open-addressing pointer set: holds objects finalized (destroyFn dispatched)
  * whose slab slot has not yet been re-handed-out. A 2nd finalize of a pointer
  * still in the set = double-destroy → abort. Alloc clears it (slot reuse). */
+#ifndef MS_LEDGER_SET_SIZE
 #define MS_LEDGER_SET_SIZE (1u << 20)
+#endif
 #define MS_LEDGER_SET_MASK (MS_LEDGER_SET_SIZE - 1)
 enum { MS_LSLOT_EMPTY = 0, MS_LSLOT_USED = 1, MS_LSLOT_TOMB = 2 };
 static void*   gLedgerKey[MS_LEDGER_SET_SIZE];
