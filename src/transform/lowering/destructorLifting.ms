@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName } from "../../checker/types";
+import { isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
@@ -2083,6 +2083,18 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 	// idempotent and recurses into nested struct fields via fieldEqExpr.
 	for (const structName of ctx.pendingStructEqs) {
 		ensureEq(structName, lctx, defaultLoc);
+	}
+
+	// Synthesized carrier structs (Maybe<T>) have no symbol-table entry, so ensureEq's
+	// name lookup can never find them — generate from the Type the comparison carried.
+	for (const carrierType of ctx.pendingCarrierEqs) {
+		const carrierName = typeNameOf(carrierType);
+		if (carrierName === "") continue;
+		if (nameSetContains(lctx.generated, carrierName + "Eq")) continue;
+		if (isGloballyOwned(carrierName + "Eq")) continue;
+		nameSetAdd(lctx.generated, carrierName + "Eq");
+		claimGlobal(carrierName + "Eq");
+		generateEq(carrierName, carrierType, lctx, defaultLoc);
 	}
 
 	for (const decl of lctx.collector) {

@@ -19,7 +19,7 @@
 import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull } from "../util";
+import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension, resolveOperatorExt, getExtFnType, ExtensionMethod } from "../../checker/context";
@@ -95,6 +95,18 @@ function registerTupleOp(ctx: TransformContext, t: Type, tName: string, op: stri
 	// Create new entry
 	const entry: PendingTupleOp = { tupleType: t, tupleName: tName, ops: [op] };
 	ctx.pendingTupleOps.push(entry);
+}
+
+function registerCarrierEq(ctx: TransformContext, t: Type): void {
+	const tn = typeNameOf(t);
+	for (const pending of ctx.pendingCarrierEqs) {
+		if (typeNameOf(pending) === tn) return;
+	}
+	ctx.pendingCarrierEqs.push(t);
+}
+
+function makeMaybeCarrier(payload: Node, carrierType: Type, loc: SourceLocation): Node {
+	return makeTypedObjectLiteral(["value", "present"], [payload, makeBool(true, loc)], carrierType, loc);
 }
 
 // Register a struct/interface == use for later on-demand Eq generation by destructorLifting.
@@ -306,6 +318,35 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 			if (vk === TypeKind.Union && unwrapRefNullUnion(valueType) === null) {
 				return makeBool(isNotEqual, loc);
 			}
+		}
+	}
+
+	// Maybe carrier against a payload (or another carrier). tsc types `v === 1` on
+	// `number | undefined` as LEGAL — false when absent — so this lowers, it does not
+	// diagnose. Routed through the generated per-carrier Eq rather than an inline
+	// `v.present && v.value === o` because the carrier side may be a call
+	// (`m["k"] === 1`), and the inline form would evaluate it twice. Comparing the
+	// wrapped payload also gets the absent-vs-zero case right, which a payload-only
+	// comparison silently does not.
+	if (isNullEqOp && !hasNullLeft && !hasNullRight) {
+		const rightOperandType = resolveType(ctx, d.right);
+		const leftIsMaybe = leftType !== null && isMaybeType(leftType);
+		const rightIsMaybe = rightOperandType !== null && isMaybeType(rightOperandType);
+		const carrierType = leftIsMaybe ? leftType : rightOperandType;
+		const carrierName = carrierType !== null ? typeNameOf(carrierType) : "";
+		const carriersAgree = !leftIsMaybe || !rightIsMaybe
+			|| typeNameOf(leftType) === typeNameOf(rightOperandType);
+		if ((leftIsMaybe || rightIsMaybe) && carrierName !== "" && carriersAgree) {
+			const eqLeft = leftIsMaybe ? d.left : makeMaybeCarrier(d.left, carrierType, loc);
+			const eqRight = rightIsMaybe ? d.right : makeMaybeCarrier(d.right, carrierType, loc);
+			registerCarrierEq(ctx, carrierType);
+			const eqFnType = createFunction([carrierType, carrierType], ["x", "y"], booleanType());
+			const eqCallee = makeIdent(carrierName + "Eq", loc);
+			eqCallee.nodeType = eqFnType;
+			const eqCall = makeCall(eqCallee, [eqLeft, eqRight], loc);
+			eqCall.nodeType = booleanType();
+			if (isNotEqual) return makeUnary("!", eqCall, loc);
+			return eqCall;
 		}
 	}
 
