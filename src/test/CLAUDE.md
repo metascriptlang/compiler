@@ -9,9 +9,13 @@ When you add or modify tests, **update the progress section at the bottom**.
 Companion file: **`docs/TESTGAP.md`** tracks defects in the test HARNESS
 itself — where running the tests is slow, misleading, or where a tier exists
 but nothing invokes it. This file answers "what do we test and where does a
-test go"; that one answers "why does testing cost what it costs". Open item
-with a measured cost: the native tier runs its 134 cells strictly serially
-(>40 min, machine mostly idle).
+test go"; that one answers "why does testing cost what it costs".
+
+The program-corpus layer follows ONE proven frame (scriptc): a single
+numbered corpus + directive heads + a dumb parallel runner, extended one
+piece at a time (san lane → diagnostics snapshots → CAS cache + lock).
+Tiers that are not program-corpus shaped (inline tests, guard/, bootstrap
+fixpoint) deliberately stay outside that frame.
 
 ---
 
@@ -102,21 +106,21 @@ src/test/
 │                       #   built with the DRC ledger (-DMS_DRC_LEDGER).
 │                       #   Runner: guard/run.sh. Every guard must be PROVEN
 │                       #   RED once before it is trusted (guard/README.md).
-├── differential/       # differential corpus — programs/*.ms run through BOTH
-│   ├── run.sh          #   backends (C binary vs JS-on-node); stdout must
-│   └── programs/*.ms   #   match byte-for-byte. Authoring contract: §3.6.
-└── native/             # NATIVE-execution tier — builds real binaries (clang),
-    ├── README.md       #   runs under --gc=drc AND --gc=orc, asserts exit 0 +
-    ├── manifest.ms     #   peak-RSS bound. The ONLY tier that runs the C runtime
-    └── programs/*.ms   #   (DRC/ORC/actor/spawn). Runner: run.ms + manifest.ms (msc run).
+└── corpus/             # THE program corpus (scriptc frame) — one program set,
+    ├── run.ms          #   many lanes. Flat NNN-topic.ms or NNN-topic/main.ms;
+    └── programs/       #   contract in each program's directive head (§3.6).
+                        #   Absorbed the former native/ (RSS cells) and
+                        #   differential/ (parity cells) tiers, 2026-07-29.
 ```
 
-> **Why `native/` exists:** the other tiers assert test-level outcomes inside
+> **Why `corpus/` exists:** the other tiers assert test-level outcomes inside
 > one large test binary. DRC over-free, ORC cycle-collector faults, actor
 > scheduler and spawn-pool leaks often fail no assertion — they surface as
-> crashes or RSS growth in a standalone binary. `native/` is the runtime
-> guard: real binary per program, both GC modes, exit-code + peak-RSS
-> assertions.
+> crashes or RSS growth in a standalone binary. Corpus programs are real
+> binaries, one process per cell: RSS programs run under BOTH GC modes with
+> exit-code + peak-RSS assertions; parity programs run through independent
+> executions (C vs JS today) and their outputs are byte-compared — no golden
+> files, the other lane IS the expected output.
 
 ---
 
@@ -214,26 +218,40 @@ Pin contracts BETWEEN phases. E.g. "after transform, every `MatchExpr` is
 gone" or "after analyze, every RC-typed local has a destroy call". Catches
 silent contract drift between adjacent phases.
 
-### 3.6. Differential corpus programs (`differential/programs/*.ms`)
+### 3.6. Corpus programs (`corpus/programs/`)
 
-Standalone programs (not `test {}` files) that print to stdout and exit.
-The runner (`differential/run.sh`) compiles each program through every
-lane and byte-compares outputs pairwise — no golden files, nothing to
-bless, nothing to drift. Lanes today: C binary vs JS-on-node; planned
-(§7 P1): C-drc vs C-orc, -O0 vs --danger, and a sanitizer lane.
+Standalone programs (not `test {}` files) that print to stdout and exit —
+flat `NNN-topic.ms`, or `NNN-topic/main.ms` with sibling modules for
+multi-module cases. ONE runner (`corpus/run.ms`, MetaScript dogfood)
+executes every program through its lanes; planned lanes (§7 P1): C-drc vs
+C-orc parity, -O0 vs --danger, and a sanitizer lane over the same corpus.
 
-Authoring contract — the runner stays a dumb byte-compare; ALL
-determinism obligations live on the program:
+Authoring contract — the runner stays a dumb executor; the program's
+contract lives entirely in its directive head (leading `// @...` comment
+lines), and ALL determinism obligations live on the program:
 
-- **Deterministic stdout only**: no timers, no randomness, no
-  pointer/address or RSS/timing prints. Ordered output, fixed loop bounds.
-- **Directive head** — the first two lines may carry directives, one per
-  line:
-  - `// @exit: <n>` — expected exit code for all lanes (default 0).
+- **Directive head** — one directive per line:
+  - `// @exit: <n>` — expected exit code, all lanes (default 0).
   - `// @skip-js: <reason>` — C-only program; the JS lane skips it and
     logs the reason. The skip list doubles as the JS backend's worklist.
-- **Name files `NNN-topic.ms`**, clustered by hundreds (0xx basics,
-  1xx strings, 2xx DU/match, 3xx closures, 4xx async/actor, 5xx std).
+  - `// @maxrss: <MB>` — RSS program: built + run under BOTH `--gc=drc`
+    and `--gc=orc` via `/usr/bin/time -l`, asserting exit + signal +
+    stdout + peak RSS (the former native/ tier semantics).
+  - `// @stdout: <substr>` — merged output must CONTAIN the substring
+    (legacy native assertion; new parity programs should omit it and rely
+    on byte-compare instead).
+  - `// @xfail(<lane>): <reason>` — known-fail for one lane; XPASS is
+    reported loud so a stale marker cannot lie silently.
+  - `// @serial` — contention-sensitive (actor/spawn stress): its run
+    cells execute one at a time after the parallel drain.
+- **Programs WITHOUT `@maxrss` are parity programs**: run through C and
+  (unless `@skip-js`) JS-on-node, outputs byte-compared pairwise — no
+  golden files, nothing to bless, nothing to drift.
+- **Deterministic stdout only**: no timers, no randomness, no
+  pointer/address or RSS/timing prints. Ordered output, fixed loop bounds.
+- **Name files `NNN-topic`**, clustered by hundreds (0xx basics,
+  1xx strings, 2xx DU/match/types, 3xx closures, 4xx async/actor,
+  5xx std, 6xx RC/DRC stress, 7xx meta/macro/jsx).
   Append-only, like `fixedbugs/`.
 - **Write RC-stress shapes deliberately**: churn in loops, values relayed
   through calls then dropped unread, throw/catch unwinding mid-build,
@@ -309,6 +327,12 @@ fixedbugs/ bug048                                                 (1)
 c/         asCoercionNullable                                     (1)
 ```
 
+The 2026-07-29 corpus migration surfaced 3 MORE: `native/programs/`
+`actorCycleStress.ms`, `ctorExtProtocol.ms`, `ctorExtProtocolLib.ms` were
+never referenced by `manifest.ms` — programs that existed but no runner
+ever executed. They were deliberately NOT migrated (no contract to carry
+over); triage them with the rest of this list.
+
 Triage so far (partial — the machine was loaded, see the flakiness note
 in §5): `lang/nullable` passes (296), `fixedbugs/bug048` passes (278),
 `lang/inheritance` fails for real (`Unresolved type 'Admin'`). The rest
@@ -351,17 +375,15 @@ msc test src/index.ms --gc=orc
 # Run a single example for hand-debugging
 msc run examples/foo.ms
 
-# === Native leak/crash guard tier — a separate curated program set (manifest.ms)
-# built as real binaries under BOTH --gc=drc and --gc=orc with peak-RSS bounds.
-# A MetaScript dogfood runner: it builds each program via msc, runs it
-# under /usr/bin/time -l, asserts exit + RSS + stdout. Point MSC at a HEAD-matched
-# binary so a stale installed msc can't cause false build-fails. `msc test` runs
-# the inline `test {}` blocks; THIS runs the leak/crash probes. ===
-MSC=./msc msc run src/test/native/run.ms
-
-# === Differential corpus — every differential/programs/*.ms through both
-# backends (C binary vs JS-on-node), stdout byte-compared. ===
-MSC=./msc src/test/differential/run.sh
+# === Corpus tier — every corpus/programs/ entry through its lanes: RSS
+# programs (@maxrss) as real binaries under BOTH --gc=drc and --gc=orc with
+# peak-RSS bounds; parity programs through C + JS-on-node, byte-compared.
+# msc builds are serial (out/ cache race), runs are parallel (except @serial),
+# progress streams to stderr. Point MSC at a HEAD-matched binary so a stale
+# installed msc can't cause false build-fails. ~19 min full (was >40).
+MSC=./msc msc run src/test/corpus/run.ms
+MSCORPUS_FILTER=leak MSC=./msc msc run src/test/corpus/run.ms  # substring subset
+MSCORPUS_JOBS=4                                                # run slots
 
 # === nim-guard lifecycle tier — DRC-ledger builds; see guard/README.md ===
 src/test/guard/run.sh
@@ -460,7 +482,7 @@ Where the remaining time actually goes, if you want to attack it:
 4. Add the import to `fixedbugs/index.ms`.
 5. If the bug is observable from a program's stdout/exit (codegen, DRC,
    runtime behavior — not checker internals), ALSO drop the repro into
-   `differential/programs/` as a corpus program (§3.6): one file then
+   `corpus/programs/` as a corpus program (§3.6): one file then
    guards both backends and every future lane.
 6. Run `msc test` on the files you touched (e.g. `msc test
    src/test/lang/match.ms` — the file plus its transitive dep tests) —
@@ -497,27 +519,41 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
 
 ### P0.5 — Native runtime guard
 
-- [x] ✅ `src/test/native/` — builds real binaries via clang, runs under BOTH
-  `--gc=drc` and `--gc=orc`, asserts exit 0 (no over-free/UAF/crash) + peak RSS
-  under bound (no leak). Runner `run.ms` + `manifest.ms` via `msc run`.
-  Seeded 5 cases; on first run it immediately caught **2 real leaks** no other
-  tier saw (call-result-in-non-RC-context, array-literal-of-strings — both
-  xfail anchors) and proved bug033 + PARALOCK spawn/actor/async hold natively.
-  This is the tier that would have caught the over-free crash in 149eb30 and the
-  "Bug D" leak-fix-gone-over-free that both shipped green.
+- [x] ✅ `src/test/native/` — grown to 61 manifest cases; on first run it caught
+  **2 real leaks** no other tier saw and proved bug033 + PARALOCK
+  spawn/actor/async hold natively. This is the tier that would have caught the
+  over-free crash in 149eb30 and the "Bug D" leak-fix-gone-over-free that both
+  shipped green. **MIGRATED into `corpus/` 2026-07-29**: all 61 cases became
+  corpus programs (`@maxrss` + `@stdout` directive heads, manifest notes
+  preserved as `// note:` headers); verdict semantics unchanged (exit + signal
+  + stdout-contains + per-process peak RSS, drc AND orc, per-lane xfail with
+  loud XPASS). 3 orphan programs surfaced by the migration (see §4.1).
 
 ### P1 — Differential corpus + diagnostics (reprioritized 2026-07-27)
 
 - [x] ✅ C↔JS differential runner — `differential/run.sh` + first programs
-  (nullable, truthy), byte-exact stdout parity (2026-07-10).
-- [ ] 🚧 Corpus growth 2 → ~60 programs per the §3.6 authoring contract
+  (nullable, truthy), byte-exact stdout parity (2026-07-10). **SUPERSEDED
+  2026-07-29 by `corpus/run.ms`**: one MetaScript-dogfood runner over the
+  unified corpus (63 entries = 61 ex-native + 2 ex-differential), serial
+  msc builds pipelined with parallel background runs (@serial cells drain
+  alone at the end), stderr streaming, per-lane xfail, build-fail logs.
+  First full run: 122 pass · 5 fail in ~19 min under load 6-21 (old
+  native runner: >40 min serial) — the 5 fails all reproduce outside the
+  runner (010-nullable = the known G1 nullable-carrier gap; 701/702 = the
+  in-tree macro-evaluator WIP regression). The old differential runner
+  swallowed build failures (`>/dev/null` + no "Built" check) and could
+  run a STALE binary from a previous round as a false pass — the corpus
+  runner closes both holes.
+- [ ] 🚧 Corpus growth 63 → ~120 programs per the §3.6 authoring contract
   (directive head, NNN-topic numbering, RC-stress shapes). First blocker
   to probe: float-formatting parity (C printf vs JS Number.toString) —
   if they differ, fix runtime number printing once; never normalize in
-  the runner.
-- [ ] 🔲 Matrix lanes in run.sh: + C-drc vs C-orc, + -O0 vs --danger;
-  sanitizer lane (`MSDIFF_SAN=1`: ASan + `-DMS_DRC_LEDGER`, every ledger
-  must balance) over the same corpus.
+  the runner. New programs should prefer parity (no @stdout) over
+  @stdout-contains; strip @stdout from migrated deterministic programs
+  over time to upgrade them to byte-compare.
+- [ ] 🔲 Matrix lanes in corpus/run.ms: + C-drc vs C-orc parity, + -O0 vs
+  --danger; sanitizer lane (`MSDIFF_SAN=1`: ASan + `-DMS_DRC_LEDGER`,
+  every ledger must balance) over the same corpus.
 - [ ] 🔲 JS-lane tier auto-discovery — attempt EVERY corpus program through
   the JS backend instead of hand-picking; a refusal must be a loud
   diagnostic naming the first unsupported construct (never silently-wrong
