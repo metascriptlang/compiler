@@ -7,7 +7,7 @@
 // TransAmDb aggregates all stores. dbSetFileText triggers invalidation.
 // dbExecute runs the full pipeline through the red-green engine.
 
-import { Node, NodeKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
+import { Node, NodeKind, SymbolKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
 import { CheckerContext, Severity, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
@@ -51,6 +51,7 @@ import { checkProgramWithRegistryCancellable, preludeContextFor } from "../../ch
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
+import "../meta/expand"; // side-effect: registers expandMacroInvocation callback
 import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
@@ -125,6 +126,7 @@ export class TransAmDb {
 	resolverConfig: ResolverConfig;
 	preludeCtx: CheckerContext;
 	preprocessCache: HashMap<number, string>;  // fileId → preprocessed source
+	checkInProgress: HashSet<string>;          // cycle guard for macro-dep pre-checks
 }
 
 export function createTransAmDb(cacheCapacity: number): TransAmDb {
@@ -141,6 +143,7 @@ export function createTransAmDb(cacheCapacity: number): TransAmDb {
 		resolverConfig: createDefaultConfig(Backend.C, ""),
 		preludeCtx: null as unknown as CheckerContext,
 		preprocessCache: new HashMap<number, string>(),
+		checkInProgress: new HashSet<string>(),
 	};
 }
 
@@ -532,6 +535,29 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const visitedPaths: HashSet<string> = new HashSet<string>();
 	dbEnsureExportsRegistered(db, filePath, visitedPaths, startVersion);
 
+	// Macro-declaring deps need a FULL check first: checkProgram registers their
+	// module ctx (registerModuleCtx), which the comptime engine seeds macro-body
+	// imports from (eval.ms lookupModuleCtx). Batch compile gets this for free
+	// from dep-order compilation; the db must do it on demand.
+	const imports = buildImportEntries(db, filePath, program);
+	db.checkInProgress.add(filePath);
+	for (const ie of imports) {
+		if (ie.sourcePath === "" || ie.sourcePath === filePath) continue;
+		if (db.checkInProgress.has(ie.sourcePath)) continue;
+		const depExports = findModuleExports(db.exportRegistry, ie.sourcePath);
+		if (depExports === null) continue;
+		let depHasMacro = false;
+		for (const es of depExports.symbols) {
+			if (es.kind === SymbolKind.Macro) {
+				depHasMacro = true;
+				break;
+			}
+		}
+		if (depHasMacro) {
+			dbTypeCheck(db, ie.sourcePath);
+		}
+	}
+
 	pushFrame(db.depStack, key);
 	const pKey = createQueryKey(TaQueryKind.Parse, fileId);
 	// Record Parse dep with actual output hash (Salsa early cutoff)
@@ -555,7 +581,6 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	}
 
 	// Cross-module: build synthetic Module + ModuleGraph, use ExportRegistry
-	const imports = buildImportEntries(db, filePath, program);
 	const mod = createModule(filePath);
 	mod.imports = imports;
 	const graph = createModuleGraph();
@@ -569,6 +594,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	// If cancelled, discard frame without caching — partial result not reliable
 	if (checkCancel(db.cancelCtx, startVersion)) {
 		popFrame(db.depStack);
+		db.checkInProgress.delete(filePath);
 		return checkerCtx;
 	}
 
@@ -576,6 +602,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	nodeCacheStore(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
 	const checkHash = hashCheckerResult(checkerCtx);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkHash, true);
+	db.checkInProgress.delete(filePath);
 	return checkerCtx;
 }
 
