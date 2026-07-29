@@ -216,12 +216,12 @@ export function split(this s: string, delimiter: string): string[] {
 	unreachable;
 }
 
-export function toLower(this s: string): string {
+export function toLowerCase(this s: string): string {
 	@emit(`return fromJSStr(toJSStr(${s}).toLowerCase());`);
 	unreachable;
 }
 
-export function toUpper(this s: string): string {
+export function toUpperCase(this s: string): string {
 	@emit(`return fromJSStr(toJSStr(${s}).toUpperCase());`);
 	unreachable;
 }
@@ -280,7 +280,8 @@ export function makeNimstrLit(s: string): string {
 // UTF-8 byte array → native JS string (boundary conversion)
 export function toJSStr(s: string): string {
 	const bytes = asBytes(s);
-	@emit(`var r = "", i = 0;
+	@emit(`if (!Array.isArray(${bytes})) return ${bytes};
+	var r = "", i = 0;
 	while (i < ${bytes}.length) {
 		var b = ${bytes}[i];
 		if (b < 128) { r += String.fromCharCode(b); i++; }
