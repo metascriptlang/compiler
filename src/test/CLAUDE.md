@@ -234,9 +234,10 @@ lines), and ALL determinism obligations live on the program:
   - `// @exit: <n>` — expected exit code, all lanes (default 0).
   - `// @skip-js: <reason>` — C-only program; the JS lane skips it and
     logs the reason. The skip list doubles as the JS backend's worklist.
-  - `// @maxrss: <MB>` — RSS program: built + run under BOTH `--gc=drc`
-    and `--gc=orc` via `/usr/bin/time -l`, asserting exit + signal +
-    stdout + peak RSS (the former native/ tier semantics).
+  - `// @maxrss: <MB>` — RSS program: built + run under `--gc=drc`,
+    `--gc=orc` and `--danger` (`-O3 -flto`, `--cc=clang`) via
+    `/usr/bin/time -l`, asserting exit + signal + stdout + peak RSS (the
+    former native/ tier semantics).
   - `// @stdout: <substr>` — merged output must CONTAIN the substring
     (legacy native assertion; new parity programs should omit it and rely
     on byte-compare instead).
@@ -251,9 +252,15 @@ lines), and ALL determinism obligations live on the program:
     fails, and diff 0 with slack declared fails as "slack unused" so the
     marker self-cleans if global-destroy ever lands. Never use @xfail for
     a survivor — it would mask every future real leak in that program.
-- **Programs WITHOUT `@maxrss` are parity programs**: run through C and
-  (unless `@skip-js`) JS-on-node, outputs byte-compared pairwise — no
-  golden files, nothing to bless, nothing to drift.
+- **Programs WITHOUT `@maxrss` are parity programs**: run through C-drc,
+  C-orc, C-danger and (unless `@skip-js`) JS-on-node.
+- **EVERY program is byte-compared across all of its lanes** — no golden
+  files, nothing to bless, nothing to drift. The axes are independent and
+  each catches its own class: C↔JS (backend), drc↔orc (GC mode changing
+  observable behaviour), O0↔danger (UB the optimizer is free to exploit,
+  and DCE masking leaks). A program whose output legitimately differs on
+  one axis is classified out with `@xfail(<lane>)` and a reason — never
+  by weakening the comparison.
 - **Deterministic stdout only**: no timers, no randomness, no
   pointer/address or RSS/timing prints. Ordered output, fixed loop bounds.
 - **Name files `NNN-topic`**, clustered by hundreds (0xx basics,
@@ -649,8 +656,15 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
   runtime/drc.c #ifndef) since ASan's freed-address quarantine makes the
   finalized-pointer set append-only — the 1M default overflows on
   3M-churn programs. Build flake-retry ported from guard/run.sh.
-- [ ] 🔲 Remaining matrix lanes in corpus/run.ms: + C-drc vs C-orc parity,
-  + -O0 vs --danger over the same corpus.
+- [x] ✅ Remaining matrix lanes in corpus/run.ms — LANDED 2026-07-30.
+  Every program is now byte-compared across all its lanes, not just C↔JS:
+  RSS programs gained the drc↔orc compare for free (both cells already
+  ran; only the comparison was missing) plus a new `danger` cell
+  (`-O3 -flto`, `--cc=clang` — zig cannot LTO on Mach-O); parity programs
+  gained `orc` + `danger`. 127 → **241 pass** with ZERO new programs, no
+  lane divergence found. Per-program build cost: O0 1.19s vs danger 3.94s
+  (measured on 601-closureArray; `--release` via zig is 9.30s, i.e. the
+  danger lane is the cheaper optimized build on macOS).
 - [ ] 🔲 JS-lane tier auto-discovery — attempt EVERY corpus program through
   the JS backend instead of hand-picking; a refusal must be a loud
   diagnostic naming the first unsupported construct (never silently-wrong
