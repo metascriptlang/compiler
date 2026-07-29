@@ -10,7 +10,7 @@ import { resetAllSideChannels } from "../parser/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/orchestrator";
 import { computeAliveSet } from "../checker/reachability";
-import { hasErrors, CheckerError } from "../checker/context";
+import { hasErrors, CheckerError, CheckerContext, ExportRegistry } from "../checker/context";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { expandMacros } from "../compiler/meta/expand";
 import { validateTypedAST } from "../checker/validate";
@@ -342,9 +342,22 @@ export function compileProjectToJS(entries: MapEntry[], entryPath: string): stri
 
 	const registry = checkModuleGraph(graph, "");
 	const preludeCtx = getPreludeContext();
+	return emitJSTwoPhase(graph, registry, preludeCtx, null, canonEntries);
+}
 
-	let combined = "";
+// Two-phase JS emission shared by compileProjectToJS / compileProjectToJSWithStd.
+// Phase 1 checks + expands macros for EVERY module before phase 2 transforms any:
+// transformProgram mutates the registered module AST in place, and a later
+// module's macro expansion compiles helpers from the DECLARING module's AST —
+// interleaving hands the macro engine a backend-lowered body (gen-20 root 1).
+// Macro diagnostics are severity-Error but non-fatal (gen-20 root 2), so
+// hasErrors after expandMacros is the loud-failure check.
+function emitJSTwoPhase(graph: ModuleGraph, registry: ExportRegistry, preludeCtx: CheckerContext, entryFilter: MapEntry[] | null, canonEntries: MapEntry[]): string {
+	const unitPaths: string[] = [];
+	const unitPrograms: Node[] = [];
+	const unitCtxs: CheckerContext[] = [];
 	for (const modPath of graph.loadOrder) {
+		if (entryFilter !== null && !isEntryPath(canonEntries, modPath)) continue;
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
 
@@ -360,11 +373,54 @@ export function compileProjectToJS(entries: MapEntry[], entryPath: string): stri
 			return msg;
 		}
 
-		const transformed = transformProgram(pr.value, ctx, true);
-		combined = combined + generateJS(transformed, []);
+		const expanded = expandMacros(pr.value, ctx);
+		if (hasErrors(ctx)) {
+			let msg = `ERROR: expand [${modPath}]:`;
+			for (const err of ctx.errors) {
+				msg = `${msg} ${err.message}`;
+			}
+			return msg;
+		}
+
+		unitPaths.push(modPath);
+		unitPrograms.push(expanded);
+		unitCtxs.push(ctx);
 	}
 
+	let combined = "";
+	for (let i = 0; i < unitPrograms.length; i += 1) {
+		const transformed = transformProgram(unitPrograms[i], unitCtxs[i], true);
+		combined = combined + generateJS(transformed, []);
+	}
 	return combined;
+}
+
+// JS twin of compileProjectToCWithStd: std resolves from disk, only the
+// map-provided entry modules are emitted.
+export function compileProjectToJSWithStd(entries: MapEntry[], entryPath: string): string {
+	resetAllSideChannels();
+	const canonEntries: MapEntry[] = [];
+	for (const e of entries) {
+		canonEntries.push({ entryPath: canonicalModulePath(e.entryPath), entrySource: e.entrySource });
+	}
+	entryPath = canonicalModulePath(entryPath);
+	const provider = createMapProvider(canonEntries);
+	provider.useFileSystem = true;
+	const root = resolveRuntimeDir();
+	const stdPath = root !== "" ? join(root, "std") : "std";
+	const config = createDefaultConfig(Backend.JS, stdPath);
+	const graph = loadModuleGraphWithConfig(entryPath, provider, config);
+	if (graph.errors.length > 0) {
+		let msg = "ERROR: graph:";
+		for (const e of graph.errors) {
+			msg = `${msg} ${e}`;
+		}
+		return msg;
+	}
+
+	const registry = checkModuleGraph(graph, stdPath, ".jms");
+	const preludeCtx = getPreludeContext();
+	return emitJSTwoPhase(graph, registry, preludeCtx, canonEntries, canonEntries);
 }
 
 test "contains basic" {
