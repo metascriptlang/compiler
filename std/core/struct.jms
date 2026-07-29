@@ -9,7 +9,7 @@
 // MS name === JS name is the convention here. A `from "JsName"` clause on
 // extern class would be required to bind to a differently-named global.
 
-extern class Set<T> {
+export extern class Set<T> {
 	size: number;
 }
 
@@ -18,7 +18,7 @@ export extern function has<T>(this s: Set<T>, value: T): boolean from "#.has(#)"
 export extern function delete<T>(this s: Set<T>, value: T): boolean from "#.delete(#)";
 export extern function clear<T>(this s: Set<T>): void from "#.clear()";
 
-extern class Map<K, V> {
+export extern class Map<K, V> {
 	size: number;
 }
 
