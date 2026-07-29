@@ -1,3 +1,5 @@
+// @ledger-slack(msStringArrayRefCell): 5
+// @ledger-slack(msRefArrayRefCell): 6
 // @maxrss: 40
 // @stdout: jsx-parse-native acc=5000
 // @skip-js: migrated from native/ — JS-lane audit pending

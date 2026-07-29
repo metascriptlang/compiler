@@ -1,3 +1,4 @@
+// @ledger-slack(msRefArrayRefCell): 1
 // @maxrss: 30
 // @stdout: jsx-lex-native acc=800000
 // @skip-js: migrated from native/ — JS-lane audit pending

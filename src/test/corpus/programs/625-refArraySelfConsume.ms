@@ -1,3 +1,4 @@
+// @ledger-slack(msRefArrayRefCell): 1
 // @maxrss: 30
 // @stdout: ref-array-self-consume n=
 // @skip-js: migrated from native/ — JS-lane audit pending

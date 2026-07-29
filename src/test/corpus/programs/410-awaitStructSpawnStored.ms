@@ -1,3 +1,4 @@
+// @ledger-slack(msRefArrayRefCell): 1
 // @maxrss: 40
 // @stdout: await-struct-spawn-stored acc=380000
 // @serial

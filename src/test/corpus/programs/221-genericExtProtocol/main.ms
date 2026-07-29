@@ -1,3 +1,4 @@
+// @ledger-slack(msRefArrayRefCell): 1
 // @maxrss: 30
 // @stdout: generic-ext-protocol PASS
 // @skip-js: migrated from native/ — JS-lane audit pending
