@@ -1,6 +1,6 @@
 // E2E: JS Backend
 
-import { compileToJS } from "../helpers";
+import { compileToJS, compileProjectToJSWithStd, MapEntry } from "../helpers";
 
 
 test "E2E JS: const variable" {
@@ -36,4 +36,42 @@ test "E2E JS: match expression" {
 test "E2E JS: interface object" {
 	const js = compileToJS("interface Point { x: number; y: number }\nconst p: Point = { x: 1, y: 2 };");
 	assert js.ok;
+}
+
+test "E2E JS: object literal completes omitted fields (C zero-fill parity)" {
+	const js = compileToJS("interface Box { w: number | null; tag: string }\nconst b: Box = { tag: \"x\" };");
+	assert js.ok;
+	assert js.value.contains("w: null");
+}
+
+// gen-20 root 1+2 guard: a cross-module macro whose body calls a module-level
+// helper must expand in the JS pipeline, and a failed expansion must be LOUD.
+test "E2E JS: cross-module macro with module-level helper expands" {
+	const macroMod = `import { Node, NodeKind } from "std/meta";
+
+function shout(s: string): string {
+	return s + "!";
+}
+
+export macro jsxmacx(node: Node): Node {
+	return {
+		kind: NodeKind.StringLiteral,
+		line: node.line,
+		column: node.column,
+		value: shout("expanded-x"),
+	};
+}
+`;
+	const useMod = `import { jsxmacx } from "./jsxmacMod";
+const x = jsxmacx(<div><p>hi</p></div>);
+console.log(x);
+`;
+	const entries: MapEntry[] = [
+		{ entryPath: "test/jsxmacMod.ms", entrySource: macroMod },
+		{ entryPath: "test/jsxmacUse.ms", entrySource: useMod },
+	];
+	const js = compileProjectToJSWithStd(entries, "test/jsxmacUse.ms");
+	assert js.indexOf("ERROR", 0) < 0;
+	assert js.contains("expanded-x");
+	assert !js.contains("unsupported: MacroInvocation");
 }
