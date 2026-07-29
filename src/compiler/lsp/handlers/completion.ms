@@ -1,6 +1,6 @@
 // LSP Handlers — Completion, completion resolve, import path/name completion.
 
-import { TransAmDb, dbParse, dbTypeCheck, dbEnsureModuleExports, dbResolveImport } from "../../transam/index";
+import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbEnsureModuleExports, dbResolveImport } from "../../transam/index";
 import { readDir } from "std/fs";
 import {
 	lspJsonString,
@@ -29,7 +29,7 @@ import { isMsModuleExtension, stripMsModuleExtension } from "../../../module/res
 import {
 	dbGetSource, lspExtractPosition, lspEnsureFileLoaded,
 	cacheResolveEdit, lookupResolveEdit,
-	CompletionCache, LspCursorParams
+	CompletionCache, createCompletionCache, LspCursorParams
 } from "./shared";
 
 
@@ -326,6 +326,27 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	if (kind === SgCompletionKind.ObjectField) {
 		const ctx = dbTypeCheck(db, path);
 		if (ctx !== null) {
+			// The checker records every object literal's contextual type at the
+			// literal's own '{'. Resolving the INNERMOST literal that way needs no
+			// field path and works in argument/return/nested position; the
+			// declaration walk below stays as the fallback.
+			const innerObj = findEnclosingObjectLiteral(program, pos.line, pos.col + 1);
+			if (innerObj !== null) {
+				const innerSg = sgQueryAtPosition(ctx, innerObj.location.line, innerObj.location.column);
+				if (innerSg !== null && innerSg.symType !== null) {
+					const innerKeys = (innerObj.data as ObjectLiteralData).keys;
+					const emptyPath: string[] = [];
+					const innerCands = sgCompleteObjectFields(ctx, prefix, innerSg.symType, emptyPath, innerKeys);
+					if (innerCands.length > 0) {
+						const innerItems = formatCompletionItemsArray(innerCands, db, path);
+						cache.uri = pos.uri;
+						cache.line = pos.line;
+						cache.prefix = prefix;
+						cache.items = innerItems;
+						return lspResponse(id, joinJsonItems(innerItems));
+					}
+				}
+			}
 			const fieldPath = sgObjectFieldPathAST(program, pos.line, pos.col + 1);
 			const enclosingObj = findEnclosingObjectLiteral(program, pos.line, pos.col + 1);
 			let existingKeys: string[] = [];
@@ -697,4 +718,50 @@ function filterCompletionItems(items: string[], prefix: string): string[] {
 		}
 	}
 	return result;
+}
+
+// ===== Object-field completion: the contextual type, not the declaration =====
+// Completion used to resolve an object literal's type by climbing to an
+// annotated VariableDecl, so it only fired for `const x: T = { … }`. The
+// checker now records each literal's contextual type at its own '{', and the
+// innermost literal is resolved from that — argument, return and nested
+// positions all complete. Measured before the fix: only DECLS_FIXTURE case A hit.
+
+const COMPLETION_FIXTURE = `interface Style { colorX: string; widthX: number; padX: number; }
+interface VNode { tagX: string; }
+function mk(s: Style): VNode { return { tagX: "d" }; }
+interface Sheet { btn: Style; }
+`;
+
+function completionFixtureAt(tail: string, line: number, col: number): string {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, lspUriToPath("file:///objcomp.ms"), `${COMPLETION_FIXTURE}${tail}`);
+	const params = `{"textDocument":{"uri":"file:///objcomp.ms"},"position":{"line":${line},"character":${col}}}`;
+	return handleCompletion("1", params, db, createCompletionCache());
+}
+
+test "object completion: annotated variable" {
+	const r = completionFixtureAt("const a: Style = {  };\n", 4, 18);
+	assert r.indexOf("colorX", 0) >= 0;
+}
+
+test "object completion: nested literal offers the INNER type" {
+	const r = completionFixtureAt("const c: Sheet = { btn: {  } };\n", 4, 25);
+	assert r.indexOf("colorX", 0) >= 0;
+	assert r.indexOf("\"label\":\"btn\"", 0) < 0;
+}
+
+test "object completion: function argument" {
+	const r = completionFixtureAt("const b = mk({  });\n", 4, 14);
+	assert r.indexOf("colorX", 0) >= 0;
+}
+
+test "object completion: argument with no enclosing variable" {
+	const r = completionFixtureAt("function run(): void { mk({  }); }\n", 4, 27);
+	assert r.indexOf("colorX", 0) >= 0;
+}
+
+test "object completion: return position" {
+	const r = completionFixtureAt("function give(): Style { return {  }; }\n", 4, 33);
+	assert r.indexOf("colorX", 0) >= 0;
 }
