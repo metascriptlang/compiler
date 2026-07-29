@@ -8,10 +8,11 @@
 // the arg→register marshalling were wrong, the second invocation would reuse the
 // first's arg (or corrupt) and the assertion would surface a wrong number.
 
-import { Node, NodeKind } from "std/meta";
+import { Node, NodeKind, NumberLiteralData } from "std/meta";
 
 macro dbl(a: Node): Node {
-	return { kind: NodeKind.NumberLiteral, line: a.line, column: a.column, value: a.value * 2, isFloat: false };
+	const ad = a.data as NumberLiteralData;
+	return { kind: NodeKind.NumberLiteral, line: a.line, column: a.column, value: ad.value * 2, isFloat: false };
 }
 
 function main(): void {
