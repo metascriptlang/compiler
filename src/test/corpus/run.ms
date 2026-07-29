@@ -374,6 +374,10 @@ function reportCell(c: Cell, t: Tally): void {
 	}
 }
 
+function comparableOutputOf(c: Cell): string {
+	return c.spec.maxRssMb >= 0.0 ? c.dir + "stdout.log" : c.dir + "out.log";
+}
+
 // byte-compare a finished parity group; one extra verdict line per program
 function compareParityGroup(cells: Cell[], t: Tally): void {
 	if (cells.length < 2) { return; }
@@ -381,16 +385,18 @@ function compareParityGroup(cells: Cell[], t: Tally): void {
 		if (!c.pass) { return; }
 	}
 	const base = cells[0];
-	const baseOut = readFileOr(base.dir + "out.log", "");
+	const baseOut = readFileOr(comparableOutputOf(base), "");
 	let same = true;
 	let other = "";
 	for (const c of cells) {
 		if (c.lane == base.lane) { continue; }
-		const o = readFileOr(c.dir + "out.log", "");
+		const o = readFileOr(comparableOutputOf(c), "");
 		if (o != baseOut) { same = false; other = c.lane; }
 	}
+	let lanes = "";
+	for (const c of cells) { lanes = lanes == "" ? c.lane : lanes + "↔" + c.lane; }
 	const tag = base.spec.name + " [parity]";
-	if (same) { t.passes = t.passes + 1; progress("  ✓ " + tag + " — " + cells.length + " lanes identical"); }
+	if (same) { t.passes = t.passes + 1; progress("  ✓ " + tag + " — " + lanes + " identical"); }
 	else { t.fails = t.fails + 1; progress("  ✗ FAIL " + tag + " — " + base.lane + " vs " + other + " outputs differ"); }
 }
 
@@ -413,9 +419,15 @@ function planJobs(specs: Spec[]): BuildJob[] {
 				const bin = OUT_DIR + "bin/" + spec.name + "." + gc;
 				jobs.push({ spec, lane: gc, cmd: MSC + " build " + spec.entry + " --gc=" + gc + " --output=" + bin, cell: makeCell(spec, gc, bin) });
 			}
+			const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
+			jobs.push({ spec, lane: "danger", cmd: MSC + " build " + spec.entry + " --gc=drc --danger --cc=clang --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
 		} else {
 			const cbin = OUT_DIR + "bin/" + spec.name + ".c";
 			jobs.push({ spec, lane: "c", cmd: MSC + " build " + spec.entry + " --gc=drc --output=" + cbin, cell: makeCell(spec, "c", cbin) });
+			const obin = OUT_DIR + "bin/" + spec.name + ".corc";
+			jobs.push({ spec, lane: "orc", cmd: MSC + " build " + spec.entry + " --gc=orc --output=" + obin, cell: makeCell(spec, "orc", obin) });
+			const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
+			jobs.push({ spec, lane: "danger", cmd: MSC + " build " + spec.entry + " --gc=drc --danger --cc=clang --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
 			if (!spec.skipJs) {
 				const jsbin = "out/" + spec.name + ".js";
 				jobs.push({ spec, lane: "js", cmd: MSC + " build " + spec.entry + " --target=js", cell: makeCell(spec, "js", jsbin) });
@@ -448,7 +460,7 @@ function drain(running: Cell[], t: Tally, parityDone: Cell[]): void {
 		if (!cellDone(c)) { continue; }
 		finishCell(c);
 		reportCell(c, t);
-		if (!SAN && c.spec.maxRssMb < 0.0) { parityDone.push(c); }
+		if (!SAN) { parityDone.push(c); }
 	}
 }
 
@@ -522,7 +534,7 @@ function main(): void {
 
 	// parity byte-compare per program (all lanes finished by now)
 	for (const spec of specs) {
-		if (SAN || spec.maxRssMb >= 0.0) { continue; }
+		if (SAN) { continue; }
 		const mine: Cell[] = [];
 		for (const c of parityDone) { if (c.spec.name == spec.name) { mine.push(c); } }
 		compareParityGroup(mine, t);
