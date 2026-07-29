@@ -1010,6 +1010,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				const objNames = objE.typeNames;
 				const objChildren = objE.typeChildren;
 				const containerName = objE.typeName !== null ? objE.typeName : "";
+				// Record the literal's own contextual type so the LSP can complete its
+				// fields wherever it sits — argument, return, nested — instead of
+				// climbing to an annotated VariableDecl that may not exist.
+				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + 1,
+					null, objE, SymbolKind.Interface, "", containerName, false);
 				let fi = 0;
 				while (fi < d.properties.length) {
 					// Name-based field lookup: match literal key against struct typeNames
