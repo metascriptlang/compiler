@@ -1,0 +1,34 @@
+// @maxrss: 40
+// @stdout: leak-closure-callarg acc=
+// @skip-js: migrated from native/ — JS-lane audit pending
+// note: FIXED (the 5th fresh-owned producer). A closure capturing a local (heap env) passed inline as a non-sink call arg the callee stores leaked the captured env (247MB @ 2M, found by coverage probing). Root, traced by emit-C: the lifted closure-pair (an NF_CLOSURE ObjectLiteral) carried no nodeType, so ensureDestructionIfNeeded bailed on null and never captured it. The 3-part fix: (1) lambdaLifting sets the closure-pair's nodeType (originalNodeType) so the analyzer can classify it; (2) classify.ms TypeKind.Function → needsCleanup=true so it captures + destroys; (3) processObjectLiteral keeps NF_CLOSURE pairs isRefConstr so the env field stays a COPY (incref) — without this, setting nodeType=Function flips the env field to a borrow (no incref) and the pair's msClosureDestroy double-frees the env against the env-var's own lifecycle (the over-free a naive 1-line flip caused, caught here + by paralock-nested). Now flat ~2MB drc+orc; paralock-nested (concurrency closures) green; self-host (heavy closure use) exit 0.
+
+// leak-closure-callarg — fresh CLOSURE (the 5th fresh-owned producer) as a stored call argument.
+// A closure capturing a local has a heap env; passed inline as a non-sink call arg the callee
+// stores, the closure thunk (an NF_CLOSURE ObjectLiteral whose type is TypeKind.Function) leaked
+// because classify.ms treated ALL TypeKind.Function as needsCleanup=false (conservative, to keep
+// bare function references safe). Heap closures with a captured env therefore never got
+// msClosureDestroy → 247MB @ 2M.
+//
+// FIXED (3-part, traced by emit-C): (1) lambdaLifting sets the lifted closure-pair's nodeType so the
+// analyzer can classify it (it was null → ensureDestructionIfNeeded bailed); (2) classify.ms Function
+// → needsCleanup=true so the pair is captured + msClosureDestroy'd; (3) processObjectLiteral keeps
+// NF_CLOSURE pairs isRefConstr so the env field stays a COPY (incref) — else nodeType=Function flips
+// it to a borrow and the destroy double-frees the env against the env-var's own lifecycle. Balanced:
+// env-var owns + each closure-holder increfs/decrefs. msClosureDestroy is null-env-safe so bare-fn
+// closures (env=NULL) no-op. Now flat ~2MB, no over-free (paralock + self-host green).
+
+interface Box { f: () => number; }
+
+function wrap(fn: () => number): Box { return { f: fn }; }
+
+function main(): void {
+	let acc = 0;
+	for (let i = 0; i < 2000000; i = i + 1) {
+		const cap = i % 7;
+		const b = wrap(() => cap + 1);
+		acc = (acc + b.f()) % 100;
+	}
+	console.log(`leak-closure-callarg acc=${acc}`);
+}
+main();

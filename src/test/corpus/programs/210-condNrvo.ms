@@ -1,0 +1,50 @@
+// @maxrss: 30
+// @stdout: cond-nrvo acc=40
+// @skip-js: migrated from native/ — JS-lane audit pending
+// note: Locks conditional evaluation of `?:` branches that compile to statements. A struct/object/new in a ternary branch is statement-emitting (NRVO f(&tmp);); left inline before the C ?:, BOTH branches ran unconditionally → over-execution, or a crash when the untaken branch was only valid under the condition. conditionalExprLower lowers hazardous ternaries to temp+if/else (matchLower / Reference genIf parity), keeping inline ?: for pure branches. Covers direct var-init, guard pattern (untaken branch is empty[0] → would crash, caught by exit code), nested ?: in a branch, call-argument, and a ternary nested in another ternary's CONDITION (the condition is unconditional, so hoistTernaries descends into it). acc=40 only if exactly the taken branches ran (runs==4). Also covers ?? and ?. since they are ternaries by this pass. Known gap (seam, not a regression): a hazardous NRVO ternary inside a && / || short-circuit operand is hoisted out → runs unconditionally. callHoist already lowers short-circuit operands to flag+nested-if but only for RC-returning calls (isRcReturning); a value-struct NRVO producer there falls through the seam between the two predicates. Closeable by routing the NRVO hazard through callHoist's existing short-circuit lowering (genExprToLoc would unify both, not required); pre-fix both branches always ran.
+
+// Regression: a statement-emitting expression (NRVO struct/object/new) in a `?:`
+// branch must be evaluated ONLY when that branch is taken — `?:` promises
+// conditional evaluation. Before the fix, codegen emitted BOTH branches'
+// `f(&tmp);` statements unconditionally before the C `?:`, so the untaken branch
+// ran too: over-execution, or a crash when the untaken branch was only valid under
+// the condition. `?:` now lowers to temp+if/else (matchLower / Reference genIf
+// parity). Locks four value positions: direct var-init, guard pattern, nested `?:`
+// in a branch, and call-argument. Marker prints only if exactly the taken branches
+// ran (runs==3) AND the guard's untaken crash-branch did NOT run (exit 0).
+
+struct V { x: int32; y: int32; }
+
+let runs: int32 = 0;
+
+function mkA(): V { runs = runs + 1; return { x: 10, y: 0 }; }
+function mkB(): V { runs = runs + 1; return { x: 20, y: 0 }; }
+function sumV(v: V): int32 { return v.x + v.y; }
+function first(arr: V[]): V { return arr[0]; }   // index 0 of empty → out-of-bounds crash
+
+function main(): void {
+	// Runtime-true condition (array access — not const-foldable away).
+	const flags: int32[] = [1];
+	const condT: boolean = flags[0] === 1;
+
+	// 1. direct var-init: only mkA must run → runs == 1
+	const a: V = condT ? mkA() : mkB();
+
+	// 2. guard pattern: untaken branch first(empty) would crash — must NOT run
+	const safe: V[] = [{ x: 5, y: 0 }];
+	const empty: V[] = [];
+	const g: V = condT ? first(safe) : first(empty);
+
+	// 3. nested ?: in a branch — inner must hoist into the guarded scope → runs == 2
+	const n: V = condT ? (a.x > 0 ? mkA() : mkB()) : mkB();
+
+	// 4. call-argument position (ternary nested in an unconditional call) → runs == 3
+	const s: int32 = sumV(condT ? mkA() : mkB());
+
+	// 5. ternary nested in another ternary's CONDITION (unconditional position) → runs == 4
+	const m: int32 = ((condT ? mkA() : mkB()).x > 5) ? 1 : 2;
+
+	// a.x=10, g.x=5, n.x=10, s=10, m=1, runs=4 → 40
+	const acc: int32 = (a.x + g.x + n.x + s + m + runs) as int32;
+	console.log(`cond-nrvo acc=${acc}`);
+}
