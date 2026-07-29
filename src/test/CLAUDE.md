@@ -6,6 +6,13 @@ which guardrails are already in place vs still missing.
 
 When you add or modify tests, **update the progress section at the bottom**.
 
+Companion file: **`docs/TESTGAP.md`** tracks defects in the test HARNESS
+itself — where running the tests is slow, misleading, or where a tier exists
+but nothing invokes it. This file answers "what do we test and where does a
+test go"; that one answers "why does testing cost what it costs". Open item
+with a measured cost: the native tier runs its 134 cells strictly serially
+(>40 min, machine mostly idle).
+
 ---
 
 ## 1. Philosophy
@@ -328,10 +335,11 @@ done
 # === PRIMARY: msc test — compiles a C test binary and runs it ===
 # Full suite (lang + c + js + handoff + fixedbugs)
 # ⚠ PARTIALLY RED (2026-07-28): the 74 latent type errors are GONE — this entry
-# now passes the checker clean. It fails later, in C codegen, on 7 files (was 14;
+# now passes the checker clean. It fails later, in C codegen, on 5 files (was 14;
 # 6 fell to the assertMessageExpr child-walker gap, bug008 to a module-blind
-# generic-instance dedup). Pre-existing latents that the old checker abort was
-# hiding, not regressions. Inventory: docs/TSGAP.md "G1-gate".
+# generic-instance dedup, bug010+bug047 to the bare Maybe-carrier positions).
+# Pre-existing latents that the old checker abort was hiding, not regressions.
+# Inventory: docs/TSGAP.md "G1-gate".
 msc test src/test/index.ms
 
 # Compiler internal tests (inline `test {}` blocks across src/)
@@ -418,12 +426,13 @@ Traps, all measured rather than assumed:
   decide whether you are green.
 - **`msc test` accepts exactly one file** — no directories, no globs, no
   `--filter`. Grouping is only possible through an aggregator module.
-- **Aggregator status**: `src/test/index.ms` now type-checks clean but 7 files
+- **Aggregator status**: `src/test/index.ms` now type-checks clean but 5 files
   fail C codegen (see the banner in §5 and docs/TSGAP.md "G1-gate");
-  `src/test/fixedbugs/index.ms` is red for the same reason (bug006 / bug010 /
-  bug047 are 3 of those 7, each passing standalone). bug008 was the fourth
-  until 2026-07-28 — it passed standalone and failed ONLY in an aggregate,
-  because its generic instance collided by name with bug007's.
+  `src/test/fixedbugs/index.ms` is red for one of them, `bug006`. Do NOT
+  repeat the claim that these "pass standalone" — that was true only of
+  bug008 (its generic instance collided by name with bug007's, so it needed
+  an aggregate to fail); bug006/bug010/bug047 all failed standalone too, and
+  the belief they did not delayed root-causing them.
 
 Where the remaining time actually goes, if you want to attack it:
 
@@ -529,10 +538,11 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
 - [ ] 🚧 Native full-suite gate `src/test/index.ms` — **the type errors are
   gone** (74 → 0; the last two, `jsonValueOf`'s `got Node, expected Node`,
   fell to the structural `typeRelation` work). It now fails in C codegen on
-  **7 files, down from 14** (2026-07-28): 6 fell to `assertMessageExpr`
+  **5 files, down from 14** (2026-07-28): 6 fell to `assertMessageExpr`
   missing from the AST child-walkers, `bug008` to a module-blind
-  generic-instance dedup. They are pre-existing latents the old checker abort
-  was hiding — identical errors under binaries built before and after.
+  generic-instance dedup, `bug010`+`bug047` to bare value-type `T | null`
+  carriers in call and equality position. They are pre-existing latents the
+  old checker abort was hiding — identical errors before and after.
   Inventory + error-class census + the remaining clusters: docs/TSGAP.md
   "G1-gate". Fix those and this gate joins the standing ladder.
 
