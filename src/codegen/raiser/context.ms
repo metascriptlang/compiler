@@ -6,7 +6,7 @@ import {
 	raiserABC, raiserABx, raiserAx
 } from "../../raiser/bytecode";
 import { RaiserValue, raiserInt, raiserString } from "../../raiser/value";
-import { Symbol } from "../../ast/node";
+import { Symbol, SymbolKind } from "../../ast/node";
 
 // --- Locals ---
 
@@ -383,6 +383,13 @@ export function clearRaiserOnDemand(): void {
 	};
 }
 
+export function isRoutineSym(sym: Symbol): boolean {
+	return sym.symbolKind === SymbolKind.Function
+		|| sym.symbolKind === SymbolKind.Method
+		|| sym.symbolKind === SymbolKind.Macro;
+}
+
 export function callRaiserOnDemand(sym: Symbol): number {
+	if (!isRoutineSym(sym)) return -1;
 	return _raiserOnDemandFn(sym);
 }

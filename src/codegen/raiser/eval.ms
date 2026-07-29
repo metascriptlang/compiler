@@ -21,7 +21,7 @@ import { moduleScopeSymbols } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
-import { registerRaiserOnDemand } from "./context";
+import { registerRaiserOnDemand, isRoutineSym } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, getMacroDeclModulePath } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
@@ -186,6 +186,7 @@ function seedCtxForSym(sym: Symbol): CheckerContext {
 
 function ensureCompiledIntoEngine(sym: Symbol): number {
 	if (_engine === null) return -1;
+	if (!isRoutineSym(sym)) return -1;
 	const name = sym.name;
 	const seenIdx = _engine.seen.get(name);
 	if (seenIdx !== null) return seenIdx;
