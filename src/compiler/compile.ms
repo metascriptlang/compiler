@@ -4,7 +4,7 @@ import { exit, exec, execFile, platform } from "std/process";
 import { exists } from "std/fs";
 import { parseSource } from "../parser/statements/validation";
 import { Node, ProgramData } from "../ast/node";
-import { CheckerContext, GcMode, hasErrors, hasFatalErrors, errorCount } from "../checker/context";
+import { CheckerContext, GcMode, hasErrors, hasFatalErrors, errorCount, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
@@ -240,6 +240,22 @@ function exitOnFatalCheckerErrors(ctx: CheckerContext, modPath: string, source: 
 				severity: ErrorSeverity.Error,
 			});
 		}
+	}
+	exit(1);
+}
+
+// Macro-machinery diagnostics (body compile failures, evaluator unavailable) are
+// severity-Error but never fatal — exitOnFatalCheckerErrors lets them through.
+function exitOnCheckerErrors(ctx: CheckerContext, modPath: string, source: string): void {
+	if (!hasErrors(ctx)) return;
+	for (const e of ctx.errors) {
+		if (e.severity !== Severity.Error) continue;
+		renderModuleError(modPath, source, {
+			message: e.message,
+			line: e.line,
+			column: e.column,
+			severity: ErrorSeverity.Error,
+		});
 	}
 	exit(1);
 }
@@ -709,6 +725,14 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	let bundle = "";
 	let compiled = 0;
 
+	// Phase 1 — check + expand + comptime for EVERY module before any backend
+	// transform runs: transformProgram mutates the registered module AST in
+	// place, and a later module's macro expansion compiles helpers from the
+	// DECLARING module's AST — transforming first hands the macro engine a
+	// backend-lowered body the raiser prelude cannot resolve (msStringConcat).
+	const unitPaths: string[] = [];
+	const unitPrograms: Node[] = [];
+	const unitCtxs: CheckerContext[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
@@ -745,8 +769,18 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		}
 
 		const macroExpanded = expandMacros(program, ctx);
-		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		const transformed = transformProgram(comptimeResolved, ctx, true);
+		exitOnCheckerErrors(ctx, modPath, mod.source);
+		unitPaths.push(modPath);
+		unitPrograms.push(evaluateComptimeBlocks(macroExpanded));
+		unitCtxs.push(ctx);
+	}
+
+	// Phase 2 — backend transform + codegen
+	for (let ui = 0; ui < unitPaths.length; ui += 1) {
+		const modPath = unitPaths[ui];
+		const mod = findModule(graph, modPath);
+		if (mod === null) continue;
+		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
 
 		// Build per-module import specifier → module ID mapping
 		const localMapKeys: string[] = [];
@@ -1029,6 +1063,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 
 		const _tmc0 = performance.now();
 		const macroExpanded = expandMacros(monoed, ctx);
+		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		tMacro = tMacro + (performance.now() - _tmc0);
 		const _tx0 = performance.now();
@@ -1428,6 +1463,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		ctx.errors = [];
 
 		const macroExpanded = expandMacros(monoed, ctx);
+		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const transformed = transformProgram(comptimeResolved, ctx, false);
 		const nativeCtx = createTransformContextWithChecker(ctx);
@@ -1567,7 +1603,11 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	ensureDir(outDir);
 	const baseDir = dirname(filePath);
 
-	// Compile each module to JS in out/debug/
+	// Two phases for the same reason as cmdBuildJS: expand every module before
+	// any backend transform mutates a declaring module's AST.
+	const unitPaths: string[] = [];
+	const unitPrograms: Node[] = [];
+	const unitCtxs: CheckerContext[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
@@ -1580,8 +1620,16 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 		ctx.errors = [];
 
 		const macroExpanded = expandMacros(program, ctx);
-		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		const transformed = transformProgram(comptimeResolved, ctx, true);
+		exitOnCheckerErrors(ctx, modPath, mod.source);
+		unitPaths.push(modPath);
+		unitPrograms.push(evaluateComptimeBlocks(macroExpanded));
+		unitCtxs.push(ctx);
+	}
+
+	for (let ui = 0; ui < unitPaths.length; ui += 1) {
+		const modPath = unitPaths[ui];
+		const ctx = unitCtxs[ui];
+		const transformed = transformProgram(unitPrograms[ui], ctx, true);
 		const jsCode = generateJS(transformed, ctx.jsImportRegistry);
 
 		const relPath = relative(baseDir, modPath);
@@ -1633,6 +1681,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		}
 
 		const macroExpanded = expandMacros(program, modCtx);
+		exitOnCheckerErrors(modCtx, modPath, mod.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const txCtx = createTransformContextWithChecker(modCtx);
 		const refined = refineTypes(comptimeResolved, txCtx, graphRegistry);
