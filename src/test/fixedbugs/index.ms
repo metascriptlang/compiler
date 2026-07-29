@@ -74,3 +74,5 @@ import "./bug058";
 import "./bug059_mono_pending_dedup_module_blind";
 import "./bug060_assert_message_expr_unwalked";
 import "./bug061_maybe_carrier_bare_position";
+import "./bug063_asbytes_zero_copy_bridge";
+import "./bug064_uint8_push_number_dispatch";
