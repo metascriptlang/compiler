@@ -34,6 +34,7 @@ import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker } from "./context";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
+import { lowerObjectLiteralComplete } from "./coercion/objectLiteralComplete";
 import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
 import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
@@ -83,6 +84,9 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	let result = jsBackend ? lowerPowerAssert(program, ctx) : program;
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
+	if (ctx.jsBackend) {
+		result = lowerObjectLiteralComplete(result, ctx);
+	}
 	result = lowerStringConcatFlatten(result, ctx);
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
