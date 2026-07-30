@@ -662,9 +662,14 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
   ran; only the comparison was missing) plus a new `danger` cell
   (`-O3 -flto`, `--cc=clang` — zig cannot LTO on Mach-O); parity programs
   gained `orc` + `danger`. 127 → **241 pass** with ZERO new programs, no
-  lane divergence found. Per-program build cost: O0 1.19s vs danger 3.94s
-  (measured on 601-closureArray; `--release` via zig is 9.30s, i.e. the
-  danger lane is the cheaper optimized build on macOS).
+  lane divergence found. `--cc=clang` is not a workaround: `--danger`
+  defaults to `--lto=thin` (options.ms), and native-macOS zig + any LTO is
+  rejected outright (toolchain.ms) — the compiler's own advice is
+  "`--cc=clang`, or drop `--lto`". Keep the LTO: whole-program DCE is
+  exactly the class this lane exists to catch. Warm per-program build on
+  601-closureArray: 0.31s clang+thin vs 0.41s zig+`--lto=off`, identical
+  runtime, 262 KB vs 294 KB. Cold-cache build timings on this tree swing
+  by ~10x — never quote one.
 - [ ] 🔲 JS-lane tier auto-discovery — attempt EVERY corpus program through
   the JS backend instead of hand-picking; a refusal must be a loud
   diagnostic naming the first unsupported construct (never silently-wrong
