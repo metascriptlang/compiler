@@ -456,6 +456,11 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
+	if (nextKind === TokenKind.Converter) {
+		const decl = try parseConverterDecl(state);
+		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+	}
+
 	if (nextKind === TokenKind.Template) {
 		// parseFunctionDecl consumes the keyword token — 'template' acts like 'function'
 		const decl = try parseFunctionDecl(state);
@@ -1782,17 +1787,60 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 	const macroDeclParams = extractParamNames(raw);
 	const macroDeclParamTypes = extractParamTypes(raw);
 
-	// Optional return type
-	skipOptionalType(state);
+	const macroDeclReturnType = captureOptionalType(state);
+	const returnTypeExpr = getLastTypeExpr();
 
 	const body = try callBlockParser(state);
 
-	return Result.ok(createNode(NodeKind.MacroDecl, {
+	const node = createNode(NodeKind.MacroDecl, {
 		macroDeclName: nameToken.value,
 		macroDeclParams,
 		macroDeclParamTypes,
+		macroDeclReturnType,
 		macroDeclBody: body,
-	}, macroToken));
+	}, macroToken);
+	node.typeExpr = returnTypeExpr;
+	return Result.ok(node);
+}
+
+export function parseConverterDecl(state: ParserState): NodeResult {
+	const convToken = current(state);
+	advance(state); // consume 'converter'
+
+	const nameToken = current(state);
+	if (!isIdentLike(nameToken)) {
+		return Result.err(`Expected identifier after 'converter' at line ${nameToken.line}`);
+	}
+	advance(state);
+
+	const raw = parseParamList(state, nameToken.value);
+	const params = extractParamNames(raw);
+	const paramTypes = extractParamTypes(raw);
+	if (params.length !== 1) {
+		return Result.err(`converter '${nameToken.value}' must take exactly one parameter at line ${nameToken.line}`);
+	}
+	if (paramTypes[0] !== "Node") {
+		return Result.err(`converter '${nameToken.value}' source must be a compile-time type (Node), got '${paramTypes[0]}' at line ${nameToken.line}`);
+	}
+
+	const macroDeclReturnType = captureOptionalType(state);
+	if (macroDeclReturnType === "") {
+		return Result.err(`converter '${nameToken.value}' requires an explicit return type at line ${nameToken.line}`);
+	}
+	const returnTypeExpr = getLastTypeExpr();
+
+	const body = try callBlockParser(state);
+
+	const node = createNode(NodeKind.MacroDecl, {
+		macroDeclName: nameToken.value,
+		macroDeclParams: params,
+		macroDeclParamTypes: paramTypes,
+		macroDeclReturnType,
+		macroDeclBody: body,
+	}, convToken);
+	node.flags = node.flags | NodeFlag.Converter;
+	node.typeExpr = returnTypeExpr;
+	return Result.ok(node);
 }
 
 // ===== Tests =====

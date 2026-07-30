@@ -6,7 +6,7 @@ import { Node, NodeKind, FunctionDeclData, createNode } from "../../ast/node";
 import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd } from "../context";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseAssertStmt } from "./control";
-import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl } from "./declaration";
+import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl, parseConverterDecl } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
 import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStateProgramParser } from "./callbacks";
 import { attachComments } from "../util";
@@ -103,6 +103,7 @@ export function parseStatement(state: ParserState): NodeResult {
 		TokenKind.Extern => parseExternDecl(state),
 		TokenKind.Distinct => parseDistinctTypeDecl(state),
 		TokenKind.Macro => parseMacroDecl(state),
+		TokenKind.Converter => parseConverterDecl(state),
 		TokenKind.Match => parseExprStmt(state),
 		TokenKind.Test => parseTestDecl(state),
 		TokenKind.Assert => parseAssertStmt(state),
