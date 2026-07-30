@@ -805,6 +805,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrField(keys, values, "macroDeclName", d.macroDeclName, loc);
 		addStrArrayField(keys, values, "macroDeclParams", d.macroDeclParams, loc);
 		addStrArrayField(keys, values, "macroDeclParamTypes", d.macroDeclParamTypes, loc);
+		addStrField(keys, values, "macroDeclReturnType", d.macroDeclReturnType, loc);
 		addNodeField(keys, values, "macroDeclBody", d.macroDeclBody, loc);
 		return;
 	}
