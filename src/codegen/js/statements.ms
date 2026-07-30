@@ -9,7 +9,7 @@ import {
 	isEmptyBlock, Type,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt } from "./emit";
-import { safeJsName } from "./expressions";
+import { safeJsName, jsSymbolName } from "./expressions";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Typed Array Mapping (reference: arrayTypeForElemType) =====
@@ -92,7 +92,7 @@ function emitVariableDeclCore(gen: JSGenerator, node: Node): void {
 		DeclKind.Var => { emit(gen, "var "); },
 		_ => { emit(gen, "let "); },
 	};
-	emit(gen, safeJsName(d.declName));
+	emit(gen, jsSymbolName(node.resolvedSym, d.declName));
 	if (d.initializer !== null) {
 		emit(gen, " = ");
 		emitNode(gen, d.initializer);

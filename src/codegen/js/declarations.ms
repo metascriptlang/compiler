@@ -5,7 +5,7 @@ import {
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitBodyOrEmpty } from "./emit";
-import { safeJsName } from "./expressions";
+import { safeJsName, jsSymbolName } from "./expressions";
 
 // ===== Function Declaration =====
 
@@ -17,7 +17,7 @@ function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 		"async_generator" => { emit(gen, "async function* "); },
 		_ => { emit(gen, "function "); },
 	};
-	emit(gen, safeJsName(d.fnName));
+	emit(gen, jsSymbolName(node.resolvedSym, d.fnName));
 	emit(gen, "(");
 	emitJoinedSafeStrings(gen, d.params, ", ", safeJsName);
 	emit(gen, ") ");
