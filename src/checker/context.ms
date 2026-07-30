@@ -1,6 +1,6 @@
 import { platform } from "std/process";
 import { unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
-import { isAssignable, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
+import { isAssignable, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
@@ -587,6 +587,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		const objElem = objT.typeReturn;
 		if (recvElem === null || objElem === null) return false;
 		if (recvElem.kind === TypeKind.Unknown || objElem.kind === TypeKind.Unknown) return false;
+		if (isReinterpretUnsafe(objT, recvT)) return false;
 		return isAssignable(objElem, recvElem);
 	}
 	// Name-based matching for well-known types and monomorphized generics.
