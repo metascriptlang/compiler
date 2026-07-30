@@ -50,6 +50,7 @@ import "./c/expressions";
 import "./c/closures";
 import "./c/result";
 import "./c/jsx";
+import "./c/converter";
 import "./c/buffer";
 import "./c/httpServer";
 import "./c/actor";
