@@ -53,14 +53,16 @@ export function endsWith(this s: string, suffix: string): boolean {
 }
 
 export function contains(this s: string, sub: string): boolean {
-	return s.indexOf(sub, 0) >= 0;
+	return s.byteIndexOf(sub, 0) >= 0;
 }
 
-export function indexOf(this s: string, sub: string, start: int64 = 0): int64 {
+export function byteIndexOf(this s: string, sub: string, start: int64 = 0): int64 {
 	const sb = s.asBytes();
 	const xb = sub.asBytes();
 	if (xb.length === 0) return start;
+	if (start > sb.length) return -1;
 	let i = start;
+	if (i < 0) i = 0;
 	while (i <= sb.length - xb.length) {
 		let found = true;
 		let j = 0;
@@ -74,7 +76,7 @@ export function indexOf(this s: string, sub: string, start: int64 = 0): int64 {
 	return -1;
 }
 
-export function lastIndexOf(this s: string, sub: string, startIdx: int64 = -1): int64 {
+export function byteLastIndexOf(this s: string, sub: string, startIdx: int64 = -1): int64 {
 	const sb = s.asBytes();
 	const xb = sub.asBytes();
 	if (xb.length === 0) return sb.length as int64;
@@ -102,7 +104,7 @@ export function count(this s: string, sub: string): int64 {
 	let n: int64 = 0;
 	let pos = 0;
 	while (pos <= sb.length - xb.length) {
-		const found = s.indexOf(sub, pos);
+		const found = s.byteIndexOf(sub, pos);
 		if (found < 0) break;
 		n = n + 1;
 		pos = found + xb.length;
@@ -148,7 +150,7 @@ export function split(this s: string, delimiter: string): string[] {
 	}
 	let pos = 0;
 	while (pos <= sb.length) {
-		const found = s.indexOf(delimiter, pos);
+		const found = s.byteIndexOf(delimiter, pos);
 		if (found < 0) { parts.push(s.byteSlice(pos, sb.length)); break; }
 		parts.push(s.byteSlice(pos, found));
 		pos = found + db.length;
@@ -176,7 +178,7 @@ export function replace(this s: string, search: string, replacement: string): st
 	const sb = s.asBytes();
 	const xb = search.asBytes();
 	if (sb.length === 0 || xb.length === 0) return s.byteSlice(0, sb.length);
-	const pos = s.indexOf(search, 0);
+	const pos = s.byteIndexOf(search, 0);
 	if (pos < 0) return s.byteSlice(0, sb.length);
 	const rb = replacement.asBytes();
 	const result: uint8[] = [];
@@ -197,7 +199,7 @@ export function replaceAll(this s: string, search: string, replacement: string):
 	const result: uint8[] = [];
 	let pos = 0;
 	while (pos <= sb.length - xb.length) {
-		const found = s.indexOf(search, pos);
+		const found = s.byteIndexOf(search, pos);
 		if (found < 0) break;
 		let k = pos;
 		while (k < found) { result.push(sb[k]); k = k + 1; }
@@ -228,44 +230,6 @@ export function reverse(this s: string): string {
 	const result: uint8[] = [];
 	let i = sb.length - 1;
 	while (i >= 0) { result.push(sb[i]); i = i - 1; }
-	return result.asString();
-}
-
-export function padStart(this s: string, targetLen: int64, pad: string): string {
-	const sb = s.asBytes();
-	const pb = pad.asBytes();
-	if (sb.length >= targetLen || pb.length === 0) return s.byteSlice(0, sb.length);
-	const result: uint8[] = [];
-	const padTotal = targetLen - sb.length;
-	let pos = 0;
-	let pi = 0;
-	while (pos < padTotal) {
-		result.push(pb[pi]);
-		pi = pi + 1;
-		if (pi >= pb.length) pi = 0;
-		pos = pos + 1;
-	}
-	let i = 0;
-	while (i < sb.length) { result.push(sb[i]); i = i + 1; }
-	return result.asString();
-}
-
-export function padEnd(this s: string, targetLen: int64, pad: string): string {
-	const sb = s.asBytes();
-	const pb = pad.asBytes();
-	if (sb.length >= targetLen || pb.length === 0) return s.byteSlice(0, sb.length);
-	const result: uint8[] = [];
-	let i = 0;
-	while (i < sb.length) { result.push(sb[i]); i = i + 1; }
-	const padTotal = targetLen - sb.length;
-	let pos = 0;
-	let pi = 0;
-	while (pos < padTotal) {
-		result.push(pb[pi]);
-		pi = pi + 1;
-		if (pi >= pb.length) pi = 0;
-		pos = pos + 1;
-	}
 	return result.asString();
 }
 
