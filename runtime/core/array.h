@@ -208,7 +208,8 @@ msString msAsString(msUint8Array* arr);
  * Uses a helper macro to avoid comma-in-braced-initializer issues with C preprocessor.
  * Usage: msGenericArrayPush(&arr, value) where value can be a compound literal. */
 #define msGenericArrayPush(arr_ptr, ...) do { \
-	if ((arr_ptr)->p == NULL || (arr_ptr)->len >= (int64_t)((msArrayPayloadBase*)(arr_ptr)->p)->cap) { \
+	if ((arr_ptr)->p == NULL || (((msArrayPayloadBase*)(arr_ptr)->p)->cap & ~MS_CAP_MASK) != 0 \
+		|| (arr_ptr)->len >= (int64_t)(((msArrayPayloadBase*)(arr_ptr)->p)->cap & MS_CAP_MASK)) { \
 		(arr_ptr)->p = (__typeof__((arr_ptr)->p))msArrayPrepareAdd( \
 			(arr_ptr)->len, (arr_ptr)->p, 1, sizeof((arr_ptr)->p->data[0])); \
 	} \
@@ -235,7 +236,8 @@ msString msAsString(msUint8Array* arr);
 	int64_t _nl = (newLen); \
 	if (_nl < 0) _nl = 0; \
 	if (_nl > (arr_ptr)->len) { \
-		if ((arr_ptr)->p == NULL || _nl > (int64_t)((msArrayPayloadBase*)(arr_ptr)->p)->cap) { \
+		if ((arr_ptr)->p == NULL || (((msArrayPayloadBase*)(arr_ptr)->p)->cap & ~MS_CAP_MASK) != 0 \
+			|| _nl > (int64_t)(((msArrayPayloadBase*)(arr_ptr)->p)->cap & MS_CAP_MASK)) { \
 			(arr_ptr)->p = (__typeof__((arr_ptr)->p))msArrayPrepareAdd( \
 				(arr_ptr)->len, (arr_ptr)->p, _nl - (arr_ptr)->len, sizeof((arr_ptr)->p->data[0])); \
 		} \
