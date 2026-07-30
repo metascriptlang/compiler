@@ -91,6 +91,16 @@ no escape hatch through `zig cc`**: `-flld` is an unknown option and `-fuse-ld=`
 is silently ignored (ziglang/zig#18357). The guard lives in
 `src/compiler/toolchain.ms` and is scoped to native macOS only.
 
+**What it buys (5-round interleaved measurement, phase A on `src/index.ms`):**
+the gain is **LTO, not clang** — clang+thinLTO vs clang-noLTO is **~13%**, while
+clang-noLTO vs zig-noLTO is **~1%**, i.e. the two drivers are equivalent code
+generators (unsurprising: `zig cc` IS clang+LLVM). clang is simply the only
+vehicle that reaches LTO on Mach-O. Measure this way or not at all: interleave
+the configs per round, give every run a unique `--output` (else the build
+self-skips with "Up to date" and reports nothing), and discard rounds where
+`uptime` spikes — single cold builds on this tree swing ~10x and have produced
+wrong answers here twice.
+
 ## Pipeline
 
 ```
