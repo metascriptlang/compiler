@@ -41,6 +41,9 @@ export enum TokenKind {
 	QuoteInterp,
 	// Template keyword — appended at end to preserve ordinals.
 	Template,
+	// Converter keyword — third routine kind (LANG.md "Converter Declarations"). Placed
+	// before the JSX block so it stays inside the isIdentLike contextual-keyword range.
+	Converter,
 	// JSX structural tokens — appended to preserve ordinals. Unlike Actor these are NOT
 	// ident-like; the `>= Break`/`>= Abstract` range checks lack an upper bound (guard: the
 	// "jsx tokens are not ident-like" test).

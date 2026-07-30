@@ -188,6 +188,7 @@ export enum NodeFlag {
 	WasAsync = 4096,      // transform: function was async before asyncDesugar rewrote to generator
 	ExternC = 8192,       // parser: extern interface — type defined in C header, skip codegen emission
 	BoundSym = 16384,     // macro bindSym: resolvedSym pre-bound in the macro's module — checker must not re-lookup
+	Converter = 32768,    // parser: MacroDecl is a converter — compiler-invoked at settled type boundaries
 }
 
 // ===== Node Kind Enum =====
@@ -372,7 +373,7 @@ export type NodeData =
 	| { assertExpr: Node, assertSource: string, assertMessage: string, assertMessageExpr: Node | null } // AssertStmt
 	// Extern / Macro / Quote variants
 	| { externKind: ExternKind, externName: string, nativeName: string, externType: string } // ExternDecl
-	| { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclBody: Node } // MacroDecl
+	| { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclReturnType: string, macroDeclBody: Node } // MacroDecl
 	| { quoteBody: Node }                                          // QuoteExpr
 	| { comptimeBody: Node }                                       // ComptimeBlock
 	// Type expression variants (positioned type AST — standard parity)
@@ -582,7 +583,7 @@ export type PropertyDeclData = { propName: string, propType: string, propIsStati
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation };
 export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] };
 export type ExternDeclData = { externKind: ExternKind, externName: string, nativeName: string, externType: string };
-export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclBody: Node };
+export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclReturnType: string, macroDeclBody: Node };
 export type DecoratedDeclData = { decorators: Node[], decoratedNode: Node };
 export type ProgramData = { programStmts: Node[] };
 export type SpliceManyData = { spliceNodes: Node[] };
