@@ -53,6 +53,7 @@ export interface ExportedSymInfo {
 	// Phase E: cross-module macros — carry body AST + param names through
 	// the export pipeline so importing modules can register in macroBodyRegistry.
 	macroBody: Node;
+	converterTarget: string; // converter target type name ("" = not a converter)
 	macroParams: string[];
 	macroParamTypes: string[];
 	// Cross-module generic mono — generic FunctionDecl / MethodDecl AST so
@@ -253,10 +254,13 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	let mBody: Node = null as unknown as Node;
 	let mParams: string[] = [];
 	let mParamTypes: string[] = [];
+	let mConverterTarget = "";
 	if (sym.symbolKind === SymbolKind.Macro && ctx !== null) {
 		if (ctx.macroBodyRegistry.has(sym.name)) {
 			mBody = ctx.macroBodyRegistry.get(sym.name);
 		}
+		const ct = ctx.converterTargetByName.get(sym.name);
+		if (ct !== null) { mConverterTarget = ct; }
 		if (ctx.macroParamsRegistry.has(sym.name)) {
 			mParams = ctx.macroParamsRegistry.get(sym.name);
 		}
@@ -315,6 +319,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		location: sym.location !== null ? sym.location : makeLoc(0, 0),
 		memberLocations: memberLocs,
 		macroBody: mBody,
+		converterTarget: mConverterTarget,
 		declNode: exportDeclNode,
 		overloadDeclNodes: ovDeclNodes,
 		macroParams: mParams,
@@ -903,6 +908,9 @@ export class CheckerContext {
 	exportRegistry: ExportRegistry;
 	extensionRegistry: ExtensionRegistry;
 	macroBodyRegistry: HashMap<string, Node>;       // Phase B: macroName → macroDeclBody
+	converterTargets: HashMap<string, string>;      // converter: target type name → converter name (in-scope pair table)
+	converterTargetOrigin: HashMap<string, int32>;  // converter: target type name → 0 local decl | 1 import (shadowing + dup detection)
+	converterTargetByName: HashMap<string, string>; // converter: converter name → target type name (export pipeline)
 	macroParamsRegistry: HashMap<string, string[]>; // Phase B: macroName → param names
 	macroParamTypesRegistry: HashMap<string, string[]>;
 	macroDeclModuleRegistry: HashMap<string, string>;
@@ -946,6 +954,9 @@ export function createContext(): CheckerContext {
 		exportRegistry: createExportRegistry(),
 		extensionRegistry: createExtensionRegistry(),
 		macroBodyRegistry: new HashMap<string, Node>(),
+		converterTargets: new HashMap<string, string>(),
+		converterTargetOrigin: new HashMap<string, int32>(),
+		converterTargetByName: new HashMap<string, string>(),
 		macroParamsRegistry: new HashMap<string, string[]>(),
 		macroParamTypesRegistry: new HashMap<string, string[]>(),
 		macroDeclModuleRegistry: new HashMap<string, string>(),

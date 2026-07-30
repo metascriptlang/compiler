@@ -514,6 +514,39 @@ function collectMacro(ctx: CheckerContext, node: Node): void {
 	ctx.macroParamsRegistry.set(d.macroDeclName, d.macroDeclParams);
 	ctx.macroParamTypesRegistry.set(d.macroDeclName, d.macroDeclParamTypes);
 	ctx.macroDeclModuleRegistry.set(d.macroDeclName, ctx.modulePath);
+	if ((node.flags & NodeFlag.Converter) !== 0) {
+		registerConverter(ctx, d.macroDeclReturnType, d.macroDeclName, 0, node.location.line, node.location.column);
+	}
+}
+
+// Converter pair table (LANG.md "Converter Declarations" rules 3-4): a local decl
+// shadows an imported pair; two IMPORTED converters for the same pair is an error
+// at import time; two LOCAL converters for the same pair is likewise an error.
+// origin: 0 = local decl, 1 = import.
+export function registerConverter(ctx: CheckerContext, target: string, name: string, origin: int32, line: number, column: number): void {
+	ctx.converterTargetByName.set(name, target);
+	if (ctx.converterTargets.has(target)) {
+		const existing = ctx.converterTargets.get(target);
+		if (existing === name) { return; }
+		let existingOrigin: int32 = 1;
+		if (ctx.converterTargetOrigin.has(target)) {
+			const eo = ctx.converterTargetOrigin.get(target);
+			if (eo !== null) { existingOrigin = eo; }
+		}
+		if (origin === 1 && existingOrigin === 0) { return; }
+		if (origin === 1 && existingOrigin === 1) {
+			addError(ctx, "duplicate converter for target '" + target + "': '" + (existing !== null ? existing : "") + "' and '" + name + "' are both in scope — the compiler never chooses; import only one or call one explicitly",
+				line, column);
+			return;
+		}
+		if (origin === 0 && existingOrigin === 0) {
+			addError(ctx, "duplicate converter for target '" + target + "': '" + (existing !== null ? existing : "") + "' and '" + name + "' declared in the same module",
+				line, column);
+			return;
+		}
+	}
+	ctx.converterTargets.set(target, name);
+	ctx.converterTargetOrigin.set(target, origin);
 }
 
 // Look up resolved source path for an import specifier from the module's import entries
@@ -750,6 +783,9 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 						ctx.macroParamTypesRegistry.set(localAlias, exportInfo.macroParamTypes);
 					}
 					ctx.macroDeclModuleRegistry.set(localAlias, exportInfo.definingModule !== "" ? exportInfo.definingModule : sourcePath);
+					if (exportInfo.converterTarget !== "") {
+						registerConverter(ctx, exportInfo.converterTarget, localAlias, 1, nameLoc.line, nameLoc.column);
+					}
 				}
 				// Implementation parity: import enum members alongside enum type
 				// (rawImportSymbol registers each skEnumField in the importing scope)
