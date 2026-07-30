@@ -8,6 +8,8 @@ extern class String {
 }
 
 // Zero-copy bridge (string ↔ uint8[]) — identity in JS
+import { isSpaceByte } from "./shared";
+
 export function asBytes(this s: string): uint8[] {
 	return s as unknown as uint8[];
 }
@@ -160,9 +162,6 @@ export function equals(this s: string, other: string): boolean {
 	return msStringEquals(s, other);
 }
 
-function isSpaceByte(b: int32): boolean {
-	return b === " ".code || (b >= "\t".code && b <= "\r".code);
-}
 
 
 export function substring(this s: string, start: int64, end: int64): string {

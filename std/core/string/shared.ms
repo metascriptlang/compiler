@@ -255,6 +255,6 @@ function asciiUpper(b: int32): int32 {
 	return b;
 }
 
-function isSpaceByte(b: int32): boolean {
+export function isSpaceByte(b: int32): boolean {
 	return b === " ".code || (b >= "\t".code && b <= "\r".code);
 }
