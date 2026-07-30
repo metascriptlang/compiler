@@ -195,10 +195,38 @@ function checkJsxConsumed(ctx: CheckerContext, nodes: Node[]): void {
 	ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth - 1;
 }
 
-function reportUnconsumedJsx(ctx: CheckerContext, node: Node, what: string): void {
+function reportUnconsumedJsx(ctx: CheckerContext, node: Node, what: string, expectedType: Type | null): void {
 	if (ctx.jsxMacroArgDepth === 0) {
-		addError(ctx, what + " must be consumed by a macro (it produces a compile-time Node)", node.location.line, node.location.column);
+		let msg = what + " must be consumed by a macro (it produces a compile-time Node)";
+		if (expectedType !== null && expectedType.kind !== TypeKind.Unknown) {
+			msg = msg + "; import a converter targeting '" + typeDisplayName(expectedType) + "' to lower it at this boundary";
+		}
+		addError(ctx, msg, node.location.line, node.location.column);
 	}
+}
+
+// Converter boundary lowering (LANG-JSX.md): JSX at a settled expected-runtime-type position
+// rewrites in place into a MacroInvocation of the in-scope converter for that target, then
+// re-checks — the eager-expansion branch expands and re-checks against the same expected type.
+// Never fires inside macro args (jsxMacroArgDepth) or where no expected type is settled.
+function tryConverterAtBoundary(ctx: CheckerContext, node: Node, expectedType: Type | null): boolean {
+	if (expectedType === null) return false;
+	if (expectedType.kind === TypeKind.Unknown || expectedType.kind === TypeKind.GenericParam) return false;
+	if (ctx.jsxMacroArgDepth > 0) return false;
+	const targetName = typeDisplayName(expectedType);
+	if (!ctx.converterTargets.has(targetName)) return false;
+	const convName = ctx.converterTargets.get(targetName);
+	if (convName === null) return false;
+	if (!ctx.macroBodyRegistry.has(convName)) return false;
+	const jsxArg = createNodeAt(node.kind, node.data, node.location);
+	jsxArg.typeExpr = node.typeExpr;
+	node.kind = NodeKind.MacroInvocation;
+	node.data = { macroName: convName, macroArgs: [jsxArg] };
+	node.nodeType = null as unknown as Type;
+	node.resolvedSym = null as unknown as Symbol;
+	node.flags = 0;
+	checkExpr(ctx, node, expectedType);
+	return true;
 }
 
 // Record the JSX tag's base name as a symbol reference for LSP go-to-def / rename. An uppercase
@@ -325,14 +353,16 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.JSXElement => {
 			const d = node.data as JSXElementData;
 			recordJsxTagSym(ctx, node);
-			reportUnconsumedJsx(ctx, node, "JSX expression");
+			if (tryConverterAtBoundary(ctx, node, expectedType)) { return; }
+			reportUnconsumedJsx(ctx, node, "JSX expression", expectedType);
 			checkJsxConsumed(ctx, d.jsxAttrs);
 			checkJsxConsumed(ctx, d.jsxChildren);
 			node.nodeType = unknownType(); return;
 		},
 		NodeKind.JSXFragment => {
 			const d = node.data as JSXFragmentData;
-			reportUnconsumedJsx(ctx, node, "JSX fragment");
+			if (tryConverterAtBoundary(ctx, node, expectedType)) { return; }
+			reportUnconsumedJsx(ctx, node, "JSX fragment", expectedType);
 			checkJsxConsumed(ctx, d.jsxFragChildren);
 			node.nodeType = unknownType(); return;
 		},
@@ -3671,6 +3701,15 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 			if (!s) { allSkipped = false; break; }
 		}
 		if (!allSkipped) {
+			let hasJsxArg = false;
+			for (const a of args) {
+				if (a.kind === NodeKind.JSXElement || a.kind === NodeKind.JSXFragment) { hasJsxArg = true; break; }
+			}
+			if (hasJsxArg) {
+				addError(ctx, `Ambiguous call to overloaded function '${sym.name}' — a converter never disambiguates an overloaded call; call the converter explicitly on the JSX argument`,
+					callNode.location.line, callNode.location.column);
+				return getReturnType(sym.symbolType);
+			}
 			addError(ctx, `Ambiguous call to overloaded function '${sym.name}'`,
 				callNode.location.line, callNode.location.column);
 			return getReturnType(sym.symbolType);

@@ -296,7 +296,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
-	if (d.declKind === DeclKind.Const && d.initializer !== null
+	if (d.declKind === DeclKind.Const && d.initializer !== null && d.declType === ""
 			&& (d.initializer.kind === NodeKind.JSXElement || d.initializer.kind === NodeKind.JSXFragment)) {
 		ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth + 1;
 		checkExpr(ctx, d.initializer, null);
