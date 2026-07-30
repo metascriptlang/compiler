@@ -21,6 +21,8 @@
 //             msGenericArrayPush/SetLen cap checks gained the bug067 flag
 //             mask so borrowed views divert to msArrayPrepareAdd's copy.
 
+import { compileToCWithStd } from "../helpers";
+
 test "bug071: uint8[] indexOf/includes/count via generic surface" {
 	const b: uint8[] = [];
 	b.push(10);
@@ -87,6 +89,60 @@ test "bug071: asBytes view reads through the generic surface" {
 	const s = v.slice(1, 3);
 	assert s.length === 2;
 	assert s[0] === 98;
+}
+
+// The rows below guard the LOUD half of the fix: once a repr-mismatched
+// receiver can no longer bind, the calls that used to corrupt silently must
+// become compile errors — not resolve to something else. Value asserts alone
+// cannot see this (the bad call no longer exists to be measured).
+
+test "bug071: number-typed arg is rejected at a uint8[] push" {
+	const src = `
+function main(): void {
+	const b: uint8[] = [];
+	let x = 65;
+	b.push(x);
+	console.log(b[0]);
+}
+`;
+	const c = compileToCWithStd(src);
+	assert !c.ok;
+}
+
+test "bug071: an explicit uint8 cast keeps push accepted" {
+	const src = `
+function main(): void {
+	const b: uint8[] = [];
+	let x = 65;
+	b.push(x as uint8);
+	console.log(b[0]);
+}
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
+
+test "bug071: join has no generic form — loud error, never a number[] bind" {
+	const src = `
+function main(): void {
+	const b: uint8[] = [];
+	b.push(7);
+	console.log(b.join(","));
+}
+`;
+	const c = compileToCWithStd(src);
+	assert !c.ok;
+}
+
+test "bug071: number[] join still resolves to its extern" {
+	const src = `
+function main(): void {
+	const n: number[] = [1, 2];
+	console.log(n.join(","));
+}
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
 }
 
 test "bug071: number[] and string[] keep their extern fast paths" {
