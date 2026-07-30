@@ -69,14 +69,27 @@ bash tools/editor-plugin/build.sh --install
 
 ## Build Optimization — default `build` is UNOPTIMIZED (`-O0`)
 
-`modeFlags` (`src/compiler/cc.ms`): default=`-O0 -g`, `--release`=`-O2`, `--danger`=`-O3 -flto`.
-A compiler built with the plain `build` command runs ~4.5x slower than a `--danger` build.
+Opt level and LTO are **separate axes**. `modeFlags` (`src/compiler/cc.ms`):
+default=`-O0 -g`, `--release`=`-O2`, `--danger`=`-O3`. `--lto=off|thin|full`
+defaults to `thin` for `--danger`, `off` otherwise (`src/compiler/options.ms`).
+A compiler built with the plain `build` command runs ~4.5x slower than a
+`--danger` build.
 
-Fast self-host build on macOS (must use Apple clang — `zig cc` can't LTO on Mach-O):
+Fast self-host build on macOS — **`--cc=clang` is mandatory, not a preference**:
 ```bash
 msc build src/index.ms --gc=drc --danger --cc=clang --output=msc
 ```
 Cross-compiling Linux/Windows: `--danger` alone works (zig cc uses LLD there).
+
+**Why (verified 2026-07-30 with raw `zig cc` 0.16.0, don't re-litigate):**
+`zig cc -O3 -flto` on a native-macOS target fails with `LTO requires using LLD`,
+while the SAME zig cross-compiling to `x86_64-linux-gnu` links `-flto` fine — so
+it is a Mach-O-target limitation, not a zig-quality or a config problem. Zig
+deliberately replaced LLD with its own Mach-O linker (ziglang/zig#8727) and its
+LTO path still requires LLD; ELF keeps LLD, hence Linux is unaffected. **There is
+no escape hatch through `zig cc`**: `-flld` is an unknown option and `-fuse-ld=`
+is silently ignored (ziglang/zig#18357). The guard lives in
+`src/compiler/toolchain.ms` and is scoped to native macOS only.
 
 ## Pipeline
 
