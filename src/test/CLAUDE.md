@@ -639,12 +639,26 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
   run a STALE binary from a previous round as a false pass — the corpus
   runner closes both holes.
 - [ ] 🚧 Corpus growth 63 → ~120 programs per the §3.6 authoring contract
-  (directive head, NNN-topic numbering, RC-stress shapes). First blocker
-  to probe: float-formatting parity (C printf vs JS Number.toString) —
-  if they differ, fix runtime number printing once; never normalize in
-  the runner. New programs should prefer parity (no @stdout) over
-  @stdout-contains; strip @stdout from migrated deterministic programs
-  over time to upgrade them to byte-compare.
+  (directive head, NNN-topic numbering, RC-stress shapes). New programs
+  should prefer parity (no @stdout) over @stdout-contains; strip @stdout
+  from migrated deterministic programs over time to upgrade them to
+  byte-compare. Cluster census (2026-07-30, 71 programs): 0xx=4, 1xx=5,
+  2xx=10, **3xx=0**, 4xx=13, **5xx=0**, 6xx=31, 7xx=8 — next by value are
+  3xx closures (the lambda-lifting mechanism behind the 702 bug, no
+  coverage) then 5xx std (Map/Array/JSON/fs).
+  - Float-formatting blocker CLEARED 2026-07-30: all 20 probed cases
+    already agree (the C runtime implements ECMAScript
+    `Number::toString`, not printf `%g`), pinned by `012-floatFormat`.
+  - 1xx strings landed 2026-07-30 (`100-stringBasics`,
+    `101-stringIndexSpace`, `102-stringSearch`, `103-stringBytes`,
+    `104-stringChurn`) — the cluster paid for itself immediately by
+    finding two JS-backend bugs the unit tiers could not see:
+    self-append was not alias-safe in `index.jms` (C had the fix,
+    guarded only by `627`, which carries `@maxrss` and therefore never
+    gets a js cell at all), and the bundler emitted module-private decls
+    unqualified so two modules sharing a helper name either silently
+    resolved to the wrong one (`function`) or failed to parse
+    (`const`/`let`). Both fixed (`d8fedf5`, `9c2fec0`).
 - [x] ✅ SAN lane — SHIPPED 2026-07-29 (`MSCORPUS_SAN=1`): whole corpus
   under ASan + slab-off + DRC ledger, 61 pass · 3 fail (the 3 = the same
   externally-reproduced reds: 010 G1 carrier, 701/702 macro-WIP). Proven
