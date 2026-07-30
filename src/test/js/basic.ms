@@ -107,3 +107,37 @@ s.stripInPlace();
 	const js = compileProjectToJSWithStd(entries, "test/strParity.ms");
 	assert js.indexOf("ERROR", 0) < 0;
 }
+
+// Nim jsgen parity (mangleName, jsgen.nim:228-281): module-level private decls
+// carry module identity in their emitted JS name; the bundle is one flat scope
+// and bare names are reserved for the exported/@emit ABI surface.
+test "E2E JS: same-name private module decls get module-qualified names" {
+	const modA = `function dupPrivHelper(): int32 { return 1; }
+const dupPrivTag: int32 = 10;
+export function fromDupA(): int32 { return dupPrivHelper() + dupPrivTag; }
+`;
+	const modB = `function dupPrivHelper(): int32 { return 2; }
+const dupPrivTag: int32 = 20;
+export function fromDupB(): int32 { return dupPrivHelper() + dupPrivTag; }
+`;
+	const useMod = `import { fromDupA } from "./dupPrivA";
+import { fromDupB } from "./dupPrivB";
+console.log(fromDupA().toString());
+console.log(fromDupB().toString());
+`;
+	const entries: MapEntry[] = [
+		{ entryPath: "test/dupPrivA.ms", entrySource: modA },
+		{ entryPath: "test/dupPrivB.ms", entrySource: modB },
+		{ entryPath: "test/dupPrivUse.ms", entrySource: useMod },
+	];
+	const js = compileProjectToJSWithStd(entries, "test/dupPrivUse.ms");
+	assert js.indexOf("ERROR", 0) < 0;
+	assert !js.contains("function dupPrivHelper(");
+	assert js.count("function dupPrivHelper") === 2;
+	assert !js.contains("const dupPrivTag =");
+	assert js.count("dupPrivTag") >= 4;
+	assert js.contains("function fromDupA(");
+	assert js.contains("function fromDupB(");
+	assert js.contains("fromDupA()");
+	assert js.contains("fromDupB()");
+}
