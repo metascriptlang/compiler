@@ -81,3 +81,4 @@ import "./bug066_asbytes_rvalue_receiver";
 import "./bug067_literal_view_push_static_clobber";
 import "./bug068_string_index_space";
 import "./bug070ClosureSigRepr";
+import "./bug071ElementNarrowArrayWidening";
