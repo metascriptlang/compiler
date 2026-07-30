@@ -447,6 +447,15 @@ static uint32_t msUtf8Decode(const unsigned char* p, const unsigned char* end, i
 	return 0xFFFD; /* replacement character */
 }
 
+/* WTF-8: one lone surrogate half (0xD800-0xDFFF) as a 3-byte sequence — produced
+ * when a TS-tier op splits an astral pair (charAt/slice/pad on a half boundary). */
+static int msWtf8EncodeSurrogate(uint32_t unit, char* out) {
+	out[0] = (char)(0xE0 | (unit >> 12));
+	out[1] = (char)(0x80 | ((unit >> 6) & 0x3F));
+	out[2] = (char)(0x80 | (unit & 0x3F));
+	return 3;
+}
+
 msString msStringCharAt(msString s, int64_t idx) {
 	if (idx < 0 || s.p == NULL || idx >= s.len) return MS_EMPTY_STRING;
 	const unsigned char* p = (const unsigned char*)s.p->data;
@@ -461,9 +470,14 @@ msString msStringCharAt(msString s, int64_t idx) {
 		int seqlen;
 		uint32_t cp = msUtf8Decode(p, end, &seqlen);
 		if (cp >= 0x10000) {
-			/* Surrogate pair: 2 UTF-16 code units */
+			/* Surrogate pair: 2 UTF-16 code units — return the exact half */
 			if (charPos == idx || charPos + 1 == idx) {
-				return msStringNew((const char*)(p), seqlen);
+				uint32_t unit = (charPos == idx)
+					? 0xD800 + ((cp - 0x10000) >> 10)
+					: 0xDC00 + ((cp - 0x10000) & 0x3FF);
+				char half[3];
+				msWtf8EncodeSurrogate(unit, half);
+				return msStringNew(half, 3);
 			}
 			charPos += 2;
 		} else {
@@ -570,31 +584,43 @@ msString msStringSlice(msString s, int64_t start, int64_t end) {
 	if (end > charLen) end = charLen;
 	if (start >= end) return MS_EMPTY_STRING;
 
-	/* Full path: walk UTF-8 to find byte offsets for char positions */
-	const unsigned char* data = (const unsigned char*)s.p->data;
-	const unsigned char* p = data;
-	const unsigned char* pend = data + s.len;
+	/* Full path: walk UTF-8 in UTF-16 unit space. A boundary landing inside an
+	 * astral pair keeps the TS half: the low half at `start`, the high half at
+	 * `end` (WTF-8-encoded, mirroring what native JS slice yields). */
+	const unsigned char* p = (const unsigned char*)s.p->data;
+	const unsigned char* pend = p + s.len;
+	msString result = msStringNewCap(s.len + 6);
+	int64_t rlen = 0;
 	int64_t charPos = 0;
-	int64_t byteStart = -1, byteEnd = -1;
 
-	while (p < pend && charPos <= end) {
-		if (charPos == start) byteStart = (int64_t)(p - data);
-		if (charPos == end) { byteEnd = (int64_t)(p - data); break; }
-
-		unsigned char b = *p;
+	while (p < pend && charPos < end) {
 		int seqlen;
-		if (b < 0x80) { seqlen = 1; }
-		else if (b < 0xE0) { seqlen = 2; }
-		else if (b < 0xF0) { seqlen = 3; }
-		else { seqlen = 4; charPos++; } /* supplementary = 2 UTF-16 units */
-		charPos++;
+		uint32_t cp = msUtf8Decode(p, pend, &seqlen);
+		if (cp >= 0x10000) {
+			int inHi = charPos >= start && charPos < end;
+			int inLo = charPos + 1 >= start && charPos + 1 < end;
+			if (inHi && inLo) {
+				memcpy(result.p->data + rlen, p, seqlen);
+				rlen += seqlen;
+			} else if (inHi) {
+				rlen += msWtf8EncodeSurrogate(0xD800 + ((cp - 0x10000) >> 10), result.p->data + rlen);
+			} else if (inLo) {
+				rlen += msWtf8EncodeSurrogate(0xDC00 + ((cp - 0x10000) & 0x3FF), result.p->data + rlen);
+			}
+			charPos += 2;
+		} else {
+			if (charPos >= start) {
+				memcpy(result.p->data + rlen, p, seqlen);
+				rlen += seqlen;
+			}
+			charPos += 1;
+		}
 		p += seqlen;
 	}
 
-	if (byteStart < 0) return MS_EMPTY_STRING;
-	if (byteEnd < 0) byteEnd = s.len; /* end beyond string → clamp to end */
-
-	return msStringNew(s.p->data + byteStart, byteEnd - byteStart);
+	result.len = rlen;
+	result.p->data[rlen] = '\0';
+	return result;
 }
 
 msString msStringSubstring(msString s, int64_t start, int64_t end) {
@@ -739,41 +765,60 @@ msString msStringReverse(msString s) {
 	return result;
 }
 
-msString msStringPadStart(msString s, int64_t targetLen, msString pad) {
-	if (s.len >= targetLen) return msStringNew(s.p->data, s.len);
-	if (pad.len == 0) return msStringNew(s.p->data, s.len);
-
-	int64_t padTotal = targetLen - s.len;
-	msString result = msStringNewCap(targetLen);
-	int64_t pos = 0;
-	while (pos < padTotal) {
-		int64_t chunk = pad.len;
-		if (pos + chunk > padTotal) chunk = padTotal - pos;
-		memcpy(result.p->data + pos, pad.p->data, chunk);
-		pos += chunk;
+/* Emit `padUnits` UTF-16 code units cycling `pad`; a truncation landing mid-astral
+ * keeps the high half (TS parity). Returns bytes written. */
+static int64_t msPadEmitUnits(char* out, msString pad, int64_t padUnits) {
+	const unsigned char* pp = (const unsigned char*)pad.p->data;
+	const unsigned char* pe = pp + pad.len;
+	const unsigned char* q = pp;
+	int64_t rlen = 0;
+	while (padUnits > 0) {
+		if (q >= pe) q = pp;
+		int seqlen;
+		uint32_t cp = msUtf8Decode(q, pe, &seqlen);
+		if (cp >= 0x10000) {
+			if (padUnits >= 2) {
+				memcpy(out + rlen, q, seqlen);
+				rlen += seqlen;
+				padUnits -= 2;
+			} else {
+				rlen += msWtf8EncodeSurrogate(0xD800 + ((cp - 0x10000) >> 10), out + rlen);
+				padUnits = 0;
+			}
+		} else {
+			memcpy(out + rlen, q, seqlen);
+			rlen += seqlen;
+			padUnits -= 1;
+		}
+		q += seqlen;
 	}
-	memcpy(result.p->data + padTotal, s.p->data, s.len);
-	result.len = targetLen;
-	result.p->data[targetLen] = '\0';
+	return rlen;
+}
+
+msString msStringPadStart(msString s, int64_t targetLen, msString pad) {
+	int64_t sUnits = msStringLength(s);
+	if (sUnits >= targetLen || pad.len == 0) return msStringNew(s.p->data, s.len);
+
+	int64_t padUnits = targetLen - sUnits;
+	msString result = msStringNewCap(padUnits * 4 + s.len);
+	int64_t rlen = msPadEmitUnits(result.p->data, pad, padUnits);
+	memcpy(result.p->data + rlen, s.p->data, s.len);
+	rlen += s.len;
+	result.len = rlen;
+	result.p->data[rlen] = '\0';
 	return result;
 }
 
 msString msStringPadEnd(msString s, int64_t targetLen, msString pad) {
-	if (s.len >= targetLen) return msStringNew(s.p->data, s.len);
-	if (pad.len == 0) return msStringNew(s.p->data, s.len);
+	int64_t sUnits = msStringLength(s);
+	if (sUnits >= targetLen || pad.len == 0) return msStringNew(s.p->data, s.len);
 
-	int64_t padTotal = targetLen - s.len;
-	msString result = msStringNewCap(targetLen);
+	int64_t padUnits = targetLen - sUnits;
+	msString result = msStringNewCap(s.len + padUnits * 4);
 	memcpy(result.p->data, s.p->data, s.len);
-	int64_t pos = 0;
-	while (pos < padTotal) {
-		int64_t chunk = pad.len;
-		if (pos + chunk > padTotal) chunk = padTotal - pos;
-		memcpy(result.p->data + s.len + pos, pad.p->data, chunk);
-		pos += chunk;
-	}
-	result.len = targetLen;
-	result.p->data[targetLen] = '\0';
+	int64_t rlen = s.len + msPadEmitUnits(result.p->data + s.len, pad, padUnits);
+	result.len = rlen;
+	result.p->data[rlen] = '\0';
 	return result;
 }
 
