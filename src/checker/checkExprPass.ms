@@ -4011,6 +4011,7 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 // Same metadata as importSymFromRegistry, but NOT defined in any scope.
 function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symbol {
 	const sym = makeSymbolState(expInfo.name, expInfo.kind, expInfo.symType, false, SymbolState.Shaped);
+	setFlag(sym, SymbolFlag.Imported);
 	sym.modulePath = expInfo.definingModule !== "" ? expInfo.definingModule : sourcePath;
 	if (expInfo.originalName !== "") sym.originalName = expInfo.originalName;
 	if (expInfo.nativeName !== "") sym.nativeName = expInfo.nativeName;

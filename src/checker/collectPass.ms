@@ -594,6 +594,7 @@ export function importSymFromRegistry(
 	nameLoc: SourceLocation, defNode: Node
 ): Symbol {
 	const sym = makeSymbol(alias, exportInfo.kind, exportInfo.symType, false);
+	setFlag(sym, SymbolFlag.Imported);
 	// Imported symbols are already shaped by the defining module. Marking
 	// Shaped prevents ensureShaped from re-running resolveAnnotation on the
 	// original declNode in the importer's ctx — that lookup fails for types
