@@ -51,8 +51,10 @@ msc run examples/actorSpawnBasic.ms
 # Compile to C only (no run)
 msc build examples/actorSpawnBasic.ms --target=c
 
-# Build the optimized self-host compiler binary → ./msc
-# (macOS: must use Apple clang — zig cc can't LTO on Mach-O)
+# Build the optimized self-host compiler binary → ./msc.
+# This exact line is THE build command: macOS is the team's primary dev
+# platform, and there --cc=clang is required, not optional (LTO/Mach-O —
+# see "Build Optimization" below). On Linux/Windows drop --cc=clang.
 msc build src/index.ms --gc=drc --danger --cc=clang --output=msc
 
 # Sync the freshly built msc + support trees to ~/.metascript/
