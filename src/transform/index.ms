@@ -35,6 +35,7 @@ import { createTransformContextWithChecker } from "./context";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerObjectLiteralComplete } from "./coercion/objectLiteralComplete";
+import { lowerStringLengthJS } from "./coercion/stringLengthJS";
 import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
 import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
@@ -127,6 +128,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// them (fixes `const has = provide(path).ok` leaking the Result). C/DRC only.
 	if (!jsBackend) { result = lowerCallHoist(result, ctx); }
 	result = lowerBuiltins(result, ctx);
+	if (jsBackend) { result = lowerStringLengthJS(result, ctx); }
 	result = lowerCStringConv(result, ctx);
 	result = lowerOperators(result, ctx);
 	result = lowerStringOps(result, ctx);
