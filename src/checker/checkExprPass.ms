@@ -2110,7 +2110,7 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	// rejection is intentionally NOT applied — see NIM-REF.md row 72 (terminal
 	// design; two intentional divergences: TS non-null types + Ref→Ptr cursor).
 	if (isReinterpretUnsafe(exprType, formal)) {
-		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — memory layout differs (array element or shared field repr); a raw cast would reinterpret, not convert (convert explicitly or provide an as" + (formal.typeName !== "" ? formal.typeName.slice(0, 1).toUpperCase() + formal.typeName.slice(1, formal.typeName.length) : "X") + " extension)", expr.location.line, expr.location.column);
+		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — memory layout differs (array element, shared field, or function signature repr); a raw cast would reinterpret, not convert (convert explicitly or provide an as" + (formal.typeName !== "" ? formal.typeName.slice(0, 1).toUpperCase() + formal.typeName.slice(1, formal.typeName.length) : "X") + " extension)", expr.location.line, expr.location.column);
 	}
 	return expr;
 }
@@ -2978,11 +2978,31 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 					addError(ctx, "Argument " + String(pi) + ": unknown is not assignable to " + typeDisplayName(paramType) + " — narrow with an explicit cast", node.location.line, node.location.column);
 				}
 			}
-			if (paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
+			// Function-typed args ARE relation-checked (Nim paramTypesMatch checks
+			// every arg) EXCEPT literal lambdas — their params/return are typed
+			// CONTEXTUALLY from this formal at their own check site, and re-checking
+			// against a generic-containing formal false-positives (ec38c20 family).
+			const argIsFnValue = argTypes[pi].kind === TypeKind.Function
+				&& pi < d.arguments.length && d.arguments[pi] !== null
+				&& d.arguments[pi].kind !== NodeKind.ArrowFunction
+				&& d.arguments[pi].kind !== NodeKind.FunctionExpr;
+			const fnPairCheckable = argIsFnValue
+				&& paramType.kind === TypeKind.Function
+				&& !hasGenericParams(paramType);
+			const fnKindMismatch = argIsFnValue
+				&& paramType.kind !== TypeKind.Function && paramType.kind !== TypeKind.Unknown
+				&& paramType.kind !== TypeKind.GenericParam && !isMaybeType(paramType)
+				&& !hasGenericParams(paramType);
+			if (fnKindMismatch) {
+				const calleeName = getCalleeName(d.callee);
+				addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType), node.location.line, node.location.column);
+			}
+			if ((paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
 				&& paramType.kind !== TypeKind.Function
 				&& argTypes[pi].kind !== TypeKind.Unknown && argTypes[pi].kind !== TypeKind.Error
 				&& (argTypes[pi].kind !== TypeKind.Function
-					|| (isMaybeType(paramType) && findFirstGenericParamName(paramType) === ""))) {
+					|| (isMaybeType(paramType) && findFirstGenericParamName(paramType) === "")))
+				|| fnPairCheckable) {
 				// Maybe<T> coercion: f(42) / f(null) where f: (number | null) → ...
 				// Mirrors the fitNode wrap rule used for var-decl/return/assignment;
 				// call args go through this site instead of fitNode. Applied

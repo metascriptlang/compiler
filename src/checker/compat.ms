@@ -59,6 +59,19 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 		if (!sameElementRepr(source.typeReturn, target.typeReturn)) return true;
 		return isReinterpretUnsafe(source.typeReturn, target.typeReturn);
 	}
+	// Closures are raw-copied msClosure structs and the call site casts fn to the
+	// DECLARED signature — a numeric-repr mismatch in return/params calls through
+	// the wrong ABI (Nim tyProc: params AND return invariant, procParamTypeRel).
+	if (source.kind === TypeKind.Function) {
+		if (fnSlotReprMismatch(source.typeReturn, target.typeReturn)) return true;
+		const tParams = target.typeChildren;
+		let fi = 0;
+		for (const sp of source.typeChildren) {
+			if (fi < tParams.length && fnSlotReprMismatch(sp, tParams[fi])) return true;
+			fi += 1;
+		}
+		return false;
+	}
 	if (source.kind === TypeKind.Struct) {
 		if (source === target) return false;
 		if (source.typeName !== "" && source.typeName === target.typeName) return false;
@@ -426,6 +439,27 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	return false;
 }
 
+
+// Repr comparison for ONE slot (param or return) of a function signature.
+// Peels `X | null` to X first — a nullable ref is pointer-repr like X itself
+// (the TS-nullable DIVERGE-INTENTIONAL model), so RaiserContext vs
+// RaiserContext|null is NOT a mismatch; int32 vs number IS.
+function fnSlotReprMismatch(a: Type | null, b: Type | null): boolean {
+	a = skipModifier(a);
+	b = skipModifier(b);
+	if (a === null || b === null) return false;
+	if (b.kind === TypeKind.Union && a.kind !== TypeKind.Union && a.kind !== TypeKind.Null) {
+		const bn = nonNullMemberOfNullable(b);
+		if (bn !== null) return fnSlotReprMismatch(a, bn);
+	}
+	if (a.kind === TypeKind.Union && b.kind !== TypeKind.Union && b.kind !== TypeKind.Null) {
+		const an = nonNullMemberOfNullable(a);
+		if (an !== null) return fnSlotReprMismatch(an, b);
+	}
+	if (fieldReprMismatch(a, b)) return true;
+	return isReinterpretUnsafe(a, b);
+}
+
 // Function assignability: contravariant params, covariant return
 function isFunctionAssignable(source: Type | null, target: Type | null): boolean {
 	if (source === null || target === null) return false;
@@ -436,6 +470,17 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 		if (!isAssignable(target.typeChildren[i], sourceParam)) return false;
 		i += 1;
 	}
+	// Repr invariance (Nim tyProc: params AND return invariant via
+	// procParamTypeRel — conversions never apply inside proc types; the
+	// closure is raw-copied and the call site casts fn to the DECLARED
+	// signature, so a numeric-width change calls through the wrong ABI).
+	// Mirrors the sameElementRepr gate on Array/Span/Ptr elements above.
+	let ri = 0;
+	for (const sp of source.typeChildren) {
+		if (fnSlotReprMismatch(sp, target.typeChildren[ri])) return false;
+		ri += 1;
+	}
+	if (fnSlotReprMismatch(source.typeReturn, target.typeReturn)) return false;
 	// Check return (covariant)
 	if (source.typeReturn !== null && target.typeReturn !== null) {
 		return isAssignable(source.typeReturn, target.typeReturn);
