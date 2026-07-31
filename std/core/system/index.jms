@@ -18,6 +18,14 @@ export class Result<T, E> {
 	static extern err(e: E): Result<T, E>;
 }
 
+export class Error {
+	message: string;
+
+	constructor(message: string) {
+		this.message = message;
+	}
+}
+
 export class AbortSignal {
 	aborted: boolean;
 	reason: string;
