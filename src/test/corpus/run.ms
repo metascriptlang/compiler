@@ -124,12 +124,12 @@ function stalenessWarning(): string {
 	const path = MSC.contains("/") ? MSC : shellOut("command -v " + MSC);
 	if (path == "" || !exists(path)) { return ""; }
 	const mtime = shellOut("stat -f %m '" + path + "' 2>/dev/null || stat -c %Y '" + path + "' 2>/dev/null");
-	const commit = shellOut("git log -1 --format=%ct -- src std runtime 2>/dev/null");
+	const commit = shellOut("git log -1 --format=%ct -- src std runtime ':!src/test' 2>/dev/null");
 	if (mtime == "" || commit == "") { return ""; }
 	const age = (commit.parseInt() - mtime.parseInt()) / 60;
 	if (age <= 0) { return ""; }
-	const when = shellOut("git log -1 --format=%h' '%s -- src std runtime 2>/dev/null");
-	return "STALE COMPILER: " + path + " is " + age.toString() + " min older than the last commit touching src/std/runtime (" + when + ") — every verdict below describes the OLD compiler; rebuild before believing any red";
+	const when = shellOut("git log -1 --format=%h' '%s -- src std runtime ':!src/test' 2>/dev/null");
+	return "STALE COMPILER: " + path + " is " + age.toString() + " min older than the last commit touching src/std/runtime (excl. src/test) (" + when + ") — every verdict below describes the OLD compiler; rebuild before believing any red";
 }
 
 function laneUniverse(spec: Spec): string[] {
