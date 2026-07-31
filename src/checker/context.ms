@@ -933,6 +933,7 @@ export class CheckerContext {
 	inTryExpr: boolean;          // true when checking tryArg of TryExpr or body of TryCatchStmt (V2 await guard)
 	genericInstDepth: int32;     // recursion depth for on-demand instantiation (limit 50)
 	generatedInstances: Node[];  // on-demand instantiated function ASTs to inject into program
+	pendingEnumToStrings: Type[]; // enum types whose _toString def must be injected in this module (recorded at lowering sites; enums reachable only via imported field types are not in module scope)
 	preludeCtx: CheckerContext;  // access private prelude symbols during instantiation
 }
 
@@ -979,6 +980,7 @@ export function createContext(): CheckerContext {
 		inTryExpr: false,
 		genericInstDepth: 0,
 		generatedInstances: [],
+		pendingEnumToStrings: [],
 		preludeCtx: null as unknown as CheckerContext,
 	};
 }
@@ -989,6 +991,14 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 	ctx.currentModule = mod;
 	ctx.modulePath = mod.path;
 	return ctx;
+}
+
+export function requestEnumToString(cc: CheckerContext, t: Type): void {
+	if (cc === null || t === null || t.typeName === "") return;
+	for (const e of cc.pendingEnumToStrings) {
+		if (e.typeName === t.typeName) return;
+	}
+	cc.pendingEnumToStrings.push(t);
 }
 
 // Create context with a shared IdentCache (one cache per compilation).

@@ -838,6 +838,17 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.nodeType = unknownType();
 				node.nodeType = unknownType(); return;
 			}
+			// Enum reverse index E[v]: TS numeric-enum reverse mapping, value → member-name string.
+			// Base must be the enum TYPE symbol itself (not a value of enum type).
+			if (d.array.kind === NodeKind.Identifier && d.array.resolvedSym !== null
+					&& d.array.resolvedSym.symbolKind === SymbolKind.Enum) {
+				const revIdxType = d.index !== null ? d.index.nodeType : null;
+				if (revIdxType === null || !(isNumeric(revIdxType) || revIdxType.kind === TypeKind.Enum)) {
+					addError(ctx, "enum reverse index '" + typeDisplayName(arrType) + "[...]' expects a numeric or enum operand", node.location.line, node.location.column);
+					node.nodeType = errorType(); return;
+				}
+				node.nodeType = stringType(); return;
+			}
 			// HashMap<K,V> subscript: mutate `m[k]` into the method-call form `m.get(k)`
 			// so the existing extension resolution (checkMemberExpr → checkCallExpr)
 			// sets up NodeFlag.ExtCall + resolvedSym, and extensionMethodLower later
