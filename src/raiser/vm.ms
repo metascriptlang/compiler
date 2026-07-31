@@ -1,5 +1,5 @@
 // Raiser VM — Bytecode executor
-// If/else dispatch loop. C backend has optional computed-goto fast path (vm_dispatch.c).
+// If/else dispatch loop. C backend has optional computed-goto fast path (vmDispatch.c).
 
 import {
 	RaiserOpcode, RaiserInstruction,
@@ -855,7 +855,7 @@ function vmCmpBranchF64(vm: RaiserVM, inst: RaiserInstruction, cmpOp: number): v
 
 // --- Bitwise handlers ---
 
-// Bitwise ops are handled entirely in C dispatch (vm_dispatch.c)
+// Bitwise ops are handled entirely in C dispatch (vmDispatch.c)
 // using int64_t casts — MetaScript fallback not needed.
 
 // --- CallHost handler ---

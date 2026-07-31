@@ -71,7 +71,7 @@ No fundamental blocker found.
 
 ### Phase 0 — Working baseline (DONE)
 
-52 opcodes; generic boxed `RaiserValue` register file; computed-goto C dispatch via `vm_dispatch.c`; 1959 tests across rgen + eval. Sufficient for comptime macro execution and small REPL programs. Rough perf: ~50× of C — dominated by per-op heap allocation and pointer indirection.
+52 opcodes; generic boxed `RaiserValue` register file; computed-goto C dispatch via `vmDispatch.c`; 1959 tests across rgen + eval. Sufficient for comptime macro execution and small REPL programs. Rough perf: ~50× of C — dominated by per-op heap allocation and pointer indirection.
 
 ### Phase 1 — Untagged typed registers (SPIKED — see `spike/`)
 
@@ -83,7 +83,7 @@ No fundamental blocker found.
 | 2 | `intVal: number` is f64 internally — integer math goes through FPU | `value.ms` |
 | 3 | Every arithmetic op heap-allocates a fresh value (`raiserInt(...)`) | `vm.ms` AddI64 etc. |
 | 4 | `Move` allocates + `copyValueInto` instead of pointer copy | `vm.ms` |
-| 5 | Each `RaiserInstruction` compiles to ~32 bytes of C struct | `vm_dispatch.c` |
+| 5 | Each `RaiserInstruction` compiles to ~32 bytes of C struct | `vmDispatch.c` |
 | 6 | `LoadField` does linear-scan + string compare on object fields | `value.ms:319` |
 | 7 | I32/F32 typed opcodes documented but unimplemented; only I64/F64 exist | `vm.ms` dispatch |
 
@@ -134,7 +134,7 @@ Implement I32/U32/U64/F32 variants currently only on paper. Compiler `kind` info
 
 ### Phase 4 — Threaded dispatch (PLANNED)
 
-Tighten `vm_dispatch.c` to direct-threaded code (next-instruction loaded inside each handler, no central `while` loop). Expected speedup: 1.3×.
+Tighten `vmDispatch.c` to direct-threaded code (next-instruction loaded inside each handler, no central `while` loop). Expected speedup: 1.3×.
 
 ---
 
@@ -201,7 +201,7 @@ src/raiser/
   value.ms           -- RaiserValue (boxed today, target untagged), array/object heaps
   module.ms          -- RaiserFunction, RaiserModule, accessors
   vm.ms              -- if/else dispatch loop, boxed register file (Phase 0)
-  vm_dispatch.c      -- computed-goto C dispatch (mirrors vm.ms layout exactly)
+  vmDispatch.c      -- computed-goto C dispatch (mirrors vm.ms layout exactly)
   disasm.ms          -- bytecode pretty-printer
   repl.ms            -- REPL skeleton — to be expanded into IDE backend (Phase 2/3)
   spike/
@@ -260,9 +260,9 @@ while (!vm.halted) {
 }
 ```
 
-### Computed-goto fast path (`vm_dispatch.c`)
+### Computed-goto fast path (`vmDispatch.c`)
 
-`vm_dispatch.c` mirrors `vm.ms`/`value.ms`/`module.ms` struct layout exactly (see `_RD_*` typedefs in the file). Any field change in those `.ms` files breaks the C dispatch — keep them in sync. Opcode numeric values are mirrored at the top of the C file.
+`vmDispatch.c` mirrors `vm.ms`/`value.ms`/`module.ms` struct layout exactly (see `_RD_*` typedefs in the file). Any field change in those `.ms` files breaks the C dispatch — keep them in sync. Opcode numeric values are mirrored at the top of the C file.
 
 ---
 

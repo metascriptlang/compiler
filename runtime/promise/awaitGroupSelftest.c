@@ -6,9 +6,9 @@
  *     cc -std=c11 -Wall -Wextra -O2 -pthread \
  *        -I runtime \
  *        runtime/promise/awaitGroup.c \
- *        runtime/promise/awaitGroup_selftest.c \
- *        -o awaitGroup_selftest
- *     ./awaitGroup_selftest
+ *        runtime/promise/awaitGroupSelftest.c \
+ *        -o awaitGroupSelftest
+ *     ./awaitGroupSelftest
  *
  * Exercises:
  *   T1 zero-sized group (pending == 0 from the start)

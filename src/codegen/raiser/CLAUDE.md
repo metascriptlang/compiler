@@ -163,7 +163,7 @@ src/codegen/raiser/         src/raiser/
     generates ──────────→  RaiserModule
     (bytecode.ms types)     (executes bytecode)
                                    │
-                            vm_dispatch.c (computed goto)
+                            vmDispatch.c (computed goto)
                             dispatch.h (C FFI header)
                             vm.ms (MetaScript fallback for objects/strings/calls)
 ```
