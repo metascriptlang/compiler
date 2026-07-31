@@ -13,7 +13,10 @@ export extern function includes<T>(this arr: T[], value: T): boolean from "#.inc
 export extern function slice<T>(this arr: T[], start: number, end: number): T[] from "#.slice(#, #)";
 export extern function concat<T>(this arr: T[], other: T[]): T[] from "#.concat(#)";
 export extern function reverse<T>(this arr: T[]): void from "#.reverse()";
-export extern function sort<T>(this arr: T[]): void from "#.sort()";
+// Typed overloads mirroring index.cms — bare native sort() is LEXICOGRAPHIC,
+// wrong for numbers.
+export extern function sort(this arr: number[]): void from "#.sort((a, b) => a - b)";
+export extern function sort(this arr: string[]): void from "#.sort()";
 export extern function fill<T>(this arr: T[], value: T): void from "#.fill(#)";
 export extern function join<T>(this arr: T[], sep: string): string from "#.join(#)";
 export extern function splice<T>(this arr: T[], start: number, deleteCount: number): void from "#.splice(#, #)";
