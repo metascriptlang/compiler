@@ -8,7 +8,7 @@
 // Fallback path: walk AST programStmts (for tests without checker context).
 
 import { Node, NodeKind, ProgramData, EnumDeclData, ExportDeclData, TypeKind, SymbolKind } from "../../ast/node";
-import { TransformContext } from "../context";
+import { TransformContext, NameSet, createNameSet, nameSetContains, nameSetAdd } from "../context";
 import {
 	makeSwitch, makeSwitchCase, makeReturn, makeString, makeNumber,
 	makeIdent, makeBlock, makeFnDecl, enumToStringName,
@@ -129,16 +129,27 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 	// in the module scope (table.current), not the root global scope.
 	if (ctx !== null && ctx.checkerCtx !== null && ctx.checkerCtx.table !== null) {
 		const toStringFns: Node[] = [];
+		const injected: NameSet = createNameSet();
 		let scope = ctx.checkerCtx.table.current;
 		while (scope !== null) {
 			for (const sym of scope.symbols.values()) {
 				if (sym.symbolKind === SymbolKind.Enum && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Enum) {
 					const t = sym.symbolType;
+					if (nameSetContains(injected, t.typeName)) continue;
+					nameSetAdd(injected, t.typeName);
 					toStringFns.push(makeEnumToString(t.typeName, t.typeNames, sym.location));
 				}
 			}
 			scope = scope.parent;
 		}
+		// Lowering sites (builtinLower/debugLower) request enums that are not in
+		// module scope — e.g. reached only through an imported field's type.
+		for (const t of ctx.checkerCtx.pendingEnumToStrings) {
+			if (t.kind !== TypeKind.Enum || nameSetContains(injected, t.typeName)) continue;
+			nameSetAdd(injected, t.typeName);
+			toStringFns.push(makeEnumToString(t.typeName, t.typeNames, program.location));
+		}
+		ctx.checkerCtx.pendingEnumToStrings = [];
 		// Append to program stmts via return-value move (avoids local array aliasing)
 		program.data = { programStmts: concatStmts(pd.programStmts, toStringFns) };
 		return program;

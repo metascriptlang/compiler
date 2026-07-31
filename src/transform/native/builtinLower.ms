@@ -12,9 +12,9 @@
 // JSON serialization is now user-land via std/serialize/json macros — no @builtin
 // kinds remain for JSON-related rewrites here.
 
-import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
 import { isNumeric, createResult, createArray, createPrimitive, stringType, unknownType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType } from "../../checker/types";
-import { findExtension } from "../../checker/context";
+import { findExtension, requestEnumToString } from "../../checker/context";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import {
@@ -40,6 +40,10 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		// arr.length = n → msXxxArraySetLen(&arr, n)
 		if (node.kind === NodeKind.BinaryExpr) {
 			return lowerLengthAssign(node, ctx);
+		}
+		// E[v] → E_toString(v) (enum reverse index)
+		if (node.kind === NodeKind.ArrayAccess) {
+			return lowerEnumReverseIndex(node, ctx);
 		}
 		return node;
 	});
@@ -86,6 +90,30 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	return node;
 }
 
+// ===== Enum Reverse Index =====
+// E[v] → E_toString(v). The checker typed the ArrayAccess as string and
+// verified the base resolves to the enum TYPE symbol. JS keeps the source
+// form (flat-constant enum emission has no reverse map yet — TSGAP).
+
+function lowerEnumReverseIndex(node: Node, ctx: TransformContext): Node {
+	if (ctx.jsBackend) return node;
+	const d = node.data as ArrayAccessData;
+	if (d.array === null || d.index === null || d.array.kind !== NodeKind.Identifier) return node;
+	const sym = d.array.resolvedSym;
+	if (sym === null || sym.symbolKind !== SymbolKind.Enum) return node;
+	const t = sym.symbolType;
+	if (t === null || t.kind !== TypeKind.Enum || t.typeName === "") return node;
+	if (ctx.checkerCtx !== null) requestEnumToString(ctx.checkerCtx, t);
+	const loc = node.location;
+	let idx = d.index;
+	if (idx.nodeType !== null && idx.nodeType.kind === TypeKind.Number) {
+		idx = makeHiddenStdConv(idx, createPrimitive(TypeKind.Int32), loc);
+	}
+	const call = makeCall(makeIdent(enumToStringName(t.typeName), loc), [idx], loc);
+	call.nodeType = stringType();
+	return call;
+}
+
 // ===== Universal .toString() =====
 // Every type has a compiler-provided default. User extensions take priority.
 // Resolution: user extension > number > boolean > enum > string > struct/class > array > fallback
@@ -117,6 +145,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	}
 	// Enum → EnumName_toString
 	if (tk === TypeKind.Enum && objType.typeName !== "") {
+		if (ctx.checkerCtx !== null) requestEnumToString(ctx.checkerCtx, objType);
 		const call = makeCall(makeIdent(enumToStringName(objType.typeName), loc), [obj], loc);
 		call.nodeType = stringType();
 		return call;

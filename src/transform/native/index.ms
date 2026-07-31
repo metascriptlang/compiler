@@ -29,8 +29,10 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	result = markClosureCalls(result, ctx);
 	result = injectRangeChecks(result, ctx);
 	result = coerceOptionals(result, ctx);
-	result = lowerEnumToString(result, ctx);
 	result = lowerBuiltins(result, ctx);
 	result = lowerStringOps(result, ctx);
+	// Last: injection must run after every pass that can request an Enum_toString
+	// (builtinLower/debugLower here + the stage-1 lowerBuiltins run in transformProgram).
+	result = lowerEnumToString(result, ctx);
 	return result;
 }
