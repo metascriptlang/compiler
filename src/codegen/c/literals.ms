@@ -10,44 +10,37 @@ import { Type, TypeKind } from "../../ast/node";
 // ===== C String Escaping =====
 // Produces a C-compatible escaped string literal body (without quotes).
 
-function isHexByte(b: number): boolean {
-	return (b >= "0".code && b <= "9".code) || (b >= "a".code && b <= "f".code) || (b >= "A".code && b <= "F".code);
+// Port of Nim's toCChar (compiler/msgs.nim): every byte outside printable ASCII
+// is emitted as a 3-digit OCTAL escape. C hex escapes have no length bound, so
+// "\\xC3" followed by a hex digit parses as one out-of-range escape; octal is
+// self-terminating after 3 digits.
+function octalEscape(b: number): string {
+	return "\\" + ((b >> 6) & 7).toString() + ((b >> 3) & 7).toString() + (b & 7).toString();
 }
 
-// Detect a literal \xHH sequence at byte offset i.
-function isHexEscapeAt(s: string, i: number): boolean {
-	return s.byteAt(i) === "\\".code && i + 3 < s.byteLength
-		&& s.byteAt(i + 1) === "x".code
-		&& isHexByte(s.byteAt(i + 2)) && isHexByte(s.byteAt(i + 3));
-}
-
-// BYTE-PURE walk (both functions): indexes here are UTF-8 byte offsets, so only
-// the byte tier (byteAt/byteLength/byteSlice — host-uniform) may be used.
-// charAt/slice are UTF-16-unit APIs: past the first non-ASCII character a byte
-// offset reads the wrong position, and the emitted literal length drifts
-// (the gen-2 string-corruption bug). All escape-relevant bytes are ASCII, so
-// byte comparison is exact; plain bytes are copied in RUNS so multi-byte UTF-8
-// sequences stay intact through byteSlice.
+// BYTE-PURE walk: indexes here are UTF-8 byte offsets, so only the byte tier
+// (byteAt/byteLength/byteSlice — host-uniform) may be used. charAt/slice are
+// UTF-16-unit APIs: past the first non-ASCII character a byte offset reads the
+// wrong position (the gen-2 string-corruption bug). Plain bytes are copied in
+// RUNS so multi-byte UTF-8 sequences stay intact through byteSlice.
 export function escapeCString(s: string): string {
 	let result = "";
 	let runStart = 0;
 	let i = 0;
 	while (i < s.byteLength) {
 		const b = s.byteAt(i);
-		if (isHexEscapeAt(s, i)) {
-			// Hex escape \xHH — pass through as-is for C (stays in the plain run)
-			i += 4;
-		} else if (b === "\\".code || b === "\"".code || b === "\n".code
-				|| b === "\r".code || b === "\t".code || b === 0 || b === "?".code) {
+		if (b < 32 || b >= 127 || b === "\\".code || b === "\"".code
+				|| b === "'".code || b === "?".code) {
 			if (runStart < i) result = result + s.byteSlice(runStart, i);
 			result = result + match (b) {
 				"\\".code => "\\\\",
 				"\"".code => "\\\"",
+				"'".code => "\\'",
+				"?".code => "\\?",
 				"\n".code => "\\n",
 				"\r".code => "\\r",
 				"\t".code => "\\t",
-				0 => "\\0",
-				_ => "\\?",
+				_ => octalEscape(b),
 			};
 			i += 1;
 			runStart = i;
@@ -59,23 +52,10 @@ export function escapeCString(s: string): string {
 	return result;
 }
 
-// Compute actual C byte count for a string that may contain \xHH escape sequences.
-// In our representation, \xHH is 4 bytes of source but compiles to 1 byte in C;
-// every other byte (including each byte of a multi-byte UTF-8 sequence) is
-// exactly one C byte.
+// Escapes are decoded by the lexer, so a token value is already pure UTF-8 bytes
+// and each byte is exactly one C byte.
 export function cStringByteLen(s: string): number {
-	let len = 0;
-	let i = 0;
-	while (i < s.byteLength) {
-		if (isHexEscapeAt(s, i)) {
-			len += 1;
-			i += 4;
-		} else {
-			len += 1;
-			i += 1;
-		}
-	}
-	return len;
+	return s.byteLength;
 }
 
 // Wrap in C string literal quotes
@@ -267,18 +247,22 @@ test "true/false" {
 
 test "null" { assert cNullLiteral() === "MS_NIL"; }
 
-test "hex escape passthrough" {
+test "backslash-x sequence has its backslash escaped" {
 	const backslash = "\\";
 	const esc = backslash + "x1b[";
-	assert escapeCString(esc) === esc;
-	const embedded = "hi" + backslash + "x0ayo";
-	assert escapeCString(embedded) === embedded;
+	assert escapeCString(esc) === backslash + backslash + "x1b[";
+}
+
+test "control and non-ascii bytes emit octal escapes" {
+	assert escapeCString(fromCodePoint(27) + "[") === "\\033[";
+	assert escapeCString("hi" + fromCodePoint(10) + "yo") === "hi\\nyo";
+	assert escapeCString(fromCodePoint(233)) === "\\303\\251";
 }
 
 test "cStringByteLen plain" { assert cStringByteLen("hello") === 5; }
 
-test "cStringByteLen hex escape" {
+test "cStringByteLen counts raw bytes" {
 	const backslash = "\\";
-	assert cStringByteLen(backslash + "x1b[") === 2;
-	assert cStringByteLen(backslash + "x1b[0m") === 4;
+	assert cStringByteLen(backslash + "x1b[") === 5;
+	assert cStringByteLen(fromCodePoint(27) + "[0m") === 4;
 }
