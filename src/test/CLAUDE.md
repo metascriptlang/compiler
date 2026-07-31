@@ -642,9 +642,14 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
   (directive head, NNN-topic numbering, RC-stress shapes). New programs
   should prefer parity (no @stdout) over @stdout-contains; strip @stdout
   from migrated deterministic programs over time to upgrade them to
-  byte-compare. Cluster census (2026-07-31, 76 programs): 0xx=4, 1xx=5,
-  2xx=10, 3xx=5, 4xx=13, **5xx=0**, 6xx=31, 7xx=8 — next by value is
+  byte-compare. Cluster census (2026-07-31, 80 programs): 0xx=4, 1xx=5,
+  2xx=13, 3xx=5, 4xx=13, **5xx=1**, 6xx=31, 7xx=8 — next by value is
   5xx std (Map/Array/JSON/fs).
+  - 24x match-lowering landed 2026-07-31 (`240-matchShadowUninit`,
+    `241-matchShadowBothRun`, `242-matchShadowOrderSwap`) — proven red
+    pre-fix (241 exit=133 on all three native lanes): lowered
+    `const x = match(...)` lost its checker symbol and collided with a
+    same-named sibling `let` in the hoisted C slot.
   - 3xx closures landed 2026-07-31 (`300-closureBasics`,
     `301-closureMutation`, `302-closureEscape`, `303-closureShared`,
     `304-closureChurn`) — all parity incl. js (loop-capture is
