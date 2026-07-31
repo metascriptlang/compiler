@@ -13,7 +13,7 @@
 // Or-patterns [p1, p2] → $m === p1 || $m === p2
 // Binding patterns (identifier) → const name = $m; prepended to body
 
-import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type, SymbolKind, isEmptyBlock } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type, Symbol, SymbolKind, isEmptyBlock } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, containsExprKind, replaceInExpr } from "../walker";
 import {
@@ -50,7 +50,7 @@ function hoistNestedMatch(expr: Node, hoisted: Node[], ctx: TransformContext): N
 		hoisted.push(letDecl);
 
 		// if-chain assigning to $matchres_N
-		hoisted.push(buildIfChain(matchData.matchCases, matchSym.name, discType, loc, "assign", resultSym.name, ctx));
+		hoisted.push(buildIfChain(matchData.matchCases, matchSym.name, discType, loc, "assign", resultSym.name, resultSym, ctx));
 
 		// Replace MatchExpr with $matchres_N
 		return makeIdentResolved(resultSym, loc);
@@ -130,7 +130,7 @@ export function lowerMatchStmt(matchNode: Node, ctx: TransformContext): Node[] {
 	const discType = d.matchStmtDisc.nodeType;
 
 	// Build if-else chain from cases
-	const ifChain = buildIfChain(d.matchStmtCases, tempName, discType, loc, "stmt", "", ctx);
+	const ifChain = buildIfChain(d.matchStmtCases, tempName, discType, loc, "stmt", "", null, ctx);
 	result.push(ifChain);
 
 	return result;
@@ -148,7 +148,7 @@ function lowerMatchExprAsStmt(matchNode: Node, ctx: TransformContext): Node[] {
 	matchDecl.resolvedSym = matchSym;
 	result.push(matchDecl);
 	const discType = d.matchDisc.nodeType;
-	const ifChain = buildIfChain(d.matchCases, tempName, discType, loc, "stmt", "", ctx);
+	const ifChain = buildIfChain(d.matchCases, tempName, discType, loc, "stmt", "", null, ctx);
 	result.push(ifChain);
 	return result;
 }
@@ -171,12 +171,13 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 	// let x; (uninitialized, to be assigned in each branch)
 	const placeholder = makeNull(loc);
 	const letDecl = makeVarDecl(varData.declName, placeholder, DeclKind.Let, loc);
+	letDecl.resolvedSym = stmt.resolvedSym;
 	if (stmt.nodeType !== null) {
 		letDecl.nodeType = stmt.nodeType;
 	}
 	result.push(letDecl);
 	// if-chain with assignment: x = armValue
-	const ifChain = buildIfChain(matchData.matchCases, tempName, discType, loc, "assign", varData.declName, ctx);
+	const ifChain = buildIfChain(matchData.matchCases, tempName, discType, loc, "assign", varData.declName, stmt.resolvedSym, ctx);
 	result.push(ifChain);
 
 	return result;
@@ -198,7 +199,7 @@ function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
 	result.push(matchDecl);
 	const discType = matchData.matchDisc.nodeType;
 	// if-chain with return: return armValue
-	const ifChain = buildIfChain(matchData.matchCases, tempName, discType, loc, "return", "", ctx);
+	const ifChain = buildIfChain(matchData.matchCases, tempName, discType, loc, "return", "", null, ctx);
 	result.push(ifChain);
 
 	return result;
@@ -239,7 +240,7 @@ function canUseSwitchDispatch(cases: Node[], discType: Type): boolean {
 
 // Build switch dispatch for enum/int patterns with guard support.
 // Groups same-pattern arms with different guards into one switch case.
-function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, ctx: TransformContext): Node {
+function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, assignSym: Symbol | null, ctx: TransformContext): Node {
 	// Build default body from wildcards: process unguarded first (base), then guarded (wrap).
 	// This ensures: _ when g1 => b1, _ when g2 => b2, _ => b3
 	// becomes: if (g1) { b1 } else if (g2) { b2 } else { b3 }
@@ -247,7 +248,7 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 	for (let wi = cases.length - 1; wi >= 0; wi -= 1) {
 		const wd = cases[wi].data as MatchCaseData;
 		if (!isWildcard(wd.casePatterns)) continue;
-		const body = wrapArmBody(wd.caseBody, mode, varName, loc);
+		const body = wrapArmBody(wd.caseBody, mode, varName, assignSym, loc);
 		if (wd.caseGuard !== null) {
 			defaultBody = makeIf(wd.caseGuard, body, defaultBody, loc);
 		} else {
@@ -319,7 +320,7 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 			}
 		}
 
-		const armBody = wrapArmBody(caseData.caseBody, mode, varName, loc);
+		const armBody = wrapArmBody(caseData.caseBody, mode, varName, assignSym, loc);
 
 		if (mergedInto >= 0) {
 			armGuards[mergedInto].push(caseData.caseGuard);
@@ -382,15 +383,15 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 	return makeBlock(stmts, loc);
 }
 
-function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, ctx: TransformContext): Node {
+function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, assignSym: Symbol | null, ctx: TransformContext): Node {
 	// String hash dispatch for >8 string cases
 	if (isAllStringCases(cases)) {
-		return buildHashSwitch(cases, tempName, discType, loc, mode, varName, ctx);
+		return buildHashSwitch(cases, tempName, discType, loc, mode, varName, assignSym, ctx);
 	}
 
 	// Switch dispatch for enum/int discriminants (O(1) jump table in C)
 	if (canUseSwitchDispatch(cases, discType)) {
-		return buildSwitchDispatch(cases, tempName, discType, loc, mode, varName, ctx);
+		return buildSwitchDispatch(cases, tempName, discType, loc, mode, varName, assignSym, ctx);
 	}
 
 	// Check if any case is a wildcard/binding — if not, last arm becomes the else
@@ -407,7 +408,7 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 		const caseData = caseNode.data as MatchCaseData;
 
 		// Wrap body based on mode
-		const body = wrapArmBody(caseData.caseBody, mode, varName, loc);
+		const body = wrapArmBody(caseData.caseBody, mode, varName, assignSym, loc);
 
 		if (isWildcard(caseData.casePatterns)) {
 			if (caseData.caseGuard !== null) {
@@ -454,7 +455,7 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 // Pushes the "result destination" (return or assignment) into terminal positions.
 // C has no expression-blocks — this makes each arm produce a statement-level result.
 
-function wrapArmBody(armBody: Node, mode: string, varName: string, loc: SourceLocation): Node {
+function wrapArmBody(armBody: Node, mode: string, varName: string, assignSym: Symbol | null, loc: SourceLocation): Node {
 	if (mode === "stmt") {
 		// Expression-form arms (=> expr) need wrapping in ExprStmt for codegen.
 		// Block-form arms (=> { ... }) are already BlockStmt — pass through.
@@ -466,12 +467,12 @@ function wrapArmBody(armBody: Node, mode: string, varName: string, loc: SourceLo
 		}
 		return armBody;
 	}
-	return moveInto(armBody, mode, varName, loc);
+	return moveInto(armBody, mode, varName, assignSym, loc);
 }
 
 // Recursive: walks into blocks and if-else to find terminal expressions.
 // Returns a new node with return/assign inserted at every terminal position.
-function moveInto(node: Node, mode: string, varName: string, loc: SourceLocation): Node {
+function moveInto(node: Node, mode: string, varName: string, assignSym: Symbol | null, loc: SourceLocation): Node {
 	// BlockStmt: keep leading stmts, moveInto the last one
 	if (node.kind === NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
@@ -482,15 +483,15 @@ function moveInto(node: Node, mode: string, varName: string, loc: SourceLocation
 			newStmts.push(bd.statements[si]);
 			si = si + 1;
 		}
-		newStmts.push(moveInto(bd.statements[bd.statements.length - 1], mode, varName, loc));
+		newStmts.push(moveInto(bd.statements[bd.statements.length - 1], mode, varName, assignSym, loc));
 		return makeBlock(newStmts, loc);
 	}
 	// IfStmt: recurse into both branches
 	if (node.kind === NodeKind.IfStmt) {
 		const d = node.data as IfStmtData;
-		d.consequent = moveInto(d.consequent, mode, varName, loc);
+		d.consequent = moveInto(d.consequent, mode, varName, assignSym, loc);
 		if (d.alternate !== null) {
-			d.alternate = moveInto(d.alternate, mode, varName, loc);
+			d.alternate = moveInto(d.alternate, mode, varName, assignSym, loc);
 		}
 		return node;
 	}
@@ -505,25 +506,26 @@ function moveInto(node: Node, mode: string, varName: string, loc: SourceLocation
 		if (mode === "return") return node;
 		const rd = node.data as ReturnStmtData;
 		if (rd.argument !== null) {
-			return emitResult(rd.argument, mode, varName, loc);
+			return emitResult(rd.argument, mode, varName, assignSym, loc);
 		}
 		return node;
 	}
 	// ExprStmt: unwrap and wrap in return/assign
 	if (node.kind === NodeKind.ExprStmt) {
 		const expr = (node.data as ExprStmtData).expr;
-		return emitResult(expr, mode, varName, loc);
+		return emitResult(expr, mode, varName, assignSym, loc);
 	}
 	// Bare expression (not wrapped in ExprStmt): wrap directly
-	return emitResult(node, mode, varName, loc);
+	return emitResult(node, mode, varName, assignSym, loc);
 }
 
 // Emit the final result: either return expr or varName = expr
-function emitResult(expr: Node, mode: string, varName: string, loc: SourceLocation): Node {
+function emitResult(expr: Node, mode: string, varName: string, assignSym: Symbol | null, loc: SourceLocation): Node {
 	if (mode === "return") {
 		return makeReturn(expr, loc);
 	}
-	return makeExprStmt(makeAssign(makeIdent(varName, loc), expr, loc), loc);
+	const lhs = assignSym !== null ? makeIdentResolved(assignSym, loc) : makeIdent(varName, loc);
+	return makeExprStmt(makeAssign(lhs, expr, loc), loc);
 }
 
 function prependToBody(decl: Node, body: Node, loc: SourceLocation): Node {
@@ -657,7 +659,7 @@ interface HashBucket {
 // Collision-safe: patterns sharing a hash are chained in the same case arm.
 // Return mode: matched arms `return`, so default body placed unconditionally after switch.
 // Stmt/assign mode: matched arms don't exit, so $matched flag guards the default body.
-function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, ctx: TransformContext): Node {
+function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, assignSym: Symbol | null, ctx: TransformContext): Node {
 	let defaultBody = makeBlock([], loc);
 	// return mode: matched arms exit via return — no flag needed, unconditional default is safe.
 	// stmt/assign mode: matched arms don't exit — need $matched flag to skip default.
@@ -683,7 +685,7 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 	for (let i = 0; i < cases.length; i += 1) {
 		const caseData = cases[i].data as MatchCaseData;
 		if (isWildcard(caseData.casePatterns)) {
-			defaultBody = wrapArmBody(caseData.caseBody, mode, varName, loc);
+			defaultBody = wrapArmBody(caseData.caseBody, mode, varName, assignSym, loc);
 			continue;
 		}
 
@@ -692,7 +694,7 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 			const strData = pat.data as StringLiteralData;
 			const hash = hashStringSigned(strData.value);
 
-			const body = wrapArmBody(caseData.caseBody, mode, varName, loc);
+			const body = wrapArmBody(caseData.caseBody, mode, varName, assignSym, loc);
 			let guardedBlock = body;
 			if (needsFlag) {
 				const setMatched = makeExprStmt(makeAssign(makeIdentResolved(matchedSym, loc), makeBool(true, loc), loc), loc);
