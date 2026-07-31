@@ -61,7 +61,6 @@ extern function msStaticCacheGet(slotId: int32): string;
 extern function msStaticCachePut(slotId: int32, sec: int64, source: string): void;
 
 // Zero-alloc hot path externs (Phase 1-4)
-extern function recvAll(this dest: string, fd: int32): int32 from "&msNetRecvAll";
 extern function buildResponseReuse(this dest: string, status: int32, st: string, ct: string, body: string): void from "&msBuildResponseReuse";
 extern function parsePathInto(this dest: string, data: string): void from "&msFastParsePathInto";
 extern function shiftLeft(this s: string, offset: int32): void from "&msStringShiftLeft";
