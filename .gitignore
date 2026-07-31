@@ -1,17 +1,45 @@
 .claude/
 .metascript-cache/
-.msc-cache/
 .DS_Store
 
 out/
 bin/
-examples/
+# examples/
+graphify-out/
 .zig-cache/
 zig-out/
 
 src/**/*.c
 !src/raiser/dispatch.c
+std/**/*.c
+
+/a.o
+/a.out
 
 vendor/*
 !vendor/mbedtls
 !vendor/monocypher
+!vendor/miniz
+.session-artifacts/
+
+# local compiler build artifacts (debug/bisect binaries + linker response files)
+msc-*
+*_link.rsp
+
+# secrets / local env
+.env
+.env.*
+*.zip
+
+# self-host compiler binaries (msc-* above only covers the suffixed variants)
+/msc
+/msc2
+/msc_nim
+/msc.lock
+
+# object files + foreign toolchain caches
+*.o
+nim-cache/
+
+# a mis-expanded ~ once created a nested copy of the repo here
+/Users/
