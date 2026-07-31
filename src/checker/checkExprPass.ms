@@ -660,6 +660,20 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					}
 				}
 			}
+			// Strings are immutable at the surface (docs/STRING-CONTRACT.md);
+			// the byte-mutation story is the uint8[] buffer tier.
+			if (isAsgn && d.left.kind === NodeKind.ArrayAccess) {
+				const sad = d.left.data as ArrayAccessData;
+				let strObjType = sad.array.nodeType;
+				if (strObjType !== null && strObjType.kind === TypeKind.Ref && strObjType.typeReturn !== null) {
+					strObjType = strObjType.typeReturn;
+				}
+				if (strObjType !== null && isStringLike(strObjType)) {
+					addError(ctx, "strings are immutable - mutate bytes via uint8[] (asBytes/asString) instead",
+						node.location.line, node.location.column);
+					node.nodeType = errorType(); return;
+				}
+			}
 			// HashMap<K,V> subscript write: `m[k] = v` → `m.set(k, v)`. Mutate the
 			// whole BinaryExpr into a method call so the existing extension
 			// resolution + lowering path handles it. Counterpart of the read-case
