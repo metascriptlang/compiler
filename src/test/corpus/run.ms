@@ -113,6 +113,62 @@ function readFileOr(path: string, dflt: string): string {
 	return dflt;
 }
 
+function shellOut(cmd: string): string {
+	return runCapture(cmd).output.trim();
+}
+
+// A binary older than the tree reports the PREVIOUS compiler's behaviour as
+// today's result — indistinguishable from a real product bug, and the more
+// sessions share the tree the likelier it gets (docs/TESTGAP.md T8).
+function stalenessWarning(): string {
+	const path = MSC.contains("/") ? MSC : shellOut("command -v " + MSC);
+	if (path == "" || !exists(path)) { return ""; }
+	const mtime = shellOut("stat -f %m '" + path + "' 2>/dev/null || stat -c %Y '" + path + "' 2>/dev/null");
+	const commit = shellOut("git log -1 --format=%ct -- src std runtime 2>/dev/null");
+	if (mtime == "" || commit == "") { return ""; }
+	const age = (commit.parseInt() - mtime.parseInt()) / 60;
+	if (age <= 0) { return ""; }
+	const when = shellOut("git log -1 --format=%h' '%s -- src std runtime 2>/dev/null");
+	return "STALE COMPILER: " + path + " is " + age.toString() + " min older than the last commit touching src/std/runtime (" + when + ") — every verdict below describes the OLD compiler; rebuild before believing any red";
+}
+
+function laneUniverse(spec: Spec): string[] {
+	if (spec.maxRssMb >= 0.0) { return ["drc", "orc", "danger", "san"]; }
+	const lanes: string[] = ["c", "orc", "danger", "san"];
+	if (!spec.skipJs) { lanes.push("js"); }
+	return lanes;
+}
+
+function listHas(items: string[], v: string): boolean {
+	for (const s of items) { if (s == v) { return true; } }
+	return false;
+}
+
+function joinWith(items: string[], sep: string): string {
+	let out = "";
+	for (const s of items) { out = out == "" ? s : out + sep + s; }
+	return out;
+}
+
+// A directive that cannot apply is a lie the runner used to keep (T9): removing
+// @skip-js from an @maxrss program reads as "js lane enabled" and enables
+// nothing. @xfail naming an impossible lane fails; inert @skip-js is reported
+// as one aggregate because it is a design call, not per-program neglect.
+function validateDirectives(specs: Spec[], t: Tally): string[] {
+	const inert: string[] = [];
+	for (const spec of specs) {
+		const lanes = laneUniverse(spec);
+		for (const lane of spec.xfailLanes) {
+			if (!listHas(lanes, lane)) {
+				progress("  ✗ " + spec.name + " [directives] — @xfail(" + lane + ") can never fire; this program's lanes are " + joinWith(lanes, "/"));
+				t.fails = t.fails + 1;
+			}
+		}
+		if (spec.skipJs && spec.maxRssMb >= 0.0) { inert.push(spec.name); }
+	}
+	return inert;
+}
+
 // ---- directive head ----
 
 function directiveValue(line: string, key: string): string {
@@ -482,9 +538,16 @@ function main(): void {
 	progress("");
 	const mode = SAN ? "SAN lane (ASan + slab-off + DRC ledger, drc)" : "parity + RSS lanes";
 	progress("Corpus tier — " + specs.length + " programs, " + jobs.length + " builds, " + mode + " (msc=" + MSC + ", slots=" + RUN_SLOTS + ")");
-	progress("");
 
 	const t: Tally = { fails: 0, xfails: 0, xpasses: 0, passes: 0 };
+
+	const stale = stalenessWarning();
+	if (stale != "") { progress(""); progress("  !! " + stale); }
+	const inertSkipJs = validateDirectives(specs, t);
+	if (inertSkipJs.length > 0) {
+		progress("  !! " + inertSkipJs.length + " programs carry @skip-js under @maxrss — INERT: @maxrss programs never get a js cell, so the marker enables and disables nothing");
+	}
+	progress("");
 	const running: Cell[] = [];
 	const pendingSerial: Cell[] = [];
 	const parityDone: Cell[] = [];
@@ -541,6 +604,7 @@ function main(): void {
 	}
 
 	progress("");
+	if (stale != "") { progress("  !! " + stale); progress(""); }
 	const summary = t.passes + " pass · " + t.fails + " fail · " + t.xfails + " xfail · " + t.xpasses + " xpass";
 	progress("  " + summary);
 	console.log(summary);
