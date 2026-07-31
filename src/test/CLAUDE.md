@@ -642,10 +642,20 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
   (directive head, NNN-topic numbering, RC-stress shapes). New programs
   should prefer parity (no @stdout) over @stdout-contains; strip @stdout
   from migrated deterministic programs over time to upgrade them to
-  byte-compare. Cluster census (2026-07-30, 71 programs): 0xx=4, 1xx=5,
-  2xx=10, **3xx=0**, 4xx=13, **5xx=0**, 6xx=31, 7xx=8 — next by value are
-  3xx closures (the lambda-lifting mechanism behind the 702 bug, no
-  coverage) then 5xx std (Map/Array/JSON/fs).
+  byte-compare. Cluster census (2026-07-31, 76 programs): 0xx=4, 1xx=5,
+  2xx=10, 3xx=5, 4xx=13, **5xx=0**, 6xx=31, 7xx=8 — next by value is
+  5xx std (Map/Array/JSON/fs).
+  - 3xx closures landed 2026-07-31 (`300-closureBasics`,
+    `301-closureMutation`, `302-closureEscape`, `303-closureShared`,
+    `304-closureChurn`) — all parity incl. js (loop-capture is
+    per-iteration on BOTH backends; env ledger types `dollarEnv_*`
+    balance exactly). Found two compiler bugs on the way: a local named
+    `log` CAPTURED by a closure marks the prelude `console.log` extern
+    alive and its TU emits `static void log(...)` colliding with math.h
+    (capture-free `log` locals are fine — probe /tmp/log-collide); and
+    `new Error(...)` is `Undefined variable 'Error'` under `--target=js`
+    while every C lane accepts it (corpus convention throws strings, so
+    only the JS worklist is affected).
   - Float-formatting blocker CLEARED 2026-07-30: all 20 probed cases
     already agree (the C runtime implements ECMAScript
     `Number::toString`, not printf `%g`), pinned by `012-floatFormat`.
