@@ -145,7 +145,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 	// Module-qualified name (Standard reference implementation parity)
 	const isMain = d.fnName === "main";
-	const isExternFn = sym !== null && hasFlag(sym, SymbolFlag.ImportC);
+	const isExternFn = (sym !== null && hasFlag(sym, SymbolFlag.ImportC)) || d.fnFlags === "extern" || d.fnFlags.indexOf("extern", 0) >= 0;
 	const ovIdx = sym !== null ? sym.overloadIdx : 0;
 	let name = mangledFunctionName(sym, d.fnName, ovIdx);
 
@@ -213,7 +213,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 	// Extern functions with 'from' clause bind to existing C functions — header provides declaration.
 	// Extern functions without 'from' use mangled name and need our prototype.
-	const hasNativeName = sym !== null && sym.nativeName !== "";
+	const hasNativeName = (sym !== null && sym.nativeName !== "") || (d.nativeName !== null && d.nativeName !== "");
 	if (isExternFn && hasNativeName) return;
 
 	// DRC hooks: ensureDrcProto handles their forward decls with correct pointer convention.
@@ -461,6 +461,8 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 	// tree) plus flag-level (`gen:` marker on methodFlags) — either skips.
 	if (hasGenericParams(methodType)) return;
 	if (isGenericFn(d.methodFlags)) return;
+	if (d.methodFlags === "extern" || d.methodFlags.indexOf("extern", 0) >= 0) return;
+	if (node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.ImportC)) return;
 	const cRetType = getTypeDesc(g, methodType.typeReturn);
 	// NRVO: methods returning large value-types (Result<T,E>, struct, tuple)
 	// must be emitted with `void` return + first param `Type* __result`. Caller
