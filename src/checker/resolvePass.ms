@@ -151,6 +151,16 @@ function collectInferParamNames(t: Type | null, acc: string[]): void {
 	collectInferParamNames(t.typeReturn, acc);
 }
 
+// One annotation reaches resolveAnnotation once per checker pass, and the
+// passes report DIFFERENT columns for it (declaration start vs the annotation
+// itself), so the key has to be the line, not the position.
+function warnOncePerLine(ctx: CheckerContext, msg: string, line: number, col: number): void {
+	for (const e of ctx.errors) {
+		if (e.line === line && e.message === msg) return;
+	}
+	addWarning(ctx, msg, line, col);
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: number, col: number): Type {
 	let trimmed = text.trim();
 	if (trimmed === "") return unknownType();
@@ -620,7 +630,14 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		"null" => nullType(),
 		"never" => neverType(),
 		"unknown" => userUnknownType(),
-		"any" => unknownType(),
+		"any" => {
+			if (line > 0) addError(ctx, "'any' is not a MetaScript type - use 'unknown' with an explicit cast", line, col);
+			return unknownType();
+		},
+		"undefined" => {
+			if (line > 0) warnOncePerLine(ctx, "'undefined' is an alias of 'null' - prefer 'null'", line, col);
+			return nullType();
+		},
 		"int8" => createPrimitive(TypeKind.Int8),
 		"int16" => createPrimitive(TypeKind.Int16),
 		"int32" => createPrimitive(TypeKind.Int32),
@@ -668,7 +685,7 @@ function isValidTypeIdentifier(name: string): boolean {
 function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: number, col: number, mangledName: string): Type {
 	if (line > 0 && isValidTypeIdentifier(name)
 			&& name.indexOf("__") < 0 && name.indexOf("typeof ") < 0
-			&& name !== "unknown" && name !== "any" && name !== "undefined" && name !== "never") {
+			&& name !== "unknown" && name !== "never") {
 		// Hard error, not warning: the unknownType() recovery reaches codegen as
 		// void*, and call sites then pass &global for what should be an object
 		// pointer — a silent memory-corruption miscompile, far worse than failing

@@ -360,7 +360,7 @@ function transformCallSite(node: Node): void {
 // Utility for C codegen: check if a type name is a primitive (value type in C)
 export function isPrimitiveTypeName(typeName: string): boolean {
 	return match (typeName) {
-		"number" | "string" | "boolean" | "void" | "null" | "undefined" | "any" | "unknown" | "never" => true,
+		"number" | "string" | "boolean" | "void" | "null" | "unknown" | "never" => true,
 		"int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64" => true,
 		"float32" | "float64" => true,
 		_ => false,
