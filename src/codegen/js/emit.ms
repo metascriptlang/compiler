@@ -141,20 +141,41 @@ export function finalize(gen: JSGenerator): string {
 
 // ===== String Escaping =====
 
+// BYTE-PURE walk (same rule as escapeCString): a UTF-16-unit walk splits astral
+// chars into lone-surrogate halves whose WTF-8 bytes are invalid UTF-8 in the
+// output file. Plain bytes are copied in RUNS so multi-byte sequences stay
+// intact; real lone surrogates (WTF-8 ED A0-BF ..) become \uXXXX escapes.
 export function escapeJSString(s: string): string {
 	let result = "";
-	for (let i = 0; i < s.length; i += 1) {
-		const ch = s.slice(i, i + 1);
-		result = result + match (ch) {
-			"\\" => "\\\\",
-			"\"" => "\\\"",
-			"\n" => "\\n",
-			"\r" => "\\r",
-			"\t" => "\\t",
-			"\0" => "\\0",
-			_ => ch,
-		};
+	let runStart = 0;
+	let i = 0;
+	while (i < s.byteLength) {
+		const b = s.byteAt(i);
+		if (b === "\\".code || b === "\"".code || b === "\n".code
+				|| b === "\r".code || b === "\t".code || b === 0) {
+			if (runStart < i) result = result + s.byteSlice(runStart, i);
+			result = result + match (b) {
+				"\\".code => "\\\\",
+				"\"".code => "\\\"",
+				"\n".code => "\\n",
+				"\r".code => "\\r",
+				"\t".code => "\\t",
+				_ => "\\x00",
+			};
+			i += 1;
+			runStart = i;
+		} else if (b === 237 && i + 2 < s.byteLength
+				&& s.byteAt(i + 1) >= 160 && s.byteAt(i + 1) <= 191) {
+			if (runStart < i) result = result + s.byteSlice(runStart, i);
+			const cu = 53248 + (s.byteAt(i + 1) - 128) * 64 + (s.byteAt(i + 2) - 128);
+			result = result + "\\u" + cu.toString(16).padStart(4, "0");
+			i += 3;
+			runStart = i;
+		} else {
+			i += 1;
+		}
 	}
+	if (runStart < i) result = result + s.byteSlice(runStart, i);
 	return result;
 }
 
@@ -196,6 +217,13 @@ test "emitLine" {
 test "escapeJSString basics" {
 	assert escapeJSString("hello") === "hello";
 	assert escapeJSString("a\\b") === "a\\\\b";
+}
+
+test "escapeJSString keeps astral runs, escapes lone surrogates" {
+	const astral = fromCodePoint(128512);
+	assert escapeJSString(astral) === astral;
+	assert escapeJSString(fromCodePoint(55296)) === "\\" + "ud800";
+	assert escapeJSString(fromCodePoint(57343)) === "\\" + "udfff";
 }
 
 test "convertImportPath" {
