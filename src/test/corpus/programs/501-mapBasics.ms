@@ -4,11 +4,7 @@
 // the native Map — this program is the contract that they agree.
 // Values stay ref-typed (string): a value-type V makes get() return the
 // Maybe carrier of the open G1 cluster — 010-nullable owns that xfail.
-// HashMap/HashSet live in 504 (@skip-js: no js binding yet).
-//
-// @xfail(js): native-Map bind misses 100% on byte-array string keys (identity
-// compare) + jms get() type-lie elides null-checks — fixed by the native-string
-// migration, docs/STRING-CONTRACT.md P1/P2; XPASS fires loud when it lands.
+// HashMap/HashSet live in 504.
 
 function main(): void {
 	const m = new Map<string, string>();

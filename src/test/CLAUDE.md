@@ -642,9 +642,18 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
   (directive head, NNN-topic numbering, RC-stress shapes). New programs
   should prefer parity (no @stdout) over @stdout-contains; strip @stdout
   from migrated deterministic programs over time to upgrade them to
-  byte-compare. Cluster census (2026-07-31, 80 programs): 0xx=4, 1xx=5,
-  2xx=13, 3xx=5, 4xx=13, **5xx=1**, 6xx=31, 7xx=8 — next by value is
-  5xx std (Map/Array/JSON/fs).
+  byte-compare.   Cluster census (2026-08-01, 84 programs): 0xx=4, 1xx=5,
+  2xx=13, 3xx=5, 4xx=13, **5xx=5**, 6xx=31, 7xx=8 — next: 505/506 json,
+  507/508 fs.
+  - 5xx std grew 2026-08-01 post string-contract P1/P2 (js = native
+    strings + native Map/Set): `501` dropped its @xfail(js) (all-lane
+    green), `502-mapChurn` (pins the re-insert-to-end ordering rule),
+    `503-arrayOps`, `504-hashContainers` (sorted canonical prints — hash
+    containers promise no iteration order). 503 immediately caught TWO
+    latent bugs: `concat()` was 100% broken on C (runtime kept a stale
+    by-value param from before the array migration; zero callers hid it)
+    and the js `sort<T>` bind was bare `#.sort()` = lexicographic on
+    numbers. Both fixed same-day.
   - 24x match-lowering landed 2026-07-31 (`240-matchShadowUninit`,
     `241-matchShadowBothRun`, `242-matchShadowOrderSwap`) — proven red
     pre-fix (241 exit=133 on all three native lanes): lowered
