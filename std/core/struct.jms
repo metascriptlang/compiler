@@ -29,3 +29,4 @@ export extern function delete<K, V>(this m: Map<K, V>, key: K): boolean from "#.
 export extern function clear<K, V>(this m: Map<K, V>): void from "#.clear()";
 export extern function keys<K, V>(this m: Map<K, V>): K[] from "Array.from(#.keys())";
 export extern function values<K, V>(this m: Map<K, V>): V[] from "Array.from(#.values())";
+export extern function toItems<K, V>(this m: Map<K, V>): K[] from "Array.from(#.keys())";
