@@ -16,10 +16,34 @@
 # Env: MSC=<path to msc> (default: msc)   GUARD_GC="drc orc" (default both)
 set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
+# Compiler UNDER TEST: ./msc (the freshly built binary) when present, else the
+# installed msc; MSC=<path> overrides. Made absolute because probes build from
+# a private sandbox below.
+[ -n "${MSC:-}" ] || { [ -x ./msc ] && MSC=./msc; }
 MSC="${MSC:-msc}"
+case "$MSC" in */*) MSC="$(cd "$(dirname "$MSC")" && pwd)/$(basename "$MSC")";; esac
+echo "nim-guard: compiler under test = $MSC"
 MODES="${GUARD_GC:-drc orc}"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fail=0
+
+# `out/<mode>/.cache` is resolved against the CWD, so building from the repo root
+# shares the object cache with any other msc invocation there — a concurrent
+# build writing the same .o mid-read produced link errors on a DIFFERENT probe
+# every run. Build from a private sandbox instead; the content-addressed global
+# cache (~/.metascript/cache/objects) keeps it warm.
+WORK="$TMP/work"; mkdir -p "$WORK"
+INFRA_RE="_link\.rsp': FileNotFound|UnexpectedRemainder|NotLibStub|failed to resolve relocations"
+
+# build <ms> <gc> <bin> <log>; retries once on a toolchain-race signature so
+# infra noise can't be mistaken for drift, and says so out loud when it does.
+build() {
+  ( cd "$WORK" && "$MSC" build "$1" --gc="$2" --passC="-DMS_DRC_LEDGER" --output="$3" ) >"$4" 2>&1 && return 0
+  grep -qE "$INFRA_RE" "$4" || return 1
+  echo "     flake-retry $(basename "$1" .ms) [$2]: toolchain race, rebuilding clean"
+  rm -rf "$WORK"/out
+  ( cd "$WORK" && "$MSC" build "$1" --gc="$2" --passC="-DMS_DRC_LEDGER" --output="$3" ) >"$4" 2>&1
+}
 
 for ms in "$DIR"/*.ms; do
   [ -e "$ms" ] || continue
@@ -31,8 +55,7 @@ for ms in "$DIR"/*.ms; do
     if [ -n "$checkfails" ]; then
       # errorcheck guard: build MUST fail at check, log MUST carry every tag.
       # Compiling clean means a checker rule was silently dropped.
-      if "$MSC" build "$ms" --gc="$gc" --passC="-DMS_DRC_LEDGER" --output="$bin" \
-           >"$TMP/$name.$gc.build" 2>&1; then
+      if build "$ms" "$gc" "$bin" "$TMP/$name.$gc.build"; then
         echo "FAIL $name [$gc]: compiled clean — a checker rule was dropped"
         fail=1; continue
       fi
@@ -46,8 +69,7 @@ for ms in "$DIR"/*.ms; do
       [ $ok -eq 1 ] && echo "ok   $name [$gc]"
       continue
     fi
-    if ! "$MSC" build "$ms" --gc="$gc" --passC="-DMS_DRC_LEDGER" --output="$bin" \
-         >"$TMP/$name.$gc.build" 2>&1; then
+    if ! build "$ms" "$gc" "$bin" "$TMP/$name.$gc.build"; then
       echo "FAIL $name [$gc]: build error"; grep -iE '^error' "$TMP/$name.$gc.build" | head -3
       fail=1; continue
     fi
