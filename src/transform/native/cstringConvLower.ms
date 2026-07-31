@@ -1,4 +1,4 @@
-// Target-aware: C emits ms* helpers, JS emits toJSStr/fromJSStr.
+// Target-aware: C emits ms* helpers; JS emits nothing (cstring ≡ string).
 // Runs before analyzer (DRC) so the conversion is a plain CallExpr by then.
 
 import { Node, NodeKind, HiddenStdConvData, CallExprData, IdentifierData, TypeKind } from "../../ast/node";
@@ -10,8 +10,6 @@ function inverseOf(fn: string): string {
 	return match (fn) {
 		"msStringToCString" => "msStringFromCStr",
 		"msStringFromCStr" => "msStringToCString",
-		"toJSStr" => "fromJSStr",
-		"fromJSStr" => "toJSStr",
 		_ => "",
 	};
 }
@@ -43,9 +41,10 @@ export function lowerCStringConv(program: Node, ctx: TransformContext): Node {
 
 		if (!matchForward && !matchReverse) return node;
 
-		const fn = ctx.jsBackend
-			? (matchForward ? "toJSStr" : "fromJSStr")
-			: (matchForward ? "msStringToCString" : "msStringFromCStr");
+		// cstring ≡ string on JS (STRING-CONTRACT §1) — no conversion exists.
+		if (ctx.jsBackend) return d.convExpr;
+
+		const fn = matchForward ? "msStringToCString" : "msStringFromCStr";
 
 		// Round-trip optimization: `fn(inverse(x))` ≡ `x`. Walker is bottom-up,
 		// so a nested inverse conversion has already been rewritten to its

@@ -89,7 +89,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (ctx.jsBackend) {
 		result = lowerObjectLiteralComplete(result, ctx);
 	}
-	result = lowerStringConcatFlatten(result, ctx);
+	if (!jsBackend) { result = lowerStringConcatFlatten(result, ctx); }
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
 	result = materializeMaybeReads(result, ctx);
@@ -131,7 +131,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = lowerStringLengthJS(result, ctx); }
 	result = lowerCStringConv(result, ctx);
 	result = lowerOperators(result, ctx);
-	result = lowerStringOps(result, ctx);
+	if (!jsBackend) { result = lowerStringOps(result, ctx); }
 	result = lowerSubscript(result, ctx);
 	if (!jsBackend) { result = spanLower(result, ctx); }
 	if (!jsBackend) { result = spanParamExpand(result, ctx); }
