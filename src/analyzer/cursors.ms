@@ -893,7 +893,7 @@ test "call result is NOT cursor (owns data)" {
 }
 
 test "member access with only read use is cursor" {
-	const body = getFuncBody("function f(obj: any) { const name = obj.name; if (name) {} }");
+	const body = getFuncBody("function f(obj: { name: string }) { const name = obj.name; if (name) {} }");
 	const cs = inferCursors(body);
 	assert isCursorVar(cs, "name");
 }
@@ -919,7 +919,7 @@ test "DRC temp is not cursor" {
 }
 
 test "nested block cursor" {
-	const body = getFuncBody("function f(obj: any) { if (true) { const x = obj.name; } }");
+	const body = getFuncBody("function f(obj: { name: string }) { if (true) { const x = obj.name; } }");
 	const cs = inferCursors(body);
 	assert isCursorVar(cs, "x");
 }

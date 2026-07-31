@@ -24,7 +24,7 @@
 // dispatch on `this`, prototype chain). The transform is wired in the
 // `!jsBackend` branch of the pipeline.
 
-import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind, Type } from "../../ast/node";
 import { TransformContext } from "../context";
 import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { createFunction, voidType, unknownType } from "../../checker/types";
@@ -125,7 +125,7 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 		// typeChildren with the right `this` type keeps `genFunctionDecl` /
 		// `shouldIndirectParam` honest — without it, `this` codegens as `void*`.
 		const classType = classNode.nodeType !== null ? classNode.nodeType : unknownType();
-		const widenedChildren: any[] = [classType];
+		const widenedChildren: Type[] = [classType];
 		for (const t of ctorType.typeChildren) { widenedChildren.push(t); }
 		const widenedNames: string[] = ["this"];
 		for (const n of ctorType.typeNames) { widenedNames.push(n); }

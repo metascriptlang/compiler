@@ -5,7 +5,8 @@
 // Each generic call site is independent — explicit `<int32>` at one layer
 // must not leak into another. Closures at any level must see concrete types.
 
-import { TypeKind } from "../../../ast/node";
+import { TypeKind, Node, NodeKind } from "../../../ast/node";
+import { forEachChild } from "../../../ast/visitor";
 import { checkOnly, findFnDecl } from "../helpers";
 import { checkNoGenericParamLeakage, formatViolations } from "../invariant";
 
@@ -34,33 +35,26 @@ test "stress deep-nesting: no GenericParam leakage at any layer" {
 	assert true;
 }
 
+// Depth-first search for the first ArrowFunction node — the arrow is nested
+// inside layer5 call args.
+function findArrow(node: Node): Node {
+	if (node === null) return null as unknown as Node;
+	if (node.kind === NodeKind.ArrowFunction) return node;
+	let found: Node = null as unknown as Node;
+	forEachChild(node, (child: Node): void => {
+		if (found === null) {
+			const r = findArrow(child);
+			if (r !== null) found = r;
+		}
+	});
+	return found;
+}
+
 test "stress deep-nesting: innermost closure typed Int32" {
 	const result = checkOnly(SRC_DEEP);
 	const main_fn = findFnDecl(result.program, "mainDeep");
 	assert main_fn !== null;
-	// Walk to find the arrow — it's nested inside layer5 call args
-	let _findArrow: (node: any) => any = null as unknown as ((node: any) => any);
-	_findArrow = (node: any): any => {
-		if (node === null) return null;
-		if (node.kind === 15) return node; // ArrowFunction
-		const d: any = node.data;
-		if (d !== null && d.programStmts !== undefined) {
-			for (const s of d.programStmts) { const r = _findArrow(s); if (r !== null) return r; }
-		}
-		if (d !== null && d.statements !== undefined) {
-			for (const s of d.statements) { const r = _findArrow(s); if (r !== null) return r; }
-		}
-		if (d !== null && d.fnBody !== undefined) { const r = _findArrow(d.fnBody); if (r !== null) return r; }
-		if (d !== null && d.initializer !== undefined) { const r = _findArrow(d.initializer); if (r !== null) return r; }
-		if (d !== null && d.callee !== undefined) {
-			const r = _findArrow(d.callee); if (r !== null) return r;
-			if (d.arguments !== undefined) {
-				for (const a of d.arguments) { const r2 = _findArrow(a); if (r2 !== null) return r2; }
-			}
-		}
-		return null;
-	};
-	const arrow = _findArrow(main_fn);
+	const arrow = findArrow(main_fn);
 	assert arrow !== null;
 	assert arrow.nodeType !== null;
 	assert arrow.nodeType.typeChildren[0].kind === TypeKind.Int32;

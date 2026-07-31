@@ -5,9 +5,9 @@
 // Also tests: unimported type alias in `as` cast → 'object', wrong field names on NodeData.
 
 import { checkSource } from "./helpers";
-import { Severity } from "../../checker/context";
+import { Severity, CheckerContext } from "../../checker/context";
 
-function hasError(ctx: any, needle: string): boolean {
+function hasError(ctx: CheckerContext, needle: string): boolean {
 	let i = 0;
 	while (i < ctx.errors.length) {
 		const msg: string = ctx.errors[i].message;
@@ -31,7 +31,7 @@ function hasError(ctx: any, needle: string): boolean {
 	return false;
 }
 
-function errorCount(ctx: any): number {
+function errorCount(ctx: CheckerContext): number {
 	let count = 0;
 	let i = 0;
 	while (i < ctx.errors.length) {

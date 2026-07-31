@@ -9,6 +9,7 @@
 //   msc org role <org> <user> <role>   — change member role (owner|member)
 
 import { createHeaders, setHeader } from "std/http/headers";
+import { HttpHeaders } from "std/core/fetch/types";
 import { parseJson, JsonValue, JsonKind } from "std/core/json";
 import { loadToken } from "./login";
 import { registryBaseUrl } from "./registry";
@@ -42,11 +43,11 @@ function getArray(obj: JsonValue, field: string): JsonValue[] {
 	return [];
 }
 
-function authHeaders(): { headers: any, ok: boolean } {
+function authHeaders(): { headers: HttpHeaders, ok: boolean } {
 	const token = loadToken();
 	if (token === "") {
 		console.log(`${errStyle("error")}: not logged in — run ${cyan("msc login")} first`);
-		return { headers: null, ok: false };
+		return { headers: createHeaders(), ok: false };
 	}
 	const h = createHeaders();
 	setHeader(h, "authorization", "Bearer " + token);
