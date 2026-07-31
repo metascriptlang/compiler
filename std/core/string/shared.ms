@@ -7,24 +7,6 @@
 // ⚠ Every COMPUTED push must cast `as uint8` (a number-typed arg silently
 // binds the number[] overload on C — §2 push-dispatch facet).
 
-export function byteLength(this s: string): int64 {
-	return s.asBytes().length as int64;
-}
-
-export function byteAt(this s: string, idx: int64): int32 {
-	const b = s.asBytes();
-	if (idx < 0 || idx >= b.length) return -1;
-	return b[idx] as int32;
-}
-
-export function byteSlice(this s: string, start: int64, end: int64): string {
-	const b = s.asBytes();
-	const result: uint8[] = [];
-	let i = start;
-	while (i < end && i < b.length) { result.push(b[i]); i = i + 1; }
-	return result.asString();
-}
-
 export function startsWith(this s: string, prefix: string): boolean {
 	const sb = s.asBytes();
 	const pb = prefix.asBytes();

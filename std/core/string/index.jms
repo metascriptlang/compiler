@@ -1,328 +1,15 @@
 // MetaScript String Prelude — JavaScript Backend
-// Strings are UTF-8 byte arrays (number[]), same as C backend.
-// toJSStr/fromJSStr use @emit with template interpolation for native JS String interop.
+// string = native JS string (docs/STRING-CONTRACT.md §3). The byte tier is a
+// hand-rolled WTF-8 encode cached per string — TextEncoder is banned: it
+// rewrites lone surrogates to U+FFFD while the C payload keeps raw WTF-8.
 
-// Native JS API
-extern class String {
-	static fromCharCode(code: int32): string;
-}
+// ===== WTF-8 byte tier =====
 
-// Zero-copy bridge (string ↔ uint8[]) — identity in JS
-import { isSpaceByte } from "./shared";
-
-export function asBytes(this s: string): uint8[] {
-	return s as unknown as uint8[];
-}
-
-export function asString(this arr: uint8[]): string {
-	return arr as unknown as string;
-}
-
-// String concat — creates new byte array (called by lowerStringConcatFlatten for 2-part +)
-export function msStringConcat(a: string, b: string): string {
-	const ab = a.asBytes();
-	const bb = b.asBytes();
-	const result: uint8[] = [];
-	let i = 0;
-	while (i < ab.length) { result.push(ab[i]); i = i + 1; }
-	i = 0;
-	while (i < bb.length) { result.push(bb[i]); i = i + 1; }
-	return result.asString();
-}
-
-// String concat N parts — rest params (called by lowerStringConcatFlatten for 3+ part +)
-// On JS, count is ignored — we iterate ...parts directly. On C, the codegen rewrites
-// the call into `msStringConcatArr(arr, count)` against a stack-local array.
-export function msStringConcatArr(count: number, ...parts: string[]): string {
-	const result: uint8[] = [];
-	let i = 0;
-	while (i < parts.length) {
-		const part = parts[i];
-		const p = part.asBytes();
-		let j = 0;
-		while (j < p.length) { result.push(p[j]); j = j + 1; }
-		i = i + 1;
-	}
-	return result.asString();
-}
-
-// Self-append N parts — called by stringOpLower for `x = x + a + b + ...`
-// and `x = `${x}${a}${b}``. Aliased parts read a one-time snapshot of dest's
-// original payload (same alias-safety as the C runtime wrapper).
-function sameBytes(a: uint8[], b: uint8[]): boolean {
-	@emit(`return ${a} === ${b};`);
-	unreachable;
-}
-
-export function msStringAppendArr(dest: string, count: number, ...parts: string[]): void {
-	const db = dest.asBytes();
-	let anyAlias = false;
-	let i = 0;
-	while (i < parts.length) {
-		if (sameBytes(parts[i].asBytes(), db)) { anyAlias = true; }
-		i = i + 1;
-	}
-	const snap: uint8[] = [];
-	if (anyAlias) {
-		let k = 0;
-		while (k < db.length) { snap.push(db[k]); k = k + 1; }
-	}
-	i = 0;
-	while (i < parts.length) {
-		const pb = parts[i].asBytes();
-		if (anyAlias && sameBytes(pb, db)) {
-			let j = 0;
-			while (j < snap.length) { db.push(snap[j]); j = j + 1; }
-		} else {
-			const n = pb.length;
-			let j = 0;
-			while (j < n) { db.push(pb[j]); j = j + 1; }
-		}
-		i = i + 1;
-	}
-}
-
-// ===== Operators =====
-// Primitive operators (implementation)
-export function `==`(this a: string, b: string): boolean {
-	return msStringEquals(a, b);
-}
-export function `<`(this a: string, b: string): boolean {
-	return msStringCompare(a, b) < 0;
-}
-// Derived operators (call == and < internally)
-export function `!=`(this a: string, b: string): boolean { return !(a == b); }
-export function `>`(this a: string, b: string): boolean { return b < a; }
-export function `<=`(this a: string, b: string): boolean { return !(b < a); }
-export function `>=`(this a: string, b: string): boolean { return !(a < b); }
-
-// Lexicographic compare — returns <0, 0, >0 (shared by <, <=, derived >, >=)
-export function msStringCompare(a: string, b: string): int32 {
-	const ab = a.asBytes();
-	const bb = b.asBytes();
-	let i = 0;
-	while (i < ab.length && i < bb.length) {
-		if (ab[i] !== bb[i]) return (ab[i] as int32) - (bb[i] as int32);
-		i = i + 1;
-	}
-	return ab.length - bb.length;
-}
-
-// String equality — byte-by-byte comparison (implementation)
-export function msStringEquals(a: string, b: string): boolean {
-	const ab = a.asBytes();
-	const bb = b.asBytes();
-	if (ab.length !== bb.length) return false;
-	let i = 0;
-	while (i < ab.length) {
-		if (ab[i] !== bb[i]) return false;
-		i = i + 1;
-	}
-	return true;
-}
-
-// ===== String Extension Methods (after lowering: s.method(args) → method(s, args)) =====
-// Pure MetaScript on byte arrays — shared logic with C backend.
-
-export function charAt(this s: string, idx: int64): string {
-	const js = toJSStr(s);
-	@emit(`if (${idx} < 0 || ${idx} >= ${js}.length) return [];`);
-	@emit(`return fromJSStr(${js}.charAt(${idx}));`);
-	unreachable;
-}
-
-export function charCodeAt(this s: string, idx: int64): int32 {
-	const js = toJSStr(s);
-	@emit(`if (${idx} < 0 || ${idx} >= ${js}.length) return -1;`);
-	@emit(`return ${js}.charCodeAt(${idx});`);
-	unreachable;
-}
-
-export function indexOf(this s: string, sub: string, start: int64 = 0): int64 {
-	const js = toJSStr(s);
-	const jsub = toJSStr(sub);
-	@emit(`return ${js}.indexOf(${jsub}, ${start});`);
-	unreachable;
-}
-
-export function lastIndexOf(this s: string, sub: string, startIdx: int64 = -1): int64 {
-	const js = toJSStr(s);
-	const jsub = toJSStr(sub);
-	@emit(`return ${startIdx} < 0 ? ${js}.lastIndexOf(${jsub}) : ${js}.lastIndexOf(${jsub}, ${startIdx});`);
-	unreachable;
-}
-
-export function slice(this s: string, start: int64, end: int64): string {
-	const js = toJSStr(s);
-	@emit(`return fromJSStr(${js}.slice(${start}, ${end}));`);
-	unreachable;
-}
-
-export function equals(this s: string, other: string): boolean {
-	return msStringEquals(s, other);
-}
-
-
-
-export function substring(this s: string, start: int64, end: int64): string {
-	return s.slice(start, end);
-}
-
-// Byte reverse, matching msStringReverse — mangles multi-byte UTF-8 on both backends.
-
-export function padStart(this s: string, targetLen: int64, pad: string): string {
-	const js = toJSStr(s);
-	const jp = toJSStr(pad);
-	@emit(`return fromJSStr(${js}.padStart(${targetLen}, ${jp}));`);
-	unreachable;
-}
-
-export function padEnd(this s: string, targetLen: int64, pad: string): string {
-	const js = toJSStr(s);
-	const jp = toJSStr(pad);
-	@emit(`return fromJSStr(${js}.padEnd(${targetLen}, ${jp}));`);
-	unreachable;
-}
-
-// strtod/strtoll parity: unparseable input is 0, never NaN.
-export function parseFloat(this s: string): number {
-	const js = toJSStr(s);
-	@emit(`var v = Number.parseFloat(${js}); return Number.isNaN(v) ? 0 : v;`);
-	unreachable;
-}
-
-export function parseInt(this s: string): int64 {
-	const js = toJSStr(s);
-	@emit(`var v = Number.parseInt(${js}, 10); return Number.isNaN(v) ? 0 : v;`);
-	unreachable;
-}
-
-// JS arrays carry no separate allocation, so capacity is always the live length.
-export function capacity(this s: string): int64 {
-	return s.asBytes().length as int64;
-}
-
-export function setLength(this s: string, newLen: int64): void {
-	const b = s.asBytes();
-	while (b.length > newLen) { b.pop(); }
-	while (b.length < newLen) { b.push(0); }
-}
-
-export function append(this s: string, other: string): void {
-	msStringAppend(s, other);
-}
-
-export function setSlice(this s: string, start: number, end: number): void {
-	const b = s.asBytes();
-	let a = start;
-	let e = end;
-	if (a < 0) a = 0;
-	if (e > b.length) e = b.length;
-	if (a >= e) { s.setLength(0); return; }
-	const n = e - a;
-	let i = 0;
-	while (i < n) { b[i] = b[a + i]; i = i + 1; }
-	s.setLength(n);
-}
-
-export function stripInPlace(this s: string): void {
-	const b = s.asBytes();
-	if (b.length === 0) return;
-	let first = 0;
-	let last = b.length - 1;
-	while (first <= last && isSpaceByte(b[first])) { first = first + 1; }
-	while (last >= first && isSpaceByte(b[last])) { last = last - 1; }
-	s.setSlice(first, last + 1);
-}
-
-export function fromCodePoint(cp: number): string {
-	@emit(`if (${cp} < 0 || ${cp} > 1114111) return [];`);
-	@emit(`return fromJSStr(String.fromCodePoint(${cp}));`);
-	unreachable;
-}
-
-// Number/bool to string (called by builtinLower .toString())
-export function msNumberToString(n: number): string {
-	@emit(`return fromJSStr(String(${n}));`);
-	unreachable;
-}
-
-export function msNumberToStringRadix(n: number, radix: number): string {
-	@emit(`return fromJSStr(${n}.toString(${radix}));`);
-	unreachable;
-}
-
-export function msBoolToString(b: boolean): string {
-	@emit(`return ${b} ? [116,114,117,101] : [102,97,108,115,101];`);
-	unreachable;
-}
-
-// String hash — DJB2 (matches C runtime msStringHash)
-export function msStringHash(s: string): int32 {
-	const sb = s.asBytes();
-	let h: int32 = 5381;
-	let i = 0;
-	while (i < sb.length) {
-		h = (h * 33 + sb[i]) as int32;
-		i = i + 1;
-	}
-	return h;
-}
-
-// String append (in-place, called by lowerStringOps for +=)
-export function msStringAppend(dest: string, src: string): void {
-	const db = dest.asBytes();
-	const sb = src.asBytes();
-	const n = sb.length;
-	let i = 0;
-	while (i < n) { db.push(sb[i]); i = i + 1; }
-}
-
-// For long string literals (>64 bytes)
-export function makeNimstrLit(s: string): string {
-	@emit(`var r = []; for (var i = 0; i < ${s}.length; i++) r.push(${s}.charCodeAt(i)); return r;`);
-	unreachable;
-}
-
-// UTF-8 byte array → native JS string (boundary conversion)
-// .length on string → UTF-16 code units (LANG.md Index-Space Contract).
-// Injected by the jsBackend stringLengthJS pass; byte-walks without building
-// the JS string. WTF-8 lone-surrogate sequences (from charAt on astral halves)
-// count 1 like any 3-byte sequence.
-export function msStringLength(s: string): int64 {
-	const bytes = asBytes(s);
-	@emit(`if (!Array.isArray(${bytes})) return ${bytes}.length;
-	var n = 0, i = 0;
-	while (i < ${bytes}.length) {
-		var b = ${bytes}[i];
-		if (b < 128) { i += 1; }
-		else if (b < 224) { i += 2; }
-		else if (b < 240) { i += 3; }
-		else { i += 4; n += 1; }
-		n += 1;
-	}
-	return n;`);
-	unreachable;
-}
-
-export function toJSStr(s: string): string {
-	const bytes = asBytes(s);
-	@emit(`if (!Array.isArray(${bytes})) return ${bytes};
-	var r = "", i = 0;
-	while (i < ${bytes}.length) {
-		var b = ${bytes}[i];
-		if (b < 128) { r += String.fromCharCode(b); i++; }
-		else if (b < 224) { r += String.fromCharCode(((b & 31) << 6) | (${bytes}[i+1] & 63)); i += 2; }
-		else if (b < 240) { r += String.fromCharCode(((b & 15) << 12) | ((${bytes}[i+1] & 63) << 6) | (${bytes}[i+2] & 63)); i += 3; }
-		else { var cp = ((b & 7) << 18) | ((${bytes}[i+1] & 63) << 12) | ((${bytes}[i+2] & 63) << 6) | (${bytes}[i+3] & 63); cp -= 65536; r += String.fromCharCode(55296 + (cp >> 10), 56320 + (cp & 1023)); i += 4; }
-	}
-	return r;`);
-	unreachable;
-}
-
-// Native JS string → UTF-8 byte array (boundary conversion)
-export function fromJSStr(s: string): string {
-	@emit(`var r = [], i = 0;
+function wtf8Cached(s: string): uint8[] {
+	@emit(`var g = globalThis.__msWtf8Cache || (globalThis.__msWtf8Cache = new Map());
+	var c = g.get(${s});
+	if (c !== undefined) return c;
+	var r = [], i = 0;
 	while (i < ${s}.length) {
 		var ch = ${s}.charCodeAt(i);
 		if (ch < 128) { r.push(ch); }
@@ -331,9 +18,186 @@ export function fromJSStr(s: string): string {
 		else { var lo = ${s}.charCodeAt(i + 1); if (ch < 56320 && lo >= 56320 && lo < 57344) { i++; var cp2 = 65536 + (((ch & 1023) << 10) | (lo & 1023)); r.push((cp2 >> 18) | 240, ((cp2 >> 12) & 63) | 128, ((cp2 >> 6) & 63) | 128, (cp2 & 63) | 128); } else { r.push((ch >> 12) | 224, ((ch >> 6) & 63) | 128, (ch & 63) | 128); } }
 		i++;
 	}
+	if (g.size >= 512) g.clear();
+	g.set(${s}, r);
 	return r;`);
 	unreachable;
 }
 
+// Fresh mutable copy — the cache entry must never escape.
+export function asBytes(this s: string): uint8[] {
+	const c = wtf8Cached(s);
+	@emit(`return ${c}.slice();`);
+	unreachable;
+}
+
+// WTF-8 decode — 3-byte sequences may decode to lone surrogates (round-trip).
+export function asString(this arr: uint8[]): string {
+	@emit(`var b = ${arr}, r = "", i = 0;
+	while (i < b.length) {
+		var x = b[i];
+		if (x < 128) { r += String.fromCharCode(x); i++; }
+		else if (x < 224) { r += String.fromCharCode(((x & 31) << 6) | (b[i+1] & 63)); i += 2; }
+		else if (x < 240) { r += String.fromCharCode(((x & 15) << 12) | ((b[i+1] & 63) << 6) | (b[i+2] & 63)); i += 3; }
+		else { var cp = ((x & 7) << 18) | ((b[i+1] & 63) << 12) | ((b[i+2] & 63) << 6) | (b[i+3] & 63); cp -= 65536; r += String.fromCharCode(55296 + (cp >> 10), 56320 + (cp & 1023)); i += 4; }
+	}
+	return r;`);
+	unreachable;
+}
+
+export function byteLength(this s: string): int64 {
+	return wtf8Cached(s).length as int64;
+}
+
+export function byteAt(this s: string, idx: int64): int32 {
+	const b = wtf8Cached(s);
+	if (idx < 0 || idx >= b.length) return -1;
+	return b[idx] as int32;
+}
+
+export function byteSlice(this s: string, start: int64, end: int64): string {
+	const b = wtf8Cached(s);
+	const sub: uint8[] = [];
+	for (let i = start < 0 ? 0 : start; i < end && i < b.length; i += 1) {
+		sub.push(b[i]);
+	}
+	return sub.asString();
+}
+
+// ===== Concat (native; producers only on non-gated paths — macros, tests) =====
+
+export function msStringConcat(a: string, b: string): string {
+	@emit(`return ${a} + ${b};`);
+	unreachable;
+}
+
+export function msStringConcatArr(count: number, ...parts: string[]): string {
+	@emit(`return ${parts}.join("");`);
+	unreachable;
+}
+
+// ===== Operators =====
+
+export function `==`(this a: string, b: string): boolean {
+	@emit(`return ${a} === ${b};`);
+	unreachable;
+}
+export function `<`(this a: string, b: string): boolean {
+	@emit(`return ${a} < ${b};`);
+	unreachable;
+}
+export function `!=`(this a: string, b: string): boolean { return !(a == b); }
+export function `>`(this a: string, b: string): boolean { return b < a; }
+export function `<=`(this a: string, b: string): boolean { return !(b < a); }
+export function `>=`(this a: string, b: string): boolean { return !(a < b); }
+
+export function msStringCompare(a: string, b: string): int32 {
+	@emit(`return ${a} < ${b} ? -1 : (${a} > ${b} ? 1 : 0);`);
+	unreachable;
+}
+
+export function msStringEquals(a: string, b: string): boolean {
+	@emit(`return ${a} === ${b};`);
+	unreachable;
+}
+
+// ===== String Extension Methods (after lowering: s.method(args) → method(s, args)) =====
+
+export function charAt(this s: string, idx: int64): string {
+	@emit(`return (${idx} < 0 || ${idx} >= ${s}.length) ? "" : ${s}.charAt(${idx});`);
+	unreachable;
+}
+
+export function charCodeAt(this s: string, idx: int64): int32 {
+	@emit(`return (${idx} < 0 || ${idx} >= ${s}.length) ? -1 : ${s}.charCodeAt(${idx});`);
+	unreachable;
+}
+
+export function indexOf(this s: string, sub: string, start: int64 = 0): int64 {
+	@emit(`return ${s}.indexOf(${sub}, ${start});`);
+	unreachable;
+}
+
+export function lastIndexOf(this s: string, sub: string, startIdx: int64 = -1): int64 {
+	@emit(`return ${startIdx} < 0 ? ${s}.lastIndexOf(${sub}) : ${s}.lastIndexOf(${sub}, ${startIdx});`);
+	unreachable;
+}
+
+export function slice(this s: string, start: int64, end: int64): string {
+	@emit(`return ${s}.slice(${start}, ${end});`);
+	unreachable;
+}
+
+export function equals(this s: string, other: string): boolean {
+	return msStringEquals(s, other);
+}
+
+export function substring(this s: string, start: int64, end: int64): string {
+	return s.slice(start, end);
+}
+
+export function padStart(this s: string, targetLen: int64, pad: string): string {
+	@emit(`return ${s}.padStart(${targetLen}, ${pad});`);
+	unreachable;
+}
+
+export function padEnd(this s: string, targetLen: int64, pad: string): string {
+	@emit(`return ${s}.padEnd(${targetLen}, ${pad});`);
+	unreachable;
+}
+
+// strtod/strtoll parity: unparseable input is 0, never NaN.
+export function parseFloat(this s: string): number {
+	@emit(`var v = Number.parseFloat(${s}); return Number.isNaN(v) ? 0 : v;`);
+	unreachable;
+}
+
+export function parseInt(this s: string): int64 {
+	@emit(`var v = Number.parseInt(${s}, 10); return Number.isNaN(v) ? 0 : v;`);
+	unreachable;
+}
+
+// Native strings carry no separate allocation — capacity is the byte length.
+export function capacity(this s: string): int64 {
+	return s.byteLength();
+}
+
+export function fromCodePoint(cp: number): string {
+	@emit(`return (${cp} < 0 || ${cp} > 1114111) ? "" : String.fromCodePoint(${cp});`);
+	unreachable;
+}
+
+// Number/bool to string (called by builtinLower .toString())
+export function msNumberToString(n: number): string {
+	@emit(`return String(${n});`);
+	unreachable;
+}
+
+export function msNumberToStringRadix(n: number, radix: number): string {
+	@emit(`return ${n}.toString(${radix});`);
+	unreachable;
+}
+
+export function msBoolToString(b: boolean): string {
+	@emit(`return ${b} ? "true" : "false";`);
+	unreachable;
+}
+
+// String hash — DJB2 over WTF-8 bytes (matches C runtime msStringHash)
+export function msStringHash(s: string): int32 {
+	const sb = wtf8Cached(s);
+	let h: int32 = 5381;
+	for (let i = 0; i < sb.length; i += 1) {
+		h = (h * 33 + sb[i]) as int32;
+	}
+	return h;
+}
+
+// .length on string → UTF-16 code units (LANG.md Index-Space Contract) = native.
+export function msStringLength(s: string): int64 {
+	@emit(`return ${s}.length;`);
+	unreachable;
+}
+
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
-export { byteLength, byteAt, byteSlice, byteIndexOf, byteLastIndexOf, startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";
+export { byteIndexOf, byteLastIndexOf, startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";

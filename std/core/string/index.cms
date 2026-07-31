@@ -129,4 +129,22 @@ export extern function String<T>(val: T): string;
 export extern function asBytes(this s: string): uint8[] from "msAsBytes";
 
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
-export { byteLength, byteAt, byteSlice, byteIndexOf, byteLastIndexOf, startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";
+export function byteLength(this s: string): int64 {
+	return s.asBytes().length as int64;
+}
+
+export function byteAt(this s: string, idx: int64): int32 {
+	const b = s.asBytes();
+	if (idx < 0 || idx >= b.length) return -1;
+	return b[idx] as int32;
+}
+
+export function byteSlice(this s: string, start: int64, end: int64): string {
+	const b = s.asBytes();
+	const result: uint8[] = [];
+	let i = start;
+	while (i < end && i < b.length) { result.push(b[i]); i = i + 1; }
+	return result.asString();
+}
+
+export { byteIndexOf, byteLastIndexOf, startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";
