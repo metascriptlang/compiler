@@ -167,15 +167,15 @@ msNumberArray msNumberArraySlice(msNumberArray* arr, int64_t start, int64_t end)
 	return result;
 }
 
-msNumberArray msNumberArrayConcat(msNumberArray* a, msNumberArray b) {
-	int64_t totalLen = a->len + b.len;
+msNumberArray msNumberArrayConcat(msNumberArray* a, const msNumberArray* b) {
+	int64_t totalLen = a->len + b->len;
 	if (totalLen == 0) return MS_EMPTY_NUMBER_ARRAY;
 	msNumberArray result = msNumberArrayNew(totalLen);
 	if (a->len > 0 && a->p) {
 		memcpy(result.p->data, a->p->data, a->len * sizeof(double));
 	}
-	if (b.len > 0 && b.p) {
-		memcpy(result.p->data + a->len, b.p->data, b.len * sizeof(double));
+	if (b->len > 0 && b->p) {
+		memcpy(result.p->data + a->len, b->p->data, b->len * sizeof(double));
 	}
 	result.len = totalLen;
 	return result;
@@ -404,8 +404,8 @@ msStringArray msStringArraySlice(msStringArray* arr, int64_t start, int64_t end)
 	return result;
 }
 
-msStringArray msStringArrayConcat(msStringArray* a, msStringArray b) {
-	int64_t totalLen = a->len + b.len;
+msStringArray msStringArrayConcat(msStringArray* a, const msStringArray* b) {
+	int64_t totalLen = a->len + b->len;
 	if (totalLen == 0) return MS_EMPTY_STRING_ARRAY;
 	msStringArray result = msStringArrayNew(totalLen);
 	/* Deep-copy non-literal strings — same rule as Slice/Push/From. */
@@ -413,8 +413,8 @@ msStringArray msStringArrayConcat(msStringArray* a, msStringArray b) {
 		msString s = a->p->data[i];
 		result.p->data[i] = (s.p != NULL && !msIsLiteral(s)) ? msStringNew(s.p->data, s.len) : s;
 	}
-	for (int64_t i = 0; i < b.len; i++) {
-		msString s = b.p->data[i];
+	for (int64_t i = 0; i < b->len; i++) {
+		msString s = b->p->data[i];
 		result.p->data[a->len + i] = (s.p != NULL && !msIsLiteral(s)) ? msStringNew(s.p->data, s.len) : s;
 	}
 	result.len = totalLen;
