@@ -496,6 +496,10 @@ function planJobs(specs: Spec[]): BuildJob[] {
 // ---- scheduler ----
 
 // same infra signatures guard/run.sh retries on — a toolchain race is not a verdict
+function nativeBuildOk(output: string): boolean {
+	return output.contains("Built") || output.contains("Up to date");
+}
+
 function isToolchainRace(output: string): boolean {
 	return output.contains("_link.rsp': FileNotFound")
 		|| output.contains("UnexpectedRemainder")
@@ -553,14 +557,16 @@ function main(): void {
 	const parityDone: Cell[] = [];
 
 	// builds run serially in the foreground (concurrent msc builds race the
-	// shared out/ cache); finished binaries run in background slots meanwhile
+	// shared out/ cache); finished binaries run in background slots meanwhile.
+	// "Up to date" = msc's self-skip when the cell binary is already fresh —
+	// a success, not a failure (unchanged reruns hit it on every native cell)
 	for (const job of jobs) {
 		let b = runCapture(job.cmd);
-		let builtOk = job.lane == "js" ? b.exitCode === 0 : b.output.contains("Built");
+		let builtOk = job.lane == "js" ? b.exitCode === 0 : nativeBuildOk(b.output);
 		if (!builtOk && isToolchainRace(b.output)) {
 			progress("  · flake-retry " + job.spec.name + " [" + job.lane + "]: toolchain race, rebuilding");
 			b = runCapture(job.cmd);
-			builtOk = job.lane == "js" ? b.exitCode === 0 : b.output.contains("Built");
+			builtOk = job.lane == "js" ? b.exitCode === 0 : nativeBuildOk(b.output);
 		}
 		if (!builtOk) {
 			ensureDir(job.cell.dir);
