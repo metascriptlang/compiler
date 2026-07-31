@@ -2,7 +2,7 @@
 // Pattern: ~/projects/metascript/src/lexer/lexer.zig
 
 import { TokenKind, identToKeyword } from "./token";
-import { LexerState, peek, peekAt, advanceChar, skip, addToken, addComment, allowsRegexAfter } from "./state";
+import { LexerState, peek, peekAt, advanceChar, skip, addToken, addComment, allowsRegexAfter, setLexError } from "./state";
 import { isDigit, isLetter, isHexDigit, isOctalDigit, isBinaryDigit } from "./chars";
 
 // ===== Number Scanning =====
@@ -87,23 +87,106 @@ export function scanNumber(s: LexerState): void {
 
 // ===== String Scanning =====
 
+function hexDigitValue(b: number): number {
+	if (b >= "0".code && b <= "9".code) return b - "0".code;
+	if (b >= "a".code && b <= "f".code) return b - "a".code + 10;
+	return b - "A".code + 10;
+}
+
+function scanHexDigits(s: LexerState, count: number): number {
+	let value = 0;
+	let i = 0;
+	while (i < count) {
+		const d = peek(s);
+		if (!isHexDigit(d)) {
+			setLexError(s, "Invalid hexadecimal escape sequence");
+			return -1;
+		}
+		value = value * 16 + hexDigitValue(d);
+		advanceChar(s);
+		i += 1;
+	}
+	return value;
+}
+
+function scanUnicodeEscape(s: LexerState): string {
+	if (peek(s) === "{".code) {
+		advanceChar(s);
+		let cp = 0;
+		let digits = 0;
+		while (isHexDigit(peek(s))) {
+			cp = cp * 16 + hexDigitValue(peek(s));
+			advanceChar(s);
+			digits += 1;
+		}
+		if (digits === 0 || peek(s) !== "}".code) {
+			setLexError(s, "Invalid Unicode escape sequence");
+			return "";
+		}
+		advanceChar(s);
+		if (cp > 1114111) {
+			setLexError(s, "Unicode codepoint must not be greater than 0x10FFFF");
+			return "";
+		}
+		return fromCodePoint(cp);
+	}
+	const unit = scanHexDigits(s, 4);
+	if (unit < 0) return "";
+	if (unit >= 0xD800 && unit <= 0xDBFF
+			&& peek(s) === "\\".code && peekAt(s, 1) === "u".code
+			&& isHexDigit(peekAt(s, 2)) && isHexDigit(peekAt(s, 3))
+			&& isHexDigit(peekAt(s, 4)) && isHexDigit(peekAt(s, 5))) {
+		const low = hexDigitValue(peekAt(s, 2)) * 4096 + hexDigitValue(peekAt(s, 3)) * 256
+			+ hexDigitValue(peekAt(s, 4)) * 16 + hexDigitValue(peekAt(s, 5));
+		if (low >= 0xDC00 && low <= 0xDFFF) {
+			skip(s, 6);
+			return fromCodePoint(65536 + (unit - 0xD800) * 1024 + (low - 0xDC00));
+		}
+	}
+	return fromCodePoint(unit);
+}
+
 function scanEscape(s: LexerState): string {
 	advanceChar(s); // skip backslash
-	// Hex escape: \xHH — read 2 hex digits, preserve as \xHH for C codegen
-	if (peek(s) === "x".code && s.pos + 2 < s.source.byteLength) {
-		advanceChar(s); // skip 'x'
-		const d1 = s.source.byteSlice(s.pos, s.pos + 1);
+	const first = peek(s);
+
+	if (first === "x".code) {
 		advanceChar(s);
-		const d2 = s.source.byteSlice(s.pos, s.pos + 1);
-		advanceChar(s);
-		return "\\" + "x" + d1 + d2;
+		const cu = scanHexDigits(s, 2);
+		if (cu < 0) return "";
+		return fromCodePoint(cu);
 	}
+	if (first === "u".code) {
+		advanceChar(s);
+		return scanUnicodeEscape(s);
+	}
+	if (first === "0".code && !isDigit(peekAt(s, 1))) {
+		advanceChar(s);
+		return fromCodePoint(0);
+	}
+	if (isDigit(first)) {
+		setLexError(s, "Octal escape sequences are not allowed in strict mode");
+		advanceChar(s);
+		return "";
+	}
+	if (first === "\n".code) {
+		advanceChar(s);
+		return "";
+	}
+	if (first === "\r".code) {
+		advanceChar(s);
+		if (peek(s) === "\n".code) advanceChar(s);
+		return "";
+	}
+
 	const esc = advanceChar(s);
 	return match (esc) {
 		"n".code => "\n",
 		"t".code => "\t",
 		"r".code => "\r",
-		"0".code => "\\" + "0",
+		"b".code => fromCodePoint(8),
+		"f".code => fromCodePoint(12),
+		"v".code => fromCodePoint(11),
 		"\\".code => "\\",
 		"\"".code => "\"",
 		"'".code => "'",

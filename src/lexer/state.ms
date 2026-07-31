@@ -19,10 +19,15 @@ export interface LexerState {
 	braceStack: number[];
 	lastToken: TokenKind;
 	jsxStack: JsxMode[];
+	lexError: string;
 }
 
 export function createLexerState(source: string): LexerState {
-	return { source, pos: 0, line: 1, column: 1, tokens: [], comments: [], templateDepth: 0, braceStack: [], lastToken: TokenKind.Eof, jsxStack: [] };
+	return { source, pos: 0, line: 1, column: 1, tokens: [], comments: [], templateDepth: 0, braceStack: [], lastToken: TokenKind.Eof, jsxStack: [], lexError: "" };
+}
+
+export function setLexError(s: LexerState, message: string): void {
+	if (s.lexError === "") s.lexError = `${message} at line ${s.line}, column ${s.column}`;
 }
 
 export function peek(s: LexerState): number {

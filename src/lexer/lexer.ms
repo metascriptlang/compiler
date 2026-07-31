@@ -14,6 +14,7 @@ export function lex(source: string): Result<Token[], string> {
 	const s = createLexerState(source);
 
 	while (s.pos < s.source.byteLength) {
+		if (s.lexError !== "") return Result.err(s.lexError);
 		const ch = peek(s);
 
 		// JSX mode (lexer-owned). Handles JSX-start in expression position and all scanning
@@ -65,6 +66,7 @@ export function lex(source: string): Result<Token[], string> {
 		return Result.err(`Unknown character at line ${s.line}, column ${s.column}`);
 	}
 
+	if (s.lexError !== "") return Result.err(s.lexError);
 	addToken(s, TokenKind.Eof, "", s.line, s.column);
 	return Result.ok(move s.tokens);
 }
