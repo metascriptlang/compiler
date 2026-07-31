@@ -31,32 +31,6 @@ export function emitNumberLiteral(gen: JSGenerator, node: Node): void {
 
 export function emitStringLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as StringLiteralData;
-	if (gen.bundleMode) {
-		// Bundle mode: strings as UTF-8 byte arrays (reference parity: makeStrLit)
-		const s = d.value;
-		if (s.byteLength === 0) {
-			emit(gen, "[]");
-			return;
-		}
-		if (s.byteLength <= 64) {
-			// Short: inline byte array [104,101,108,108,111]
-			emit(gen, "[");
-			let i = 0;
-			while (i < s.byteLength) {
-				if (i > 0) emit(gen, ",");
-				emit(gen, "" + s.byteAt(i));
-				i = i + 1;
-			}
-			emit(gen, "]");
-		} else {
-			// Long: makeNimstrLit("hello") — converts at runtime
-			emit(gen, "makeNimstrLit(\"");
-			emit(gen, escapeJSString(d.value));
-			emit(gen, "\")");
-		}
-		return;
-	}
-	// Non-bundle: native JS string
 	emit(gen, "\"");
 	emit(gen, escapeJSString(d.value));
 	emit(gen, "\"");
@@ -273,28 +247,16 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		return;
 	}
 
-	// msPrintln / console.log → toJSStr conversion (byte arrays → native JS strings)
+	// msPrintln / console.log → console.log (strings are native)
 	const isMsPrintln = d.callee.kind === NodeKind.Identifier && (d.callee.data as IdentifierData).name === "msPrintln";
 	const isConsoleLog = d.callee.kind === NodeKind.MemberExpr
 		&& (d.callee.data as MemberExprData).property === "log"
 		&& (d.callee.data as MemberExprData).object.kind === NodeKind.Identifier
 		&& ((d.callee.data as MemberExprData).object.data as IdentifierData).name === "console";
 	if (isMsPrintln || isConsoleLog) {
-		if (gen.bundleMode) {
-			// Bundle mode: strings are byte arrays, need toJSStr for display
-			emit(gen, "console.log(");
-			for (let ai = 0; ai < d.arguments.length; ai += 1) {
-				if (ai > 0) emit(gen, ", ");
-				emit(gen, "toJSStr(");
-				emitNode(gen, d.arguments[ai]);
-				emit(gen, ")");
-			}
-			emit(gen, ")");
-		} else {
-			emit(gen, "console.log(");
-			emitJoinedNodes(gen, d.arguments, ", ");
-			emit(gen, ")");
-		}
+		emit(gen, "console.log(");
+		emitJoinedNodes(gen, d.arguments, ", ");
+		emit(gen, ")");
 		return;
 	}
 

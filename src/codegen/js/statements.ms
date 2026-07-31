@@ -72,11 +72,7 @@ function emitDefaultInit(gen: JSGenerator, t: Type): void {
 		return;
 	}
 	if (t.kind === TypeKind.String) {
-		if (gen.bundleMode) {
-			emit(gen, " = []");  // byte array (reference parity)
-		} else {
-			emit(gen, " = \"\"");
-		}
+		emit(gen, " = \"\"");
 		return;
 	}
 }
