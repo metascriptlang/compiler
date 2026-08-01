@@ -801,14 +801,6 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 		bundle = bundle + `\n// --- Module: ${moduleId} ---\n`;
 		bundle = bundle + result.code;
-		if (result.exportedNames.length > 0) {
-			bundle = bundle + `__mod["${moduleId}"] = { `;
-			for (let ei = 0; ei < result.exportedNames.length; ei += 1) {
-				if (ei > 0) bundle = bundle + ", ";
-				bundle = bundle + result.exportedNames[ei];
-			}
-			bundle = bundle + " };\n";
-		}
 		compiled = compiled + 1;
 	}
 
@@ -822,7 +814,6 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		}
 		output = output + ` } from "${extImportKeys[ei]}";\n`;
 	}
-	output = output + "const __mod = {};\n";
 	output = output + bundle;
 
 	const outPath = `${outDir}/${replaceExt(basename(entryPath), ".js")}`;

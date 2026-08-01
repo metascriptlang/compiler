@@ -180,42 +180,9 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	if (d.importSource.length >= 2 && d.importSource.slice(d.importSource.length - 2, d.importSource.length) === ".h") return;
 	// std/meta is the compile-time AST/macro API — no runtime JS counterpart.
 	if (d.importSource === "std/meta" || (d.importSource.length >= 9 && d.importSource.slice(0, 9) === "std/meta/")) return;
-	if (gen.bundleMode) {
-		// All modules in global scope — skip all MetaScript imports (symbols already in scope)
-		return;
-		// Dedup: filter out names already imported in this IIFE (const can't redeclare)
-		const dedupNames: string[] = [];
-		const dedupAliases: string[] = [];
-		for (let ni = 0; ni < d.importNames.length; ni += 1) {
-			const localName = (ni < d.importAliases.length && d.importAliases[ni] !== "" && d.importAliases[ni] !== d.importNames[ni]) ? d.importAliases[ni] : d.importNames[ni];
-			let dup = false;
-			for (const existing of gen.importedNames) { if (existing === localName) { dup = true; } }
-			if (!dup) {
-				dedupNames.push(d.importNames[ni]);
-				dedupAliases.push(ni < d.importAliases.length ? d.importAliases[ni] : "");
-				gen.importedNames.push(localName);
-			}
-		}
-		if (dedupNames.length === 0) return;
-		// Find module ID from the import source → module ID mapping
-		let moduleId = d.importSource;
-		for (let mi = 0; mi < gen.importSourceToModuleIdKeys.length; mi += 1) {
-			if (gen.importSourceToModuleIdKeys[mi] === d.importSource) {
-				moduleId = gen.importSourceToModuleId[mi];
-			}
-		}
-		emitIndent(gen);
-		emit(gen, "const { ");
-		for (let i = 0; i < dedupNames.length; i += 1) {
-			if (i > 0) emit(gen, ", ");
-			const name = dedupNames[i];
-			const alias = (i < dedupAliases.length && dedupAliases[i] !== "" && dedupAliases[i] !== name) ? dedupAliases[i] : "";
-			emit(gen, name);
-			if (alias !== "") { emit(gen, ": "); emit(gen, alias); }
-		}
-		emit(gen, ` } = __mod["${moduleId}"];\n`);
-		return;
-	}
+	// Bundle: every module shares one flat scope and names carry module
+	// identity, so cross-module references need no binding statement.
+	if (gen.bundleMode) return;
 	// Non-bundle mode: ES module import
 	emitIndent(gen);
 	if (d.importNames.length === 0) {
