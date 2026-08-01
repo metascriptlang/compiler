@@ -496,8 +496,10 @@ export function printMacroDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MacroDeclData;
 	const noDefaults: Node[] = [];
 	const params = buildParamList(d.macroDeclParams, d.macroDeclParamTypes, noDefaults, options);
-	const parts: Doc[] = [docText("macro " + d.macroDeclName)];
+	const keyword = (node.flags & NodeFlag.Converter) !== 0 ? "converter " : "macro ";
+	const parts: Doc[] = [docText(keyword + d.macroDeclName)];
 	for (const p of paramListInParens(params, options)) parts.push(p);
+	if (d.macroDeclReturnType !== "") parts.push(docText(": " + d.macroDeclReturnType));
 	parts.push(docText(" "));
 	parts.push(callPrintNode(d.macroDeclBody, options));
 	return docGroup(parts);
