@@ -69,6 +69,22 @@ function main(): void {
 	if (odd !== null) { console.log("churnHit=" + odd); }
 	const even = churn.get("k100");
 	if (even === null) { console.log("churnMiss=null"); }
+
+	const feParts: string[] = [];
+	m.forEach((v: string, k: string) => { feParts.push(k + "=" + v); });
+	let fe = "";
+	for (const e of sorted(feParts)) { fe = fe + e + ","; }
+	console.log("hmForEach=" + fe);
+
+	const seen: string[] = [];
+	s.forEach((v: string) => { seen.push(v); });
+	let sf = "";
+	for (const e of sorted(seen)) { sf = sf + e + ","; }
+	console.log("hsForEach=" + sf);
+
+	const hl: HashMap<string, string> = { "lit": "L1" };
+	const lv = hl.get("lit");
+	if (lv !== null) { console.log("hmLiteral=" + lv); }
 }
 
 main();

@@ -69,5 +69,8 @@ function main(): void {
 	show("trimTabs", "\t\npad\n\t".trim());
 	show("trimNothing", "pad".trim());
 	show("trimAll", "   ".trim());
+
+	showB("includesHit", "haystack".includes("stack"));
+	showB("includesMiss", "haystack".includes("zzz"));
 }
 main();

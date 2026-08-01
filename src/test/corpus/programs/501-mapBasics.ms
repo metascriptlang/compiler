@@ -47,5 +47,17 @@ function main(): void {
 	m.set("omega", "z1");
 	const back = m.get("omega");
 	if (back !== null) { console.log("reuseAfterClear=" + back); }
+
+	let fe = "";
+	m.forEach((v: string, k: string) => { fe = fe + k + "=" + v + ";"; });
+	console.log("forEach=" + fe);
+
+	const lit: Map<string, string> = { "one": "u1", "two": "u2" };
+	lit["three"] = "u3";
+	const two = lit["two"];
+	if (two !== null) { console.log("subscript=" + two); }
+	let litKeys = "";
+	for (const k of lit.keys()) { litKeys = litKeys + k + ","; }
+	console.log("literalOrder=" + litKeys);
 }
 main();
