@@ -34,6 +34,10 @@ export function endsWith(this s: string, suffix: string): boolean {
 	return true;
 }
 
+export function includes(this s: string, sub: string): boolean {
+	return s.contains(sub);
+}
+
 export function contains(this s: string, sub: string): boolean {
 	return s.byteIndexOf(sub, 0) >= 0;
 }
