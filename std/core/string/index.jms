@@ -64,18 +64,6 @@ export function byteSlice(this s: string, start: int64, end: int64): string {
 	return sub.asString();
 }
 
-// ===== Concat (native; producers only on non-gated paths — macros, tests) =====
-
-export function msStringConcat(a: string, b: string): string {
-	@emit(`return ${a} + ${b};`);
-	unreachable;
-}
-
-export function msStringConcatArr(count: number, ...parts: string[]): string {
-	@emit(`return ${parts}.join("");`);
-	unreachable;
-}
-
 // ===== Operators =====
 
 export function `==`(this a: string, b: string): boolean {
