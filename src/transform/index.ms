@@ -80,6 +80,7 @@ import { liftDestructors } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
 import { lowerRestParams } from "./lowering/restParamLower";
 import { lowerActorPre, lowerActor } from "./lowering/actorLower";
+import { resolveRuntimeIdents } from "./lowering/runtimeIdentResolve";
 
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -145,6 +146,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// native null (platform interop) and codegen dumb.
 	if (jsBackend) { result = unwrapMaybe(result, ctx); }
 	result = lowerDCE(result, ctx);
+	if (jsBackend) { result = resolveRuntimeIdents(result, ctx); }
 	if (!jsBackend) { result = liftDestructors(result, ctx); }
 	return result;
 }
