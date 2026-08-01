@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct } from "./types";
 
 
 // ===== Assignability =====
@@ -249,6 +249,11 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	}
 	if (source.kind === TypeKind.GenericInstance && source.typeReturn !== null
 		&& source.typeReturn.kind !== TypeKind.Struct && source.typeReturn.kind !== TypeKind.Union) {
+		return isAssignable(source.typeReturn, target);
+	}
+
+	// Brand widens implicitly to its base (CubeId → string); base → brand needs `as`.
+	if (isBrandDistinct(source) && source.typeReturn !== null && target.kind !== TypeKind.Distinct) {
 		return isAssignable(source.typeReturn, target);
 	}
 

@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createArc, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, userUnknownType } from "./types";
+import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createArc, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, userUnknownType, createBrandDistinct } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -109,6 +109,45 @@ function unwrapToStruct(t: Type): Type {
 		if (s.kind === TypeKind.Ref && s.typeReturn !== null) s = s.typeReturn;
 	}
 	return s;
+}
+
+function isLiteralTypeKind(k: TypeKind): boolean {
+	return k === TypeKind.StringLiteral || k === TypeKind.BooleanLiteral || k === TypeKind.EnumLiteral;
+}
+
+// TS branded primitive: one primitive base + object operand(s) whose fields are
+// ALL literal-typed. Identity = sorted brand field/value pairs, NOT the alias
+// name — tsc parity: two aliases with the same brand literal are one type.
+function tryBrandIntersection(operandTypes: Type[]): Type | null {
+	let base: Type | null = null;
+	const pairs: string[] = [];
+	for (const op of operandTypes) {
+		const s = unwrapToStruct(op);
+		if (s.kind === TypeKind.Struct) {
+			if (s.typeNames === null || s.typeNames.length === 0) return null;
+			for (let fi = 0; fi < s.typeNames.length; fi += 1) {
+				const ft = s.typeChildren[fi];
+				if (ft === null || !isLiteralTypeKind(ft.kind)) return null;
+				pairs.push(s.typeNames[fi] + ":" + typeDisplayName(ft));
+			}
+		} else {
+			if (base !== null) return null;
+			if (!(isNumeric(s) || s.kind === TypeKind.String || s.kind === TypeKind.Boolean || s.kind === TypeKind.Char)) return null;
+			base = op;
+		}
+	}
+	if (base === null || pairs.length === 0) return null;
+	for (let i = 1; i < pairs.length; i += 1) {
+		const p = pairs[i];
+		let j = i - 1;
+		while (j >= 0 && pairs[j] > p) { pairs[j + 1] = pairs[j]; j = j - 1; }
+		pairs[j + 1] = p;
+	}
+	let brandKey = "";
+	for (const pr of pairs) {
+		brandKey = brandKey.length === 0 ? pr : brandKey + "&" + pr;
+	}
+	return createBrandDistinct(brandKey, base);
 }
 
 // Append fields from a struct-like operand into the accumulator arrays.
@@ -281,7 +320,12 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 			}
 			return createStruct("", mergedNames, mergedTypes, true);
 		}
-		// Erasure tier (primitive operand or single non-empty): first operand wins.
+		if (operandTypes.length >= 2) {
+			const brand = tryBrandIntersection(operandTypes);
+			if (brand !== null) return brand;
+		}
+		// Erasure tier (non-brand mix): first operand wins. S2 (TSGAP item 5)
+		// replaces this silent collapse with a hard error.
 		const firstPart = intersectionParts[0].trim();
 		if (firstPart.length > 0) {
 			return resolveAnnotation(firstPart, ctx, line, col);
