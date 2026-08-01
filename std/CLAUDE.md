@@ -6,40 +6,25 @@
 std/
 ├── CLAUDE.md                  -- this file
 ├── core/                      -- prelude modules (auto-loaded, no import needed)
-│   ├── system.ms              -- console, Result<T,E>, toString
-│   ├── string/index.cms       -- string extension methods
-│   ├── array/index.cms        -- array extension methods
-│   ├── map/index.cms          -- Map<K,V> methods
-│   ├── buffer/                -- binary data (Buffer class wrapping C)
-│   │   ├── index.cms          -- prelude (Buffer class, 90 extern bindings)
-│   │   ├── native.h           -- C header (msBuffer = typedef msString)
-│   │   ├── native.c           -- C implementation (714 LOC)
-│   │   └── test.ms            -- 45 tests (alloc, int r/w, float, search, swap)
+│   ├── system/                -- console, Result<T,E>, toString (index.ms/.jms)
+│   ├── string/                -- string surface (immutable — docs/STRING-CONTRACT.md):
+│   │   ├── shared.ms          --   portable byte-tier algorithms, ALL backends
+│   │   └── index.cms/.jms/.rms--   per-backend kernels (js = native string + WTF-8 byte tier)
+│   ├── array/                 -- array extension methods (index.cms/.jms/.rms)
+│   ├── struct.ms              -- Map/Set/HashMap/HashSet — C implementations
+│   │                             (ordered IndexMap + open addressing; @builtin("IndexableMap"))
+│   ├── struct.jms             -- same surface bound to native JS Map/Set
+│   ├── buffer/                -- binary data; uint8[] mutation tier + asBytes/asString bridges
 │   ├── crypto/                -- cryptographic operations (mbedTLS)
-│   │   ├── index.cms          -- prelude (hash, HMAC, random, Hasher/Hmac classes)
-│   │   ├── errors.ms          -- CryptoError types + constructors
-│   │   ├── native.h           -- C header (Phase 1: hash/HMAC/random)
-│   │   ├── native.c           -- C implementation (~350 LOC, mbedTLS MD API)
-│   │   └── test.ms            -- 30+ tests (known vectors, streaming, random)
-│   └── json/                  -- JSON types + parser + stringify
-│       ├── index.cms          -- prelude (JsonKind, JsonValue, JSON class)
-│       ├── index.ms           -- re-exports for explicit import
-│       ├── types.ms           -- JsonKind enum, JsonValue class
-│       ├── builder.ms         -- constructors + accessors
-│       ├── parser.ms          -- recursive descent JSON parser
-│       └── stringify.ms       -- JSON serializer
-├── fs/                        -- file system
-│   ├── index.cms              -- 7 C externs + pure MS logic (stat decode, utils)
-│   ├── native.h               -- minimal C runtime (7 POSIX wrappers)
-│   └── path.ms                -- pure MetaScript path utilities (21 tests)
+│   ├── json/                  -- JSON prelude
+│   └── actor/ date/ fetch/ math.ms performance/ promise/ websocket/
+├── serialize/                 -- json (encode/decode/accessors/builder), cbor, contracts
+├── fs/                        -- file system (index.cms + native.h, path.ms)
 ├── io/                        -- standard streams (stdin/stdout/stderr only)
-│   ├── index.cms              -- readLine, readBytes, writeStdout, writeStderr
-│   └── native.h               -- C runtime (stdio wrappers)
-├── process/                   -- process control
-│   ├── index.cms              -- argv, exit, cwd, exec, getEnv, clockMs
-│   └── native.h               -- C runtime (POSIX process ops)
-└── testing/                   -- test framework
-    └── index.ms               -- test "name" { assert statement; }
+├── process/                   -- argv, exit, cwd, exec, getEnv, clockMs
+├── http/ https/ net/          -- networking stack
+├── actor/ archive/ build/ compress/ hash/ meta/ os/ runtime/ surreal/ toycodec/
+└── testing/                   -- test "name" { assert statement; }
 ```
 
 ## File Types
@@ -48,6 +33,8 @@ std/
 |-----------|---------|---------|
 | `.ms` | Pure MetaScript implementation | All backends |
 | `.cms` | C-backend prelude (extern declarations + MS wrappers) | C only |
+| `.jms` | JS-backend prelude (native binds via `extern ... from "pattern"`) | JS only |
+| `.rms` | Raiser-backend prelude | Raiser only |
 | `.h` | C runtime header (included via `@include`) | C only |
 
 **Prefer `.ms` over `.cms`+`.h`** when the logic is pure string/array/number manipulation. Only use `.cms` + `.h` when you need actual C/POSIX calls (file I/O, syscalls, malloc, etc.).
