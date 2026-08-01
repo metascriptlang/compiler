@@ -11,6 +11,7 @@ import { verboseLog } from "./compiler/io";
 import { error, bold, green, cyan } from "./utils/color";
 import { findProjectRoot } from "./utils/path";
 import "./ast/childTableGuard";
+import "./ast/childSlotGuard";
 import { join } from "std/fs/path";
 // Import the package manager hub for test discovery. Individual commands
 // (msc add, install, publish, ...) are wired up from this module as they land.
