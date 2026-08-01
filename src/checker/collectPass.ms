@@ -269,6 +269,10 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 	const sym = makeSymbol(d.className, SymbolKind.Class, classType, false);
 	classType.sym = sym;
 	innerType.sym = sym;
+	if ((node.flags & NodeFlag.ExternC) !== 0) {
+		setFlag(sym, SymbolFlag.ImportC);
+		sym.nativeName = d.className;
+	}
 	defineOrError(ctx, sym, node);
 	// Check for constructor → set HasConstructor flag for codegen
 	for (const member of d.classBody) {
