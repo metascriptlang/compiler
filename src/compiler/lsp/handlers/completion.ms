@@ -40,6 +40,20 @@ import {
 let _prebuiltCache: HashMap<string, string[]> = new HashMap<string, string[]>();
 const PREBUILT_CAPACITY = 10;
 
+const STMT_KEYWORDS: string[] = ["actor", "assert", "async", "await", "break", "case", "catch", "class", "const", "continue", "converter", "default", "defer", "do", "else", "enum", "export", "extern", "false", "finally", "for", "function", "if", "import", "interface", "let", "macro", "match", "move", "new", "null", "quote", "return", "sizeof", "static", "struct", "super", "switch", "template", "test", "this", "throw", "true", "try", "type", "typeof", "undefined", "unreachable", "var", "when", "while"];
+const TYPE_KEYWORDS: string[] = ["char", "cstring", "distinct", "double", "float", "float32", "float64", "int", "int16", "int32", "int64", "int8", "keyof", "never", "ref", "typeof", "uint16", "uint32", "uint64", "uint8", "unknown", "void"];
+const KEYWORD_COMPLETION_KIND = 14;
+
+function lspKeywordItems(kind: SgCompletionKind, prefix: string): string[] {
+	const words = kind === SgCompletionKind.TypeAnnotation ? TYPE_KEYWORDS : STMT_KEYWORDS;
+	const result: string[] = [];
+	for (const w of words) {
+		if (prefix.length > 0 && !w.startsWith(prefix)) continue;
+		result.push(lspFmtCompletionItem(w, KEYWORD_COMPLETION_KIND, "keyword", "16", false, "", "", ""));
+	}
+	return result;
+}
+
 export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string): void {
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return;
@@ -50,6 +64,9 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 	// Defer detail/docs/textEdit to completionItem/resolve.
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null);
 	const items: string[] = [];
+	for (const kw of STMT_KEYWORDS) {
+		items.push("{\"label\":" + lspJsonString(kw) + ",\"kind\":" + KEYWORD_COMPLETION_KIND + ",\"sortText\":\"16\"}");
+	}
 	for (const c of candidates) {
 		const kindNum = lspCompletionItemKind(c.kind, c.isMutable);
 		const sortText = lspCompletionSortText(c);
@@ -400,6 +417,9 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 		if (kind === SgCompletionKind.Identifier || kind === SgCompletionKind.TypeAnnotation) {
 			const emptyScope: HashSet<string> = new HashSet<string>();
 			const fallbackItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, emptyScope);
+			for (const kwItem of lspKeywordItems(kind, prefix)) {
+				fallbackItems.push(kwItem);
+			}
 			if (fallbackItems.length > 0) return lspResponse(id, joinJsonItems(fallbackItems));
 		}
 		return lspResponse(id, "[]");
@@ -464,6 +484,12 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 		const autoImportItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, inScopeSet);
 		for (let ai = 0; ai < autoImportItems.length; ai = ai + 1) {
 			cachedItems.push(autoImportItems[ai]);
+		}
+	}
+
+	if (kind === SgCompletionKind.Identifier || kind === SgCompletionKind.TypeAnnotation) {
+		for (const kwItem of lspKeywordItems(kind, prefix)) {
+			cachedItems.push(kwItem);
 		}
 	}
 
@@ -907,4 +933,78 @@ const z = mA({ a: 1 });
 	dbSetFileText(db, lspUriToPath("file:///cycuse.ms"), use);
 	const ctx = dbTypeCheck(db, lspUriToPath("file:///cycuse.ms"));
 	assert ctx !== null;
+}
+
+// ===== Keyword completion =====
+
+test "keyword completion: statement prefix offers converter" {
+	const r = completionFixtureAt("conv\n", 4, 4);
+	assert r.indexOf("\"label\":\"converter\"", 0) >= 0;
+}
+
+test "keyword completion: statement prefix offers function" {
+	const r = completionFixtureAt("fun\n", 4, 3);
+	assert r.indexOf("\"label\":\"function\"", 0) >= 0;
+}
+
+test "keyword completion: type annotation offers uint32 not function" {
+	const r = completionFixtureAt("const v: uin = 0;\n", 4, 12);
+	assert r.indexOf("\"label\":\"uint32\"", 0) >= 0;
+	assert r.indexOf("\"label\":\"function\"", 0) < 0;
+}
+
+test "keyword completion: member access offers no keywords" {
+	const r = completionFixtureAt("function f(s: Style): void { s. }\n", 4, 31);
+	assert r.indexOf("colorX", 0) >= 0;
+	assert r.indexOf("\"label\":\"const\"", 0) < 0;
+}
+
+test "keyword completion: annotation on decl without initializer" {
+	const r = completionFixtureAt("let v: uin\n", 4, 10);
+	assert r.indexOf("\"label\":\"uint32\"", 0) >= 0;
+}
+
+test "keyword completion: file holds a decl without initializer elsewhere" {
+	const r = completionFixtureAt("conv\nlet v: uin\n", 4, 4);
+	assert r.indexOf("\"label\":\"converter\"", 0) >= 0;
+}
+
+test "keyword completion: items carry the LSP Keyword kind" {
+	const r = completionFixtureAt("conv\n", 4, 4);
+	assert r.indexOf("\"label\":\"converter\",\"kind\":14", 0) >= 0;
+}
+
+test "keyword completion: a clean file still offers keywords" {
+	const r = completionFixtureAt("const q = 1;\nfun\n", 5, 3);
+	assert r.indexOf("\"label\":\"function\"", 0) >= 0;
+}
+
+test "keyword completion: object field context offers none" {
+	const r = completionFixtureAt("const a: Style = {  };\n", 4, 18);
+	assert r.indexOf("colorX", 0) >= 0;
+	assert r.indexOf("\"kind\":14", 0) < 0;
+}
+
+test "keyword completion: import name context offers none" {
+	const r = completionFixtureAt("import { m } from \"./x\";\n", 4, 10);
+	assert r.indexOf("\"kind\":14", 0) < 0;
+}
+
+test "keyword completion: a prefix matching no keyword adds no noise" {
+	const r = completionFixtureAt("zzq\n", 4, 3);
+	assert r.indexOf("\"kind\":14", 0) < 0;
+}
+
+test "keyword completion: parameter annotation offers type keywords" {
+	const r = completionFixtureAt("function g(p: uin): void { }\n", 4, 17);
+	assert r.indexOf("\"label\":\"uint32\"", 0) >= 0;
+}
+
+test "keyword completion: prebuilt empty-prefix includes const" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, lspUriToPath("file:///kwpre.ms"), "const a = 1;\n\n");
+	prebuildCompletionCache(db, lspUriToPath("file:///kwpre.ms"), "file:///kwpre.ms");
+	const params = `{"textDocument":{"uri":"file:///kwpre.ms"},"position":{"line":1,"character":0}}`;
+	const r = handleCompletion("1", params, db, createCompletionCache());
+	assert r.indexOf("\"label\":\"const\"", 0) >= 0;
 }
