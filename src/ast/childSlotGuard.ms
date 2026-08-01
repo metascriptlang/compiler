@@ -16,7 +16,7 @@
 // WHAT IT CATCHES: `forEachChild` (src/ast/visitor.ms) handing `cb` a null.
 //   `let v: uin` with no initializer leaves `initializer === null`; the LSP's
 //   `isInTypeAnnotation` walker read `child.typeExpr` off it and the language
-//   server died mid-request (EXC_BAD_ACCESS at 0xb8) — see bug074.
+//   server died mid-request (EXC_BAD_ACCESS at 0xb8) — see bug075.
 //
 // RED MEANS: the null-skip in `forEachChild` was removed, or a new child table
 //   bypasses it. Restore the skip — do NOT patch the callers one by one; the

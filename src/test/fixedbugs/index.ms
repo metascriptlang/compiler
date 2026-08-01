@@ -87,3 +87,4 @@ import "./bug071ElementNarrowArrayWidening";
 import "./bug072ExternMethodLiftedEmit";
 import "./bug073MatchShadowedLetSlot";
 import "./bug074BrandIntersectionDistinct";
+import "./bug075VisitorNullChildSlot";
