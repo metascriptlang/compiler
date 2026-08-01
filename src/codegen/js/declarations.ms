@@ -17,7 +17,7 @@ function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 		"async_generator" => { emit(gen, "async function* "); },
 		_ => { emit(gen, "function "); },
 	};
-	emit(gen, jsSymbolName(node.resolvedSym, d.fnName));
+	emit(gen, jsSymbolName(node.resolvedSym, d.fnName, gen.bundleMode));
 	emit(gen, "(");
 	emitJoinedSafeStrings(gen, d.params, ", ", safeJsName);
 	emit(gen, ") ");

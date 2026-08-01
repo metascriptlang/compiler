@@ -88,7 +88,7 @@ function emitVariableDeclCore(gen: JSGenerator, node: Node): void {
 		DeclKind.Var => { emit(gen, "var "); },
 		_ => { emit(gen, "let "); },
 	};
-	emit(gen, jsSymbolName(node.resolvedSym, d.declName));
+	emit(gen, jsSymbolName(node.resolvedSym, d.declName, gen.bundleMode));
 	if (d.initializer !== null) {
 		emit(gen, " = ");
 		emitNode(gen, d.initializer);

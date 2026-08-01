@@ -13,8 +13,8 @@ import {
 	AwaitExprData, YieldExprData,
 } from "../../ast/node";
 import { emit, emitNode, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes } from "./emit";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar } from "../c/names";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Literal Emitters =====
 
@@ -105,17 +105,19 @@ export function safeJsName(name: string): string {
 	return name;
 }
 
-// Nim jsgen mangleName parity: decl and every reference derive the emitted
-// name from the SAME symbol, so they agree by construction. Bare names are the
-// exported/@emit ABI surface (Nim's exportc "$1" class); private module-level
-// decls reuse the C backend's module-qualified names (one naming oracle).
-export function jsSymbolName(sym: Symbol, name: string): string {
+// Decl and every reference derive the emitted name from the SAME symbol, so
+// they agree by construction. Uniqueness is required within the EMITTED scope:
+// the bundle is one flat scope (mangle everything), while non-bundle emits one
+// ES module per file where the import/export pair binds public names.
+export function jsSymbolName(sym: Symbol, name: string, bundleMode: boolean): string {
 	if (sym === null) return safeJsName(name);
 	if (sym.nativeName !== null && sym.nativeName !== "") return safeJsName(name);
-	if (hasFlag(sym, SymbolFlag.Exported)) return safeJsName(name);
-	if (hasFlag(sym, SymbolFlag.Imported)) return safeJsName(name);
+	if (!bundleMode && (hasFlag(sym, SymbolFlag.Exported) || hasFlag(sym, SymbolFlag.Imported))) return safeJsName(name);
 	if (sym.symbolKind === SymbolKind.Function && sym.modulePath !== null && sym.modulePath !== "") {
 		return mangledFunctionName(sym, name, sym.overloadIdx);
+	}
+	if (sym.symbolKind === SymbolKind.Class && sym.modulePath !== null && sym.modulePath !== "") {
+		return mangledGlobalName(sym, name);
 	}
 	if (isModuleGlobalVar(sym)) return mangledGlobalName(sym, name);
 	return safeJsName(name);
@@ -123,7 +125,7 @@ export function jsSymbolName(sym: Symbol, name: string): string {
 
 export function emitIdentifier(gen: JSGenerator, node: Node): void {
 	const d = node.data as IdentifierData;
-	emit(gen, jsSymbolName(node.resolvedSym, d.name));
+	emit(gen, jsSymbolName(node.resolvedSym, d.name, gen.bundleMode));
 }
 
 // ===== Binary Expression =====
