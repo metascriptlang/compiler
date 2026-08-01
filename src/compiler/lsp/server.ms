@@ -437,3 +437,52 @@ test "isSuperseded not by different file" {
 	q.push({ body: "2", method: "textDocument/didChange", fileUri: "file:///b.ms" });
 	assert !isSuperseded(q[0], q, 1);
 }
+
+// ===== Wire-level completion =====
+// These drive the SAME path an editor does — processMessage over JSON-RPC —
+// not just the handler. The bug074 segfault lived in dispatch-and-below and was
+// invisible to handler fixtures: a completion in a file holding `let v: uin`
+// (no initializer) killed the process, so the editor saw a dead server rather
+// than a bad response. Pre-fix these tests take the runner down with them.
+
+const KW_WIRE_URI = "file:///lspkw.ms";
+const KW_WIRE_TEXT = "conv\\nlet v: uin\\n";
+
+function kwWireState(): LspServerState {
+	const state = createServerState();
+	processMessage("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}", state);
+	processMessage("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + KW_WIRE_URI + "\",\"languageId\":\"metascript\",\"version\":1,\"text\":\"" + KW_WIRE_TEXT + "\"}}}", state);
+	return state;
+}
+
+function kwWireCompletion(state: LspServerState, id: string, line: number, col: number): string {
+	const msg = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"" + KW_WIRE_URI + "\"},\"position\":{\"line\":" + line.toString() + ",\"character\":" + col.toString() + "}}}";
+	return processMessage(msg, state);
+}
+
+test "wire completion: statement position offers keywords" {
+	const response = kwWireCompletion(kwWireState(), "2", 0, 4);
+	assert response.indexOf("\"label\":\"converter\"", 0) >= 0;
+}
+
+test "wire completion: annotation position offers type keywords only" {
+	const response = kwWireCompletion(kwWireState(), "2", 1, 10);
+	assert response.indexOf("\"label\":\"uint32\"", 0) >= 0;
+	assert response.indexOf("\"label\":\"function\"", 0) < 0;
+}
+
+test "wire completion: response is a framed message carrying its id" {
+	const response = kwWireCompletion(kwWireState(), "7", 0, 4);
+	assert response.indexOf("Content-Length:", 0) === 0;
+	assert response.indexOf("\"id\":7", 0) > 0;
+}
+
+test "wire completion: the server survives a file with an absent child slot" {
+	const state = kwWireState();
+	const first = kwWireCompletion(state, "2", 0, 4);
+	assert first.length > 0;
+	const second = kwWireCompletion(state, "3", 1, 10);
+	assert second.indexOf("\"id\":3", 0) > 0;
+	const hover = processMessage("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"" + KW_WIRE_URI + "\"},\"position\":{\"line\":0,\"character\":1}}}", state);
+	assert hover.length > 0;
+}
