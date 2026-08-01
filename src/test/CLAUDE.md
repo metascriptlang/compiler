@@ -32,10 +32,11 @@ Zig:
 - **Regression tests** with a 1-to-1 bug-to-test mapping (`fixedbugs/`).
 - **Lifecycle guards** that go red on drift from the reference memory
   model (`guard/`, §3.7).
-- **Differential corpus** — the same program through independent
-  executions (C vs JS backend; drc vs orc and -O0 vs --danger as they
-  come online), outputs byte-compared (`differential/`, §3.6). No golden
-  files: the other execution IS the expected output, so tests can't drift.
+- **Program corpus** — the same program through independent executions
+  (C-drc vs C-orc vs `--danger` vs JS-on-node), outputs byte-compared, plus
+  `@maxrss` RSS cells and an `MSCORPUS_SAN=1` sanitizer lane
+  (`corpus/`, §3.6). No golden files: the other execution IS the expected
+  output, so tests can't drift.
 - **Self-host bootstrap** as the integration test of last resort
   (gen-0 vs gen-1 fixpoint on identical input — the definition of "solid").
 
@@ -444,10 +445,10 @@ Other rules that make these numbers real:
 ```bash
 # === PRIMARY: msc test — compiles a C test binary and runs it ===
 # Full suite (lang + c + js + handoff + fixedbugs)
-# ⚠ PARTIALLY RED (2026-07-28): the 74 latent type errors are GONE — this entry
-# now passes the checker clean. It fails later, in C codegen, on 5 files (was 14;
-# 6 fell to the assertMessageExpr child-walker gap, bug008 to a module-blind
-# generic-instance dedup, bug010+bug047 to the bare Maybe-carrier positions).
+# ⚠ PARTIALLY RED (2026-07-30): the 74 latent type errors are GONE — this entry
+# now passes the checker clean. It fails later, in C codegen, on 2 files (was 14):
+# bug006 + lang/syntax, one array/pointer-repr cluster entangled with the
+# in-flight array migration.
 # Pre-existing latents that the old checker abort was hiding, not regressions.
 # Inventory: docs/TSGAP.md "G1-gate".
 msc test src/test/index.ms
@@ -542,7 +543,7 @@ Traps, all measured rather than assumed:
   decide whether you are green.
 - **`msc test` accepts exactly one file** — no directories, no globs, no
   `--filter`. Grouping is only possible through an aggregator module.
-- **Aggregator status**: `src/test/index.ms` now type-checks clean but 5 files
+- **Aggregator status**: `src/test/index.ms` now type-checks clean but 2 files
   fail C codegen (see the banner in §5 and docs/TSGAP.md "G1-gate");
   `src/test/fixedbugs/index.ms` is red for one of them, `bug006`. Do NOT
   repeat the claim that these "pass standalone" — that was true only of
@@ -638,7 +639,7 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
   swallowed build failures (`>/dev/null` + no "Built" check) and could
   run a STALE binary from a previous round as a false pass — the corpus
   runner closes both holes.
-- [ ] 🚧 Corpus growth 63 → ~120 programs per the §3.6 authoring contract
+- [ ] 🚧 Corpus growth 86 → ~120 programs per the §3.6 authoring contract
   (directive head, NNN-topic numbering, RC-stress shapes). New programs
   should prefer parity (no @stdout) over @stdout-contains; strip @stdout
   from migrated deterministic programs over time to upgrade them to
@@ -654,6 +655,9 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
     by-value param from before the array migration; zero callers hid it)
     and the js `sort<T>` bind was bare `#.sort()` = lexicographic on
     numbers. Both fixed same-day.
+  - `250-brandDistinct` landed 2026-08-01 with TSGAP item 5 S1 (branded
+    primitives: nominal in the checker, erased at runtime) — parity all
+    lanes incl. js; guard bug074.
   - 24x match-lowering landed 2026-07-31 (`240-matchShadowUninit`,
     `241-matchShadowBothRun`, `242-matchShadowOrderSwap`) — proven red
     pre-fix (241 exit=133 on all three native lanes): lowered
@@ -728,10 +732,15 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
 - [ ] 🚧 Native full-suite gate `src/test/index.ms` — **the type errors are
   gone** (74 → 0; the last two, `jsonValueOf`'s `got Node, expected Node`,
   fell to the structural `typeRelation` work). It now fails in C codegen on
-  **5 files, down from 14** (2026-07-28): 6 fell to `assertMessageExpr`
+  **2 files, down from 14** (2026-07-30): 6 fell to `assertMessageExpr`
   missing from the AST child-walkers, `bug008` to a module-blind
   generic-instance dedup, `bug010`+`bug047` to bare value-type `T | null`
-  carriers in call and equality position. They are pre-existing latents the
+  carriers in call and equality position, `fmt/roundtrip` to enum
+  reverse-index + request-driven `Enum_toString` injection, and
+  `stress/deepNesting`+`handoff/classMemberElseIf` to banning `any` (they
+  were the tree's only two users of it). The last 2 are `bug006` +
+  `lang/syntax` — one array/pointer-repr cluster, entangled with the
+  in-flight array migration. They are pre-existing latents the
   old checker abort was hiding — identical errors before and after.
   Inventory + error-class census + the remaining clusters: docs/TSGAP.md
   "G1-gate". Fix those and this gate joins the standing ladder.
