@@ -23,10 +23,11 @@ function rewriteStringTsTier(node: Node): Node {
 
 function rewriteLength(node: Node): Node {
 	const d = node.data as MemberExprData;
-	if (d.property !== "length") return node;
+	if (d.property !== "length" && d.property !== "byteLength" && d.property !== "unicodeLength") return node;
 	const objType = d.object.nodeType;
 	if (objType === null || objType.kind !== TypeKind.String) return node;
-	const result = makeCall(makeIdent("msStringLength", node.location), [d.object], node.location);
+	const callee = d.property === "length" ? "msStringLength" : d.property;
+	const result = makeCall(makeIdent(callee, node.location), [d.object], node.location);
 	result.nodeType = node.nodeType;
 	return result;
 }
