@@ -7,6 +7,21 @@
 // result is re-checked in place; never applied inside overload scoring.
 
 import { compileToC, compileToCWithStd, compileProjectToCWithStd, MapEntry } from "../helpers";
+import { parseSource } from "../../parser/statements/validation";
+import "../../parser/statements/core";
+import { resetAllSideChannels } from "../../parser/context";
+import { printNode } from "../../compiler/fmt/printer/index";
+import { formatDoc } from "../../compiler/fmt/layout";
+import { defaultFormatOptions } from "../../compiler/fmt/options";
+
+function fmtSource(source: string): string {
+	resetAllSideChannels();
+	const parsed = parseSource(source);
+	if (!parsed.ok) return "";
+	const opts = defaultFormatOptions();
+	opts.source = source;
+	return formatDoc(printNode(parsed.value, opts), opts);
+}
 
 // Shared converter: any JSX node → the number literal 7.
 const CONV = `
@@ -102,6 +117,22 @@ test "converter: target mismatch — no application, normal error" {
 test "converter: explicit call stays legal" {
 	const c = compileToCWithStd(CONV + "function main(): void { const x: number = toNum(<a/>); }");
 	assert c.ok;
+}
+
+// ===== fmt: a formatter that rewrites `converter` to `macro` silently changes the
+// routine kind and drops the target type — the whole boundary contract. =====
+
+test "converter: fmt preserves the converter keyword and target type" {
+	const out = fmtSource("export converter toNum(n: Node): number { return n; }");
+	assert out.contains("converter toNum");
+	assert out.contains("): number");
+	assert !out.contains("macro toNum");
+}
+
+test "converter: fmt preserves a plain macro's return annotation" {
+	const out = fmtSource("export macro plain(n: Node): Node { return n; }");
+	assert out.contains("macro plain");
+	assert out.contains("): Node");
 }
 
 // ===== 9.2 scope law (registry via imports) =====
