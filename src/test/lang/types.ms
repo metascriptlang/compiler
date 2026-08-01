@@ -298,14 +298,17 @@ test "power of 2 via bitwise trick" {
 	assert !isPowerOf2(p0);
 }
 
-// ===== Intersection types (erasure tier) =====
+// ===== Intersection types =====
 //
-// Intersection types `T & U` are accepted by the parser and erase at the
-// resolver to their left-most operand. Branded type pattern (`string & { __brand }`)
-// compiles as `string` at runtime. Object intersection is parsed but only the
-// first operand's fields are visible (full TS-compat field merge is a follow-up).
+// `interface & interface` merges fields at resolve (resolvePass two-tier).
+// `Prim & { __brand }` is a BRANDED primitive (TSGAP item 5 S1): nominal in
+// the checker — identity = the brand literal pairs — erased to the base
+// after check. Cross-brand / base→brand rejection coverage: fixedbugs/bug074.
 
-test "intersection inline annotation" {
-	const x: string & { __brand: "X" } = "hello";
-	assert x === "hello";
+type TypesXBrand = string & { __brand: "X" };
+
+test "intersection inline annotation is a brand" {
+	const x: TypesXBrand = "hello" as TypesXBrand;
+	assert (x as string) === "hello";
+	assert x.length === 5;
 }
