@@ -48,7 +48,6 @@ import { lowerArrayMethodInline } from "./desugar/arrayMethodInline";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
-import { lowerResultFieldCheck } from "./desugar/resultFieldCheck";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
 import { lowerTailCall } from "./lowering/tailCallLower";
@@ -103,11 +102,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerArrayMethodInline(result, ctx); }
 	if (!jsBackend) { result = lowerForLoop(result, ctx); }
 	if (!jsBackend) { result = lowerForOf(result, ctx); }
-	if (!jsBackend) { result = lowerTryExpr(result, ctx); }
+	result = lowerTryExpr(result, ctx);
 	if (jsBackend) { result = lowerResultConstructors(result); }
-	// resultFieldCheck wraps .value/.error in BlockStmt — invalid in C expression position.
-	// Skip for C until a StmtExpr-equivalent node (GNU statement expressions) is added.
-	if (jsBackend) { result = lowerResultFieldCheck(result, ctx); }
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	if (!jsBackend) { result = lowerTailCall(result, ctx); }
