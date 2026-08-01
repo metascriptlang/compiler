@@ -17,7 +17,9 @@ export extern function add<T>(this s: Set<T>, value: T): void from "#.add(#)";
 export extern function has<T>(this s: Set<T>, value: T): boolean from "#.has(#)";
 export extern function delete<T>(this s: Set<T>, value: T): boolean from "#.delete(#)";
 export extern function clear<T>(this s: Set<T>): void from "#.clear()";
+export extern function forEach<T>(this s: Set<T>, fn: (value: T) => void): void from "#.forEach(#)";
 
+@builtin("IndexableMap")
 export extern class Map<K, V> {
 	size: number;
 }
@@ -30,12 +32,14 @@ export extern function clear<K, V>(this m: Map<K, V>): void from "#.clear()";
 export extern function keys<K, V>(this m: Map<K, V>): K[] from "Array.from(#.keys())";
 export extern function values<K, V>(this m: Map<K, V>): V[] from "Array.from(#.values())";
 export extern function toItems<K, V>(this m: Map<K, V>): K[] from "Array.from(#.keys())";
+export extern function forEach<K, V>(this m: Map<K, V>, fn: (value: V, key: K) => void): void from "#.forEach(#)";
 
 // HashMap/HashSet promise NO iteration order; native insertion order is a
 // permitted strengthening (STRING-CONTRACT §5). C keeps open addressing.
 @emit("const HashMap = Map;");
 @emit("const HashSet = Set;");
 
+@builtin("IndexableMap")
 export extern class HashMap<K, V> {
 	size: number;
 }
@@ -48,6 +52,10 @@ export extern function clear<K, V>(this m: HashMap<K, V>): void from "#.clear()"
 export extern function keys<K, V>(this m: HashMap<K, V>): K[] from "Array.from(#.keys())";
 export extern function values<K, V>(this m: HashMap<K, V>): V[] from "Array.from(#.values())";
 export extern function toItems<K, V>(this m: HashMap<K, V>): K[] from "Array.from(#.keys())";
+export extern function forEach<K, V>(this m: HashMap<K, V>, fn: (value: V, key: K) => void): void from "#.forEach(#)";
+
+export extern function mapFromPairs<K, V>(keys: K[], values: V[]): Map<K, V> from "new Map(#.map((k, i) => [k, #[i]]))";
+export extern function hashMapFromPairs<K, V>(keys: K[], values: V[]): HashMap<K, V> from "new Map(#.map((k, i) => [k, #[i]]))";
 
 export extern class HashSet<T> {
 	size: number;
@@ -58,4 +66,5 @@ export extern function has<T>(this s: HashSet<T>, value: T): boolean from "#.has
 export extern function delete<T>(this s: HashSet<T>, value: T): boolean from "#.delete(#)";
 export extern function clear<T>(this s: HashSet<T>): void from "#.clear()";
 export extern function toItems<T>(this s: HashSet<T>): T[] from "Array.from(#.values())";
+export extern function forEach<T>(this s: HashSet<T>, fn: (value: T) => void): void from "#.forEach(#)";
 export extern function toItems<T>(this s: Set<T>): T[] from "Array.from(#.values())";
