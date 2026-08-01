@@ -308,6 +308,13 @@ export function values<K, V>(this m: HashMap<K, V>): V[] {
 	return result;
 }
 
+export function forEach<K, V>(this m: HashMap<K, V>, fn: (value: V, key: K) => void): void {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
+	for (const entry of m.data) {
+		if (entry.hcode !== 0) fn(entry.value, entry.key);
+	}
+}
+
 // Iterator protocol: toItems() makes HashMap iterable with for...of.
 export function* toItems<K, V>(this m: HashMap<K, V>): Iterator<K> {
 	for (const entry of m.data) {
@@ -442,6 +449,13 @@ export function clear<T>(this s: HashSet<T>): void {
 	let i: int32 = 0;
 	while (i < s.data.length) { s.data[i].hcode = 0; i = i + 1; }
 	s.size = 0;
+}
+
+export function forEach<T>(this s: HashSet<T>, fn: (value: T) => void): void {
+	if (s.writing) { msMapFatal("concurrent map read and map write"); }
+	for (const entry of s.data) {
+		if (entry.hcode !== 0) fn(entry.key);
+	}
 }
 
 export function* toItems<T>(this s: HashSet<T>): Iterator<T> {
@@ -656,6 +670,13 @@ export function values<K, V>(this m: Map<K, V>): V[] {
 	return result;
 }
 
+export function forEach<K, V>(this m: Map<K, V>, fn: (value: V, key: K) => void): void {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
+	for (const entry of m.entries) {
+		if (entry.hcode !== 0) fn(entry.value, entry.key);
+	}
+}
+
 export function* toItems<K, V>(this m: Map<K, V>): Iterator<K> {
 	for (const entry of m.entries) {
 		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
@@ -851,6 +872,13 @@ export function clear<T>(this s: Set<T>): void {
 	while (i < s.indices.length) { s.indices[i] = -1; i = i + 1; }
 	s.size = 0;
 	s.tombstones = 0;
+}
+
+export function forEach<T>(this s: Set<T>, fn: (value: T) => void): void {
+	if (s.writing) { msMapFatal("concurrent map read and map write"); }
+	for (const entry of s.entries) {
+		if (entry.hcode !== 0) fn(entry.key);
+	}
 }
 
 export function* toItems<T>(this s: Set<T>): Iterator<T> {
