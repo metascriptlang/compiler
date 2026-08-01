@@ -41,6 +41,7 @@ import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
 import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerStringTruthiness } from "./coercion/stringTruthiness";
+import { eraseBrandTypes } from "./coercion/brandErase";
 import { lowerDestructuring } from "./desugar/destructuringLower";
 import { lowerSpread } from "./desugar/spreadExpand";
 import { lowerArrayMethodInline } from "./desugar/arrayMethodInline";
@@ -83,7 +84,8 @@ import { lowerActorPre, lowerActor } from "./lowering/actorLower";
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
-	let result = jsBackend ? lowerPowerAssert(program, ctx) : program;
+	let result = eraseBrandTypes(program);
+	result = jsBackend ? lowerPowerAssert(result, ctx) : result;
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
 	if (ctx.jsBackend) {
