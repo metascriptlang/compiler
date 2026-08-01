@@ -775,6 +775,29 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		unitCtxs.push(ctx);
 	}
 
+	const pendingInsts = drainPendingInstances();
+	for (const instNode of pendingInsts) {
+		if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
+			instNode.nodeType = instNode.resolvedSym.symbolType;
+		}
+		let owner = "";
+		if (instNode.resolvedSym !== null && instNode.resolvedSym.modulePath !== "") {
+			owner = instNode.resolvedSym.modulePath;
+		}
+		let targetIdx: int32 = -1;
+		for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
+			if (unitPaths[pi] === owner) { targetIdx = pi; }
+		}
+		if (targetIdx < 0) {
+			for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
+				if (unitPaths[pi] === entryPath) { targetIdx = pi; }
+			}
+		}
+		if (targetIdx >= 0) {
+			(unitPrograms[targetIdx].data as ProgramData).programStmts.push(instNode);
+		}
+	}
+
 	// Phase 2 — backend transform + codegen
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const modPath = unitPaths[ui];
