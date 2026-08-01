@@ -31,8 +31,11 @@ import {
 type ChildVisitor = (child: Node) => void;
 
 // Visit all child nodes of a given node (read-only, no mutation).
-export function forEachChild(node: Node, cb: ChildVisitor): void {
+export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 	if (node === null) return;
+	const cb = (n: Node): void => {
+		if (n !== null) cbRaw(n);
+	};
 	match (node.kind) {
 		// Program root
 		NodeKind.Program => {
