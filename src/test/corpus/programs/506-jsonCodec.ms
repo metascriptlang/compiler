@@ -7,7 +7,6 @@
 // pairs → WTF-8 byte metrics, corpus 101 convention), int/float split,
 // stringifyPretty shape, and the typed macro path JSON.stringify<T> /
 // JSON.parse<T> (compile-time codec expansion — the serialize flagship).
-// @xfail(js): same .cms-only facade + exported-bare-name collision as 505.
 
 interface Item {
 	id: int32;

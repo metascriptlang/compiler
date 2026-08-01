@@ -9,12 +9,6 @@
 // getDynamicField/at return jsonNull sentinels (not |null) — chain freely,
 // probe kind for absence. Intermediates annotated `: JsonValue` (method
 // dispatch on the raw match-type expansion is the open G1/DU cluster).
-// @xfail(js): std/core/json facade is .cms-only, so this import can't resolve
-// on js. Renaming it .ms is NOT enough (probed 2026-08-01): the prelude then
-// bundles the codec into EVERY js program and exported bare names collide
-// (asString/length buffer↔json — jsSymbolName treats SymbolFlag.Exported as
-// ABI surface; reference mangles unless exportc). Unlock = js exported-name
-// mangling fix, then rename the facade. C lanes gate the codec meanwhile.
 
 function main(): void {
 	const pr = parseJson("{\"s\":\"hi\",\"n\":42,\"f\":true,\"z\":null,\"a\":[1,2,3],\"o\":{\"k\":\"v\"}}");
