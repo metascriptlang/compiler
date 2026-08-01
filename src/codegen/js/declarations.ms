@@ -73,16 +73,20 @@ export function emitEnumDecl(gen: JSGenerator, node: Node): void {
 function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as ClassDeclData;
 	emit(gen, "class ");
-	emit(gen, d.className);
+	emit(gen, jsSymbolName(node.resolvedSym, d.className, gen.bundleMode));
 	if (d.classExtends !== "") {
 		emit(gen, " extends ");
 		emit(gen, d.classExtends);
 	}
 	emit(gen, " {\n");
 	gen.indentLevel = gen.indentLevel + 1;
+	const staticMethods: Node[] = [];
 	for (const member of d.classBody) {
 		match (member.kind) {
-			NodeKind.MethodDecl => { emitMethodDecl(gen, member); },
+			NodeKind.MethodDecl => {
+				if ((member.data as MethodDeclData).methodIsStatic) { staticMethods.push(member); }
+				else { emitMethodDecl(gen, member); }
+			},
 			NodeKind.ConstructorDecl => { emitConstructorDecl(gen, member); },
 			NodeKind.PropertyDecl => {},
 			_ => { emitNode(gen, member); },
@@ -91,6 +95,28 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	gen.indentLevel = gen.indentLevel - 1;
 	emitIndent(gen);
 	emit(gen, "}\n");
+	for (const member of staticMethods) {
+		emitStaticMethodFn(gen, d.className, member);
+	}
+}
+
+function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): void {
+	const d = member.data as MethodDeclData;
+	if (isExternFlag(d.methodFlags)) return;
+	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
+	emitIndent(gen);
+	match (d.methodFlags) {
+		"async" => { emit(gen, "async function "); },
+		"generator" => { emit(gen, "function* "); },
+		"async_generator" => { emit(gen, "async function* "); },
+		_ => { emit(gen, "function "); },
+	};
+	emit(gen, jsSymbolName(member.resolvedSym, className + "_" + d.methodName, gen.bundleMode));
+	emit(gen, "(");
+	emitJoinedSafeStrings(gen, skipThisParams(d.methodParams), ", ", safeJsName);
+	emit(gen, ") ");
+	emitBodyOrEmpty(gen, d.methodBody);
+	emitNewline(gen);
 }
 
 export function emitClassDecl(gen: JSGenerator, node: Node): void {
