@@ -1119,6 +1119,18 @@ export function createDistinct(inner: Type): Type {
 	return t;
 }
 
+export function createBrandDistinct(brandKey: string, inner: Type): Type {
+	const t = createDistinct(inner);
+	t.typeName = brandKey;
+	t.typeFlags = t.typeFlags | (TypeFlag.BrandWiden as int32);
+	return t;
+}
+
+export function isBrandDistinct(t: Type | null): boolean {
+	if (t === null) return false;
+	return t.kind === TypeKind.Distinct && (t.typeFlags & (TypeFlag.BrandWiden as int32)) !== 0;
+}
+
 export function createGenericParam(name: string): Type {
 	const t = emptyType();
 	t.kind = TypeKind.GenericParam;
