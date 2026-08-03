@@ -5435,13 +5435,13 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// is not a function or function pointer". `fitNode`'s named-fn → closure
 	// auto-wrap only fires for Identifier callees with SymbolKind.Function,
 	// so it doesn't catch this case for inline expression-form functions.
-	if (explicitReturnType !== null && explicitReturnType.kind !== TypeKind.Unknown) {
+	if (explicitReturnType !== null) {
 		return createClosureType(types, params, explicitReturnType);
 	}
 	if (returnTypeAnnotation === "void") {
 		return createClosureType(types, params, voidType());
 	}
-	if (inferredRet.kind !== TypeKind.Unknown) {
+	if (inferredRet.kind !== TypeKind.Unknown || isUserUnknown(inferredRet)) {
 		return createClosureType(types, params, inferredRet);
 	}
 	return createClosureType(types, params, unknownType());
