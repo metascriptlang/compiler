@@ -149,6 +149,7 @@ export interface BuildConfig {
 	package: PackageSection;
 	deps: DepsSection;
 	devDeps: DepsSection;
+	globalImports: string[];
 	valid: boolean;
 }
 
@@ -350,6 +351,22 @@ function extractPackage(pkgNode: Node): PackageSection {
 	return pkg;
 }
 
+function extractGlobalImports(giNode: Node): string[] {
+	const result: string[] = [];
+	if (giNode === null || giNode.kind !== NodeKind.ArrayLiteral) return result;
+	const ad = giNode.data as ArrayLiteralData;
+	for (const elem of ad.elements) {
+		const flat = nodeString(elem);
+		if (flat.length > 0) {
+			result.push(flat);
+		} else if (elem !== null && elem.kind === NodeKind.ObjectLiteral) {
+			const from = nodeString(findObjField(elem, "from"));
+			if (from.length > 0) result.push(from);
+		}
+	}
+	return result;
+}
+
 // Extract DepsSection from an ObjectLiteral node (the `deps: { ... }` or `devDeps: { ... }` block).
 // Each key/value pair is a package name → version string (registry or git source spec).
 function extractDeps(depsNode: Node): DepsSection {
@@ -379,7 +396,8 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const defPkg = defaultPackageSection();
 	const defDeps = defaultDepsSection();
 	const defDevDeps = defaultDepsSection();
-	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, cc: defCc, package: defPkg, deps: defDeps, devDeps: defDevDeps, valid: false };
+	const defGi: string[] = [];
+	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, cc: defCc, package: defPkg, deps: defDeps, devDeps: defDevDeps, globalImports: defGi, valid: false };
 
 	if (!exists(filePath)) return defCfg;
 
@@ -405,7 +423,9 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const deps = extractDeps(findObjField(configObj, "deps"));
 	const devDeps = extractDeps(findObjField(configObj, "devDeps"));
 
-	return { entry, build: bs, resolve: rs, fmt, cc, package: pkg, deps, devDeps, valid: true };
+	const globalImports = extractGlobalImports(findObjField(configObj, "globalImports"));
+
+	return { entry, build: bs, resolve: rs, fmt, cc, package: pkg, deps, devDeps, globalImports, valid: true };
 }
 
 // Validate build.ms and return LSP-style warnings.
@@ -484,7 +504,9 @@ function testExtractFromSource(source: string): BuildConfig {
 		resolve: extractResolve(findObjField(configObj, "resolve")),
 		fmt: extractFmt(findObjField(configObj, "fmt")),
 		cc: extractCc(findObjField(configObj, "cc")),
-		package: pkg, deps, devDeps, valid: true,
+		package: pkg, deps, devDeps,
+		globalImports: extractGlobalImports(findObjField(configObj, "globalImports")),
+		valid: true,
 	};
 }
 
@@ -525,6 +547,31 @@ test "extractDeps handles git source specs" {
 	assert cfg.deps.keys.length === 1;
 	assert cfg.deps.keys[0] === "my-fork";
 	assert cfg.deps.values[0] === "git+github.com/me/foo@v1.0.0";
+}
+
+test "extractGlobalImports reads flat string array" {
+	const cfg = testExtractFromSource("const config = { globalImports: [\"./src/converters\"] }; export default config;");
+	assert cfg.globalImports.length === 1;
+	assert cfg.globalImports[0] === "./src/converters";
+}
+
+test "extractGlobalImports reads from-object entries" {
+	const cfg = testExtractFromSource("const config = { globalImports: [{ from: \"./src/converters\" }, { from: \"std/core/math\" }] }; export default config;");
+	assert cfg.globalImports.length === 2;
+	assert cfg.globalImports[0] === "./src/converters";
+	assert cfg.globalImports[1] === "std/core/math";
+}
+
+test "extractGlobalImports mixes flat and from-object" {
+	const cfg = testExtractFromSource("const config = { globalImports: [\"./a\", { from: \"./b\" }] }; export default config;");
+	assert cfg.globalImports.length === 2;
+	assert cfg.globalImports[0] === "./a";
+	assert cfg.globalImports[1] === "./b";
+}
+
+test "extractGlobalImports absent yields empty" {
+	const cfg = testExtractFromSource("const config = { entry: \"./src/index\" }; export default config;");
+	assert cfg.globalImports.length === 0;
 }
 
 test "extractDeps empty block" {
