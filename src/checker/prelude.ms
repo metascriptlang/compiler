@@ -9,9 +9,20 @@
 
 
 // Default global imports. Returns array (module-level const string[] hits DRC bug).
-// Later: merge with build.ms globalImports.
-export function globalImports(): string[] {
+export function defaultGlobalImports(): string[] {
 	return ["std/core/system", "std/core/array", "std/core/string", "std/core/json", "std/core/buffer", "std/core/promise", "std/core/struct", "std/core/fetch", "std/core/date", "std/core/performance", "std/core/websocket"];
+}
+
+let _extraGlobalImports: string[] = [];
+
+export function setExtraGlobalImports(paths: string[]): void {
+	_extraGlobalImports = paths;
+}
+
+export function globalImports(): string[] {
+	const result = defaultGlobalImports();
+	for (const p of _extraGlobalImports) result.push(p);
+	return result;
 }
 
 export function isGlobalImport(path: string): boolean {
@@ -22,8 +33,37 @@ export function isGlobalImport(path: string): boolean {
 }
 
 // ===== Tests =====
-test "globalImports has system, string, array, json, buffer, promise, struct, fetch, date, performance, websocket" {
+test "setExtraGlobalImports appends build.ms entries after the defaults" {
+	const base = defaultGlobalImports().length;
+	setExtraGlobalImports(["/abs/neon/src/converters"]);
 	const imports = globalImports();
+	assert imports.length === base + 1;
+	assert imports[0] === "std/core/system";
+	assert imports[base] === "/abs/neon/src/converters";
+	assert isGlobalImport("/abs/neon/src/converters");
+	setExtraGlobalImports([]);
+	assert globalImports().length === base;
+	assert !isGlobalImport("/abs/neon/src/converters");
+}
+
+test "setExtraGlobalImports replaces previous extras" {
+	setExtraGlobalImports(["/a"]);
+	setExtraGlobalImports(["/b"]);
+	const imports = globalImports();
+	assert imports.length === defaultGlobalImports().length + 1;
+	assert imports[imports.length - 1] === "/b";
+	setExtraGlobalImports([]);
+}
+
+test "isGlobalImport sees extras" {
+	setExtraGlobalImports(["/abs/neon/converters"]);
+	assert isGlobalImport("/abs/neon/converters");
+	setExtraGlobalImports([]);
+	assert !isGlobalImport("/abs/neon/converters");
+}
+
+test "globalImports has system, string, array, json, buffer, promise, struct, fetch, date, performance, websocket" {
+	const imports = defaultGlobalImports();
 	assert imports.length === 11;
 	assert imports[0] === "std/core/system";
 	assert imports[1] === "std/core/array";
