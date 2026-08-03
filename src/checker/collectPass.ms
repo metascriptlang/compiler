@@ -523,10 +523,10 @@ function collectMacro(ctx: CheckerContext, node: Node): void {
 	}
 }
 
-// Converter pair table (LANG.md "Converter Declarations" rules 3-4): a local decl
-// shadows an imported pair; two IMPORTED converters for the same pair is an error
-// at import time; two LOCAL converters for the same pair is likewise an error.
-// origin: 0 = local decl, 1 = import.
+// Converter pair table (LANG.md "Converter Declarations" rules 3-4), tiered:
+// origin 0 = local decl, 1 = import, 2 = build.ms globalImports inject.
+// A LOWER origin shadows a higher one; two converters for the same pair at the
+// SAME tier is an error — the compiler never chooses between equals.
 export function registerConverter(ctx: CheckerContext, target: string, name: string, origin: int32, line: number, column: number): void {
 	ctx.converterTargetByName.set(name, target);
 	if (ctx.converterTargets.has(target)) {
@@ -537,15 +537,18 @@ export function registerConverter(ctx: CheckerContext, target: string, name: str
 			const eo = ctx.converterTargetOrigin.get(target);
 			if (eo !== null) { existingOrigin = eo; }
 		}
-		if (origin === 1 && existingOrigin === 0) { return; }
-		if (origin === 1 && existingOrigin === 1) {
-			addError(ctx, "duplicate converter for target '" + target + "': '" + (existing !== null ? existing : "") + "' and '" + name + "' are both in scope — the compiler never chooses; import only one or call one explicitly",
-				line, column);
-			return;
-		}
-		if (origin === 0 && existingOrigin === 0) {
-			addError(ctx, "duplicate converter for target '" + target + "': '" + (existing !== null ? existing : "") + "' and '" + name + "' declared in the same module",
-				line, column);
+		if (origin > existingOrigin) { return; }
+		if (origin === existingOrigin) {
+			if (origin === 0) {
+				addError(ctx, "duplicate converter for target '" + target + "': '" + (existing !== null ? existing : "") + "' and '" + name + "' declared in the same module",
+					line, column);
+			} else if (origin === 1) {
+				addError(ctx, "duplicate converter for target '" + target + "': '" + (existing !== null ? existing : "") + "' and '" + name + "' are both in scope — the compiler never chooses; import only one or call one explicitly",
+					line, column);
+			} else {
+				addError(ctx, "duplicate converter for target '" + target + "': '" + (existing !== null ? existing : "") + "' and '" + name + "' are both injected via build.ms globalImports",
+					line, column);
+			}
 			return;
 		}
 	}
