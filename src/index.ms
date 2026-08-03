@@ -12,7 +12,8 @@ import { error, bold, green, cyan } from "./utils/color";
 import { findProjectRoot } from "./utils/path";
 import "./ast/childTableGuard";
 import "./ast/childSlotGuard";
-import { join } from "std/fs/path";
+import { join, isAbsolute, normalize } from "std/fs/path";
+import { setExtraGlobalImports } from "./checker/prelude";
 // Import the package manager hub for test discovery. Individual commands
 // (msc add, install, publish, ...) are wired up from this module as they land.
 // NOTE: imported so test discovery finds these modules' inline tests; any link
@@ -49,6 +50,27 @@ export function main(): number {
 	const projectRoot = findProjectRoot(opts.inputFile);
 	const buildMsPath = join(projectRoot, "build.ms");
 	opts.projectRoot = projectRoot;
+
+	// build.ms globalImports — every command that checks code must see them,
+	// so this runs before dispatch, not inside run/build. Entries are
+	// extension-less module paths: std/ specifiers pass through, project
+	// paths become absolute against projectRoot.
+	if (projectRoot !== "") {
+		const giCfg = loadBuildConfig(buildMsPath, false);
+		if (giCfg.valid && giCfg.globalImports.length > 0) {
+			const extras: string[] = [];
+			for (const gi of giCfg.globalImports) {
+				if (gi.length > 4 && gi.slice(0, 4) === "std/") {
+					extras.push(gi);
+				} else if (isAbsolute(gi)) {
+					extras.push(normalize(gi));
+				} else {
+					extras.push(normalize(join(projectRoot, gi)));
+				}
+			}
+			setExtraGlobalImports(extras);
+		}
+	}
 
 	match (cmd) {
 		"" | "help" => printUsage(),
