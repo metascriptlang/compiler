@@ -10,7 +10,7 @@ import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal,
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords } from "./context";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
-import { collectTopLevel, defineOrError } from "./collectPass";
+import { collectTopLevel, defineOrError, registerConverter } from "./collectPass";
 import { readFile } from "std/fs";
 import { platform } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
@@ -1802,7 +1802,8 @@ function defineBuiltinConstants(ctx: CheckerContext): void {
 // Resolution mirrors src/module/resolver.ms: backend-specific extension FIRST
 // so per-target preludes (e.g., struct.jms for JS) win over the generic .ms.
 function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string, backendExt: string): void {
-	const base = stdPath.length > 0 ? stdPath + "/" + specifier.slice(4, specifier.length) : specifier;
+	const isStd = specifier.length > 4 && specifier.slice(0, 4) === "std/";
+	const base = isStd && stdPath.length > 0 ? stdPath + "/" + specifier.slice(4, specifier.length) : specifier;
 	let src = try readFile(base + backendExt) catch "";
 	let resolvedPath = base + backendExt;
 	if (src.length === 0) {
@@ -2040,6 +2041,25 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	for (const sym of preludeCtx.table.current.symbols.values()) {
 		if (hasFlag(sym, SymbolFlag.Exported)) {
 			addSymbolToScope(ctx.table.current, sym);
+			// Exported macros (converters included) expand per-module: mirror the
+			// import branch (collectPass) — body/params/declModule registries, and
+			// the converter pair at tier 2 so local decls and explicit imports shadow it.
+			if (sym.symbolKind === SymbolKind.Macro) {
+				const body = preludeCtx.macroBodyRegistry.get(sym.name);
+				const params = preludeCtx.macroParamsRegistry.get(sym.name);
+				if (body !== null && params !== null) {
+					ctx.macroBodyRegistry.set(sym.name, body);
+					ctx.macroParamsRegistry.set(sym.name, params);
+					const pt = preludeCtx.macroParamTypesRegistry.get(sym.name);
+					if (pt !== null) { ctx.macroParamTypesRegistry.set(sym.name, pt); }
+					const dm = preludeCtx.macroDeclModuleRegistry.get(sym.name);
+					if (dm !== null) { ctx.macroDeclModuleRegistry.set(sym.name, dm); }
+					const ct = preludeCtx.converterTargetByName.get(sym.name);
+					if (ct !== null && ct !== "") {
+						registerConverter(ctx, ct, sym.name, 2, 0, 0);
+					}
+				}
+			}
 		}
 	}
 	if (preludeCtx.extensionRegistry !== null && ctx.extensionRegistry !== null) {
