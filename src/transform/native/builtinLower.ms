@@ -129,11 +129,16 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	}
 	// Priority 2: compiler defaults
 	const tk = objType.kind;
-	// Number/int/float → msNumberToStringRadix(value, radix) — radix defaults to 10
+	// Number/int/float → msNumberToStringRadix(value, radix) — radix defaults to 10.
+	// 64-bit integers take the int64-parameter variant: a double argument would
+	// truncate the value before the digits are ever produced.
 	if (isNumeric(objType)) {
 		const cd2 = callNode.data as CallExprData;
 		const radixArg = cd2.arguments.length > 0 ? cd2.arguments[0] : makeNumber(10, loc);
-		const call = makeCall(makeIdent("msNumberToStringRadix", loc), [obj, radixArg], loc);
+		let fn = "msNumberToStringRadix";
+		if (objType.kind === TypeKind.Uint64) { fn = "msUint64ToStringRadix"; }
+		else if (objType.kind === TypeKind.Int64) { fn = "msIntToStringRadix"; }
+		const call = makeCall(makeIdent(fn, loc), [obj, radixArg], loc);
 		call.nodeType = stringType();
 		return call;
 	}

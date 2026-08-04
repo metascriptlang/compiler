@@ -22,7 +22,7 @@
 // conservative syntactic match. Side-effecting indexes (arr[i++]) fall through.
 
 import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, StringLiteralData, IdentifierData, MemberExprData, NumberLiteralData, CallExprData, HiddenDerefData, TypeKind } from "../../ast/node";
-import { isNumeric, isStringLike } from "../../checker/types";
+import { isNumeric, isStringLike, isWideInteger } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber, makeHiddenAddr } from "../util";
@@ -156,6 +156,10 @@ function coercePartToString(node: Node, loc: SourceLocation): Node {
 	if (node.kind === NodeKind.StringLiteral) return node;
 	if (node.nodeType !== null && node.nodeType.kind === TypeKind.String) return node;
 	if (node.nodeType !== null) {
+		if (isWideInteger(node.nodeType)) {
+			const fn = node.nodeType.kind === TypeKind.Uint64 ? "msUint64ToString" : "msIntToString";
+			return makeCall(makeIdent(fn, loc), [node], loc);
+		}
 		if (isNumeric(node.nodeType)) {
 			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
 		}
@@ -226,5 +230,5 @@ import { createToken, TokenKind } from "../../lexer/token";
 
 function makeNumberLit(val: number, loc: SourceLocation): Node {
 	const tok = createToken(TokenKind.Number, val.toString(), loc.line);
-	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: val % 1 !== 0 }, tok);
+	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: val % 1 !== 0, intVal: val as int64 }, tok);
 }

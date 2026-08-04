@@ -2098,6 +2098,13 @@ export function isIntegerType(t: Type | null): boolean {
 		t.kind === TypeKind.Uint32 || t.kind === TypeKind.Uint64;
 }
 
+// Integers a double cannot round-trip: everything up to 32 bits fits exactly in
+// the 53-bit mantissa, 64-bit types do not.
+export function isWideInteger(t: Type | null): boolean {
+	if (t === null) return false;
+	return t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint64;
+}
+
 // Integer rank for narrowing detection (higher = wider range)
 // Parity: standard reference's ordinal range comparison patterns
 export function integerRank(t: Type): number {

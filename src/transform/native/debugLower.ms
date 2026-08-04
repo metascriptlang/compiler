@@ -5,7 +5,7 @@
 // json builders (jsonObject/jsonString/jsonNumber/jsonBool) + stringify from std/core/json.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, createNode } from "../../ast/node";
-import { isNumeric, stringType, unknownType, createArray, unwrapRef } from "../../checker/types";
+import { isNumeric, isWideInteger, stringType, unknownType, createArray, unwrapRef } from "../../checker/types";
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension, requestEnumToString } from "../../checker/context";
@@ -27,7 +27,13 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	const t = arg.nodeType;
 	// String: as-is
 	if (t.kind === TypeKind.String || arg.kind === NodeKind.StringLiteral) return arg;
-	// Number/int → msNumberToString
+	// Number/int → msNumberToString; 64-bit integers need the exact formatter
+	if (isWideInteger(t)) {
+		const fn = t.kind === TypeKind.Uint64 ? "msUint64ToString" : "msIntToString";
+		const call = makeCall(makeIdent(fn, loc), [arg], loc);
+		call.nodeType = stringType();
+		return call;
+	}
 	if (isNumeric(t)) {
 		const call = makeCall(makeIdent("msNumberToString", loc), [arg], loc);
 		call.nodeType = stringType();
