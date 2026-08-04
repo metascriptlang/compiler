@@ -17,6 +17,8 @@ export {
 	jsonToStringArray, jsonToBooleanArray, jsonToNumberArray, jsonToFloat32Array,
 	jsonToInt8Array, jsonToInt16Array, jsonToInt32Array, jsonToInt64Array,
 	jsonToUint8Array, jsonToUint16Array, jsonToUint32Array,
+	kindName, reqString, reqBoolean, reqNumber, reqInt64, reqArray, reqObject, joinDecodeErrors,
+	_jsonCheckDiscStr,
 } from "std/serialize/json/accessors";
 
 // Macro system constraint: when macro X's expansion result contains a call
@@ -25,16 +27,28 @@ export {
 // defining module's. Here `jsonStringify` body emits `jsonValueOf(...)`
 // calls, so we must import `jsonValueOf` even though we never call it
 // directly. Same for the other two macros.
-import { jsonStringify, jsonValueOf, jsonValueToStruct } from "std/serialize/json";
+import { jsonStringify, jsonValueOf, jsonValueToStruct, jsonValueToStructE } from "std/serialize/json";
 
 function _jsonStringifyTyped<T>(value: T): string {
 	return jsonStringify(value);
 }
 
+// Strict contract: the MS type is the contract. Syntax errors, a non-object
+// top level, missing fields, and kind mismatches ALL surface as Result.err —
+// never as fabricated defaults. Optional fields are spelled `T | null` in
+// the interface, not by tolerating absence.
 function _jsonParseTyped<T>(input: string, witness: T | null): Result<T, string> {
 	const pr = parseJson(input);
 	if (!pr.ok) return Result.err(pr.error);
-	return Result.ok(jsonValueToStruct(pr.value, witness));
+	const root: JsonValue = pr.value;
+	if (root === null || root.kind !== JsonKind.Object) {
+		const got = root === null ? "null" : kindName(root.kind);
+		return Result.err("expected object at top level, got " + got);
+	}
+	const errs: string[] = [];
+	const v: T = jsonValueToStructE(root, witness, errs, "");
+	if (errs.length > 0) return Result.err(joinDecodeErrors(errs));
+	return Result.ok(v);
 }
 
 // ===== V2 — generic helpers for non-atomic-builtin element arrays =====
@@ -107,6 +121,8 @@ export function _jsonToStructArray<T>(jv: JsonValue, witness: T | null): T[] {
 	}
 	return out;
 }
+
+
 
 export class JSON {
 	static stringify<T>(value: T): string {
