@@ -16,7 +16,7 @@ import { genStmt, resolveEmitArgs } from "./statements";
 import { mangle, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
 import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfoDef, isNilableValueType } from "./types";
 import { genTestDeclNode } from "./test";
-import { formatCNumber, cBoolLiteral, cStringLiteral } from "./literals";
+import { formatCNumber, formatCNumberLit, cBoolLiteral, cStringLiteral } from "./literals";
 import { isDrcLifecycleName } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
@@ -693,7 +693,7 @@ function genGlobalVar(g: CGen, node: Node): void {
 		const init = d.initializer;
 		if (init.kind === NodeKind.NumberLiteral) {
 			const nd = init.data as NumberLiteralData;
-			const litStr = formatCNumber(nd.value, node.nodeType);
+			const litStr = formatCNumberLit(nd, node.nodeType);
 			// Integer types: cast to suppress -Wimplicit-int-float-conversion.
 			const castedLit = (node.nodeType !== null && isIntegerType(node.nodeType))
 				? `(${cType})${litStr}`

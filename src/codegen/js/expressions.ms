@@ -15,17 +15,23 @@ import {
 import { emit, emitNode, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar } from "../c/names";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { int64ToDecimal } from "../../utils/string";
 
 // ===== Literal Emitters =====
 
 export function emitNumberLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as NumberLiteralData;
-	if (d.value < 0) {
+	// Integers print from the exact int64. The engine still parses the result as
+	// a double — exact int64 SEMANTICS on this backend need the BigInt mapping —
+	// but emitting the digits the user wrote keeps the loss in one place instead
+	// of baking a second, front-end rounding into the output.
+	const text = d.isFloat ? "" + d.value : int64ToDecimal(d.intVal);
+	if (text.byteLength > 0 && text.byteAt(0) === "-".code) {
 		emit(gen, "(");
-		emit(gen, "" + d.value);
+		emit(gen, text);
 		emit(gen, ")");
 	} else {
-		emit(gen, "" + d.value);
+		emit(gen, text);
 	}
 }
 

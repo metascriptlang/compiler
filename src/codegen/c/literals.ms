@@ -4,7 +4,8 @@
 // number formatting for C output.
 
 import { Builder, addLine, createBuilder, extract, StringPool, createStringPool, internString } from "./context";
-import { Type, TypeKind } from "../../ast/node";
+import { Type, TypeKind, NumberLiteralData } from "../../ast/node";
+import { int64ToDecimal } from "../../utils/string";
 
 
 // ===== C String Escaping =====
@@ -98,6 +99,15 @@ export function formatCNumber(value: number, type: Type | null = null): string {
 		return text + ".0";
 	}
 	return text;
+}
+
+// Literal emission for a NumberLiteral node: integers take the exact int64,
+// floats (and integer literals in float position) keep the double formatter.
+export function formatCNumberLit(d: NumberLiteralData, type: Type | null = null): string {
+	const wantsFloat = type !== null
+		&& (type.kind === TypeKind.Number || type.kind === TypeKind.Float32 || type.kind === TypeKind.Float64);
+	if (d.isFloat || wantsFloat) return formatCNumber(d.value, type);
+	return int64ToDecimal(d.intVal);
 }
 
 // Format as int32

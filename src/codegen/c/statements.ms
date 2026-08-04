@@ -12,7 +12,7 @@ import {
 	readProcStmts, emitLineDir, getTemp, fillLocalName, pushBlock, popBlock,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
-import { formatCNumber } from "./literals";
+import { formatCNumber, formatCNumberLit } from "./literals";
 import { ensureCrossModuleProto } from "./forward";
 import { safeName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
@@ -845,7 +845,7 @@ function genSwitchStmt(g: CGen, p: CProc, node: Node): void {
 				// emit for NumberLiteral tests regardless of stamped nodeType — checker
 				// is inconsistent (e.g. hex literals like 0xE may carry Number type).
 				const testSnippet = test.kind === NodeKind.NumberLiteral
-					? formatCNumber((test.data as NumberLiteralData).value, null)
+					? formatCNumberLit(test.data as NumberLiteralData, null)
 					: genExpr(g, p, test);
 				emitStmtsLine(p, `case ${testSnippet}:`);
 			}
