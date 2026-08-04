@@ -614,8 +614,9 @@ Status legend: ✅ done · 🚧 in progress · 🔲 todo
   `bug048` which is still an orphan — see §4.1).
 - [x] ✅ Wired into `lang.ms` + `index.ms`
 
-Current baseline: full native suite green — `msc test src/index.ms` **3404/0**, 167 files (2026-08-04), drc AND orc.
-Corpus **372 pass / 0 fail / 3 xfail**; SAN **90 / 0 / 1 xfail**; nim-guard ALL GREEN (same date).
+Current baseline: full native suite green — `msc test src/index.ms` **3411/0**, 168 files (2026-08-05), drc AND orc.
+Corpus **382 pass / 0 fail / 3 xfail** (509/510 json-strict added 2026-08-05, parity all 4 lanes);
+SAN **92 / 0 / 1 xfail**; nim-guard ALL GREEN (2026-08-04).
 Self-host fixpoint the same day: **emitted-C 0/292 differ** between gen-2 and gen-3,
 and the two binaries differ only inside `LC_CODE_SIGNATURE` (the ad-hoc signature
 embeds the `--output` name; `LC_UUID` matches). Recipe, since nothing scripts it:
