@@ -122,6 +122,102 @@ export function parseNumberLiteral(s: string): number {
 	return parseFloat(s);
 }
 
+// Exact integer view of the same literal text parseNumberLiteral accepts.
+// Accumulating in int64 instead of a double is the whole point: `parseFloat`
+// and the `result * 16 + d` loops above both round off past 2^53.
+// Callers must only use this when the literal has no fraction/exponent.
+export function parseIntegerLiteral(s: string): int64 {
+	let neg = false;
+	let start = 0;
+	if (s.byteLength > 0 && s.byteAt(0) === "-".code) { neg = true; start = 1; }
+
+	let radix: int64 = 10;
+	if (s.byteLength > start + 2 && s.charAt(start) === "0") {
+		const prefix = s.charAt(start + 1);
+		if (prefix === "x" || prefix === "X") { radix = 16; start = start + 2; }
+		else if (prefix === "b" || prefix === "B") { radix = 2; start = start + 2; }
+		else if (prefix === "o" || prefix === "O") { radix = 8; start = start + 2; }
+	}
+
+	let result: int64 = 0;
+	for (let i = start; i < s.byteLength; i = i + 1) {
+		const ch = s.byteAt(i);
+		if (ch === "_".code) { continue; }
+		let digit: int64 = -1;
+		if (ch >= "0".code && ch <= "9".code) { digit = (ch - "0".code) as int64; }
+		else if (ch >= "a".code && ch <= "f".code) { digit = (ch - "a".code + 10) as int64; }
+		else if (ch >= "A".code && ch <= "F".code) { digit = (ch - "A".code + 10) as int64; }
+		if (digit < 0 || digit >= radix) { continue; }
+		result = result * radix + digit;
+	}
+	return neg ? -result : result;
+}
+
+// Does this decimal digit string fit int64? Compared as text because the value
+// is by definition one a double (and possibly an int64) cannot hold, so there is
+// no numeric type available to range-check it in.
+export function fitsInt64Decimal(s: string, negative: boolean): boolean {
+	let start = 0;
+	if (s.byteLength > 0 && (s.byteAt(0) === "-".code || s.byteAt(0) === "+".code)) { start = 1; }
+	while (start < s.byteLength - 1 && s.byteAt(start) === "0".code) { start = start + 1; }
+	const digits = s.slice(start, s.byteLength);
+	const limit = negative ? "9223372036854775808" : "9223372036854775807";
+	if (digits.byteLength < limit.byteLength) return true;
+	if (digits.byteLength > limit.byteLength) return false;
+	for (let i = 0; i < digits.byteLength; i = i + 1) {
+		const a = digits.byteAt(i);
+		const b = limit.byteAt(i);
+		if (a < b) return true;
+		if (a > b) return false;
+	}
+	return true;
+}
+
+test "fitsInt64Decimal at the boundary" {
+	assert fitsInt64Decimal("9223372036854775807", false);
+	assert !fitsInt64Decimal("9223372036854775808", false);
+	assert fitsInt64Decimal("9223372036854775808", true);
+	assert !fitsInt64Decimal("123456789012345678901234567890", false);
+	assert fitsInt64Decimal("0000009007199254740993", false);
+}
+
+// Decimal digits straight from an int64. Deliberately hand-rolled instead of
+// `.toString()`: this runs inside the compiler, so a build made by a generation
+// whose toString still routed through a double would emit truncated digits and
+// the defect would survive its own fix.
+export function int64ToDecimal(v: int64): string {
+	if (v === 0) return "0";
+	// Accumulate on the negative side — INT64_MIN has no positive counterpart.
+	let n: int64 = v > 0 ? 0 - v : v;
+	let out = "";
+	while (n !== 0) {
+		const digit: int64 = 0 - (n % 10);
+		out = "0123456789".charAt(digit as int32) + out;
+		n = n / 10;
+	}
+	return v < 0 ? "-" + out : out;
+}
+
+test "int64ToDecimal past 2^53" {
+	assert int64ToDecimal(parseIntegerLiteral("9007199254740993")) === "9007199254740993";
+}
+test "int64ToDecimal int64 max" {
+	assert int64ToDecimal(parseIntegerLiteral("9223372036854775807")) === "9223372036854775807";
+}
+test "int64ToDecimal zero" { assert int64ToDecimal(0) === "0"; }
+test "int64ToDecimal negative" { assert int64ToDecimal(-42) === "-42"; }
+
+test "parseIntegerLiteral keeps digits past 2^53" {
+	assert parseIntegerLiteral("9007199254740993") === 9007199254740993;
+}
+test "parseIntegerLiteral int64 max" {
+	assert parseIntegerLiteral("9223372036854775807") === 9223372036854775807;
+}
+test "parseIntegerLiteral hex" { assert parseIntegerLiteral("0xFF") === 255; }
+test "parseIntegerLiteral binary" { assert parseIntegerLiteral("0b1111") === 15; }
+test "parseIntegerLiteral octal" { assert parseIntegerLiteral("0o17") === 15; }
+test "parseIntegerLiteral negative" { assert parseIntegerLiteral("-42") === -42; }
+
 test "parseNumberLiteral hex" { assert parseNumberLiteral("0xFF") === 255; }
 test "parseNumberLiteral binary" { assert parseNumberLiteral("0b1111") === 15; }
 test "parseNumberLiteral octal" { assert parseNumberLiteral("0o17") === 15; }
