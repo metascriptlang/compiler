@@ -85,6 +85,21 @@ function parseLiteral(input: string, pos: number, expected: string, value: JsonV
 
 // ===== Number Parser =====
 
+// Only ever called for a 19-digit integer — the digit COUNT already decides every
+// other case, and the count is known from the scan positions without touching the
+// string. Byte reads are not free on the js backend, so the common path must not
+// do any. (std cannot import src, so this mirrors the checker's own bound check.)
+function int64FitsAtLimitWidth(input: string, digitStart: number, negative: boolean): boolean {
+	const limit = negative ? "9223372036854775808" : "9223372036854775807";
+	for (let i = 0; i < 19; i = i + 1) {
+		const a = input.byteAt(digitStart + i);
+		const b = limit.byteAt(i);
+		if (a < b) return true;
+		if (a > b) return false;
+	}
+	return true;
+}
+
 function parseNumber(input: string, pos: number): ParseResult {
 	let p = pos;
 	const len = input.byteLength;
@@ -92,39 +107,61 @@ function parseNumber(input: string, pos: number): ParseResult {
 	// Optional minus
 	if (p < len && input.byteAt(p) === "-".code) p = p + 1;
 
-	// Integer part
+	// Integer part. The grammar is `zero / (digit1-9 *DIGIT)` — a leading zero
+	// may not be followed by another digit, so `01` is not a number.
 	if (p >= len || input.byteAt(p) < "0".code || input.byteAt(p) > "9".code) {
 		return errorAt("Invalid number", pos);
 	}
+	const intStart = p;
+	const firstDigit = input.byteAt(p);
 	while (p < len && input.byteAt(p) >= "0".code && input.byteAt(p) <= "9".code) {
 		p = p + 1;
 	}
+	if (firstDigit === "0".code && p - intStart > 1) {
+		return errorAt("Leading zeros are not allowed in a number", intStart);
+	}
 
-	// Decimal part
+	// Decimal part — the dot must be followed by at least one digit.
 	let isFloat = false;
 	if (p < len && input.byteAt(p) === ".".code) {
 		isFloat = true;
 		p = p + 1;
+		const fracStart = p;
 		while (p < len && input.byteAt(p) >= "0".code && input.byteAt(p) <= "9".code) {
 			p = p + 1;
 		}
+		if (p === fracStart) return errorAt("Expected a digit after '.'", p);
 	}
 
-	// Exponent part
+	// Exponent part — same rule after the optional sign.
 	if (p < len && (input.byteAt(p) === "e".code || input.byteAt(p) === "E".code)) {
 		isFloat = true;
 		p = p + 1;
 		if (p < len && (input.byteAt(p) === "+".code || input.byteAt(p) === "-".code)) {
 			p = p + 1;
 		}
+		const expStart = p;
 		while (p < len && input.byteAt(p) >= "0".code && input.byteAt(p) <= "9".code) {
 			p = p + 1;
 		}
+		if (p === expStart) return errorAt("Expected a digit in the exponent", p);
 	}
 
 	const numStr = input.byteSlice(pos, p);
+	// An integer wider than int64 has no exact carrier here: `parseInt` clamps to
+	// INT64_MAX, which would hand back a wrong value labelled Int. Fall back to the
+	// float carrier, which is what the JS engine does with the same input, so both
+	// backends agree. Exact digits for these need the RawNumber carrier.
+	// The digit count decides all but the exactly-19-digit case, and it comes from
+	// the scan positions — no string reads on the common path.
+	let fitsI64 = true;
+	if (!isFloat) {
+		const digitCount = p - intStart;
+		if (digitCount > 19) { fitsI64 = false; }
+		else if (digitCount === 19) { fitsI64 = int64FitsAtLimitWidth(input, intStart, pos < intStart); }
+	}
 	return Result.ok({
-		node: isFloat ? jsonNumber(parseFloat(numStr)) : jsonInt(numStr.parseInt()),
+		node: isFloat || !fitsI64 ? jsonNumber(parseFloat(numStr)) : jsonInt(numStr.parseInt()),
 		pos: p,
 	});
 }
@@ -146,6 +183,10 @@ function parseString(input: string, pos: number): ParseResult {
 		if (ch === "\"".code) {
 			if (runStart < p) result += input.byteSlice(runStart, p);
 			return Result.ok({ node: jsonString(result), pos: p + 1 });
+		}
+		// U+0000..U+001F must be escaped; a raw one ends the string per the grammar.
+		if (ch < 32) {
+			return errorAt("Raw control character in string — must be escaped", p);
 		}
 		if (ch === "\\".code) {
 			if (runStart < p) result += input.byteSlice(runStart, p);
@@ -258,7 +299,7 @@ function parseObject(input: string, pos: number, depth: number): ParseResult {
 			return errorAt("Expected string key", p);
 		}
 		const keyResult = try parseString(input, p);
-		keys.push(keyResult.node.strVal);
+		const key = keyResult.node.strVal;
 		p = skipWs(input, keyResult.pos);
 
 		if (p >= input.byteLength || input.byteAt(p) !== ":".code) {
@@ -267,7 +308,21 @@ function parseObject(input: string, pos: number, depth: number): ParseResult {
 		p = skipWs(input, p + 1);
 
 		const valResult = try parseValue(input, p, depth + 1);
-		values.push(valResult.node);
+		// Duplicate key: last one wins, first position kept (JS parity —
+		// engine objects cannot hold two entries for one key).
+		let existing = -1;
+		for (let ki = 0; ki < keys.length; ki = ki + 1) {
+			if (keys[ki] === key) {
+				existing = ki;
+				break;
+			}
+		}
+		if (existing >= 0) {
+			values[existing] = valResult.node;
+		} else {
+			keys.push(key);
+			values.push(valResult.node);
+		}
 		p = skipWs(input, valResult.pos);
 
 		if (p >= input.byteLength) return errorAt("Unterminated object", pos);
@@ -415,4 +470,12 @@ test "parse whitespace" {
 	const r = parseJson("  { \"x\" : 1 }  ");
 	assert r.ok;
 	assert r.value.keys[0] === "x";
+}
+
+test "duplicate keys: last one wins (JS parity)" {
+	const r = parseJson("{\"a\":1,\"a\":2}");
+	assert r.ok;
+	assert r.value.keys.length === 1;
+	const v0 = r.value.values[0];
+	if (v0.kind === JsonKind.Int) assert v0.intVal === (2 as int64);
 }
