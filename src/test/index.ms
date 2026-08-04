@@ -59,9 +59,12 @@ import "./c/protocols";
 import "./c/typeIntrospection";
 import "./c/multidecl";
 import "./c/toycodec";
+import "./c/structuralPrefix";
 import "./c/drcLifecycle";
+import "./c/int64Literal";
 import "./js/basic";
 import "./js/result";
+import "./js/int64Literal";
 
 // -- phase handoff tests --
 import "./handoff/index";
