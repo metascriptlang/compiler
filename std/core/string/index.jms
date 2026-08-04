@@ -166,6 +166,31 @@ export function msNumberToStringRadix(n: number, radix: number): string {
 	unreachable;
 }
 
+// 64-bit integer formatting. On C these take an int64/uint64 parameter so the
+// value never round-trips through a double; here every number is already a
+// double, so they are the same String()/toString() call. Exact int64 semantics
+// on this backend wait on the BigInt mapping — until then these exist so the
+// shared lowering can name one function for both backends.
+export function msIntToString(n: int64): string {
+	@emit(`return String(${n});`);
+	unreachable;
+}
+
+export function msUint64ToString(n: uint64): string {
+	@emit(`return String(${n});`);
+	unreachable;
+}
+
+export function msIntToStringRadix(n: int64, radix: number): string {
+	@emit(`return ${n}.toString(${radix});`);
+	unreachable;
+}
+
+export function msUint64ToStringRadix(n: uint64, radix: number): string {
+	@emit(`return ${n}.toString(${radix});`);
+	unreachable;
+}
+
 export function msBoolToString(b: boolean): string {
 	@emit(`return ${b} ? "true" : "false";`);
 	unreachable;
