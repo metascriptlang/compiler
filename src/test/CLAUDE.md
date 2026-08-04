@@ -239,9 +239,13 @@ lines), and ALL determinism obligations live on the program:
     `--gc=orc` and `--danger` (`-O3 -flto`, `--cc=clang`) via
     `/usr/bin/time -l`, asserting exit + signal + stdout + peak RSS (the
     former native/ tier semantics).
-  - `// @stdout: <substr>` — merged output must CONTAIN the substring
-    (legacy native assertion; new parity programs should omit it and rely
-    on byte-compare instead).
+  - `// @stdout: <substr>` — merged output must CONTAIN the substring.
+    Enforced on every lane (RSS, SAN **and** parity — parity cells checked
+    exit code only until 2026-08-04). Byte-compare across lanes stays the
+    primary assertion, so most programs still want no `@stdout`; reach for
+    it when the lanes cannot judge correctness on their own, i.e. when
+    every lane could be wrong in the same way (see `013-int64Fidelity`,
+    which additionally grades itself into the exit code).
   - `// @xfail(<lane>): <reason>` — known-fail for one lane; XPASS is
     reported loud so a stale marker cannot lie silently.
   - `// @serial` — contention-sensitive (actor/spawn stress): its run
@@ -386,7 +390,7 @@ done
 
 ```bash
 msc build src/index.ms --gc=drc --danger --cc=clang --output=msc  # 0. build the candidate → ./msc
-msc test src/index.ms                                             # 1. inline suite (baseline 3346/0)
+msc test src/index.ms                                             # 1. inline suite (baseline 3404/0)
 msc test src/index.ms --gc=orc                                    # 2. same under ORC
 msc run src/test/corpus/run.ms                                    # 3. corpus: parity + RSS lanes
 MSCORPUS_SAN=1 msc run src/test/corpus/run.ms                     # 4. corpus: SAN lane
@@ -500,7 +504,7 @@ smaller entry no longer buys much, because you still pay a build.
 |---|---|---|---|
 | `msc test src/test/fixedbugs/bug048.ms` (14 files) | ~18s | 2.7s | **20s** |
 | `msc test src/compiler/meta/expand.ms` (69 files) | ~45s | 4.8s | **49s** |
-| `msc test src/index.ms` — 164 files / 3346 tests | ~21s | 17-19s | **40s** |
+| `msc test src/index.ms` — 167 files / 3404 tests | ~21s | 17-19s | **40s** |
 | ↑ same, first run after a large tree change | ~51s | 17s | **69s** |
 
 Yes, that table is right: the **full battery (40s) beats a single-module test
@@ -610,7 +614,15 @@ Status legend: ✅ done · 🚧 in progress · 🔲 todo
   `bug048` which is still an orphan — see §4.1).
 - [x] ✅ Wired into `lang.ms` + `index.ms`
 
-Current baseline: full native suite green — `msc test src/index.ms` **3346/0**, 164 files (2026-07-28).
+Current baseline: full native suite green — `msc test src/index.ms` **3404/0**, 167 files (2026-08-04), drc AND orc.
+Corpus **372 pass / 0 fail / 3 xfail**; SAN **90 / 0 / 1 xfail**; nim-guard ALL GREEN (same date).
+Self-host fixpoint the same day: **emitted-C 0/292 differ** between gen-2 and gen-3,
+and the two binaries differ only inside `LC_CODE_SIGNATURE` (the ad-hoc signature
+embeds the `--output` name; `LC_UUID` matches). Recipe, since nothing scripts it:
+build gen-N+1 with gen-N, `rm -rf out/release/.cache` before each generation so the
+emission is actually regenerated, snapshot the cache, then compare the two `.c` sets.
+Give every generation a distinct `--output` or msc self-skips with "Up to date" and
+you compare a stale cache against itself.
 
 ### P0.5 — Native runtime guard
 
@@ -643,7 +655,7 @@ Current baseline: full native suite green — `msc test src/index.ms` **3346/0**
   (directive head, NNN-topic numbering, RC-stress shapes). New programs
   should prefer parity (no @stdout) over @stdout-contains; strip @stdout
   from migrated deterministic programs over time to upgrade them to
-  byte-compare.   Cluster census (2026-08-01, 84 programs): 0xx=4, 1xx=5,
+  byte-compare.   Cluster census (2026-08-04, 85 programs): 0xx=5, 1xx=5,
   2xx=13, 3xx=5, 4xx=13, **5xx=5**, 6xx=31, 7xx=8 — next: 505/506 json,
   507/508 fs.
   - 5xx std grew 2026-08-01 post string-contract P1/P2 (js = native
