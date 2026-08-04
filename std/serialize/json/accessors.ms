@@ -73,6 +73,112 @@ export function length(this v: JsonValue): number {
 	};
 }
 
+// ===== Strict (req*) accessors — fail-loud typed decode =====
+//
+// Same coercion rules as as*, but a kind mismatch APPENDS an error naming
+// the field instead of silently returning the default. jsonValueToStructE
+// emits these; the facade turns a non-empty errs into Result.err. Missing
+// field and JSON null are indistinguishable here (both arrive as the
+// jsonNull sentinel) — the message says "got null" for both.
+
+export function kindName(k: JsonKind): string {
+	return match (k) {
+		JsonKind.Null => "null",
+		JsonKind.Bool => "boolean",
+		JsonKind.Number => "number",
+		JsonKind.String => "string",
+		JsonKind.Array => "array",
+		JsonKind.Object => "object",
+		JsonKind.Int => "int",
+		_ => "unknown",
+	};
+}
+
+function pushKindErr(errs: string[], pfx: string, field: string, expected: string, v: JsonValue): void {
+	const got = v === null ? "null" : kindName(v.kind);
+	errs.push("field '" + pfx + field + "': expected " + expected + ", got " + got);
+}
+
+export function reqString(this v: JsonValue, pfx: string, field: string, errs: string[]): string {
+	if (v !== null && v.kind === JsonKind.String) return v.strVal;
+	pushKindErr(errs, pfx, field, "string", v);
+	return "";
+}
+
+export function reqBoolean(this v: JsonValue, pfx: string, field: string, errs: string[]): boolean {
+	if (v !== null && v.kind === JsonKind.Bool) return v.boolVal;
+	pushKindErr(errs, pfx, field, "boolean", v);
+	return false;
+}
+
+// JSON wire has one number type; a field typed number accepts either carrier.
+export function reqNumber(this v: JsonValue, pfx: string, field: string, errs: string[]): number {
+	if (v !== null) {
+		if (v.kind === JsonKind.Number) return v.numVal;
+		if (v.kind === JsonKind.Int) return v.intVal as number;
+	}
+	pushKindErr(errs, pfx, field, "number", v);
+	return 0;
+}
+
+// Int carrier only — a float literal for an int field is a contract breach
+// (the classification is a pure function of the source text, so both
+// backends reject identically).
+export function reqInt64(this v: JsonValue, pfx: string, field: string, errs: string[]): int64 {
+	if (v !== null && v.kind === JsonKind.Int) return v.intVal;
+	pushKindErr(errs, pfx, field, "int", v);
+	return 0 as int64;
+}
+
+export function reqArray(this v: JsonValue, pfx: string, field: string, errs: string[]): JsonValue {
+	if (v !== null && v.kind === JsonKind.Array) return v;
+	pushKindErr(errs, pfx, field, "array", v);
+	return jsonNull();
+}
+
+export function reqObject(this v: JsonValue, pfx: string, field: string, errs: string[]): JsonValue {
+	if (v !== null && v.kind === JsonKind.Object) return v;
+	pushKindErr(errs, pfx, field, "object", v);
+	return jsonNull();
+}
+
+// DU discriminator gate. Runs BEFORE the variant match: an unrecognised
+// disc records an error and is coerced to the first declared variant, so
+// the match itself only ever sees a known value and needs no wildcard arm.
+// (A wildcard arm would have to build an object whose disc field is a
+// runtime string rather than the variant's literal type — that is a third,
+// unrelated anonymous type, and the union assignment stops type-checking.)
+// Unknown-disc input is rejected by the facade via errs; decoding it as
+// variant 0 only keeps the expression total.
+// Joins decode problems into one message, dropping repeats.
+//
+// A nested object's handle expression is inlined once PER INNER FIELD (the
+// macro emits an expression, and an expression cannot bind a local), so a
+// missing intermediate object reports itself once per field below it. The
+// message carries the full field path, so identical text always means the
+// same problem — dropping repeats loses nothing and keeps the output
+// deterministic. Removing the repeats at the source needs statement-level
+// binding in the expansion, which the macro surface cannot express today.
+export function joinDecodeErrors(errs: string[]): string {
+	const seen: string[] = [];
+	for (const e of errs) {
+		let dup = false;
+		for (const s of seen) {
+			if (s === e) { dup = true; }
+		}
+		if (!dup) seen.push(e);
+	}
+	return seen.join("; ");
+}
+
+export function _jsonCheckDiscStr(v: string, allowed: string[], errs: string[], pfx: string, field: string): string {
+	for (const a of allowed) {
+		if (a === v) return v;
+	}
+	errs.push("field '" + pfx + field + "': unknown discriminator value '" + v + "'");
+	return allowed[0];
+}
+
 // ===== Dynamic Field Access (protocol — `getDynamicField`) =====
 
 export function getDynamicField(this v: JsonValue, key: string): JsonValue {
@@ -188,4 +294,57 @@ export function jsonToFloat32Array(this v: JsonValue): float32[] {
 	if (v === null || v.kind !== JsonKind.Array) return out;
 	for (const item of v.items) out.push(asNumber(item) as float32);
 	return out;
+}
+
+// ===== Tests =====
+
+test "reqString: ok path adds no error" {
+	const errs: string[] = [];
+	const v: JsonValue = { kind: JsonKind.String, strVal: "hi" };
+	assert reqString(v, "", "name", errs) === "hi";
+	assert errs.length === 0;
+}
+
+test "reqString: wrong kind pushes named error" {
+	const errs: string[] = [];
+	const v: JsonValue = { kind: JsonKind.Int, intVal: 7 as int64 };
+	assert reqString(v, "", "name", errs) === "";
+	assert errs.length === 1;
+	assert errs[0] === "field 'name': expected string, got int";
+}
+
+test "reqString: prefix lands in the message" {
+	const errs: string[] = [];
+	const v: JsonValue = { kind: JsonKind.Null };
+	reqString(v, "addr.", "city", errs);
+	assert errs[0] === "field 'addr.city': expected string, got null";
+}
+
+test "reqNumber: accepts both carriers" {
+	const errs: string[] = [];
+	const i: JsonValue = { kind: JsonKind.Int, intVal: 30 as int64 };
+	const f: JsonValue = { kind: JsonKind.Number, numVal: 0.5 };
+	assert reqNumber(i, "", "a", errs) === 30;
+	assert reqNumber(f, "", "b", errs) === 0.5;
+	assert errs.length === 0;
+}
+
+test "reqInt64: rejects float carrier" {
+	const errs: string[] = [];
+	const f: JsonValue = { kind: JsonKind.Number, numVal: 1.5 };
+	reqInt64(f, "", "age", errs);
+	assert errs.length === 1;
+	assert errs[0] === "field 'age': expected int, got number";
+}
+
+test "reqArray/reqObject: mismatch pushes, sentinel returned" {
+	const errs: string[] = [];
+	const n: JsonValue = { kind: JsonKind.Int, intVal: 3 as int64 };
+	const a = reqArray(n, "", "tags", errs);
+	const o = reqObject(n, "", "addr", errs);
+	assert a.kind === JsonKind.Null;
+	assert o.kind === JsonKind.Null;
+	assert errs.length === 2;
+	assert errs[0] === "field 'tags': expected array, got int";
+	assert errs[1] === "field 'addr': expected object, got int";
 }
