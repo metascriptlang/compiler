@@ -19,7 +19,7 @@ import {
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeNumber, makeString, makeBool } from "../util";
+import { makeNumber, makeIntNumber, makeString, makeBool } from "../util";
 import { firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -52,9 +52,13 @@ function foldBinary(node: Node): Node {
 
 	const result = match (d.left.kind) {
 		NodeKind.NumberLiteral => {
-			const lv = (d.left.data as NumberLiteralData).value;
-			const rv = (d.right.data as NumberLiteralData).value;
-			return foldNumberBinary(d.operator, lv, rv, loc, node);
+			const ld = d.left.data as NumberLiteralData;
+			const rd = d.right.data as NumberLiteralData;
+			// The fold table runs on doubles. Folding operands a double cannot hold
+			// would bake in a wrong constant, so leave the expression alone and let
+			// the backend's own integer arithmetic evaluate it.
+			if (!fitsDouble(ld) || !fitsDouble(rd)) return node;
+			return foldNumberBinary(d.operator, ld.value, rd.value, loc, node);
 		},
 		NodeKind.StringLiteral => {
 			const ls = (d.left.data as StringLiteralData).value;
@@ -74,6 +78,12 @@ function foldBinary(node: Node): Node {
 		result.nodeType = node.nodeType;
 	}
 	return result;
+}
+
+// True when the literal's exact value survives a round trip through a double.
+function fitsDouble(d: NumberLiteralData): boolean {
+	if (d.isFloat) return true;
+	return ((d.intVal as number) as int64) === d.intVal;
 }
 
 function foldNumberBinary(op: string, lv: number, rv: number, loc: SourceLocation, fallback: Node): Node {
@@ -130,10 +140,11 @@ function foldUnary(node: Node): Node {
 			}
 		},
 		NodeKind.NumberLiteral => {
-			const nv = (d.operand.data as NumberLiteralData).value;
+			const od = d.operand.data as NumberLiteralData;
+			const nv = od.value;
 			const result = match (d.unaryOp) {
-				"-" => makeNumber(0 - nv, loc),
-				"+" => makeNumber(nv, loc),
+				"-" => od.isFloat ? makeNumber(0 - nv, loc) : makeIntNumber(0 - od.intVal, loc),
+				"+" => od.isFloat ? makeNumber(nv, loc) : makeIntNumber(od.intVal, loc),
 				_ => node,
 			};
 			// Preserve checker-stamped type through constant folding.
