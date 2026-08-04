@@ -139,7 +139,14 @@ export function transAmHashNode(node: Node): number {
 		NodeKind.NumberLiteral => {
 			const nd = node.data as NumberLiteralData;
 			h = hI(h, nd.value);
-			if (nd.isFloat) h = hI(h, 1);
+			if (nd.isFloat) {
+				h = hI(h, 1);
+			} else {
+				// Split: a single `as number` would round the halves back together
+				// and collide the exact pairs this field exists to distinguish.
+				h = hI(h, (nd.intVal & 0xFFFFFFFF) as number);
+				h = hI(h, ((nd.intVal >> 32) & 0xFFFFFFFF) as number);
+			}
 		},
 		NodeKind.StringLiteral => {
 			h = hS(h, (node.data as StringLiteralData).value);

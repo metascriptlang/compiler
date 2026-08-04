@@ -2219,7 +2219,7 @@ test "constrained interface Box<T extends number>" {
 
 test "fnDefaults on FunctionDeclData" {
 	const zl = makeLoc(0, 0);
-	const defNode = createNodeAt(NodeKind.NumberLiteral, { value: 42, isFloat: false }, zl);
+	const defNode = createNodeAt(NodeKind.NumberLiteral, { value: 42, isFloat: false, intVal: 42 as int64 }, zl);
 	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "defTest", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: [null, defNode], nameLocation: zl }, zl);
 	const d = fnNode.data as FunctionDeclData;
 	assert d.fnDefaults.length === 2;

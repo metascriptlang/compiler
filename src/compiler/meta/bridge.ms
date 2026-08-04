@@ -81,7 +81,7 @@ export function synthToken(loc: SourceLocation): Token {
 }
 
 export function mkNumber(val: number, loc: SourceLocation): Node {
-	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: val % 1 !== 0 }, synthToken(loc));
+	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: val % 1 !== 0, intVal: val as int64 }, synthToken(loc));
 }
 
 export function mkString(val: string, loc: SourceLocation): Node {
@@ -1253,7 +1253,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		// === Literals ===
 		NodeKind.NumberLiteral => {
 			const value = readFloat(objHeap, h, "value");
-			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat: value % 1 !== 0 }, loc);
+			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat: value % 1 !== 0, intVal: value as int64 }, loc);
 		},
 		NodeKind.StringLiteral => {
 			return createNodeAt(NodeKind.StringLiteral, { value: readStr(objHeap, h, "value") }, loc);
@@ -1802,7 +1802,7 @@ test "NumberLiteral serialization — float stays float-boxed" {
 	const objHeap = createStructHeap();
 	const arrHeap = createArrayHeap();
 	const loc = makeLoc(1, 0);
-	const node = createNode(NodeKind.NumberLiteral, { value: 3.5, isFloat: true }, synthToken(loc));
+	const node = createNode(NodeKind.NumberLiteral, { value: 3.5, isFloat: true, intVal: 0 as int64 }, synthToken(loc));
 	const val = nodeToValue(node, objHeap, arrHeap);
 	const numVal = heapObjectGetField(objHeap, val.intVal, "value");
 	assert numVal.kind === RaiserValueKind.Float;
@@ -3000,7 +3000,7 @@ test "nodeToValue — child Nodes' nodeType cascades through dispatch" {
 	const loc = makeLoc(1, 0);
 	const left = createNodeAt(NodeKind.Identifier, { name: "a" }, loc);
 	left.nodeType = makePrimType(TypeKind.Int32);
-	const right = createNodeAt(NodeKind.NumberLiteral, { value: 1, isFloat: false }, loc);
+	const right = createNodeAt(NodeKind.NumberLiteral, { value: 1, isFloat: false, intVal: 1 as int64 }, loc);
 	right.nodeType = makePrimType(TypeKind.Int32);
 	const expr = createNodeAt(NodeKind.BinaryExpr, { operator: "+", left, right }, loc);
 	expr.nodeType = makePrimType(TypeKind.Int32);

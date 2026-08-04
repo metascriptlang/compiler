@@ -154,8 +154,17 @@ export function makeNull(loc: SourceLocation): Node {
 
 export function makeNumber(val: number, loc: SourceLocation): Node {
 	const isFloat = val % 1 !== 0;
-	const n = createNode(NodeKind.NumberLiteral, { value: val, isFloat }, syntheticToken(loc));
+	const n = createNode(NodeKind.NumberLiteral, { value: val, isFloat, intVal: isFloat ? 0 as int64 : val as int64 }, syntheticToken(loc));
 	if (!isFloat) { n.nodeType = int32Type(); } else { n.nodeType = float64Type(); }
+	return n;
+}
+
+// Integer literal built from an exact int64 — the double field is only the
+// approximate view, so anything past 2^53 must be produced through here rather
+// than makeNumber.
+export function makeIntNumber(val: int64, loc: SourceLocation): Node {
+	const n = createNode(NodeKind.NumberLiteral, { value: val as number, isFloat: false, intVal: val }, syntheticToken(loc));
+	n.nodeType = int32Type();
 	return n;
 }
 

@@ -7,7 +7,7 @@ import { Node, NodeKind, Expression, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd } from "../context";
 import { parseOk, parseMemberChain, tryParseLiteralKeyword } from "./util";
 import { isIdentLike } from "../util";
-import { parseNumberLiteral } from "../../utils/string";
+import { parseNumberLiteral, parseIntegerLiteral } from "../../utils/string";
 
 
 type ExprResult = Result<Expression, string>;
@@ -147,7 +147,8 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	if (token.kind === TokenKind.Number) {
 		advance(state);
 		const isFloat = token.value.indexOf(".") >= 0 || token.value.indexOf("e") >= 0 || token.value.indexOf("E") >= 0;
-		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(token.value), isFloat }, token));
+		const intVal = isFloat ? 0 as int64 : parseIntegerLiteral(token.value);
+		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(token.value), isFloat, intVal }, token));
 	}
 
 	// String literal — with optional .code suffix ("a".code → MemberExpr)

@@ -294,7 +294,7 @@ export function makeLocRange(line: int32, column: int32, endLine: int32, endColu
 
 export type NodeData =
 	// Literal variants
-	| { value: number, isFloat: boolean }                          // NumberLiteral
+	| { value: number, isFloat: boolean, intVal: int64 }           // NumberLiteral
 	| { value: string }                                            // StringLiteral
 	| { boolValue: boolean }                                       // BooleanLiteral
 	| { nullPlaceholder: boolean }                                 // NullLiteral (always true)
@@ -513,7 +513,11 @@ export type Expression = Node;
 // Named aliases for as-casts. Single source of truth for each NodeKind's data shape.
 
 // Literals
-export type NumberLiteralData = { value: number, isFloat: boolean };
+// `value` is the double view, kept for the float path and for every consumer that
+// only needs magnitude. `intVal` is authoritative when !isFloat: a double cannot
+// round-trip an integer past 2^53, so the exact value would otherwise be lost in
+// the parser, before any backend sees it.
+export type NumberLiteralData = { value: number, isFloat: boolean, intVal: int64 };
 export type StringLiteralData = { value: string };
 export type BooleanLiteralData = { boolValue: boolean };
 export type RegexLiteralData = { regexPattern: string };
