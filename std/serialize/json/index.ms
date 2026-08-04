@@ -7,7 +7,7 @@
 // AST — must be in the importer's symbol table).
 
 export { jsonStringify, jsonValueOf } from "./encode";
-export { jsonValueToStruct } from "./decode";
+export { jsonValueToStruct, jsonValueToStructE } from "./decode";
 export { parseJson } from "./parser";
 export { JsonValue, JsonKind } from "./types";
 

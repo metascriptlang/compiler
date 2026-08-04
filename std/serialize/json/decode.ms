@@ -427,3 +427,421 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 		keyLocations: [],
 	};
 }
+
+// ===== Strict variant — jsonValueToStructE(jv, witness, errs, pfx) =====
+//
+// Same expansion shape as jsonValueToStruct, but every field read goes
+// through a req* accessor that appends into `errs` (a string[] expression)
+// when the input does not satisfy the declared type. `pfx` is a string
+// EXPRESSION carrying the dotted path for messages — "" at the top level,
+// pfx + "field." one level down.
+//
+// Three deliberate deviations from the lenient macro, all facade-motivated:
+//
+// - The nested-struct witness is `MemberExpr(witness, field)` carrying the
+//   field's type-AST in `nodeType`, the same carrier encode.ms uses for its
+//   recursion. It is consumed by the re-expansion and never reaches codegen,
+//   so the null witness is not dereferenced. The lenient macro instead emits
+//   `null as "<Name> | null"`, whose asType STRING must resolve in the
+//   expanding module's scope — which is the prelude facade for
+//   JSON.parse<T>, where user type names do not exist. That is why nested
+//   structs only ever worked when the macro was called directly from the
+//   user's own module.
+//
+// - Reference-typed fields are peeled before classification: an array or
+//   interface field arrives as TypeGeneric("Ref", [inner]).
+//
+// - Array fields are matched as TypeArray OR TypeGeneric("Array", [T]).
+//
+// Element-level strictness for atomic-element arrays is deferred: the array
+// itself is kind-checked via reqArray, elements convert leniently.
+export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node): Node {
+	let tt = witness.nodeType;
+	if (tt.kind === NodeKind.TypeUnion) {
+		let nonNullCount: int32 = 0;
+		let firstNonNull: Node = null as unknown as Node;
+		for (const m of tt.typExprMembers) {
+			if (m.kind === NodeKind.Identifier && m.name === "null") continue;
+			if (firstNonNull === null) firstNonNull = m;
+			nonNullCount = nonNullCount + 1;
+		}
+		if (nonNullCount === 1) {
+			tt = firstNonNull;
+		}
+	}
+	if (tt.kind === NodeKind.TypeGeneric) {
+		tt = tt.typExprArgs[0];
+	}
+
+	// Tagged-union decode, strict: the disc is read through req*, and a
+	// wildcard arm records an unknown-disc error while still producing
+	// variant 0 so the emitted match stays a total expression. Without that
+	// arm an unrecognised disc silently decoded as the LAST variant.
+	// Payload fields inside the wildcard arm use the lenient accessors
+	// deliberately — the parse is already rejected by the disc error, and
+	// per-field noise would bury it.
+	if (tt.kind === NodeKind.TypeUnion) {
+		const info = detectUnionDisc(tt);
+		const discField: string = info.discField;
+		const discKind: string = info.discKind;
+		const variants = info.variants;
+
+		if (discField === "" || variants.length === 0) {
+			error("jsonValueToStructE: cannot determine discriminator for union type — variants must share a literal-typed disc field", witness);
+		}
+		if (discKind === "enum") {
+			error("jsonValueToStructE: enum-discriminated unions not yet supported in decode (encode works); use boolean or string disc", witness);
+		}
+
+		const discReqName: string = discKind === "boolean" ? "reqBoolean" : "reqString";
+		const discFieldLit: Node = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: discField };
+		const discRead: Node = {
+			kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+			callee: {
+				kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
+				object: {
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+					arguments: [jv, discFieldLit],
+				},
+				property: discReqName,
+			},
+			arguments: [pfx, discFieldLit, errs],
+		};
+		// String disc: gate the value against the declared variant keys, so
+		// an unrecognised disc is an ERROR rather than a silent decode as
+		// whichever arm happens to be last. A boolean disc covering both
+		// values needs no gate.
+		let matchDisc: Node = discRead;
+		if (discKind !== "boolean") {
+			const allowedNodes: Node[] = [];
+			for (const variant of variants) {
+				allowedNodes.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variant.key });
+			}
+			matchDisc = {
+				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+				callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonCheckDiscStr" },
+				arguments: [discRead,
+					{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: allowedNodes },
+					errs, pfx, discFieldLit],
+			};
+		}
+
+		const matchCases: Node[] = [];
+		for (const variant of variants) {
+			const variantKey: string = variant.key;
+			const v: Node = variant.member;
+			if (v.kind !== NodeKind.TypeObject) {
+				error("jsonValueToStructE: union variants must be struct types (got kind=" + v.kind + ")", witness);
+			}
+
+			let pattern: Node;
+			let discLiteral: Node;
+			if (discKind === "boolean") {
+				const bv: boolean = variantKey === "true";
+				pattern = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: bv };
+				discLiteral = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: bv };
+			} else {
+				pattern = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variantKey };
+				discLiteral = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variantKey };
+			}
+
+			const vKeyNodes: string[] = [discField];
+			const vValueNodes: Node[] = [discLiteral];
+			for (let fi = 0; fi < v.typExprFieldNames.length; fi = fi + 1) {
+				const fname: string = v.typExprFieldNames[fi];
+				const ftype: Node = v.typExprFieldTypes[fi];
+				if (fname === discField) continue;
+
+				if (ftype.kind !== NodeKind.Identifier) {
+					error("jsonValueToStructE: DU variant payload field '" + fname + "' must be atomic (string/bool/number/int*/float*); nested struct + array deferred", witness);
+				}
+				const a = pickAtomicAccessor(ftype.name);
+				let reqName: string = "reqInt64";
+				if (a.methodName === "asString") reqName = "reqString";
+				else if (a.methodName === "asBoolean") reqName = "reqBoolean";
+				else if (a.methodName === "asNumber") reqName = "reqNumber";
+				const fnameLit: Node = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname };
+				const fieldAccess: Node = {
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: {
+						kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
+						object: {
+							kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+							callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+							arguments: [jv, fnameLit],
+						},
+						property: reqName,
+					},
+					arguments: [pfx, fnameLit, errs],
+				};
+				const finalAccess: Node = a.needsCast
+					? { kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asExpr: fieldAccess, asType: a.castType }
+					: fieldAccess;
+				vKeyNodes.push(fname);
+				vValueNodes.push(finalAccess);
+			}
+
+			matchCases.push({
+				kind: NodeKind.MatchCase, line: jv.line, column: jv.column,
+				casePatterns: [pattern],
+				caseGuard: null as unknown as Node,
+				caseBody: {
+					kind: NodeKind.ObjectLiteral, line: jv.line, column: jv.column,
+					keys: vKeyNodes,
+					properties: vValueNodes,
+					keyLocations: [],
+				},
+			});
+		}
+
+
+		return {
+			kind: NodeKind.MatchExpr, line: jv.line, column: jv.column,
+			matchDisc,
+			matchCases,
+		};
+	}
+
+	if (tt.kind !== NodeKind.TypeObject) {
+		error("jsonValueToStructE: target type must be a struct/interface; atomic types not supported", witness);
+	}
+
+	const fields: string[] = tt.typExprFieldNames;
+	const fieldTypes: Node[] = tt.typExprFieldTypes;
+	const keyNodes: string[] = [];
+	const valueNodes: Node[] = [];
+	let i = 0;
+	while (i < fields.length) {
+		const fname: string = fields[i];
+		const ftype: Node = fieldTypes[i];
+		const fnameLit: Node = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname };
+
+		// Peel ownership wrappers: reference-typed fields (arrays,
+		// interfaces) arrive as TypeGeneric("Ref", [inner]).
+		let fcore: Node = ftype;
+		let peeling: boolean = true;
+		while (peeling) {
+			peeling = false;
+			if (fcore.kind === NodeKind.TypeGeneric) {
+				const b: Node = fcore.typExprBase;
+				if (b.kind === NodeKind.Identifier) {
+					const bn: string = b.name;
+					if (bn === "Ref" || bn === "Ptr" || bn === "Sink" || bn === "Lent" || bn === "Var" || bn === "Borrow") {
+						fcore = fcore.typExprArgs[0];
+						peeling = true;
+					}
+				}
+			}
+		}
+
+		// Array detection FIRST — the struct branch would otherwise swallow
+		// a TypeGeneric("Array", [Elem]).
+		let isArrayField: boolean = false;
+		let elemType: Node = null as unknown as Node;
+		if (fcore.kind === NodeKind.TypeArray) {
+			isArrayField = true;
+			elemType = fcore.typExprElement;
+		} else if (fcore.kind === NodeKind.TypeGeneric) {
+			const base: Node = fcore.typExprBase;
+			if (base.kind === NodeKind.Identifier && base.name === "Array") {
+				isArrayField = true;
+				elemType = fcore.typExprArgs[0];
+			}
+		}
+
+		if (isArrayField) {
+			let ec: Node = elemType;
+			let epeeling: boolean = true;
+			while (epeeling) {
+				epeeling = false;
+				if (ec.kind === NodeKind.TypeGeneric) {
+					const eb: Node = ec.typExprBase;
+					if (eb.kind === NodeKind.Identifier) {
+						const ebn: string = eb.name;
+						if (ebn === "Ref" || ebn === "Ptr" || ebn === "Sink" || ebn === "Lent" || ebn === "Var" || ebn === "Borrow") {
+							ec = ec.typExprArgs[0];
+							epeeling = true;
+						}
+					}
+				}
+			}
+			let en: string = "";
+			let elemIsStruct: boolean = false;
+			if (ec.kind === NodeKind.Identifier) {
+				en = ec.name;
+			} else if (ec.kind === NodeKind.TypeObject) {
+				elemIsStruct = true;
+			} else {
+				error("jsonValueToStructE: unsupported array element kind=" + ec.kind + " (field '" + fname + "')", witness);
+			}
+			const isBuiltin: boolean = en === "string" || en === "boolean"
+				|| en === "number" || en === "float32" || en === "float64"
+				|| en === "int8" || en === "int16" || en === "int32" || en === "int64"
+				|| en === "uint8" || en === "uint16" || en === "uint32";
+
+			const reqArrayCall: Node = {
+				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+				callee: {
+					kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
+					object: {
+						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+						arguments: [jv, fnameLit],
+					},
+					property: "reqArray",
+				},
+				arguments: [pfx, fnameLit, errs],
+			};
+
+			if (elemIsStruct) {
+				// Element decode needs a runtime loop, so it goes through the
+				// array-of-structs helper. Its witness is the array field
+				// itself (MemberExpr on the outer witness) — the helper's T
+				// binds from the element type, no name resolution involved.
+				const arrWitness: Node = {
+					kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
+					object: witness, property: fname, nodeType: ftype, isOptional: false,
+				};
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonToStructArray" },
+					arguments: [reqArrayCall,
+						{ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true }],
+				});
+				i = i + 1;
+				continue;
+			}
+			if (!isBuiltin) {
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonToIntArray" },
+					arguments: [reqArrayCall,
+						{ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true }],
+				});
+				i = i + 1;
+				continue;
+			}
+			let arrHelper: string = "jsonToInt64Array";
+			if (en === "string") arrHelper = "jsonToStringArray";
+			else if (en === "boolean") arrHelper = "jsonToBooleanArray";
+			else if (en === "number") arrHelper = "jsonToNumberArray";
+			else if (en === "float64") arrHelper = "jsonToNumberArray";
+			else if (en === "float32") arrHelper = "jsonToFloat32Array";
+			else if (en === "int8") arrHelper = "jsonToInt8Array";
+			else if (en === "int16") arrHelper = "jsonToInt16Array";
+			else if (en === "int32") arrHelper = "jsonToInt32Array";
+			else if (en === "int64") arrHelper = "jsonToInt64Array";
+			else if (en === "uint8") arrHelper = "jsonToUint8Array";
+			else if (en === "uint16") arrHelper = "jsonToUint16Array";
+			else if (en === "uint32") arrHelper = "jsonToUint32Array";
+			keyNodes.push(fname);
+			valueNodes.push({
+				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+				callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: arrHelper },
+				arguments: [reqArrayCall],
+			});
+			i = i + 1;
+			continue;
+		}
+
+		// Nested struct — recurse through the macro itself. The witness is a
+		// MemberExpr carrying the field's type-AST; it is consumed by the
+		// re-expansion and never evaluated at runtime.
+		if (fcore.kind === NodeKind.TypeObject) {
+			const reqObjCall: Node = {
+				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+				callee: {
+					kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
+					object: {
+						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+						arguments: [jv, fnameLit],
+					},
+					property: "reqObject",
+				},
+				arguments: [pfx, fnameLit, errs],
+			};
+			const childPfx: Node = {
+				kind: NodeKind.BinaryExpr, line: jv.line, column: jv.column,
+				operator: "+",
+				left: pfx,
+				right: { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname + "." },
+			};
+			const innerWitness: Node = {
+				kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
+				object: witness, property: fname, nodeType: ftype, isOptional: false,
+			};
+			keyNodes.push(fname);
+			valueNodes.push({
+				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+				callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "jsonValueToStructE" },
+				arguments: [reqObjCall, innerWitness, errs, childPfx],
+			});
+			i = i + 1;
+			continue;
+		}
+
+		// Literal-typed field — emitted directly. A flat struct's literal
+		// field is a declared constant; DU discs are validated by the union
+		// branch above.
+		if (fcore.kind === NodeKind.StringLiteral) {
+			keyNodes.push(fname);
+			valueNodes.push(fcore);
+			i = i + 1;
+			continue;
+		}
+		if (fcore.kind === NodeKind.BooleanLiteral) {
+			keyNodes.push(fname);
+			valueNodes.push({ kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: fcore.boolValue });
+			i = i + 1;
+			continue;
+		}
+
+		if (fcore.kind !== NodeKind.Identifier) {
+			let extra: string = "";
+			if (fcore.kind === NodeKind.TypeGeneric) {
+				const b: Node = fcore.typExprBase;
+				extra = b.kind === NodeKind.Identifier
+					? " (generic base '" + b.name + "', argc=" + fcore.typExprArgs.length + ")"
+					: " (generic base kind=" + b.kind + ")";
+			}
+			error("jsonValueToStructE: unsupported field type kind=" + fcore.kind + extra + "; field '" + fname + "'", witness);
+		}
+		const a = pickAtomicAccessor(fcore.name);
+		let reqName: string = "reqInt64";
+		if (a.methodName === "asString") reqName = "reqString";
+		else if (a.methodName === "asBoolean") reqName = "reqBoolean";
+		else if (a.methodName === "asNumber") reqName = "reqNumber";
+		const fieldAccess: Node = {
+			kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+			callee: {
+				kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
+				object: {
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+					arguments: [jv, fnameLit],
+				},
+				property: reqName,
+			},
+			arguments: [pfx, fnameLit, errs],
+		};
+		const finalAccess: Node = a.needsCast
+			? { kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asExpr: fieldAccess, asType: a.castType }
+			: fieldAccess;
+		keyNodes.push(fname);
+		valueNodes.push(finalAccess);
+		i = i + 1;
+	}
+
+	return {
+		kind: NodeKind.ObjectLiteral,
+		line: jv.line,
+		column: jv.column,
+		keys: keyNodes,
+		properties: valueNodes,
+		keyLocations: [],
+	};
+}
