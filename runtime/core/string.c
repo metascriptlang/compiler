@@ -1021,12 +1021,18 @@ msString msNumberToString(double value) {
 	return msStringNew(buf, (int)(p - buf));
 }
 
-msString msNumberToStringRadix(double value, double radix) {
+/* Unsigned counterpart of msIntToString: values above INT64_MAX print as a
+   negative through the signed formatter. */
+msString msUint64ToString(uint64_t value) {
+	char buf[24];
+	int len = snprintf(buf, sizeof(buf), "%llu", (unsigned long long)value);
+	return msStringNew(buf, len);
+}
+
+msString msIntToStringRadix(int64_t iv, double radix) {
 	int r = (int)radix;
 	if (r < 2 || r > 36) r = 10;
-	if (r == 10) return msNumberToString(value);
-	int64_t iv = (int64_t)value;
-	if ((double)iv != value) return msNumberToString(value); /* non-integer: fallback to base 10 */
+	if (r == 10) return msIntToString(iv);
 	char buf[66]; /* enough for 64-bit binary + sign + null */
 	int neg = iv < 0;
 	uint64_t uv = neg ? (uint64_t)(-(iv + 1)) + 1 : (uint64_t)iv;
@@ -1039,6 +1045,30 @@ msString msNumberToStringRadix(double value, double radix) {
 	} while (uv > 0);
 	if (neg) buf[--pos] = '-';
 	return msStringNew(buf + pos, 65 - pos);
+}
+
+msString msUint64ToStringRadix(uint64_t uv, double radix) {
+	int r = (int)radix;
+	if (r < 2 || r > 36) r = 10;
+	if (r == 10) return msUint64ToString(uv);
+	char buf[66];
+	static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+	int pos = 65;
+	buf[pos] = '\0';
+	do {
+		buf[--pos] = digits[uv % r];
+		uv /= r;
+	} while (uv > 0);
+	return msStringNew(buf + pos, 65 - pos);
+}
+
+msString msNumberToStringRadix(double value, double radix) {
+	int r = (int)radix;
+	if (r < 2 || r > 36) r = 10;
+	if (r == 10) return msNumberToString(value);
+	int64_t iv = (int64_t)value;
+	if ((double)iv != value) return msNumberToString(value); /* non-integer: fallback to base 10 */
+	return msIntToStringRadix(iv, radix);
 }
 
 msString msBoolToString(int value) {

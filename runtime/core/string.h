@@ -265,6 +265,9 @@ void msStringSetChar(msString* s, int64_t idx, msString ch);
 
 /* Number/bool to string */
 msString msIntToString(int64_t value);
+msString msUint64ToString(uint64_t value);
+msString msIntToStringRadix(int64_t value, double radix);
+msString msUint64ToStringRadix(uint64_t value, double radix);
 msString msNumberToString(double value);
 msString msNumberToStringRadix(double value, double radix);
 /* msNumberToString is the no-radix fast path; msNumberToStringRadix handles arbitrary base */
