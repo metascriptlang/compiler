@@ -334,8 +334,14 @@ function finishRssCell(c: Cell): void {
 
 function finishParityCell(c: Cell): void {
 	const rawExit = readExit(c);
-	c.pass = rawExit === c.spec.expectExit;
-	c.detail = "exit=" + rawExit;
+	const merged = readFileOr(c.dir + "out.log", "");
+	const exitOk = rawExit === c.spec.expectExit;
+	const outOk = c.spec.stdoutSub == "" || merged.contains(c.spec.stdoutSub);
+
+	let detail = "exit=" + rawExit;
+	if (!outOk) { detail = detail + " [stdout missing '" + c.spec.stdoutSub + "']"; }
+	c.pass = exitOk && outOk;
+	c.detail = detail;
 	c.finished = true;
 }
 
