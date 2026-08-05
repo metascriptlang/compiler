@@ -479,3 +479,12 @@ test "duplicate keys: last one wins (JS parity)" {
 	const v0 = r.value.values[0];
 	if (v0.kind === JsonKind.Int) assert v0.intVal === (2 as int64);
 }
+
+test "parse keeps object keys in insertion order" {
+	const r = parseJson("{\"b\":1,\"2\":2,\"a\":3,\"1\":4}");
+	assert r.ok;
+	assert r.value.keys[0] === "b";
+	assert r.value.keys[1] === "2";
+	assert r.value.keys[2] === "a";
+	assert r.value.keys[3] === "1";
+}

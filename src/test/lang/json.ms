@@ -171,3 +171,130 @@ test "DU decode: variant payload wrong kind is an error" {
 	assert errs[0] === "field 'r': expected number, got string";
 }
 
+
+// ===== Array-of-struct elements (roadmap 7) =====
+//
+// Exercised through jsonValueToStructE directly, like the DU tests above:
+// the facade entry adds a generic-instantiation variable this file does not
+// need in order to pin the element contract.
+
+interface Line {
+	sku: string;
+	qty: int64;
+}
+
+interface Cart {
+	items: Line[];
+}
+
+test "array of structs: elements decode" {
+	const pr = parseJson(`{"items":[{"sku":"a","qty":2},{"sku":"b","qty":3}]}`);
+	assert pr.ok;
+	const errs: string[] = [];
+	const c: Cart = jsonValueToStructE(pr.value, null as Cart | null, errs, "");
+	assert errs.length === 0;
+	assert c.items.length === 2;
+	assert c.items[1].sku === "b";
+	assert c.items[1].qty === 3;
+}
+
+test "array of structs: element field of the wrong kind is an error" {
+	const pr = parseJson(`{"items":[{"sku":"a","qty":"two"}]}`);
+	assert pr.ok;
+	const errs: string[] = [];
+	const c: Cart = jsonValueToStructE(pr.value, null as Cart | null, errs, "");
+	assert errs.length === 1;
+	assert errs[0] === "field 'items[0].qty': expected int, got string";
+}
+
+test "array of structs: a missing element field is an error" {
+	const pr = parseJson(`{"items":[{"sku":"a"}]}`);
+	assert pr.ok;
+	const errs: string[] = [];
+	const c: Cart = jsonValueToStructE(pr.value, null as Cart | null, errs, "");
+	assert errs.length === 1;
+	assert errs[0] === "field 'items[0].qty': expected int, got null";
+}
+
+test "array of structs: a non-object element is an error" {
+	const pr = parseJson(`{"items":[7]}`);
+	assert pr.ok;
+	const errs: string[] = [];
+	const c: Cart = jsonValueToStructE(pr.value, null as Cart | null, errs, "");
+	assert errs.length > 0;
+	assert errs[0] === "field 'items[0]': expected object, got int";
+}
+
+test "array of structs: the second element reports its own index" {
+	const pr = parseJson(`{"items":[{"sku":"a","qty":1},{"sku":"b"}]}`);
+	assert pr.ok;
+	const errs: string[] = [];
+	const c: Cart = jsonValueToStructE(pr.value, null as Cart | null, errs, "");
+	assert errs.length === 1;
+	assert errs[0] === "field 'items[1].qty': expected int, got null";
+}
+
+// ===== Atomic array elements are strict too =====
+//
+// Struct elements became strict first; atomic elements stayed lenient and
+// silently fabricated a default (`["a",7]` for string[] produced ["a",""]).
+// The type is the contract at every depth, so the element index appears in
+// the path exactly as it does for struct elements.
+
+interface Bag {
+	xs: string[];
+}
+
+interface Nums {
+	ns: int64[];
+}
+
+interface Flags {
+	bs: boolean[];
+}
+
+test "atomic array elements: all-good still decodes" {
+	const pr = parseJson(`{"xs":["a","b"]}`);
+	assert pr.ok;
+	const errs: string[] = [];
+	const b: Bag = jsonValueToStructE(pr.value, null as Bag | null, errs, "");
+	assert errs.length === 0;
+	assert b.xs.length === 2;
+	assert b.xs[1] === "b";
+}
+
+test "atomic array elements: wrong element kind is an error" {
+	const pr = parseJson(`{"xs":["a",7]}`);
+	assert pr.ok;
+	const errs: string[] = [];
+	const b: Bag = jsonValueToStructE(pr.value, null as Bag | null, errs, "");
+	assert errs.length === 1;
+	assert errs[0] === "field 'xs[1]': expected string, got int";
+}
+
+test "atomic array elements: null element is an error" {
+	const pr = parseJson(`{"xs":["a",null]}`);
+	assert pr.ok;
+	const errs: string[] = [];
+	const b: Bag = jsonValueToStructE(pr.value, null as Bag | null, errs, "");
+	assert errs.length === 1;
+	assert errs[0] === "field 'xs[1]': expected string, got null";
+}
+
+test "atomic array elements: float in an int64 array is an error" {
+	const pr = parseJson(`{"ns":[1,1.5]}`);
+	assert pr.ok;
+	const errs: string[] = [];
+	const n: Nums = jsonValueToStructE(pr.value, null as Nums | null, errs, "");
+	assert errs.length === 1;
+	assert errs[0] === "field 'ns[1]': expected int, got number";
+}
+
+test "atomic array elements: wrong kind in a boolean array is an error" {
+	const pr = parseJson(`{"bs":[true,"x"]}`);
+	assert pr.ok;
+	const errs: string[] = [];
+	const f: Flags = jsonValueToStructE(pr.value, null as Flags | null, errs, "");
+	assert errs.length === 1;
+	assert errs[0] === "field 'bs[1]': expected boolean, got string";
+}

@@ -17,6 +17,15 @@ interface Sized {
 	sizes: int32[];
 }
 
+interface Line {
+	sku: string;
+	qty: int64;
+}
+
+interface Cart {
+	items: Line[];
+}
+
 function main(): void {
 	const okTags = JSON.parse<Tagged>("{\"label\":\"l\",\"tags\":[\"a\",\"b\"]}");
 	if (okTags.ok) {
@@ -51,6 +60,41 @@ function main(): void {
 		console.log("sized ok n=" + sized.value.sizes.length.toString() + " last=" + sized.value.sizes[2].toString());
 	} else {
 		console.log("sized err=" + sized.error);
+	}
+
+	const cart = JSON.parse<Cart>("{\"items\":[{\"sku\":\"a\",\"qty\":2},{\"sku\":\"b\",\"qty\":3}]}");
+	if (cart.ok) {
+		console.log("cart ok n=" + cart.value.items.length.toString() + " second=" + cart.value.items[1].sku + " qty=" + cart.value.items[1].qty.toString());
+	} else {
+		console.log("cart err=" + cart.error);
+	}
+
+	const badElem = JSON.parse<Cart>("{\"items\":[{\"sku\":\"a\",\"qty\":\"two\"}]}");
+	if (badElem.ok) {
+		console.log("badElem ok — WRONG");
+	} else {
+		console.log("badElem err=" + badElem.error);
+	}
+
+	const missingElemField = JSON.parse<Cart>("{\"items\":[{\"sku\":\"a\",\"qty\":1},{\"sku\":\"b\"}]}");
+	if (missingElemField.ok) {
+		console.log("missingElemField ok — WRONG");
+	} else {
+		console.log("missingElemField err=" + missingElemField.error);
+	}
+
+	const nonObjElem = JSON.parse<Cart>("{\"items\":[7]}");
+	if (nonObjElem.ok) {
+		console.log("nonObjElem ok — WRONG");
+	} else {
+		console.log("nonObjElem err=" + nonObjElem.error);
+	}
+
+	const emptyItems = JSON.parse<Cart>("{\"items\":[]}");
+	if (emptyItems.ok) {
+		console.log("emptyItems ok n=" + emptyItems.value.items.length.toString());
+	} else {
+		console.log("emptyItems err=" + emptyItems.error);
 	}
 }
 
