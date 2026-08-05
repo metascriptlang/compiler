@@ -1,4 +1,4 @@
-// Phase 0 guard for the TypeKind.Unknown kind-split debt — docs/UNKNOWN-BUG.md.
+// Phase 0 guard for the TypeKind.Pending kind-split debt — docs/UNKNOWN-BUG.md.
 //
 // Two holes were found by probe on 2026-08-04 and had NO test, so a refactor
 // could change either one silently:
@@ -10,11 +10,11 @@
 //   §4.1 — a generic whose T is not inferrable reaches codegen with no checker
 //        diagnostic and emits a call to a specialisation that was never emitted.
 //
-// Cells marked DEBT pin behaviour that is WRONG ON PURPOSE: they record today's
-// answer so the split cannot happen quietly. When §8 Phase 2 lands they must be
-// rewritten to assert agreement, not disagreement — that is the point.
+// §8 Phase 2 landed: user `unknown` is TypeKind.Unknown, the flag is gone, and
+// the former disagreement cells now assert agreement. Cells still marked DEBT
+// pin behaviour that flips at Phase 3 (pending-at-emission population).
 
-import { unknownType, userUnknownType, isUserUnknown, isPointerShapedForUnknown } from "../../checker/types";
+import { pendingType, unknownType, isUserUnknown, isPointerShapedForUnknown } from "../../checker/types";
 import { isPointerType, getTypeDesc } from "../../codegen/c/types";
 import { createCGen } from "../../codegen/c/context";
 import { hasErrors } from "../../checker/context";
@@ -23,16 +23,16 @@ import { compileToC } from "../helpers";
 
 // ===== A. user `unknown` — all three readers must agree it is a pointer =====
 
-test "user unknown carries the UserUnknown stamp" {
-	assert isUserUnknown(userUnknownType());
+test "user unknown has its own kind" {
+	assert isUserUnknown(unknownType());
 }
 
 test "checker reader: user unknown is pointer-shaped" {
-	assert isPointerShapedForUnknown(userUnknownType());
+	assert isPointerShapedForUnknown(unknownType());
 }
 
 test "ABI reader: user unknown is a pointer" {
-	assert isPointerType(userUnknownType());
+	assert isPointerType(unknownType());
 }
 
 test "emission reader: a user unknown param is declared void*" {
@@ -59,18 +59,16 @@ test "emission reader: the call passes the value, not its address" {
 	}
 }
 
-// ===== B. flagless Unknown — DEBT: the readers do not agree =====
+// ===== B. Pending — post-split, the readers agree it is not a pointer =====
 
-test "flagless Unknown carries no stamp" {
-	assert !isUserUnknown(unknownType());
+test "a Pending type is not user unknown" {
+	assert !isUserUnknown(pendingType());
 }
 
-test "DEBT: checker and ABI readers disagree about a flagless Unknown" {
-	// After the §8 Phase 2 split this cell must become: both readers answer
-	// false for TypeKind.Pending. Until then the disagreement IS the state of
-	// the tree and is pinned here so it cannot change unnoticed.
-	const pending = unknownType();
-	assert isPointerShapedForUnknown(pending), "checker reader changed — update docs/UNKNOWN-BUG.md §3";
+test "post-split: checker and ABI readers agree a Pending type is not a pointer" {
+	// Inverted when §8 Phase 2 landed — this was the §3 disagreement cell.
+	const pending = pendingType();
+	assert !isPointerShapedForUnknown(pending), "checker reader changed — update docs/UNKNOWN-BUG.md §3";
 	assert !isPointerType(pending), "ABI reader changed — update docs/UNKNOWN-BUG.md §3";
 }
 
@@ -136,7 +134,7 @@ test "DEBT: flagless Unknown at getTypeDesc emits void* silently" {
 	assert ctx !== null;
 	assert !hasErrors(ctx);
 	const g = createCGen(ctx, "gate.ms");
-	assert getTypeDesc(g, unknownType()) === "void*";
+	assert getTypeDesc(g, pendingType()) === "void*";
 	assert !hasErrors(ctx), "emission now errors on flagless Unknown — flip this cell, docs/UNKNOWN-BUG.md §9";
 }
 
@@ -144,6 +142,6 @@ test "emission gate control: user unknown emits void* with no error" {
 	const ctx = checkSource("function main(): void { }");
 	assert ctx !== null;
 	const g = createCGen(ctx, "gate.ms");
-	assert getTypeDesc(g, userUnknownType()) === "void*";
+	assert getTypeDesc(g, unknownType()) === "void*";
 	assert !hasErrors(ctx);
 }
