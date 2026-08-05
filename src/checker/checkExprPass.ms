@@ -9,7 +9,7 @@ import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, f
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
-	CandidateScore, sameType,
+	CandidateScore, sameType, explainStructuralPrefix,
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
@@ -1610,7 +1610,18 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			node.data = { value: size } as unknown as NodeData;
 			node.nodeType = int32Type(); return;
 		},
-		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
+		NodeKind.HiddenDeref => {
+			const d = node.data as HiddenDerefData;
+			checkExpr(ctx, d.expr, null);
+			if (node.nodeType === null) {
+				const inner = d.expr.nodeType;
+				node.nodeType = (inner !== null && inner.kind === TypeKind.Ref && inner.typeReturn !== null)
+					? inner.typeReturn
+					: inner;
+			}
+			return;
+		},
+		NodeKind.HiddenAddr => {
 			const d = node.data as HiddenDerefData;
 			checkExpr(ctx, d.expr, null); node.nodeType = d.expr.nodeType; return;
 		},
@@ -3061,7 +3072,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				&& !hasGenericParams(paramType);
 			if (fnKindMismatch) {
 				const calleeName = getCalleeName(d.callee);
-				addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType), node.location.line, node.location.column);
+				addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + explainStructuralPrefix(argTypes[pi], paramType), node.location.line, node.location.column);
 			}
 			if ((paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
 				&& paramType.kind !== TypeKind.Function
@@ -3106,7 +3117,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 							argTypes[pi] = coerced.nodeType;
 						} else {
 							const calleeName = getCalleeName(d.callee);
-							addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType), node.location.line, node.location.column);
+							addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + explainStructuralPrefix(argTypes[pi], paramType), node.location.line, node.location.column);
 						}
 					}
 				}
@@ -3172,7 +3183,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 						if (paramT.kind === TypeKind.GenericParam || paramT.kind === TypeKind.Unknown) continue;
 						if (!isAssignable(argT, paramT)) {
 							const calleeName = getCalleeName(d.callee);
-							addError(ctx, `Argument type mismatch in '${calleeName}' arg ${pi}: got ${typeDisplayName(argT)}, expected ${typeDisplayName(paramT)}`, d.arguments[pi].location.line, d.arguments[pi].location.column);
+							addError(ctx, `Argument type mismatch in '${calleeName}' arg ${pi}: got ${typeDisplayName(argT)}, expected ${typeDisplayName(paramT)}${explainStructuralPrefix(argT, paramT)}`, d.arguments[pi].location.line, d.arguments[pi].location.column);
 						}
 					}
 				}
