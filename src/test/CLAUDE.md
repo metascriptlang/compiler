@@ -668,6 +668,18 @@ you compare a stale cache against itself.
     by-value param from before the array migration; zero callers hid it)
     and the js `sort<T>` bind was bare `#.sort()` = lexicographic on
     numbers. Both fixed same-day.
+  - 21x conditional-evaluation trio landed 2026-08-05 (97 programs total):
+    `215-shortCircuitNrvo` (statement-emitting `&&`/`||` RHS ran
+    unconditionally on C — parity, JS is the spec lane),
+    `216-matchShortCircuit` (match-expr in `&&`/`||` RHS or ternary arm
+    hoisted out of its guard by the SHARED lowerMatch pass — BOTH backends
+    over-executed identically, so this one pins effect counts via `@stdout`;
+    byte-parity alone is blind to it), `217-assignEvalOrder`
+    (`arr[idx()] = c ? a : b` evaluated RHS before the LHS index on C; TS
+    order is LHS-first). All three proven red pre-fix; fixes live in
+    conditionalExprLower (universal `&&`/`||` guarded rewrite + do-while
+    per-iteration condition + assignment target-effects pre-hoist) and
+    matchLower (position-aware hoist).
   - `250-brandDistinct` landed 2026-08-01 with TSGAP item 5 S1 (branded
     primitives: nominal in the checker, erased at runtime) — parity all
     lanes incl. js; guard bug074.
