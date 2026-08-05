@@ -1096,7 +1096,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			else if (opts.gcMode === "orc") ctx.gcMode = GcMode.Orc;
 		ctx.targetOs = opts.targetOs;
 		const _ta0 = performance.now();
+		const preAnErrors = ctx.errors.length;
 		const analyzed = analyzeProgram(hcrResult, ctx);
+		if (ctx.errors.length > preAnErrors) {
+			for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
+				console.log(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
+			}
+			exit(1);
+		}
 		tAnalyze = tAnalyze + (performance.now() - _ta0);
 		const _tl0 = performance.now();
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
@@ -1497,7 +1504,14 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			else if (opts.gcMode === "orc") ctx.gcMode = GcMode.Orc;
 		ctx.targetOs = opts.targetOs;
 
+		const preAnErrors = ctx.errors.length;
 		const analyzed = analyzeProgram(hcrResult, ctx);
+		if (ctx.errors.length > preAnErrors) {
+			for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
+				console.log(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
+			}
+			exit(1);
+		}
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 
 		processed.push({ program: nativeLowered, ctx, modPath });
