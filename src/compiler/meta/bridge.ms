@@ -310,10 +310,7 @@ function genericInstanceToAst(t: Type, loc: SourceLocation, visited: Type[]): No
 // Maybe<T> is the checker's INTERNAL carrier for `T | null` — macros must see
 // the surface union the user wrote, not {value, present}. Leaking the carrier
 // made codec macros treat nullable fields as nested structs and emit garbage C.
-// Helper-per-arm on purpose: a createNodeAt literal INSIDE a match arm loses
-// its contextual NodeData typing and corrupts memory (compiler bug, reported;
-// /tmp/clit-probe pins both broken shapes). The literal below is contextually
-// typed by the formal — never add `as TypeUnionData` (same bug, cast shape).
+// The literal is contextually typed by the formal, like unionToAst below.
 function maybeToUnionAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	return createNodeAt(NodeKind.TypeUnion, {
 		typExprMembers: [
