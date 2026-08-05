@@ -537,6 +537,46 @@ export function createUnion(types: Type[]): Type {
 	t.typeChildren = seen;
 	for (const ut of flat) { propagateToOwner(t, ut); }
 	stampInlineDuVariants(seen);
+	// Null-extension of a discriminated match-type keeps its disc metadata:
+	// `Event | null` must stay recognizable as the DU `Event` plus a null
+	// member — flattening used to drop typeNames/typeExtra, so the bridge
+	// (unionToAst) handed macros a bare 3-member union and enum-disc DUs
+	// became undecodable behind `| null` witnesses. Conditions are strict:
+	// exactly ONE flattened source carried metadata, its variants survived
+	// dedup index-aligned from 0 (typeNames keys map to variants by index),
+	// and every extra member is Null. Anything else (DU | string, two DUs)
+	// keeps the unstamped shape.
+	if (needsFlatten) {
+		let metaSrc: Type | null = null;
+		let metaCount = 0;
+		for (const ut of types) {
+			if (ut !== null && ut.kind === TypeKind.Union
+				&& ut.typeNames !== null && ut.typeNames.length >= 2) {
+				metaSrc = ut;
+				metaCount += 1;
+			}
+		}
+		if (metaCount === 1 && metaSrc !== null && metaSrc.typeChildren !== null) {
+			const vc = metaSrc.typeChildren.length;
+			let aligned = seen.length >= vc;
+			if (aligned) {
+				for (let vi = 0; vi < vc; vi += 1) {
+					if (seen[vi] !== metaSrc.typeChildren[vi]) { aligned = false; break; }
+				}
+			}
+			if (aligned) {
+				for (let ei = vc; ei < seen.length; ei += 1) {
+					if (seen[ei].kind !== TypeKind.Null) { aligned = false; break; }
+				}
+			}
+			if (aligned) {
+				const names: string[] = [];
+				for (const nm of metaSrc.typeNames) { names.push(nm); }
+				t.typeNames = names;
+				t.typeExtra = metaSrc.typeExtra;
+			}
+		}
+	}
 	return t;
 }
 
