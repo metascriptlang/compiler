@@ -738,6 +738,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			// Bitwise ops require integer operands (reference parity: no float overloads)
 			// Insert implicit number → int32 cast for C backend
+			if ((isUserUnknown(effLeft) || isUserUnknown(effRight))
+				&& d.operator !== "=" && d.operator !== "===" && d.operator !== "!=="
+				&& d.operator !== "==" && d.operator !== "!="
+				&& d.operator !== "&&" && d.operator !== "||" && d.operator !== "??"
+				&& d.operator !== "&&=" && d.operator !== "||=" && d.operator !== "??=") {
+				addError(ctx, "operator '" + d.operator + "' cannot be applied to 'unknown' — narrow with an explicit cast", node.location.line, node.location.column);
+			}
 			if (isBitwiseBinaryOp(d.operator)) {
 				checkBitwiseOperands(ctx, d.operator, effLeft, effRight, node);
 				if (effLeft !== null && effLeft.kind === TypeKind.Number) {
