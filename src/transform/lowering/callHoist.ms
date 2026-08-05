@@ -45,7 +45,7 @@
 // short-circuit in a VariableDecl/assignment initializer is left to the analyzer.
 
 import { Node, NodeKind, DeclKind, Symbol, SourceLocation, VariableDeclData, BinaryExprData, ExprStmtData, IfStmtData, WhileStmtData, ConditionalExprData, Type, TypeKind } from "../../ast/node";
-import { isResult, isAwaitable, unknownType, booleanType } from "../../checker/types";
+import { isResult, isAwaitable, pendingType, booleanType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, replaceInExpr } from "../walker";
 import { makeVarDecl, makeIdentResolved, makeIf, makeBlock, makeBreak, makeUnary, makeBool, makeBinary, makeAssign, makeExprStmt, makeDefaultValue, extractBodyStmts } from "../util";
@@ -106,7 +106,7 @@ function hoistFreshRcCalls(expr: Node, hoisted: Node[], ctx: TransformContext): 
 	return replaceInExpr(expr, (node: Node): Node => {
 		if (node.kind !== NodeKind.CallExpr && node.kind !== NodeKind.NewExpr) return node;
 		if (!isRcReturning(node.nodeType)) return node;
-		const ty = node.nodeType !== null ? node.nodeType : unknownType();
+		const ty = node.nodeType !== null ? node.nodeType : pendingType();
 		const loc = node.location;
 		const sym = freshTempSym(ctx, "hoist", ty);
 		const decl = makeVarDecl(sym.name, node, DeclKind.Const, loc);

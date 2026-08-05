@@ -15,7 +15,7 @@ import {
 	ReturnStmtData, VariableDeclData, CallExprData, MemberExprData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { unknownType, int32Type } from "../../checker/types";
+import { pendingType, int32Type } from "../../checker/types";
 import { Symbol } from "../../ast/node";
 import { walkExpandBlocks } from "../walker";
 import {
@@ -153,16 +153,16 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 			const callback = cd.arguments[0];
 			const loc = stmt.location;
 			if (method === "map") {
-				const arrSym = freshTempSym(ctx, "mArr", arrExpr.nodeType !== null ? arrExpr.nodeType : unknownType());
-				const resSym = freshTempSym(ctx, "mRes", unknownType());
+				const arrSym = freshTempSym(ctx, "mArr", arrExpr.nodeType !== null ? arrExpr.nodeType : pendingType());
+				const resSym = freshTempSym(ctx, "mRes", pendingType());
 				const iSym = freshTempSym(ctx, "mI", int32Type());
 				const loopStmts = buildMap(arrExpr, callback, arrSym, resSym, iSym, loc);
 				loopStmts.push(makeReturn(makeIdentResolved(resSym, loc), loc));
 				return loopStmts;
 			}
 			if (method === "filter") {
-				const arrSym = freshTempSym(ctx, "fArr", arrExpr.nodeType !== null ? arrExpr.nodeType : unknownType());
-				const resSym = freshTempSym(ctx, "fRes", unknownType());
+				const arrSym = freshTempSym(ctx, "fArr", arrExpr.nodeType !== null ? arrExpr.nodeType : pendingType());
+				const resSym = freshTempSym(ctx, "fRes", pendingType());
 				const iSym = freshTempSym(ctx, "fI", int32Type());
 				const loopStmts = buildFilter(arrExpr, callback, arrSym, resSym, iSym, loc);
 				loopStmts.push(makeReturn(makeIdentResolved(resSym, loc), loc));
@@ -170,8 +170,8 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 			}
 			// reduce
 			const initExpr = cd.arguments[1];
-			const arrSym = freshTempSym(ctx, "rArr", arrExpr.nodeType !== null ? arrExpr.nodeType : unknownType());
-			const accSym = freshTempSym(ctx, "rAcc", initExpr.nodeType !== null ? initExpr.nodeType : unknownType());
+			const arrSym = freshTempSym(ctx, "rArr", arrExpr.nodeType !== null ? arrExpr.nodeType : pendingType());
+			const accSym = freshTempSym(ctx, "rAcc", initExpr.nodeType !== null ? initExpr.nodeType : pendingType());
 			const iSym = freshTempSym(ctx, "rI", int32Type());
 			const loopStmts = buildReduce(arrExpr, callback, initExpr, arrSym, accSym, iSym, loc);
 			loopStmts.push(makeReturn(makeIdentResolved(accSym, loc), loc));
@@ -188,16 +188,16 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 			const callback = cd.arguments[0];
 			const loc = stmt.location;
 			if (method === "map") {
-				const arrSym = freshTempSym(ctx, "mArr", arrExpr.nodeType !== null ? arrExpr.nodeType : unknownType());
-				const resSym = freshTempSym(ctx, "mRes", unknownType());
+				const arrSym = freshTempSym(ctx, "mArr", arrExpr.nodeType !== null ? arrExpr.nodeType : pendingType());
+				const resSym = freshTempSym(ctx, "mRes", pendingType());
 				const iSym = freshTempSym(ctx, "mI", int32Type());
 				const loopStmts = buildMap(arrExpr, callback, arrSym, resSym, iSym, loc);
 				loopStmts.push(makeVarDecl(d.declName, makeIdentResolved(resSym, loc), d.declKind, loc));
 				return loopStmts;
 			}
 			if (method === "filter") {
-				const arrSym = freshTempSym(ctx, "fArr", arrExpr.nodeType !== null ? arrExpr.nodeType : unknownType());
-				const resSym = freshTempSym(ctx, "fRes", unknownType());
+				const arrSym = freshTempSym(ctx, "fArr", arrExpr.nodeType !== null ? arrExpr.nodeType : pendingType());
+				const resSym = freshTempSym(ctx, "fRes", pendingType());
 				const iSym = freshTempSym(ctx, "fI", int32Type());
 				const loopStmts = buildFilter(arrExpr, callback, arrSym, resSym, iSym, loc);
 				loopStmts.push(makeVarDecl(d.declName, makeIdentResolved(resSym, loc), d.declKind, loc));
@@ -205,8 +205,8 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 			}
 			// reduce
 			const initExpr = cd.arguments[1];
-			const arrSym = freshTempSym(ctx, "rArr", arrExpr.nodeType !== null ? arrExpr.nodeType : unknownType());
-			const accSym = freshTempSym(ctx, "rAcc", initExpr.nodeType !== null ? initExpr.nodeType : unknownType());
+			const arrSym = freshTempSym(ctx, "rArr", arrExpr.nodeType !== null ? arrExpr.nodeType : pendingType());
+			const accSym = freshTempSym(ctx, "rAcc", initExpr.nodeType !== null ? initExpr.nodeType : pendingType());
 			const iSym = freshTempSym(ctx, "rI", int32Type());
 			const loopStmts = buildReduce(arrExpr, callback, initExpr, arrSym, accSym, iSym, loc);
 			loopStmts.push(makeVarDecl(d.declName, makeIdentResolved(accSym, loc), d.declKind, loc));

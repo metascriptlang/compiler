@@ -16,7 +16,7 @@ import {
 	SwitchStmtData, SwitchCaseData, VariableDeclData, CallExprData,
 } from "../ast/node";
 import {
-	createUnion, unknownType, nullType, neverType,
+	createUnion, pendingType, nullType, neverType,
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isNumeric, isDiscriminatedUnion,
@@ -729,7 +729,7 @@ function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
 }
 
 function unionOfTypes(types: Type[], parent: Type | null): Type {
-	if (types.length === 0) return unknownType();
+	if (types.length === 0) return pendingType();
 	if (types.length === 1) return types[0];
 	const uniq: Type[] = [];
 	for (const t of types) {
@@ -742,7 +742,7 @@ function unionOfTypes(types: Type[], parent: Type | null): Type {
 		}
 		if (!seen) uniq.push(t);
 	}
-	if (uniq.length === 0) return unknownType();
+	if (uniq.length === 0) return pendingType();
 	if (uniq.length === 1) return uniq[0];
 	return joinNarrowedTypes(parent, uniq);
 }
@@ -903,7 +903,7 @@ function narrowTypeByPredicate(t: Type | null, callExpr: Node, refNode: Node, as
 	const fnType = sym.symbolType;
 	if (fnType.kind !== TypeKind.Function) return t;
 	const sentinel = fnType.typeExtra;
-	if (sentinel === null || sentinel.kind !== TypeKind.Unknown) return t;
+	if (sentinel === null || sentinel.kind !== TypeKind.Pending) return t;
 	const predicateTarget = sentinel.typeReturn;
 	if (predicateTarget === null) return t;
 	const paramName = sentinel.typeName;
@@ -1182,7 +1182,7 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 	if (literalExpr.kind !== NodeKind.StringLiteral) return t;
 	const d = literalExpr.data as StringLiteralData;
 	const targetKind = typeKindOfTypeofString(d.value);
-	if (targetKind === TypeKind.Unknown) return t;  // unknown typeof string, no narrow
+	if (targetKind === TypeKind.Pending) return t;  // unknown typeof string, no narrow
 	// For union types, filter variants by whether their kind matches.
 	if (t.kind === TypeKind.Union) {
 		const remaining: Type[] = [];
@@ -1202,9 +1202,9 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 	// For non-union types: if the kind matches, keep/drop based on assumeTrue.
 	const matches = typeofStringMatches(t, d.value);
 	if (assumeTrue) {
-		return matches ? t : unknownType();
+		return matches ? t : pendingType();
 	}
-	return matches ? unknownType() : t;
+	return matches ? pendingType() : t;
 }
 
 // Family match for `typeof` narrowing: "number" covers every numeric kind —
@@ -1222,7 +1222,7 @@ function typeKindOfTypeofString(s: string): TypeKind {
 	if (s === "string") return TypeKind.String;
 	if (s === "number") return TypeKind.Number;
 	if (s === "boolean") return TypeKind.Boolean;
-	return TypeKind.Unknown;
+	return TypeKind.Pending;
 }
 
 // Narrow a discriminated-union type by a discriminant property equality.

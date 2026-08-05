@@ -8,7 +8,7 @@
 //             tuple field (`._1`) was already correct.
 // Root cause: checkExprPass ArrayAccess arm computed the element type via
 //             getElementType(arrType), which handled Array/Span/Ptr/IndexableMap
-//             but had no TypeKind.Tuple case → returned unknownType() → void*.
+//             but had no TypeKind.Tuple case → returned pendingType() → void*.
 //             nativeLower later re-derived the right type on the rewritten
 //             MemberExpr, but too late: the untyped local's symbol was already
 //             void*.

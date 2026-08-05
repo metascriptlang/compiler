@@ -19,7 +19,7 @@
 // Fix:        After `expandMacroInvocation` returns, if the result is
 //             still `NodeKind.MacroInvocation` (= no real expansion
 //             happened, error already reported), skip the re-check and
-//             return `unknownType()`. Applied at both eager-call site
+//             return `pendingType()`. Applied at both eager-call site
 //             (CallExpr → user macro) and post-mono re-check site
 //             (MacroInvocation in macroBodyRegistry).
 

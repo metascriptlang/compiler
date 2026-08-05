@@ -80,7 +80,7 @@ function anonFieldKey(t: Type | null): string {
 			return k + "):" + anonFieldKey(t.typeReturn);
 		},
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
-		TypeKind.Unknown => "unknown",
+		TypeKind.Pending => "unknown",
 		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0]) : "unknown",
 		_ => {
 			const simple = getSimpleTypeDesc(t);
@@ -343,7 +343,7 @@ export function isPointerType(t: Type): boolean {
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => true,
 		// user `unknown` is void*; PENDING-inference Unknown must stay non-pointer
 		// or arg shims deref/addr pending-typed scalar exprs (types.ms:1805 trap)
-		TypeKind.Unknown => (inner.typeFlags & TypeFlag.UserUnknown) !== 0,
+		TypeKind.Pending => (inner.typeFlags & TypeFlag.UserUnknown) !== 0,
 		_ => false,
 	};
 }
@@ -734,7 +734,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 		TypeKind.Tuple => genTupleType(g, t),
 		// Nim getTypeDescAux else-branch: an unresolved type reaching codegen is an
 		// internal error. Interim flag read until the kind split — docs/UNKNOWN-BUG.md §9.
-		TypeKind.Unknown => {
+		TypeKind.Pending => {
 			if ((t.typeFlags & TypeFlag.UserUnknown) === 0) {
 				gateFlaglessUnknown(g, t);
 			}

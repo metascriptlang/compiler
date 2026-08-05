@@ -544,7 +544,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 export function instantiateClassConstructor(classSym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): void {
 	// Refuse unresolved types
 	for (const ct of concreteTypes) {
-		if (ct === null || ct.kind === TypeKind.GenericParam || ct.kind === TypeKind.Unknown) return;
+		if (ct === null || ct.kind === TypeKind.GenericParam || ct.kind === TypeKind.Pending) return;
 	}
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);

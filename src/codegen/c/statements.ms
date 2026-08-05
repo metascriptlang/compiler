@@ -731,7 +731,7 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 		setStmtsIndent(p, oldIndent + 2);
 		if (d.catchName !== "") {
 			const ct = node.nodeType;
-			if (ct !== null && ct.kind !== TypeKind.Unknown && ct.kind !== TypeKind.Error) {
+			if (ct !== null && ct.kind !== TypeKind.Pending && ct.kind !== TypeKind.Error) {
 				const cty = getTypeDesc(g, ct);
 				emitStmtsLine(p, `${cty} ${safeName(d.catchName)} = (${cty})msCurrException;`);
 			} else {

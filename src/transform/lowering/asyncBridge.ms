@@ -27,7 +27,7 @@ import {
 	makeAssign, makeBinary, makeTryCatch, makeContinue, syntheticToken, extractBodyStmts, collectDeclNames,
 } from "../util";
 import { NameSet, createNameSet, nameSetAdd } from "../context";
-import { createPromise, createFunction, createPtr, createPrimitive, voidType, unknownType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
+import { createPromise, createFunction, createPtr, createPrimitive, voidType, pendingType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
 import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl } from "./generatorLower";
 import { stmtCountAfter } from "../testUtil";
 
@@ -451,7 +451,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// retFutType: actual typed Promise for $retFut (Promise<number> → msFuture_double*)
 	const retFutType = promiseTypeFor(fnReturnInner);
 	const promiseVoidType = createPromise(voidType());
-	const stepperRetType = createFunction([], [], unknownType());  // returns void* (msFutureBase* or NULL)
+	const stepperRetType = createFunction([], [], pendingType());  // returns void* (msFutureBase* or NULL)
 	const closureType = stepperRetType;
 
 	// 1. Extract body statements

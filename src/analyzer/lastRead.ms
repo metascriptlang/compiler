@@ -12,7 +12,7 @@
 import { Node, NodeKind, ProgramData, IdentifierData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, ExportDeclData, MoveExprData, HiddenDerefData, HiddenStdConvData, Symbol, isEmptyBlock, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { makeSymbol } from "../checker/symbol";
-import { unknownType } from "../checker/types";
+import { pendingType } from "../checker/types";
 import { OuterEntry } from "./scope";
 import { parseInput } from "../transform/testUtil";
 
@@ -246,7 +246,7 @@ function getExpr(input: string): Node {
 // ===== Test Helpers: Symbol Attachment =====
 
 function makeTestSym(name: string): Symbol {
-	return makeSymbol(name, SymbolKind.Variable, unknownType(), false);
+	return makeSymbol(name, SymbolKind.Variable, pendingType(), false);
 }
 
 function attachSymToNode(node: Node, name: string, sym: Symbol): void {

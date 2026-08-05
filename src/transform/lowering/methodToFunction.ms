@@ -27,7 +27,7 @@
 import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind, Type } from "../../ast/node";
 import { TransformContext } from "../context";
 import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
-import { createFunction, voidType, unknownType } from "../../checker/types";
+import { createFunction, voidType, pendingType } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 
 // ===== Synthesize FunctionDecl from MethodDecl =====
@@ -124,7 +124,7 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 		// Receiver type is the class's declared type (Ref<Struct>). Widening
 		// typeChildren with the right `this` type keeps `genFunctionDecl` /
 		// `shouldIndirectParam` honest — without it, `this` codegens as `void*`.
-		const classType = classNode.nodeType !== null ? classNode.nodeType : unknownType();
+		const classType = classNode.nodeType !== null ? classNode.nodeType : pendingType();
 		const widenedChildren: Type[] = [classType];
 		for (const t of ctorType.typeChildren) { widenedChildren.push(t); }
 		const widenedNames: string[] = ["this"];

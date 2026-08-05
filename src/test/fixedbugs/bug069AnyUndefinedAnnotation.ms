@@ -6,7 +6,7 @@
 //             classMemberElseIf). `: undefined` resolved to the same void*
 //             instead of behaving as `null`.
 // Root cause: resolvePass mapped "any" to the internal pending-inference
-//             singleton (unknownType()) — the checker's own "not inferred
+//             singleton (pendingType()) — the checker's own "not inferred
 //             yet, allow" sentinel — so user `any` inherited every leniency
 //             gate and bypassed the UserUnknown diagnostics. "undefined"
 //             had no mapping at all and fell through the exempted

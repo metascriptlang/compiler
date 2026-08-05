@@ -15,7 +15,7 @@
 
 import { Node, NodeKind, DeclKind, ExprStmtData, CallExprData, MemberExprData, VariableDeclData } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { unknownType } from "../../checker/types";
+import { pendingType } from "../../checker/types";
 import { walkNode, walkExpandBlocks } from "../walker";
 import { makeVarDecl, makeIdent, makeIdentResolved, makeCall, makeMember, makeExprStmt, makeBlock } from "../util";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
@@ -61,7 +61,7 @@ function lowerRvalueNode(node: Node, ctx: TransformContext): Node {
 	// Transform: f().method(args);
 	//   → { const $rval_N = f(); $rval_N.method(args); }
 	const loc = node.location;
-	const rvalType = member.object.nodeType !== null ? member.object.nodeType : unknownType();
+	const rvalType = member.object.nodeType !== null ? member.object.nodeType : pendingType();
 	const sym = freshTempSym(ctx, "rval", rvalType);
 	const tmpDecl = makeVarDecl(sym.name, member.object, DeclKind.Const, loc);
 	tmpDecl.resolvedSym = sym;
@@ -92,7 +92,7 @@ function isAsBytesCallOnRvalue(expr: Node): boolean {
 function hoistBridgeReceiver(callNode: Node, ctx: TransformContext): Node {
 	const member = (callNode.data as CallExprData).callee.data as MemberExprData;
 	const loc = callNode.location;
-	const rvalType = member.object.nodeType !== null ? member.object.nodeType : unknownType();
+	const rvalType = member.object.nodeType !== null ? member.object.nodeType : pendingType();
 	const sym = freshTempSym(ctx, "rval", rvalType);
 	const tmpDecl = makeVarDecl(sym.name, member.object, DeclKind.Const, loc);
 	tmpDecl.resolvedSym = sym;

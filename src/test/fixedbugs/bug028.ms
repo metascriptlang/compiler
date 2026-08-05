@@ -52,12 +52,12 @@
 import { CheckerContext, ExportRegistry, ExtensionRegistry, createExportRegistry, registerModuleExports, ModuleExports, ExportedSymInfo, findExportsByName, buildExportInfo } from "../../checker/context";
 import { makeSymbol } from "../../checker/symbol";
 import { createNodeAt, NodeKind, SymbolKind, Type, TypeKind, makeLoc, Symbol } from "../../ast/node";
-import { unknownType } from "../../checker/types";
+import { pendingType } from "../../checker/types";
 
 // Helper: build a minimal sym + decl pair and run buildExportInfo on it.
 function _buildExportFor(name: string, declKind: int32): ExportedSymInfo {
 	const zl = makeLoc(0, 0);
-	const sym = makeSymbol(name, SymbolKind.TypeAlias, unknownType(), false);
+	const sym = makeSymbol(name, SymbolKind.TypeAlias, pendingType(), false);
 	if (declKind === NodeKind.InterfaceDecl) {
 		sym.declNode = createNodeAt(NodeKind.InterfaceDecl, {
 			interfaceName: name, interfaceFields: [], nameLocation: zl,

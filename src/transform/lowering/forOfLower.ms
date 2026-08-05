@@ -8,7 +8,7 @@
 
 import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, NodeFlag, Type, TypeKind, Symbol } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { int32Type, unknownType, isIterator, getIteratorNextFnType } from "../../checker/types";
+import { int32Type, pendingType, isIterator, getIteratorNextFnType } from "../../checker/types";
 import { walkNode } from "../walker";
 import {
 	makeIdentResolved, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
@@ -58,10 +58,10 @@ function makeNextCallSym(iterSym: Symbol, resultType: Type | null, loc: SourceLo
 
 function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol): Node {
 	const iterType = d.forOfIterable.nodeType;
-	const iterSym = freshTempSym(ctx, "iter", iterType !== null ? iterType : unknownType());
+	const iterSym = freshTempSym(ctx, "iter", iterType !== null ? iterType : pendingType());
 	const nextFnType = getIteratorNextFnType(d.forOfIterable.nodeType);
 	const resultType = nextFnType !== null ? nextFnType.typeReturn : null;
-	const rSym = freshTempSym(ctx, "r", resultType !== null ? resultType : unknownType());
+	const rSym = freshTempSym(ctx, "r", resultType !== null ? resultType : pendingType());
 
 	const stmts: Node[] = [];
 	const iterDecl = makeVarDecl(iterSym.name, d.forOfIterable, DeclKind.Const, loc);
@@ -116,7 +116,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	// For non-stable expressions, copy to a temp (evaluated once)
 	let iterExpr: Node = d.forOfIterable;
 	if (!isStableLvalue) {
-		const iterSym = freshTempSym(ctx, "iter", iterType !== null ? iterType : unknownType());
+		const iterSym = freshTempSym(ctx, "iter", iterType !== null ? iterType : pendingType());
 		const iterDecl = makeVarDecl(iterSym.name, d.forOfIterable, DeclKind.Const, loc);
 		iterDecl.resolvedSym = iterSym;
 		// A fresh owned value (call result / array literal) has no other owner, so the
@@ -157,7 +157,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 
 	if (d.forOfPattern !== null && d.forOfPattern.kind === NodeKind.ArrayPattern) {
 		// Destructured: const $elem = <iter>[$idx]; const a = $elem[0]; const b = $elem[1]; ...
-		const elemType = elemArrType !== null && elemArrType.typeReturn !== null ? elemArrType.typeReturn : unknownType();
+		const elemType = elemArrType !== null && elemArrType.typeReturn !== null ? elemArrType.typeReturn : pendingType();
 		const elemSym = freshTempSym(ctx, "elem", elemType);
 		const elemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
 		const elemDecl = makeVarDecl(elemSym.name, elemAccess, DeclKind.Const, loc);

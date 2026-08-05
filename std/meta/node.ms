@@ -7,7 +7,7 @@ import { Token } from "./token";
 // ===== TypeKind Enum =====
 
 export enum TypeKind {
-	Number, String, Boolean, Void, Char, Null, Unknown, Never,
+	Number, String, Boolean, Void, Char, Null, Pending, Never,
 	Int8, Int16, Int32, Int64, Uint8, Uint16, Uint32, Uint64, Float32, Float64,
 	Struct, Array, SizedArray, Span, Function, Tuple, CString,
 	GenericParam, GenericInstance,

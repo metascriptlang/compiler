@@ -385,7 +385,7 @@ When `setFileText(path, newSource)` is called:
 | Array-indexed LRU | Pointer-based linked list (`cache.zig:17`) | Index-based | DRC can't track graph pointers |
 | Automatic dep tracking | Manual `recordDependency()` calls | Frame-based push/pop scope | Impossible to forget |
 | Per-query LRU sizing | Single 10k cache | parse:128, symbols:512, type_check:2048 | Right-sized, less eviction churn |
-| Cycle recovery | Error return | Return `unknownType()` / empty results | Graceful degradation (Salsa pattern, `hir-ty/src/infer.rs`) |
+| Cycle recovery | Error return | Return `pendingType()` / empty results | Graceful degradation (Salsa pattern, `hir-ty/src/infer.rs`) |
 | Interface-wrapped containers | Raw arrays/slices | All `Foo[]` in `interface FooList` | DRC value-type workaround |
 | Typed query results | `*anyopaque` + `type_id: u64` | Per-QueryKind result interfaces | Type safety, no runtime checks |
 | Transparent queries | All queries cached | Trivial derivations skip cache | Less memory, less eviction |

@@ -2191,7 +2191,7 @@ function processTryCatch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 		// on stmt.nodeType by the checker.
 		const catchType = stmt.nodeType;
 		let handled = false;
-		if (d.catchName !== "" && catchType !== null && catchType.kind !== TypeKind.Unknown && catchType.kind !== TypeKind.Error) {
+		if (d.catchName !== "" && catchType !== null && catchType.kind !== TypeKind.Pending && catchType.kind !== TypeKind.Error) {
 			const rcInfo = classifyType(catchType, dctx.ctx);
 			if (rcInfo.needsCleanup) {
 				pushScope(dctx, false, false);

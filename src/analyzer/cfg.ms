@@ -10,7 +10,7 @@ import { Node, NodeKind, ProgramData, Symbol, IdentifierData, BinaryExprData, Un
 import { forEachChild } from "../ast/visitor";
 import { AliasKind, aliases, getRootSym } from "./alias";
 import { makeSymbol } from "../checker/symbol";
-import { unknownType } from "../checker/types";
+import { pendingType } from "../checker/types";
 
 import { parseInput } from "../transform/testUtil";
 
@@ -822,7 +822,7 @@ test "loop use is not last read" {
 // ===== Field-Level Tests (Phase B: alias-aware BFS) =====
 
 function makeTestSym(name: string): Symbol {
-	return makeSymbol(name, SymbolKind.Variable, unknownType(), false);
+	return makeSymbol(name, SymbolKind.Variable, pendingType(), false);
 }
 
 // Test helper: walk a subtree and attach `sym` to every Identifier whose

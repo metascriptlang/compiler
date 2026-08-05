@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, pendingType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase } from "./types";
 
 
 // ===== Assignability =====
@@ -278,7 +278,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	}
 
 	// Unknown on either side: inference pending, allow
-	if (source.kind === TypeKind.Unknown || target.kind === TypeKind.Unknown) {
+	if (source.kind === TypeKind.Pending || target.kind === TypeKind.Pending) {
 		return true;
 	}
 
@@ -737,7 +737,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	}
 
 	// Unknown = inference pending
-	if (formal.kind === TypeKind.Unknown || actual.kind === TypeKind.Unknown) {
+	if (formal.kind === TypeKind.Pending || actual.kind === TypeKind.Pending) {
 		return TypeRelation.Generic;
 	}
 	// GenericParam = inference pending
@@ -969,7 +969,7 @@ function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 let sumGenericDepth = 0;
 function sumGeneric(t: Type | null): number {
 	if (t === null) return 0;
-	if (t.kind === TypeKind.GenericParam || t.kind === TypeKind.Unknown) return 1;
+	if (t.kind === TypeKind.GenericParam || t.kind === TypeKind.Pending) return 1;
 	if (sumGenericDepth > 20) return 0;
 	sumGenericDepth = sumGenericDepth + 1;
 	let childSum = 0;
@@ -1081,8 +1081,8 @@ test "different kind" {
 }
 
 test "unknown compatible" {
-	assert isAssignable(unknownType(), numberType());
-	assert isAssignable(numberType(), unknownType());
+	assert isAssignable(pendingType(), numberType());
+	assert isAssignable(numberType(), pendingType());
 }
 
 test "numeric widening" {
@@ -1100,7 +1100,7 @@ test "same element" { assert isAssignable(createArray(numberType()), createArray
 
 test "different element" { assert !isAssignable(createArray(numberType()), createArray(stringType())); }
 
-test "unknown element" { assert isAssignable(createArray(unknownType()), createArray(numberType())); }
+test "unknown element" { assert isAssignable(createArray(pendingType()), createArray(numberType())); }
 
 test "same signature" {
 	const f1 = createFunction([numberType()], ["a"], stringType());
@@ -1115,14 +1115,14 @@ test "different param count" {
 }
 
 test "covariant return" {
-	const f1 = createFunction([], [], unknownType());
+	const f1 = createFunction([], [], pendingType());
 	const f2 = createFunction([], [], numberType());
 	assert isAssignable(f1, f2);
 }
 
 test "nominal same name" {
 	const o1 = createStruct("Type", ["kind"], [numberType()], false);
-	const o2 = createStruct("Type", ["kind"], [unknownType()], false);
+	const o2 = createStruct("Type", ["kind"], [pendingType()], false);
 	assert isAssignable(o1, o2);
 }
 
@@ -1152,8 +1152,8 @@ test "exact match" {
 test "no match" { assert typeRelation(numberType(), stringType()) === TypeRelation.None; }
 
 test "unknown = generic" {
-	assert typeRelation(numberType(), unknownType()) === TypeRelation.Generic;
-	assert typeRelation(unknownType(), numberType()) === TypeRelation.Generic;
+	assert typeRelation(numberType(), pendingType()) === TypeRelation.Generic;
+	assert typeRelation(pendingType(), numberType()) === TypeRelation.Generic;
 }
 
 test "int conversion" { assert typeRelation(numberType(), createPrimitive(TypeKind.Int32)) === TypeRelation.IntConv; }
@@ -1205,7 +1205,7 @@ test "different err type" {
 }
 
 test "unknown ok compatible" {
-	const r1 = createResult(unknownType(), stringType());
+	const r1 = createResult(pendingType(), stringType());
 	const r2 = createResult(numberType(), stringType());
 	assert isAssignable(r1, r2);
 }

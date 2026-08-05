@@ -4,7 +4,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { unknownType, charType, float64Type, voidType, nullType, createFunction, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
+import { pendingType, charType, float64Type, voidType, nullType, createFunction, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords } from "./context";
@@ -274,7 +274,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 			// Test blocks compile to functions — allow return statements inside
 			const savedFunction = ctx.currentFunction;
 			const savedInTest = ctx.inTestBlock;
-			ctx.currentFunction = makeSymbol("__test__", SymbolKind.Function, unknownType(), false);
+			ctx.currentFunction = makeSymbol("__test__", SymbolKind.Function, pendingType(), false);
 			ctx.inTestBlock = true;
 			checkBlock(ctx, d.testBody);
 			ctx.inTestBlock = savedInTest;
@@ -301,7 +301,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth + 1;
 		checkExpr(ctx, d.initializer, null);
 		ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth - 1;
-		const aliasType = unknownType();
+		const aliasType = pendingType();
 		node.nodeType = aliasType;
 		let sym: Symbol = null as unknown as Symbol;
 		const existing = lookupLocal(ctx.table, d.declName);
@@ -363,7 +363,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const dt = declType;
 	if (dt !== null && initType !== null
 		&& initType.kind === TypeKind.Null
-		&& dt.kind !== TypeKind.Unknown
+		&& dt.kind !== TypeKind.Pending
 		&& dt.kind !== TypeKind.GenericParam
 		&& !isAssignable(initType, dt)) {
 		const initLoc = d.initializer !== null ? d.initializer.location : d.nameLocation;
@@ -458,7 +458,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 		&& fnType !== null
 		&& fnType.kind === TypeKind.Function
 		&& fnType.typeReturn !== null
-		&& fnType.typeReturn.kind !== TypeKind.Unknown
+		&& fnType.typeReturn.kind !== TypeKind.Pending
 		&& fnType.typeReturn.kind !== TypeKind.Void
 		&& !isAwaitable(fnType.typeReturn)) {
 		const got = formatTypeBrief(fnType.typeReturn);
@@ -489,8 +489,8 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	// If return type was unknown (no annotation), use inferred type
 	if (sym.symbolType.kind === TypeKind.Function
 		&& sym.symbolType.typeReturn !== null
-		&& sym.symbolType.typeReturn.kind === TypeKind.Unknown
-		&& ctx.inferredReturn.kind !== TypeKind.Unknown) {
+		&& sym.symbolType.typeReturn.kind === TypeKind.Pending
+		&& ctx.inferredReturn.kind !== TypeKind.Pending) {
 		sym.symbolType.typeReturn = ctx.inferredReturn;
 	}
 
@@ -506,7 +506,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 		&& sym.symbolType.typeReturn !== null
 		&& !isAwaitable(sym.symbolType.typeReturn)) {
 		let inner = sym.symbolType.typeReturn;
-		if (inner.kind === TypeKind.Unknown) inner = voidType();
+		if (inner.kind === TypeKind.Pending) inner = voidType();
 		sym.symbolType.typeReturn = createPromise(inner);
 	}
 
@@ -657,7 +657,7 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
 			const methodSym = node.resolvedSym;
-			const sym = methodSym !== null ? methodSym : makeSymbol(d.methodName, SymbolKind.Method, unknownType(), false);
+			const sym = methodSym !== null ? methodSym : makeSymbol(d.methodName, SymbolKind.Method, pendingType(), false);
 				if (d.methodFlags === "async" || d.methodFlags === "async_generator" || (d.methodFlags !== "" && d.methodFlags.indexOf("async") >= 0)) {
 					setFlag(sym, SymbolFlag.Async);
 				}
@@ -888,7 +888,7 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 }
 
 function iterableElemType(t: Type): Type {
-	if (t === null) return unknownType();
+	if (t === null) return pendingType();
 	// reference array: see through Ref<Array> to the value array's element type so
 	// for..of takes the direct array-iteration path, not the implicit toItems iterator.
 	let it = t;
@@ -898,9 +898,9 @@ function iterableElemType(t: Type): Type {
 	}
 	return match (it.kind) {
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span =>
-			it.typeReturn !== null ? it.typeReturn : unknownType(),
+			it.typeReturn !== null ? it.typeReturn : pendingType(),
 		TypeKind.String => charType(),
-		_ => isIterator(it) ? getIteratorYieldType(it) : unknownType(),
+		_ => isIterator(it) ? getIteratorYieldType(it) : pendingType(),
 	};
 }
 
@@ -911,8 +911,8 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	// Implicit iterator: for non-array/string types, resolve .toItems() during checking.
 	// The checker creates and type-checks the call — generic instantiation happens naturally.
 	// (Reference: semFor → implicitIterator("items", collection) → semExpr)
-	if (elemType.kind === TypeKind.Unknown && d.forOfIterable.nodeType !== null
-			&& d.forOfIterable.nodeType.kind !== TypeKind.Unknown
+	if (elemType.kind === TypeKind.Pending && d.forOfIterable.nodeType !== null
+			&& d.forOfIterable.nodeType.kind !== TypeKind.Pending
 			&& d.forOfIterable.nodeType.kind !== TypeKind.Error) {
 		const loc = d.forOfIterable.location;
 		const memberNode = createNodeAt(NodeKind.MemberExpr,
@@ -922,7 +922,7 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 		checkExpr(ctx, toItemsCall, null);
 		if (toItemsCall.nodeType !== null && toItemsCall.nodeType.kind !== TypeKind.Error) {
 			const resolved = iterableElemType(toItemsCall.nodeType);
-			if (resolved.kind !== TypeKind.Unknown) {
+			if (resolved.kind !== TypeKind.Pending) {
 				elemType = resolved;
 				d.forOfIterable = toItemsCall;
 			}
@@ -962,7 +962,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			if (elem.kind === NodeKind.Identifier) {
 				const id = elem.data as IdentifierData;
 				if (id.name !== "_") {
-					let elemType = unknownType();
+					let elemType = pendingType();
 					if (iterType !== null && iterType.kind === TypeKind.Tuple && iterType.typeChildren !== null && i < iterType.typeChildren.length) {
 						elemType = iterType.typeChildren[i];
 					} else if (iterType !== null && (iterType.kind === TypeKind.Array || iterType.kind === TypeKind.SizedArray) && iterType.typeReturn !== null) {
@@ -985,7 +985,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			const p = prop.data as ObjectPatternPropData;
 			if (p.propAlias.kind === NodeKind.Identifier) {
 				const id = p.propAlias.data as IdentifierData;
-				defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, unknownType(), !isConst));
+				defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, pendingType(), !isConst));
 				markInitialized(ctx.initTracker, id.name);
 			}
 		}
@@ -999,7 +999,7 @@ function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	const affineSnap = saveConsumeState(ctx.affineTracker);
 	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
 	const saved = enterLoopScope(ctx);
-	defineSymbol(ctx.table, makeSymbol(d.forInBinding, SymbolKind.Variable, unknownType(), !d.forInIsConst));
+	defineSymbol(ctx.table, makeSymbol(d.forInBinding, SymbolKind.Variable, pendingType(), !d.forInIsConst));
 	markInitialized(ctx.initTracker, d.forInBinding);
 	checkStmt(ctx, d.forInBody);
 	exitLoopScope(ctx, saved);
@@ -1060,7 +1060,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		// below for `return X` so subsequent returns can't downgrade the type.
 		if (ctx.matchExprDepth === 0
 				&& ctx.inferredReturn !== null
-				&& ctx.inferredReturn.kind === TypeKind.Unknown) {
+				&& ctx.inferredReturn.kind === TypeKind.Pending) {
 			ctx.inferredReturn = voidType();
 		}
 		return;
@@ -1079,7 +1079,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 			&& ctx.currentFunction.symbolType.typeReturn !== null) {
 			const declared = ctx.currentFunction.symbolType.typeReturn;
 			d.argument.nodeType = nullType();
-			if (declared.kind !== TypeKind.Unknown && !isAssignable(nullType(), declared)) {
+			if (declared.kind !== TypeKind.Pending && !isAssignable(nullType(), declared)) {
 				addError(ctx,
 					"Return type mismatch in '" + ctx.currentFunction.name + "': expected " + formatTypeBrief(declared) + ", got null",
 					node.location.line, node.location.column);
@@ -1106,7 +1106,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		&& ctx.currentFunction !== null
 		&& ctx.currentFunction.symbolType.kind === TypeKind.Function
 		&& ctx.currentFunction.symbolType.typeReturn !== null
-		&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown) {
+		&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Pending) {
 		returnExpected = ctx.currentFunction.symbolType.typeReturn;
 		if (hasFlag(ctx.currentFunction, SymbolFlag.Async)) {
 			const unwrapped = awaitedType(returnExpected);
@@ -1134,13 +1134,13 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	// (e.g. `expr` → `expr.asNumber()`) are reflected in downstream checks.
 	const finalRetType = d.argument !== null ? d.argument.nodeType : retType;
 	// Track inferred return type (first return wins)
-	if (ctx.matchExprDepth === 0 && ctx.inferredReturn !== null && ctx.inferredReturn.kind === TypeKind.Unknown) {
+	if (ctx.matchExprDepth === 0 && ctx.inferredReturn !== null && ctx.inferredReturn.kind === TypeKind.Pending) {
 		ctx.inferredReturn = finalRetType;
 	}
 	// Assignability check against the (already-unwrapped) expected return type.
 	if (returnExpected !== null
 		&& finalRetType !== null
-		&& finalRetType.kind !== TypeKind.Unknown
+		&& finalRetType.kind !== TypeKind.Pending
 		&& finalRetType.kind !== TypeKind.Error
 		&& !isAssignable(finalRetType, returnExpected)) {
 		const got = formatTypeBrief(finalRetType);
@@ -1168,7 +1168,7 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 		openScope(ctx.table, ScopeKind.Block);
 		if (d.catchName !== "") {
 			const errSym = lookupSymbol(ctx.table, "Error");
-			const catchType = (errSym !== null && errSym.symbolType !== null) ? errSym.symbolType : unknownType();
+			const catchType = (errSym !== null && errSym.symbolType !== null) ? errSym.symbolType : pendingType();
 			node.nodeType = catchType;
 			const catchSym = makeSymbol(d.catchName, SymbolKind.Variable, catchType, false);
 			defineSymbol(ctx.table, catchSym);
@@ -1366,7 +1366,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	openScope(ctx.table, ScopeKind.Function);
 	let i = 0;
 	for (const param of params) {
-		let paramType = unknownType();
+		let paramType = pendingType();
 		if (sym !== null && sym.symbolType.kind === TypeKind.Function && i < sym.symbolType.typeChildren.length) {
 			paramType = sym.symbolType.typeChildren[i];
 			// Rest param: inside the body the symbol is the packed array, not the
@@ -1398,7 +1398,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		// Expression body (arrow functions) — infer return type
 		checkExpr(ctx, body, null);
 		const exprType = body.nodeType;
-		if (ctx.inferredReturn.kind === TypeKind.Unknown) {
+		if (ctx.inferredReturn.kind === TypeKind.Pending) {
 			ctx.inferredReturn = exprType;
 		}
 	}
@@ -1429,7 +1429,7 @@ function exitLoopScope(ctx: CheckerContext, saved: boolean): void {
 function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as DestructuringDeclData;
 	checkExpr(ctx, d.destrInit, null);
-	const initType = d.destrInit.nodeType !== null ? d.destrInit.nodeType : unknownType();
+	const initType = d.destrInit.nodeType !== null ? d.destrInit.nodeType : pendingType();
 	defineForOfPatternBindings(ctx, d.destrPattern, initType, d.destrIsConst);
 }
 
@@ -2450,7 +2450,7 @@ test "no return stays unknown" {
 	const ctx = checkSource("function noop() { const x = 1; }");
 	const sym = lookupSymbol(ctx.table, "noop");
 	assert sym !== null;
-	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Unknown;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Pending;
 }
 
 test "return type mismatch detected" { assert !checkOk("function foo(): number { return \"hello\"; }"); }

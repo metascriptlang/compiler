@@ -88,7 +88,7 @@ export function assignType(target: Type, source: Type): void {
 
 export function emptyType(): Type {
 	return {
-		kind: TypeKind.Unknown,
+		kind: TypeKind.Pending,
 		typeName: "",
 		typeNames: [],
 		typeChildren: [],
@@ -371,7 +371,7 @@ export function getIteratorYieldType(t: Type): Type | null {
 			}
 		}
 	}
-	return unknownType();
+	return pendingType();
 }
 
 export function isResult(t: Type | null): boolean {
@@ -1260,19 +1260,19 @@ export function stringType(): Type { return getSysType(TypeKind.String); }
 export function booleanType(): Type { return getSysType(TypeKind.Boolean); }
 export function voidType(): Type { return getSysType(TypeKind.Void); }
 export function nullType(): Type { return getSysType(TypeKind.Null); }
-export function unknownType(): Type { return getSysType(TypeKind.Unknown); }
+export function pendingType(): Type { return getSysType(TypeKind.Pending); }
 
 // Annotation-written `unknown` — strict top type. A FRESH Type (not the shared
 // pending-inference singleton) stamped UserUnknown so conversion sites can
 // enforce the void*-repr rules only on user-declared unknowns.
 export function userUnknownType(): Type {
-	const t = createPrimitive(TypeKind.Unknown);
+	const t = createPrimitive(TypeKind.Pending);
 	t.typeFlags = TypeFlag.UserUnknown as int32;
 	return t;
 }
 
 export function isUserUnknown(t: Type | null): boolean {
-	return t !== null && t.kind === TypeKind.Unknown && (t.typeFlags & TypeFlag.UserUnknown) !== 0;
+	return t !== null && t.kind === TypeKind.Pending && (t.typeFlags & TypeFlag.UserUnknown) !== 0;
 }
 export function neverType(): Type { return getSysType(TypeKind.Never); }
 export function errorType(): Type { return getSysType(TypeKind.Error); }
@@ -1341,7 +1341,7 @@ export function createConditionalType(check: Type, extendsType: Type, trueType: 
 // Evaluate a conditional type if its check and extends types are concrete (no GenericParam).
 // Returns the true/false branch, or the original type if unevaluable.
 export function evaluateConditionalType(t: Type | null): Type {
-	if (t === null || t.kind !== TypeKind.Conditional) return t !== null ? t : unknownType();
+	if (t === null || t.kind !== TypeKind.Conditional) return t !== null ? t : pendingType();
 	if (t.typeChildren.length < 4) return t;
 	const check = t.typeChildren[0];
 	const ext = t.typeChildren[1];
@@ -1556,7 +1556,7 @@ export function isMaybeWrappable(t: Type | null): boolean {
 	if (t.kind === TypeKind.Null) return false;
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return false;
 	// unknown is void* in C — pointer branch of the SomePointer split, same as Ref/Ptr
-	if (t.kind === TypeKind.Unknown) return false;
+	if (t.kind === TypeKind.Pending) return false;
 	if (t.kind === TypeKind.Function) return true;
 	if (isStructType(t)) return true;
 	if (isPrimitiveKind(t.kind)) return true;
@@ -1582,7 +1582,7 @@ export function isPointerShapedForUnknown(t: Type | null): boolean {
 	if (inner === null) return true;
 	if (inner.kind === TypeKind.Union) return unwrapRefNullUnion(inner) !== null;
 	return match (inner.kind) {
-		TypeKind.Unknown | TypeKind.Null | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow
+		TypeKind.Pending | TypeKind.Null | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow
 			| TypeKind.CString | TypeKind.GenericParam | TypeKind.Error | TypeKind.Never => true,
 		_ => false,
 	};
@@ -1609,8 +1609,8 @@ export function unwrapRefNullUnion(t: Type): Type | null {
 	const a = t.typeChildren[0];
 	const b = t.typeChildren[1];
 	if (a === null || b === null) return null;
-	if ((a.kind === TypeKind.Ref || a.kind === TypeKind.Ptr || a.kind === TypeKind.Unknown) && b.kind === TypeKind.Null) return a;
-	if ((b.kind === TypeKind.Ref || b.kind === TypeKind.Ptr || b.kind === TypeKind.Unknown) && a.kind === TypeKind.Null) return b;
+	if ((a.kind === TypeKind.Ref || a.kind === TypeKind.Ptr || a.kind === TypeKind.Pending) && b.kind === TypeKind.Null) return a;
+	if ((b.kind === TypeKind.Ref || b.kind === TypeKind.Ptr || b.kind === TypeKind.Pending) && a.kind === TypeKind.Null) return b;
 	return null;
 }
 
@@ -1852,13 +1852,13 @@ function substituteClearFlag(t: Type): void {
 }
 
 export function substituteType(t: Type | null, paramName: string, concrete: Type): Type {
-	if (t === null) return unknownType();
+	if (t === null) return pendingType();
 	if (t.kind === TypeKind.GenericParam && t.typeName === paramName) return concrete;
 	if (substituteIsSeen(t)) return t;
 	substituteSetFlag(t);
 	const result = match (t.kind) {
 			TypeKind.Number | TypeKind.String | TypeKind.Boolean |
-			TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
+			TypeKind.Void | TypeKind.Null | TypeKind.Pending |
 			TypeKind.Never | TypeKind.Error | TypeKind.GenericParam |
 			TypeKind.CString => t,
 			TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
@@ -2184,15 +2184,15 @@ export function isCallable(t: Type): boolean {
 export function getReturnType(t: Type): Type {
 	if (t.kind === TypeKind.Function) {
 		const ret = t.typeReturn;
-		return ret !== null ? ret : unknownType();
+		return ret !== null ? ret : pendingType();
 	}
-	return unknownType();
+	return pendingType();
 }
 
 export function getElementType(t: Type): Type {
 	if (t.kind === TypeKind.Array || t.kind === TypeKind.SizedArray || t.kind === TypeKind.Span || t.kind === TypeKind.Ptr) {
 		const elem = t.typeReturn;
-		return elem !== null ? elem : unknownType();
+		return elem !== null ? elem : pendingType();
 	}
 	// @builtin("IndexableMap") subscript: `m[k]` returns V. Makes `{ [key: K]: V }`
 	// work at runtime via .get() after the lowering in transform/native/nativeLower.ms.
@@ -2200,7 +2200,7 @@ export function getElementType(t: Type): Type {
 		&& t.typeChildren !== null && t.typeChildren.length === 2) {
 		return t.typeChildren[1];
 	}
-	return unknownType();
+	return pendingType();
 }
 
 // Collect unique GenericParam names from a type tree (used by getProperty for GenericInstance substitution)
@@ -2228,7 +2228,7 @@ function collectGenericParamNames(t: Type | null, names: string[]): void {
 }
 
 export function getProperty(t: Type | null, name: string): Type {
-	if (t === null) return unknownType();
+	if (t === null) return pendingType();
 	// Unwrap Ref/Ptr to access inner Object's properties (class types are Ref<Object>)
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
 		if (t.typeReturn !== null) return getProperty(t.typeReturn, name);
@@ -2239,10 +2239,10 @@ export function getProperty(t: Type | null, name: string): Type {
 			if (propName === name) {
 				if (i < t.typeChildren.length) {
 					const found = t.typeChildren[i];
-					if (found === null) return unknownType();
+					if (found === null) return pendingType();
 					return found;
 				}
-				return unknownType();
+				return pendingType();
 			}
 			i += 1;
 		}
@@ -2258,7 +2258,7 @@ export function getProperty(t: Type | null, name: string): Type {
 		// Fallback: lazy substitution for GenericInstances without instantiated body
 		if (t.typeExtra !== null) {
 			let baseProp = getProperty(t.typeExtra, name);
-			if (baseProp.kind === TypeKind.Unknown) return baseProp;
+			if (baseProp.kind === TypeKind.Pending) return baseProp;
 			if (hasGenericParams(baseProp) && t.typeChildren.length > 0) {
 				const paramNames: string[] = [];
 				collectGenericParamNames(t.typeExtra, paramNames);
@@ -2304,7 +2304,7 @@ export function getProperty(t: Type | null, name: string): Type {
 			if (member === name) return t;
 		}
 	}
-	return unknownType();
+	return pendingType();
 }
 
 // isPrimitiveKind — used by destructorLifting, analyzer/classify, and other DRC code
@@ -2326,7 +2326,7 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind === TypeKind.Enum
 		|| kind === TypeKind.EnumLiteral
 		|| kind === TypeKind.Never
-		|| kind === TypeKind.Unknown
+		|| kind === TypeKind.Pending
 		|| kind === TypeKind.Char
 		|| kind === TypeKind.CString
 		|| kind === TypeKind.StringLiteral
@@ -2440,7 +2440,7 @@ export function typeDisplayName(t: Type | null): string {
 		TypeKind.Null => "null",
 		TypeKind.Void => "void",
 		TypeKind.Never => "never",
-		TypeKind.Unknown => "unknown",
+		TypeKind.Pending => "unknown",
 		TypeKind.Error => "<error>",
 		TypeKind.Function => "function",
 		TypeKind.GenericParam => t.typeName !== "" ? t.typeName : "<T>",
@@ -2575,7 +2575,7 @@ test "primitive kinds" {
 	assert booleanType().kind === TypeKind.Boolean;
 	assert voidType().kind === TypeKind.Void;
 	assert nullType().kind === TypeKind.Null;
-	assert unknownType().kind === TypeKind.Unknown;
+	assert pendingType().kind === TypeKind.Pending;
 	assert neverType().kind === TypeKind.Never;
 	assert errorType().kind === TypeKind.Error;
 }
@@ -2675,21 +2675,21 @@ test "isCallable" {
 test "getReturnType" {
 	const fn = createFunction([], [], booleanType());
 	assert getReturnType(fn).kind === TypeKind.Boolean;
-	assert getReturnType(numberType()).kind === TypeKind.Unknown;
+	assert getReturnType(numberType()).kind === TypeKind.Pending;
 }
 
 test "getElementType" {
 	const arr = createArray(stringType());
 	assert getElementType(arr).kind === TypeKind.String;
-	assert getElementType(numberType()).kind === TypeKind.Unknown;
+	assert getElementType(numberType()).kind === TypeKind.Pending;
 }
 
 test "getProperty" {
 	const obj = createStruct("Point", ["x", "y"], [numberType(), stringType()], false);
 	assert getProperty(obj, "x").kind === TypeKind.Number;
 	assert getProperty(obj, "y").kind === TypeKind.String;
-	assert getProperty(obj, "z").kind === TypeKind.Unknown;
-	assert getProperty(numberType(), "x").kind === TypeKind.Unknown;
+	assert getProperty(obj, "z").kind === TypeKind.Pending;
+	assert getProperty(numberType(), "x").kind === TypeKind.Pending;
 }
 
 test "substitute generic param" {

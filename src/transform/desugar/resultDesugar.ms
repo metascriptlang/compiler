@@ -20,7 +20,7 @@
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData, CallExprData, MemberExprData, IdentifierData, HiddenDerefData, IfStmtData, Type, TypeKind } from "../../ast/node";
-import { booleanType, unknownType, isResult, getResultOkType, getResultErrType } from "../../checker/types";
+import { booleanType, pendingType, isResult, getResultOkType, getResultErrType } from "../../checker/types";
 import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
@@ -40,10 +40,10 @@ function makeResultMember(sym: Symbol, resType: Type | null, propName: string, l
 	const mem = makeMember(ref, propName, loc);
 
 	if (resType !== null && isResult(resType)) {
-		let propType: Type = unknownType();
+		let propType: Type = pendingType();
 		if (propName === "ok") { propType = booleanType(); }
-		else if (propName === "value") { propType = getResultOkType(resType) !== null ? getResultOkType(resType) : unknownType(); }
-		else if (propName === "error") { propType = getResultErrType(resType) !== null ? getResultErrType(resType) : unknownType(); }
+		else if (propName === "value") { propType = getResultOkType(resType) !== null ? getResultOkType(resType) : pendingType(); }
+		else if (propName === "error") { propType = getResultErrType(resType) !== null ? getResultErrType(resType) : pendingType(); }
 		mem.nodeType = propType;
 		const propSym = makeSymbol(propName, SymbolKind.Property, propType, false);
 		propSym.state = SymbolState.Shaped;
@@ -134,7 +134,7 @@ function makeResultOk(args: Node[], resType: Type, loc: SourceLocation): Node {
 		// not the ok-type itself.
 		const okT = getResultOkType(resType);
 		if (okT !== null && (okT.kind === TypeKind.Struct || okT.kind === TypeKind.Ref)) {
-			if (args[0].nodeType === null || args[0].nodeType.kind === TypeKind.Unknown || args[0].nodeType.kind === TypeKind.GenericParam) {
+			if (args[0].nodeType === null || args[0].nodeType.kind === TypeKind.Pending || args[0].nodeType.kind === TypeKind.GenericParam) {
 				args[0].nodeType = okT;
 			}
 		}
@@ -164,14 +164,14 @@ function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node 
 		const tryData = node.data as TryExprData;
 		const loc = node.location;
 		const resType = tryData.tryArg.nodeType;
-		const sym = freshTempSym(ctx, "result", resType !== null ? resType : unknownType());
+		const sym = freshTempSym(ctx, "result", resType !== null ? resType : pendingType());
 
 		if (tryData.hasCatch && tryData.tryArg.kind === NodeKind.AwaitExpr && !isResult(resType)) {
 			const decl = makeVarDecl(sym.name, makeDefaultValue(resType, loc), DeclKind.Let, loc);
 			decl.resolvedSym = sym;
 			decl.nodeType = resType;
 			hoisted.push(decl);
-			const awSym = freshTempSym(ctx, "await", resType !== null ? resType : unknownType());
+			const awSym = freshTempSym(ctx, "await", resType !== null ? resType : pendingType());
 			const awDecl = makeVarDecl(awSym.name, tryData.tryArg, DeclKind.Const, loc);
 			awDecl.resolvedSym = awSym;
 			awDecl.nodeType = resType;
@@ -345,7 +345,7 @@ test "makeResultMember sets correct type for .error" {
 
 test "makeResultMember with null resType is graceful" {
 	const loc = makeLoc(0, 0);
-	const sym = makeSymbol("$r", SymbolKind.Variable, unknownType(), false);
+	const sym = makeSymbol("$r", SymbolKind.Variable, pendingType(), false);
 	const mem = makeResultMember(sym, null, "ok", loc);
 	assert mem.kind === NodeKind.MemberExpr;
 }

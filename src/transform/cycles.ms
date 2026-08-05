@@ -100,7 +100,7 @@ export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache
 		if (refInner !== null) subject = refInner;
 	}
 	if (subject.kind === TypeKind.Function) return true;
-	if (subject.kind === TypeKind.Ptr || subject.kind === TypeKind.Unknown) return false;
+	if (subject.kind === TypeKind.Ptr || subject.kind === TypeKind.Pending) return false;
 	if (subject.kind === TypeKind.Ref) {
 		if (subject.typeReturn === null) return true;
 		subject = subject.typeReturn;

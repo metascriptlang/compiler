@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
+import { pendingType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag } from "./symbol";
 import { IdentCache } from "./idents";
@@ -363,7 +363,7 @@ export function collectExports(ctx: CheckerContext, modulePath: string): Exporte
 // INVARIANT (reference parity: sym.type is the single type source):
 //   sym is the authoritative type source. Use getExtFnType(ext) to read the type.
 //   fnType is a FALLBACK for when sym is null (early collectPass, before symbol is available).
-//   When sym is non-null, fnType MUST be unknownType() — never the same Type as sym.symbolType.
+//   When sym is non-null, fnType MUST be pendingType() — never the same Type as sym.symbolType.
 //   Storing the same Type in both causes double-decref on destruction (DRC double ownership).
 export class ExtensionMethod {
 	methodName: string;
@@ -384,12 +384,12 @@ export function createExtensionRegistry(): ExtensionRegistry {
 }
 
 // Create an ExtensionMethod with proper ownership invariant enforced.
-// When sym is provided, fnType is set to unknownType() — sym.symbolType is authoritative.
+// When sym is provided, fnType is set to pendingType() — sym.symbolType is authoritative.
 // This prevents double-decref when both fnType and sym.symbolType reference the same Type.
 export function createExtMethod(methodName: string, receiverTypeName: string, sourcePath: string, fnType: Type, isStatic: boolean, sym: Symbol, scopeDepth: number): ExtensionMethod {
 	return {
 		methodName, receiverTypeName, sourcePath,
-		fnType: sym !== null ? unknownType() : fnType,
+		fnType: sym !== null ? pendingType() : fnType,
 		isStatic, sym, scopeDepth,
 	};
 }
@@ -482,7 +482,7 @@ export function findAllExtensionsByName(registry: ExtensionRegistry, methodName:
 
 // ===== Canonical Extension Type (Standard reference symbol type equivalent) =====
 // Standard reference: the symbol's type is the single source of truth.
-// ext.fnType is a registration-time snapshot that may be stale (unknownType from collectPass).
+// ext.fnType is a registration-time snapshot that may be stale (pendingType from collectPass).
 // Always use this helper instead of reading ext.fnType directly.
 
 export function getExtFnType(ext: ExtensionMethod): Type {
@@ -563,9 +563,9 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	const receiverType = fnType.typeChildren[0];
 	// Erased object (unknown) binds only the unknown catch-all, never a concrete
 	// overload — Nim parity: an unresolved receiver isn't matchable by a concrete param.
-	if (objType.kind === TypeKind.Unknown) return receiverType.kind === TypeKind.Unknown;
+	if (objType.kind === TypeKind.Pending) return receiverType.kind === TypeKind.Pending;
 	// Unknown receiver: match any (conservative — unresolved type)
-	if (receiverType.kind === TypeKind.Unknown) return true;
+	if (receiverType.kind === TypeKind.Pending) return true;
 	// Array methods are Ref-agnostic: T[] (Ref<Array>) and Vec<T> (value Array) share
 	// one element-typed method set. Unwrap the Ref<Array> envelope on both sides so
 	// matching compares element types; codegen dispatches &value vs ptr on the receiver.
@@ -591,7 +591,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		const recvElem = recvT.typeReturn;
 		const objElem = objT.typeReturn;
 		if (recvElem === null || objElem === null) return false;
-		if (recvElem.kind === TypeKind.Unknown || objElem.kind === TypeKind.Unknown) return false;
+		if (recvElem.kind === TypeKind.Pending || objElem.kind === TypeKind.Pending) return false;
 		if (isReinterpretUnsafe(objT, recvT)) return false;
 		return isAssignable(objElem, recvElem);
 	}
@@ -963,7 +963,7 @@ export function createContext(): CheckerContext {
 		macroDeclModuleRegistry: new HashMap<string, string>(),
 		macroExpansionDepth: 0,
 		jsxMacroArgDepth: 0,
-		inferredReturn: unknownType(),
+		inferredReturn: pendingType(),
 		includeDirectives: "",
 		jsImportRegistry: [],
 		compileDirectives: "",
@@ -1153,7 +1153,7 @@ test "create context" {
 test "sgSortRecords sorts by line then col" {
 	const records: SgSymRecord[] = [];
 	const dummySym = null as unknown as Symbol;
-	const dummyType = unknownType();
+	const dummyType = pendingType();
 	records.push({ line: 3, col: 5, colEnd: 8, sym: dummySym, symType: dummyType, kind: SymbolKind.Variable, name: "c", containerName: "", isDecl: false });
 	records.push({ line: 1, col: 10, colEnd: 13, sym: dummySym, symType: dummyType, kind: SymbolKind.Variable, name: "a", containerName: "", isDecl: false });
 	records.push({ line: 1, col: 1, colEnd: 4, sym: dummySym, symType: dummyType, kind: SymbolKind.Variable, name: "b", containerName: "", isDecl: false });
@@ -1195,7 +1195,7 @@ test "create empty" {
 
 test "register and find" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
+	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: pendingType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const found = findExtension(r, "string", "trim");
 	assert found !== null;
@@ -1216,7 +1216,7 @@ test "no attached ops" {
 
 test "detect onDestroy" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
+	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: pendingType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const ops = findAttachedOps(r, "Foo");
 	assert hasAttachedOps(ops);
@@ -1226,11 +1226,11 @@ test "detect onDestroy" {
 
 test "detect all lifecycle hooks" {
 	const r = createExtensionRegistry();
-	const d: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
+	const d: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: pendingType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, d);
-	const c: ExtensionMethod = { methodName: "onCopy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
+	const c: ExtensionMethod = { methodName: "onCopy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: pendingType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, c);
-	const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
+	const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: pendingType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, mv);
 	const ops = findAttachedOps(r, "Bar");
 	assert hasAttachedOps(ops);
@@ -1241,7 +1241,7 @@ test "detect all lifecycle hooks" {
 
 test "wrong type no match" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
+	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: pendingType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const ops = findAttachedOps(r, "Bar");
 	assert !hasAttachedOps(ops);
@@ -1255,7 +1255,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [], declNode: null as unknown as Node, overloadDeclNodes: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: pendingType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [], declNode: null as unknown as Node, overloadDeclNodes: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -1273,7 +1273,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [], declNode: null as unknown as Node, overloadDeclNodes: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: pendingType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [], declNode: null as unknown as Node, overloadDeclNodes: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");
@@ -1354,7 +1354,7 @@ test "getStaticExtTypeName" {
 
 test "static extension in registry" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: unknownType(), isStatic: true, sym: null as unknown as Symbol };
+	const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: pendingType(), isStatic: true, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const found = findExtension(r, "Math", "floor");
 	assert found !== null;
@@ -1363,7 +1363,7 @@ test "static extension in registry" {
 
 test "instance extension isStatic false" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
+	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: pendingType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const found = findExtension(r, "string", "trim");
 	assert found !== null;

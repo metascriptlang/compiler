@@ -3,7 +3,7 @@
 import { CheckerContext } from "../checker/context";
 import { Type, Symbol, SymbolKind } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
-import { unknownType } from "../checker/types";
+import { pendingType } from "../checker/types";
 
 // Pending tuple type entry — collected by operatorLower, consumed by destructorLifting.
 export interface PendingTupleOp {
@@ -86,5 +86,5 @@ export function freshTemp(ctx: TransformContext, prefix: string): string {
 // Returns a Symbol with declNode=null — safe to store on VarInfo (no destroy cascade).
 export function freshTempSym(ctx: TransformContext, prefix: string, t: Type | null): Symbol {
 	const name = freshTemp(ctx, prefix);
-	return makeSymbol(name, SymbolKind.Variable, t !== null ? t : unknownType(), false);
+	return makeSymbol(name, SymbolKind.Variable, t !== null ? t : pendingType(), false);
 }

@@ -21,7 +21,7 @@ import {
 	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
 	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType,
 } from "../util";
-import { unknownType } from "../../checker/types";
+import { pendingType } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 import { hashStringSigned } from "std/hash";
 
@@ -330,7 +330,7 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 	// `_ => {}`, means there's nothing to gate — skip the flag entirely to eliminate
 	// dead stores and empty `if (!$matched) {}` epilogues in the generated C.
 	const needsFlag = mode !== "return" && !isEmptyBlock(defaultBody);
-	const matchedSym = freshTempSym(ctx, "matched", unknownType());
+	const matchedSym = freshTempSym(ctx, "matched", pendingType());
 	const matchedName = matchedSym.name;
 
 	// Reference-aligned lowering: each MatchCase maps to ONE SwitchCase holding
@@ -755,7 +755,7 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 		}
 	}
 	const needsFlag = mode !== "return" && hasRealDefault;
-	const matchedSym = freshTempSym(ctx, "matched", unknownType());
+	const matchedSym = freshTempSym(ctx, "matched", pendingType());
 	const matchedName = matchedSym.name;
 
 	// Collect patterns into hash buckets — patterns with the same hash share a bucket.
