@@ -19,7 +19,7 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { globalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
-import { isAssignable } from "./compat";
+import { isAssignable, explainStructuralPrefix } from "./compat";
 import { setConditionalAssignFn } from "./types";
 setConditionalAssignFn(isAssignable);
 import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
@@ -1145,7 +1145,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		&& !isAssignable(finalRetType, returnExpected)) {
 		const got = formatTypeBrief(finalRetType);
 		const expected = formatTypeBrief(returnExpected);
-		addError(ctx, "Return type mismatch in '" + ctx.currentFunction.name + "': expected " + expected + ", got " + got, node.location.line, node.location.column);
+		addError(ctx, "Return type mismatch in '" + ctx.currentFunction.name + "': expected " + expected + ", got " + got + explainStructuralPrefix(finalRetType, returnExpected), node.location.line, node.location.column);
 	}
 }
 

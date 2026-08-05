@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, unknownType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase } from "./types";
 
 
 // ===== Assignability =====
@@ -509,32 +509,61 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	const sChildren = source.typeChildren;
 	const tNames = target.typeNames;
 	const tChildren = target.typeChildren;
-	let targetIdx = 0;
+	// Structural assign raw-casts the object, so the target's fields must land
+	// on the SAME offsets in the source: same name at the same index, left to
+	// right, target's list a prefix of the source's. Matching by name alone
+	// would let `A{x,y}` pass as `B{y}` and read A's x. The reference permits
+	// object upcasts for this reason and no other — the declared parent embeds
+	// as the layout prefix (inheritanceDiff walks that chain; there is no
+	// structural path for records). `extends` and `A & B` both flatten
+	// parent-first (appendStructFields), so they satisfy this by construction.
+	if (tNames.length > sNames.length) return false;
+	let idx = 0;
 	for (const targetProp of tNames) {
-		// Look for matching prop in source
-		let found = false;
-		let si = 0;
-		for (const sourceProp of sNames) {
-			if (sourceProp === targetProp) {
-				found = true;
-				if (si < sChildren.length && targetIdx < tChildren.length) {
-					if (!isAssignable(sChildren[si], tChildren[targetIdx])) {
-						return false;
-					}
-					// Structural assign raw-casts the object — shared fields whose
-					// union/numeric repr differs would reinterpret (mirror of the
-					// sameElementRepr gate on Array/Span/Ptr elements above).
-					if (fieldReprMismatch(sChildren[si], tChildren[targetIdx])) {
-						return false;
-					}
-				}
-			}
-			si += 1;
+		if (sNames[idx] !== targetProp) return false;
+		if (idx < sChildren.length && idx < tChildren.length) {
+			if (!isAssignable(sChildren[idx], tChildren[idx])) return false;
+			// Shared fields whose union/numeric repr differs would reinterpret
+			// (mirror of the sameElementRepr gate on Array/Span/Ptr elements above).
+			if (fieldReprMismatch(sChildren[idx], tChildren[idx])) return false;
 		}
-		if (!found) return false;
-		targetIdx += 1;
+		idx += 1;
 	}
 	return true;
+}
+
+// Error-path only: when a rejected object pair HAS every required field but in
+// the wrong slots, "got A, expected B" reads like a compiler bug. Name the field
+// that moved. Empty string when the plain message already explains the rejection.
+export function explainStructuralPrefix(source: Type | null, target: Type | null): string {
+	const s0 = skipModifier(source);
+	const t0 = skipModifier(target);
+	if (s0 === null || t0 === null) return "";
+	const s = unwrapRefBase(s0);
+	const t = unwrapRefBase(t0);
+	if (s.kind !== TypeKind.Struct || t.kind !== TypeKind.Struct) return "";
+	if (s.typeName === "" || t.typeName === "") return "";
+	if (s.typeName === t.typeName) return "";
+	let ti = 0;
+	for (const tProp of t.typeNames) {
+		let foundAt = 0 - 1;
+		let si = 0;
+		for (const sProp of s.typeNames) {
+			if (sProp === tProp) foundAt = si;
+			si += 1;
+		}
+		if (foundAt < 0) return "";
+		if (foundAt !== ti) {
+			return " ('" + tProp + "' is field " + String(ti) + " of " + t.typeName
+				+ " but field " + String(foundAt) + " of " + s.typeName
+				+ "; a structural match is a pointer cast, so " + t.typeName
+				+ "'s fields must be a leading prefix of " + s.typeName
+				+ " — declare " + s.typeName + " as `extends " + t.typeName + "`"
+				+ " or reorder its fields)";
+		}
+		ti += 1;
+	}
+	return "";
 }
 
 // ===== Overload Resolution =====
