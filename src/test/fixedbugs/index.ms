@@ -94,3 +94,5 @@ import "./bug078CastReturnRefIncref";
 import "./bug079DuNullUnionDiscMetadata";
 import "./bug080MatchGuardSamePattern";
 import "./bug081ExplicitMoveImplicitCopy";
+import "./bug082VariantCastWidening";
+import "./bug083EnumMemberMissing";
