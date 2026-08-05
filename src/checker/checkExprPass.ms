@@ -4406,6 +4406,9 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		for (const m of objType.typeNames) {
 			if (m === propName) { memberExists = true; break; }
 		}
+		if (!memberExists) {
+			addError(ctx, `Property '${propName}' does not exist on type '${enumName}'. Available: ${objType.typeNames.join(", ")}`, node.location.line, node.location.column);
+		}
 		// Tier 1: narrow to EnumLiteral when the context directly expects the literal form
 		// (return type, variable annotation, etc). Union<EnumLiteral...> narrowing is deferred
 		// to Tier 2 (discriminated union narrowing at call sites). The literal type is also
