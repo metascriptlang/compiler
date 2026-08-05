@@ -637,6 +637,15 @@ export function ensureRefArrayCellTypeInfo(g: CGen, cellName: string, destroyFn:
 // Main entry point: returns C type name string for a MetaScript Type.
 // Emits type definitions to CGen sections as side effect.
 
+// Emission probe for the flagless-Unknown debt (docs/UNKNOWN-BUG.md §9).
+// 2026-08-05 enumeration: real user shapes (match exprs, try/Result unwrap,
+// toString) and ~846 test-mode pending sentinels still reach this arm, so the
+// Nim-style internal error is premature — its precondition (sem never leaves a
+// pending type on emitted code) is Phase 3's exit criterion. No-op seam until
+// then: point it at addError/console.log to re-enumerate producers.
+function gateFlaglessUnknown(g: CGen, t: Type): void {
+}
+
 export function getTypeDesc(g: CGen, t: Type | null): string {
 	if (t === null) return "void*";
 	// Standard reference parity: strip ownership modifiers at entry.
@@ -723,7 +732,14 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			return genUnionType(g, t);
 		},
 		TypeKind.Tuple => genTupleType(g, t),
-		TypeKind.Unknown => "void*",
+		// Nim getTypeDescAux else-branch: an unresolved type reaching codegen is an
+		// internal error. Interim flag read until the kind split — docs/UNKNOWN-BUG.md §9.
+		TypeKind.Unknown => {
+			if ((t.typeFlags & TypeFlag.UserUnknown) === 0) {
+				gateFlaglessUnknown(g, t);
+			}
+			return "void*";
+		},
 		TypeKind.GenericParam => "void*",
 		// GenericInstance: resolve to monomorphized C struct name
 		TypeKind.GenericInstance => {
