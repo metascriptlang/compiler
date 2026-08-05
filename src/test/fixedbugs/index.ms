@@ -91,4 +91,5 @@ import "./bug075VisitorNullChildSlot";
 import "./bug076ClosureUnknownReturnRepr";
 import "./bug077MacroArgArrayAccessDoubleDeref";
 import "./bug078CastReturnRefIncref";
+import "./bug080MatchGuardSamePattern";
 import "./bug081ExplicitMoveImplicitCopy";
