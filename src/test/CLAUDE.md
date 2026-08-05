@@ -659,6 +659,13 @@ you compare a stale cache against itself.
   byte-compare.   Cluster census (2026-08-04, 85 programs): 0xx=5, 1xx=5,
   2xx=13, 3xx=5, 4xx=13, **5xx=5**, 6xx=31, 7xx=8 — next: 505/506 json,
   507/508 fs.
+  - `512-jsonInt64` landed 2026-08-05: int64 THROUGH the JSON surface —
+    the one C↔JS divergence with no prior coverage (parser.ms parseNumber's
+    `parseInt` is strtoll on C, lossy double on JS). Self-grades via delta
+    checks (equality against a literal passes vacuously on a lossy backend)
+    into the `@stdout` line; `@xfail(js)` until roadmap 3 (BigInt) — XPASS
+    will flag the flip. Deliberately does NOT import std/process: its .jms
+    parse error would satisfy the xfail for the wrong reason.
   - 5xx std grew 2026-08-01 post string-contract P1/P2 (js = native
     strings + native Map/Set): `501` dropped its @xfail(js) (all-lane
     green), `502-mapChurn` (pins the re-insert-to-end ordering rule),
