@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind } from "../ast/node";
-import { createFunction, createStruct, createArray, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, unknownType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, unknownType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
@@ -410,7 +410,7 @@ export function makeInterfaceDeclFromTypes(name: string, fields: string[], field
 // actual types come from the checker via node.nodeType (no TypeReference).
 export function resolveSimpleTypeStr(annotation: string): Type {
 	if (annotation === "") return unknownType();
-	if (annotation === "void*") return unknownType();  // void* → Unknown → "void*" in codegen
+	if (annotation === "void*") return createPtr(voidType());  // raw pointer — reference: getSysType(pointer)
 	// Handle array annotations: "Foo[]", "Foo [ ]" (parser joins tokens with spaces)
 	// Strip trailing whitespace-surrounded brackets to get element type
 	const stripped = stripArraySuffix(annotation);
