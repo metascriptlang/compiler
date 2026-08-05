@@ -343,9 +343,20 @@ function sinkClassify(t: Type | null, ctx: TransformContext): RcInfo {
 // Pattern: genWasMoved(tmp) → =copy(tmp, src) → use tmp → wasMoved(tmp) after consumption.
 // For simple refcounted types (String, Ref, Closure): shallow copy + incref is sufficient.
 // For Named types (structs with managed fields): null-init + 2-arg copy avoids aliased-field destruction.
+function reportFailedMove(srcExpr: Node, dctx: DrcContext): void {
+	if (dctx.inEnsureMove === 0 || dctx.ctx.checkerCtx === null) return;
+	if (srcExpr.kind !== NodeKind.Identifier) return;
+	const srcName = (srcExpr.data as IdentifierData).name;
+	dctx.ctx.checkerCtx.errors.push({
+		message: "cannot move '" + srcName + "': variable is still used after this point",
+		line: srcExpr.location.line, column: srcExpr.location.column, fatal: false,
+	});
+}
+
 function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 	const rcInfo = sinkClassify(srcExpr.nodeType, dctx.ctx);
 	if (!rcInfo.needsCleanup) return srcExpr;
+	reportFailedMove(srcExpr, dctx);
 
 	const loc = srcExpr.location;
 	const tmpSym = freshTempSym(dctx.ctx, "borrow", srcExpr.nodeType);
@@ -553,7 +564,9 @@ function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 
 function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const md = node.data as MoveExprData;
+	dctx.inEnsureMove += 1;
 	md.moveArg = processNode(md.moveArg, dctx, DrcMode.Consumed);
+	dctx.inEnsureMove -= 1;
 	// Identifiers: the Consumed walk above already blit+zeroed via destructiveMoveVar;
 	// recordMoveInContext stays as bookkeeping for the self-consume assignment gates.
 	// Fields/elements: recordMoveExpr defers wasMoved to the finally, before the container destroy.
@@ -914,6 +927,7 @@ function resolveLhs(flags: int32, dest: Node, destName: string, destSym: Symbol,
 // Reference: genCopy + genCopyNoCheck in injectdestructors
 function genCopy(stmt: Node, dest: Node, destName: string, destSym: Symbol, rhs: Node, rcInfo: RcInfo,
 		flags: int32, dctx: DrcContext, loc: SourceLocation): Node {
+	reportFailedMove(rhs, dctx);
 	// Binary copy (Named/String): =copy(&dest, src) handles old-value atomically
 	if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
 		const lhsExpr = resolveLhs(flags, dest, destName, destSym, loc);
@@ -1159,12 +1173,6 @@ function classifyArrayElementRc(arrayExpr: Node, dctx: DrcContext): RcInfo {
 function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation, checkLastRead: boolean): boolean {
 	if (moveArg.kind === NodeKind.Identifier) {
 		const srcName = (moveArg.data as IdentifierData).name;
-		// errFailedMove diagnostic: error when target is still used after this point
-		if (checkLastRead && !isLastReadSafe(moveArg.resolvedSym, moveArg, idx, stmts, dctx)) {
-			if (dctx.ctx.checkerCtx !== null) {
-				dctx.ctx.checkerCtx.errors.push({ message: "cannot move '" + srcName + "': variable is still used after this point", line: moveArg.location.line, column: moveArg.location.column, fatal: false });
-			}
-		}
 		if (rcInfo.wasMovedFn !== "") {
 			addPending(dctx, makeWasMovedCall(srcName, rcInfo, loc, moveArg.resolvedSym));
 		}
