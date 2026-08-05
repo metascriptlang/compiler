@@ -14,7 +14,7 @@
 // Nested struct fields deferred until typeName is surfaced on TypeObjectData
 // (needed to construct the inner-type witness for recursive macro call).
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, pickAtomicAccessor } from "../discDetect";
+import { detectUnionDisc, parseDiscKey, pickAtomicAccessor } from "../discDetect";
 
 // Macro: jv must be a JsonValue. Witness expression must be typed `T | null`
 // (e.g., user passes `null as Person | null`). Honest nullable typing — null
@@ -47,9 +47,9 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 
 	// V3 — Tagged union (DU) decoding. Mirror encode shape: dispatch on disc
 	// field accessor, emit per-variant ObjectLiteral { disc: discLit, ...payload }.
-	// Supports boolean + string disc (enum disc deferred — needs name→enum
-	// mapping). Variant payload restricted to atomic fields (string/bool/
-	// number/int*/float*) — nested struct + array in variant deferred.
+	// Supports boolean + string + enum disc. Variant payload restricted to
+	// atomic fields (string/bool/number/int*/float*) — nested struct + array
+	// in variant deferred.
 	if (tt.kind === NodeKind.TypeUnion) {
 		const info = detectUnionDisc(tt);
 		const discField: string = info.discField;
@@ -58,9 +58,6 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 
 		if (discField === "" || variants.length === 0) {
 			error("jsonValueToStruct: cannot determine discriminator for union type — variants must share a literal-typed disc field", witness);
-		}
-		if (discKind === "enum") {
-			error("jsonValueToStruct: enum-discriminated unions not yet supported in decode (encode works); use boolean or string disc", witness);
 		}
 
 		// matchDisc: jv.getDynamicField(discField).asBoolean() | .asString()
@@ -97,6 +94,18 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				const bv: boolean = variantKey === "true";
 				pattern = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: bv };
 				discLiteral = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: bv };
+			} else if (discKind === "enum") {
+				// Wire format is fixed by encode: the disc travels as the member
+				// NAME string; the constructed variant carries the real enum
+				// member — MemberExpr resolves name→value at check time.
+				const dp = parseDiscKey(discKind, variantKey);
+				pattern = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: dp.memberName };
+				discLiteral = {
+					kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
+					object: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: dp.enumName },
+					property: dp.memberName,
+					isOptional: false,
+				};
 			} else {
 				pattern = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variantKey };
 				discLiteral = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variantKey };
@@ -489,9 +498,6 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		if (discField === "" || variants.length === 0) {
 			error("jsonValueToStructE: cannot determine discriminator for union type — variants must share a literal-typed disc field", witness);
 		}
-		if (discKind === "enum") {
-			error("jsonValueToStructE: enum-discriminated unions not yet supported in decode (encode works); use boolean or string disc", witness);
-		}
 
 		const discReqName: string = discKind === "boolean" ? "reqBoolean" : "reqString";
 		const discFieldLit: Node = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: discField };
@@ -516,7 +522,8 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		if (discKind !== "boolean") {
 			const allowedNodes: Node[] = [];
 			for (const variant of variants) {
-				allowedNodes.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variant.key });
+				const adp = parseDiscKey(discKind, variant.key);
+				allowedNodes.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: adp.memberName });
 			}
 			matchDisc = {
 				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
@@ -541,6 +548,18 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				const bv: boolean = variantKey === "true";
 				pattern = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: bv };
 				discLiteral = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: bv };
+			} else if (discKind === "enum") {
+				// Same wire contract as the lenient macro: disc string is the
+				// member NAME (what encode writes and what the gate above
+				// checked); the variant is built with the real enum member.
+				const dp = parseDiscKey(discKind, variantKey);
+				pattern = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: dp.memberName };
+				discLiteral = {
+					kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
+					object: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: dp.enumName },
+					property: dp.memberName,
+					isOptional: false,
+				};
 			} else {
 				pattern = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variantKey };
 				discLiteral = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variantKey };
