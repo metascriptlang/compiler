@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf } from "../../checker/types";
+import { isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf, voidType } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
@@ -949,8 +949,9 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, p1:
 					}
 					const paramType = createVar(objType);
 					setHookParamType(helperFn, 0, paramType);
-					if (!isUnary) setHookParamType(helperFn, 1, paramType);
-					// Trace param[1] stays void* (callback/env) — no type override
+					if (!isUnary && !isTrace) setHookParamType(helperFn, 1, paramType);
+					// Trace param[1] is the raw callback/env pointer — reference: getSysType(pointer)
+					if (isTrace) setHookParamType(helperFn, 1, createPtr(voidType()));
 					markGeneratedOp(helperFn, helperName);
 					lctx.collector.push(helperFn);
 				}
@@ -1175,7 +1176,8 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 		// copy/sink: both params are the struct type
 		setHookParamType(fnNode, 1, paramType);
 	}
-	// trace: param[1] stays void* (callback/env) — reference: getSysType(pointer)
+	// trace param[1] is the raw callback/env pointer — reference: getSysType(pointer)
+	if (isTrace) setHookParamType(fnNode, 1, createPtr(voidType()));
 	markGeneratedOp(fnNode, typeName + suffix);
 	lctx.collector.push(fnNode);
 }
