@@ -696,52 +696,65 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 
 			if (elemIsStruct) {
 				// Element decode needs a runtime loop, so it goes through the
-				// array-of-structs helper. Its witness is the array field
-				// itself (MemberExpr on the outer witness) — the helper's T
-				// binds from the element type, no name resolution involved.
-				const arrWitness: Node = {
-					kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
-					object: witness, property: fname, nodeType: ftype, isOptional: false,
+				// array-of-structs helper, which re-enters this macro per
+				// element once T is concrete. T binds from the contextual
+				// return type (`T[]`), so the witness stays a bare null — no
+				// user type name has to resolve in the expanding module.
+				const arrPath: Node = {
+					kind: NodeKind.BinaryExpr, line: jv.line, column: jv.column,
+					operator: "+",
+					left: pfx,
+					right: fnameLit,
 				};
 				keyNodes.push(fname);
 				valueNodes.push({
 					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
-					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonToStructArray" },
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonToStructArrayE" },
 					arguments: [reqArrayCall,
-						{ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true }],
+						{ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
+						errs, arrPath],
 				});
 				i = i + 1;
 				continue;
 			}
+			// The array field's own path — elements append "[i]" to it, so an
+			// atomic element reports the same shape a struct element does.
+			const elemArrPath: Node = {
+				kind: NodeKind.BinaryExpr, line: jv.line, column: jv.column,
+				operator: "+",
+				left: pfx,
+				right: fnameLit,
+			};
 			if (!isBuiltin) {
 				keyNodes.push(fname);
 				valueNodes.push({
 					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
-					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonToIntArray" },
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonToIntArrayE" },
 					arguments: [reqArrayCall,
-						{ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true }],
+						{ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
+						errs, elemArrPath],
 				});
 				i = i + 1;
 				continue;
 			}
-			let arrHelper: string = "jsonToInt64Array";
-			if (en === "string") arrHelper = "jsonToStringArray";
-			else if (en === "boolean") arrHelper = "jsonToBooleanArray";
-			else if (en === "number") arrHelper = "jsonToNumberArray";
-			else if (en === "float64") arrHelper = "jsonToNumberArray";
-			else if (en === "float32") arrHelper = "jsonToFloat32Array";
-			else if (en === "int8") arrHelper = "jsonToInt8Array";
-			else if (en === "int16") arrHelper = "jsonToInt16Array";
-			else if (en === "int32") arrHelper = "jsonToInt32Array";
-			else if (en === "int64") arrHelper = "jsonToInt64Array";
-			else if (en === "uint8") arrHelper = "jsonToUint8Array";
-			else if (en === "uint16") arrHelper = "jsonToUint16Array";
-			else if (en === "uint32") arrHelper = "jsonToUint32Array";
+			let arrHelper: string = "jsonToInt64ArrayE";
+			if (en === "string") arrHelper = "jsonToStringArrayE";
+			else if (en === "boolean") arrHelper = "jsonToBooleanArrayE";
+			else if (en === "number") arrHelper = "jsonToNumberArrayE";
+			else if (en === "float64") arrHelper = "jsonToNumberArrayE";
+			else if (en === "float32") arrHelper = "jsonToFloat32ArrayE";
+			else if (en === "int8") arrHelper = "jsonToInt8ArrayE";
+			else if (en === "int16") arrHelper = "jsonToInt16ArrayE";
+			else if (en === "int32") arrHelper = "jsonToInt32ArrayE";
+			else if (en === "int64") arrHelper = "jsonToInt64ArrayE";
+			else if (en === "uint8") arrHelper = "jsonToUint8ArrayE";
+			else if (en === "uint16") arrHelper = "jsonToUint16ArrayE";
+			else if (en === "uint32") arrHelper = "jsonToUint32ArrayE";
 			keyNodes.push(fname);
 			valueNodes.push({
 				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 				callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: arrHelper },
-				arguments: [reqArrayCall],
+				arguments: [reqArrayCall, errs, elemArrPath],
 			});
 			i = i + 1;
 			continue;

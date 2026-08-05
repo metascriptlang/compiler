@@ -348,3 +348,113 @@ test "reqArray/reqObject: mismatch pushes, sentinel returned" {
 	assert errs[0] === "field 'tags': expected array, got int";
 	assert errs[1] === "field 'addr': expected object, got int";
 }
+
+// ===== Strict array-extraction helpers =====
+//
+// Mirrors of the jsonToXArray family that report a per-element failure instead
+// of coercing it to a default. `arrPath` is the path of the ARRAY field, so an
+// element reads `field 'xs[1]': expected string, got int` — the same shape a
+// struct element produces.
+
+function jsonElemPath(arrPath: string, i: int32): string {
+	return arrPath + "[" + i.toString() + "]";
+}
+
+export function jsonToStringArrayE(this v: JsonValue, errs: string[], arrPath: string): string[] {
+	const out: string[] = [];
+	if (v === null || v.kind !== JsonKind.Array) return out;
+	for (let i = 0; i < v.items.length; i = i + 1) {
+		out.push(reqString(v.items[i], jsonElemPath(arrPath, i), "", errs));
+	}
+	return out;
+}
+
+export function jsonToBooleanArrayE(this v: JsonValue, errs: string[], arrPath: string): boolean[] {
+	const out: boolean[] = [];
+	if (v === null || v.kind !== JsonKind.Array) return out;
+	for (let i = 0; i < v.items.length; i = i + 1) {
+		out.push(reqBoolean(v.items[i], jsonElemPath(arrPath, i), "", errs));
+	}
+	return out;
+}
+
+export function jsonToNumberArrayE(this v: JsonValue, errs: string[], arrPath: string): number[] {
+	const out: number[] = [];
+	if (v === null || v.kind !== JsonKind.Array) return out;
+	for (let i = 0; i < v.items.length; i = i + 1) {
+		out.push(reqNumber(v.items[i], jsonElemPath(arrPath, i), "", errs));
+	}
+	return out;
+}
+
+export function jsonToFloat32ArrayE(this v: JsonValue, errs: string[], arrPath: string): float32[] {
+	const out: float32[] = [];
+	if (v === null || v.kind !== JsonKind.Array) return out;
+	for (let i = 0; i < v.items.length; i = i + 1) {
+		out.push(reqNumber(v.items[i], jsonElemPath(arrPath, i), "", errs) as float32);
+	}
+	return out;
+}
+
+export function jsonToInt8ArrayE(this v: JsonValue, errs: string[], arrPath: string): int8[] {
+	const out: int8[] = [];
+	if (v === null || v.kind !== JsonKind.Array) return out;
+	for (let i = 0; i < v.items.length; i = i + 1) {
+		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as int8);
+	}
+	return out;
+}
+
+export function jsonToInt16ArrayE(this v: JsonValue, errs: string[], arrPath: string): int16[] {
+	const out: int16[] = [];
+	if (v === null || v.kind !== JsonKind.Array) return out;
+	for (let i = 0; i < v.items.length; i = i + 1) {
+		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as int16);
+	}
+	return out;
+}
+
+export function jsonToInt32ArrayE(this v: JsonValue, errs: string[], arrPath: string): int32[] {
+	const out: int32[] = [];
+	if (v === null || v.kind !== JsonKind.Array) return out;
+	for (let i = 0; i < v.items.length; i = i + 1) {
+		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as int32);
+	}
+	return out;
+}
+
+export function jsonToInt64ArrayE(this v: JsonValue, errs: string[], arrPath: string): int64[] {
+	const out: int64[] = [];
+	if (v === null || v.kind !== JsonKind.Array) return out;
+	for (let i = 0; i < v.items.length; i = i + 1) {
+		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs));
+	}
+	return out;
+}
+
+export function jsonToUint8ArrayE(this v: JsonValue, errs: string[], arrPath: string): uint8[] {
+	const out: uint8[] = [];
+	if (v === null || v.kind !== JsonKind.Array) return out;
+	for (let i = 0; i < v.items.length; i = i + 1) {
+		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as uint8);
+	}
+	return out;
+}
+
+export function jsonToUint16ArrayE(this v: JsonValue, errs: string[], arrPath: string): uint16[] {
+	const out: uint16[] = [];
+	if (v === null || v.kind !== JsonKind.Array) return out;
+	for (let i = 0; i < v.items.length; i = i + 1) {
+		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as uint16);
+	}
+	return out;
+}
+
+export function jsonToUint32ArrayE(this v: JsonValue, errs: string[], arrPath: string): uint32[] {
+	const out: uint32[] = [];
+	if (v === null || v.kind !== JsonKind.Array) return out;
+	for (let i = 0; i < v.items.length; i = i + 1) {
+		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as uint32);
+	}
+	return out;
+}

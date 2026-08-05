@@ -17,6 +17,9 @@ export {
 	jsonToStringArray, jsonToBooleanArray, jsonToNumberArray, jsonToFloat32Array,
 	jsonToInt8Array, jsonToInt16Array, jsonToInt32Array, jsonToInt64Array,
 	jsonToUint8Array, jsonToUint16Array, jsonToUint32Array,
+	jsonToStringArrayE, jsonToBooleanArrayE, jsonToNumberArrayE, jsonToFloat32ArrayE,
+	jsonToInt8ArrayE, jsonToInt16ArrayE, jsonToInt32ArrayE, jsonToInt64ArrayE,
+	jsonToUint8ArrayE, jsonToUint16ArrayE, jsonToUint32ArrayE,
 	kindName, reqString, reqBoolean, reqNumber, reqInt64, reqArray, reqObject, joinDecodeErrors,
 	_jsonCheckDiscStr,
 } from "std/serialize/json/accessors";
@@ -96,6 +99,19 @@ export function _jsonToIntArray<T>(jv: JsonValue, witness: T | null): T[] {
 	return out;
 }
 
+// Strict mirror for enum / primitive-alias element arrays: the element must
+// carry the Int variant, exactly as a declared int64 field must.
+export function _jsonToIntArrayE<T>(jv: JsonValue, witness: T | null, errs: string[], arrPath: string): T[] {
+	const out: T[] = [];
+	if (jv === null || jv.kind !== JsonKind.Array) return out;
+	let i = 0;
+	while (i < jv.items.length) {
+		out.push(reqInt64(jv.items[i], arrPath + "[" + i.toString() + "]", "", errs) as T);
+		i = i + 1;
+	}
+	return out;
+}
+
 // Witness via T[] — needed for value-type T (enum, primitive alias) where
 // `T | null` would canonicalize to Maybe<T> and fail to match the helper's
 // `T | null` arg type. Caller passes `[] as <Elem>[]` and T binds from
@@ -117,6 +133,22 @@ export function _jsonToStructArray<T>(jv: JsonValue, witness: T | null): T[] {
 	let i = 0;
 	while (i < jv.items.length) {
 		out.push(jsonValueToStruct(jv.items[i], witness));
+		i = i + 1;
+	}
+	return out;
+}
+
+// Strict mirror. `arrPath` is the dotted path of the ARRAY field itself, so
+// element messages read `field 'items[0].qty': ...` and a non-object element
+// reads `field 'items[0]': expected object, got int`.
+export function _jsonToStructArrayE<T>(jv: JsonValue, witness: T | null, errs: string[], arrPath: string): T[] {
+	const out: T[] = [];
+	if (jv === null || jv.kind !== JsonKind.Array) return out;
+	let i = 0;
+	while (i < jv.items.length) {
+		const elemPath: string = arrPath + "[" + i.toString() + "]";
+		const el: JsonValue = reqObject(jv.items[i], elemPath, "", errs);
+		out.push(jsonValueToStructE(el, witness, errs, elemPath + "."));
 		i = i + 1;
 	}
 	return out;
