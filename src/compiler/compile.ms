@@ -1199,8 +1199,16 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		if (opts.verbose) verboseLog(`codegen ${p.modPath}`);
 
 		const tCg = performance.now();
+		const preCgErrors = p.ctx.errors.length;
 		const cCode = generateCModule(p.program, p.ctx, p.modPath, aliveSet, false, opts.isHcr);
 		codegenTime = codegenTime + (performance.now() - tCg);
+
+		if (p.ctx.errors.length > preCgErrors) {
+			for (let ei = preCgErrors; ei < p.ctx.errors.length; ei += 1) {
+				console.log(`${error("error")}: ${p.modPath}: ${p.ctx.errors[ei].message}`);
+			}
+			exit(1);
+		}
 
 		// Process @compile("foo.c") directives
 		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
@@ -1527,7 +1535,15 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	for (const p of processed) {
 		if (opts.verbose) verboseLog(`codegen ${p.modPath}`);
 
+		const preCgErrors = p.ctx.errors.length;
 		const cCode = generateCModule(p.program, p.ctx, p.modPath, aliveSet, true, opts.isHcr);
+
+		if (p.ctx.errors.length > preCgErrors) {
+			for (let ei = preCgErrors; ei < p.ctx.errors.length; ei += 1) {
+				console.log(`${error("error")}: ${p.modPath}: ${p.ctx.errors[ei].message}`);
+			}
+			exit(1);
+		}
 
 		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		oSlots.push(compileObjs);

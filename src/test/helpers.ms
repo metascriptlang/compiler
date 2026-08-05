@@ -82,7 +82,10 @@ export function compileToC(source: string): CompileResult {
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
 	const aliveSet = createAliveSet();
-	return Result.ok(generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false));
+	const preCgErrors = checkerCtx.errors.length;
+	const cCode = generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false);
+	if (checkerCtx.errors.length > preCgErrors) return Result.err(collectErrors(checkerCtx.errors, "codegen:"));
+	return Result.ok(cCode);
 }
 
 // Like compileToC but with std/ library resolution enabled (stdPath from the
@@ -125,7 +128,10 @@ export function compileToCWithStd(source: string): CompileResult {
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
 	const aliveSet = createAliveSet();
-	return Result.ok(generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false));
+	const preCgErrors = checkerCtx.errors.length;
+	const cCode = generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false);
+	if (checkerCtx.errors.length > preCgErrors) return Result.err(collectErrors(checkerCtx.errors, "codegen:"));
+	return Result.ok(cCode);
 }
 
 // Full JS pipeline: parse → check → transform(jsBackend=true) → codegen
