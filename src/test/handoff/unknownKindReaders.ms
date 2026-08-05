@@ -15,7 +15,8 @@
 // rewritten to assert agreement, not disagreement — that is the point.
 
 import { unknownType, userUnknownType, isUserUnknown, isPointerShapedForUnknown } from "../../checker/types";
-import { isPointerType } from "../../codegen/c/types";
+import { isPointerType, getTypeDesc } from "../../codegen/c/types";
+import { createCGen } from "../../codegen/c/context";
 import { hasErrors } from "../../checker/context";
 import { checkSource } from "./helpers";
 import { compileToC } from "../helpers";
@@ -121,4 +122,28 @@ test "DEBT: uninferrable T is not diagnosed and reaches codegen" {
 		assert !un.value.contains("mk__number__"), "T is now bound — §4.1 changed";
 		assert un.value.contains("msRefArray* a_1_"), "the unbound-T fallback repr changed — §4.1 changed";
 	}
+}
+
+// ===== E. emission seam (docs/UNKNOWN-BUG.md §9) — flips to an error cell when
+// Phase 3 clears the pending-at-emission population =====
+
+test "DEBT: flagless Unknown at getTypeDesc emits void* silently" {
+	// 2026-08-05 enumeration: real user shapes (match exprs, try/Result unwrap,
+	// toString) still reach emission with a pending sentinel, so the Nim-style
+	// internal error is premature. Pin today's silent answer; when the producers
+	// are cleaned this cell must flip to assert an error is raised.
+	const ctx = checkSource("function main(): void { }");
+	assert ctx !== null;
+	assert !hasErrors(ctx);
+	const g = createCGen(ctx, "gate.ms");
+	assert getTypeDesc(g, unknownType()) === "void*";
+	assert !hasErrors(ctx), "emission now errors on flagless Unknown — flip this cell, docs/UNKNOWN-BUG.md §9";
+}
+
+test "emission gate control: user unknown emits void* with no error" {
+	const ctx = checkSource("function main(): void { }");
+	assert ctx !== null;
+	const g = createCGen(ctx, "gate.ms");
+	assert getTypeDesc(g, userUnknownType()) === "void*";
+	assert !hasErrors(ctx);
 }
