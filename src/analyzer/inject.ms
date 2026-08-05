@@ -1878,11 +1878,39 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 
 // ===== Return Statement =====
 
+// Ownership flows through conversions — reference "ownership invariance"
+// (injectdestructors nkConv/nkHiddenStdConv/nkCast recurse into the operand
+// with the same mode: owning C(x) means owning x). Classify the operand,
+// never the wrapper.
+function skipConversionWrappers(expr: Node): Node {
+	let e = expr;
+	while (true) {
+		if (e.kind === NodeKind.TypeAssertion) {
+			const ta = e.data as TypeAssertionData;
+			if (ta.asExpr === null) break;
+			e = ta.asExpr;
+			continue;
+		}
+		if (e.kind === NodeKind.HiddenStdConv || e.kind === NodeKind.HiddenSubConv) {
+			const cv = e.data as HiddenStdConvData;
+			if (cv.convExpr === null) break;
+			e = cv.convExpr;
+			continue;
+		}
+		break;
+	}
+	return e;
+}
+
 // Check if a return expression is a borrowed RC pointer that needs incref.
 // Borrowed = not fresh, not owned local. E.g., obj.field, arr[i], parameter.
 // ONLY returns true for RcKind.Ref — strings/arrays/named types need passCopyToSink
 // (deep copy), not msIncref (pointer refcount bump). See processReturn for those.
 function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
+	return needsReturnIncrefBare(skipConversionWrappers(expr), dctx);
+}
+
+function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 	if (dctx.ctx.checkerCtx === null) return false;
 	// Fresh expressions produce owned values — no incref needed
 	if (isFreshExpr(expr.kind)) return false;
