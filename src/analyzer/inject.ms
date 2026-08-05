@@ -2214,6 +2214,10 @@ function processSwitchCase(caseNode: Node, dctx: DrcContext, loc: SourceLocation
 	const processed = processStmtList(cd.caseStmts, dctx, loc);
 	const scope = popScope(dctx);
 	const cleanup = generateCleanup(scope, emptyNameSet(), loc);
+	if (scope.needsTry && cleanup.length > 0) {
+		cd.caseStmts = [wrapWithTryFinally(processed, cleanup, scope, loc)];
+		return;
+	}
 	for (const cs of cleanup) { processed.push(cs); }
 	cd.caseStmts = processed;
 }
