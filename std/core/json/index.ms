@@ -21,7 +21,7 @@ export {
 	jsonToInt8ArrayE, jsonToInt16ArrayE, jsonToInt32ArrayE, jsonToInt64ArrayE,
 	jsonToUint8ArrayE, jsonToUint16ArrayE, jsonToUint32ArrayE,
 	kindName, reqString, reqBoolean, reqNumber, reqInt64, reqArray, reqObject, joinDecodeErrors,
-	_jsonCheckDiscStr,
+	_jsonCheckDiscStr, _jsonIsNull,
 } from "std/serialize/json/accessors";
 
 // Macro system constraint: when macro X's expansion result contains a call

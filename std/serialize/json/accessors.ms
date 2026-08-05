@@ -179,6 +179,17 @@ export function _jsonCheckDiscStr(v: string, allowed: string[], errs: string[], 
 	return allowed[0];
 }
 
+export function _jsonIsNull(v: JsonValue): boolean {
+	return v === null || v.kind === JsonKind.Null;
+}
+
+test "_jsonIsNull — null sentinel and absent field are null, values are not" {
+	const obj = jsonObject(["a"], [jsonString("x")]);
+	assert _jsonIsNull(obj.getDynamicField("missing"));
+	assert _jsonIsNull(jsonNull());
+	assert !_jsonIsNull(obj.getDynamicField("a"));
+}
+
 // ===== Dynamic Field Access (protocol — `getDynamicField`) =====
 
 export function getDynamicField(this v: JsonValue, key: string): JsonValue {
