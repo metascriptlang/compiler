@@ -64,7 +64,7 @@ import {
 import { Token, TokenKind, createToken } from "../../lexer/token";
 // V3 — peel Union-backed generics (Result<T,E>, Option<T>) so codec macros see
 // substituted variants + disc info. Lazy-instantiate pattern from destructorLifting.
-import { instantiateGenericBody } from "../../checker/types";
+import { instantiateGenericBody, isMaybeType } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import {
 	RaiserValueKind, RaiserValue,
@@ -307,6 +307,25 @@ function genericInstanceToAst(t: Type, loc: SourceLocation, visited: Type[]): No
 // TS-style DUs (`{kind:"a"} | {kind:"b"}`) have at most disc field name (no
 // variant keys) — codecs walk variants directly to enumerate disc values.
 // See checker/types.ms isDiscriminatedUnion.
+// Maybe<T> is the checker's INTERNAL carrier for `T | null` — macros must see
+// the surface union the user wrote, not {value, present}. Leaking the carrier
+// made codec macros treat nullable fields as nested structs and emit garbage C.
+// Helper-per-arm on purpose: a createNodeAt literal INSIDE a match arm loses
+// its contextual NodeData typing and corrupts memory (compiler bug, reported;
+// /tmp/clit-probe pins both broken shapes). The literal below is contextually
+// typed by the formal — never add `as TypeUnionData` (same bug, cast shape).
+function maybeToUnionAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+	return createNodeAt(NodeKind.TypeUnion, {
+		typExprMembers: [
+			mapTypeToAstWith(t.typeReturn, loc, visited),
+			atomicTypeNode("null", loc),
+		],
+		discFieldName: "",
+		variantKeys: [],
+		discKind: "",
+	}, loc);
+}
+
 function unionToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	let discField: string = "";
 	const variantKeys: string[] = [];
@@ -387,6 +406,12 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[]):
 		TypeKind.Alias => t.typeReturn !== null
 			? mapTypeToAstWith(t.typeReturn, loc, visited)
 			: fallbackTypeName(t, loc),
+		// Maybe<T> is the checker's INTERNAL carrier for `T | null` — macros
+		// must see the surface union the user wrote, not {value, present}.
+		// Leaking the carrier made codec macros treat nullable fields as
+		// nested structs and emit garbage C (bug: JSON.parse<T> with a
+		// `string | null` field).
+		TypeKind.Struct when (isMaybeType(t) && t.typeReturn !== null) => maybeToUnionAst(t, loc, visited),
 		TypeKind.Struct => structToAst(t, loc, visited),
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => arrayToAst(t, loc, visited),
 		TypeKind.GenericInstance => genericInstanceToAst(t, loc, visited),
