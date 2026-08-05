@@ -2098,6 +2098,70 @@ function arrayDisplay(t: Type | null): string {
 	return typeDisplayName(t);
 }
 
+// Index of `exprType` among a discriminated union's variants, or -1. Matches
+// codegen's own rule (expressions.ms, "Variant struct → discriminated union")
+// so the checker and the emitter agree on which slot a value belongs in.
+function variantIndexInUnion(formal: Type, exprType: Type): int32 {
+	if (formal.kind !== TypeKind.Union || formal.typeChildren === null) return -1;
+	if (exprType.kind !== TypeKind.Struct) return -1;
+	// Identity/name first; a named variant resolves there. Union variants are
+	// often ANONYMOUS object types while the value carries a type ALIAS name
+	// (`NodeData`'s variants vs `TypeUnionData`), so fall back to the same
+	// structural match the object-literal path uses to pick its variant.
+	const byIdentity = duVariantIndexOfType(formal, exprType) as int32;
+	if (byIdentity >= 0) return byIdentity;
+	const names = exprType.typeNames;
+	if (names === null || names.length === 0) return -1;
+	// EXACT field-set match only. findUnionVariant accepts a superset, which
+	// picks the wrong slot when one variant's fields contain another's
+	// (`{typExprMembers, …}` vs `{typExprMembers}` → tagged 76, held 77).
+	// Two candidates that survive the type comparison are ambiguous: refuse
+	// rather than guess a slot.
+	const types = exprType.typeChildren;
+	let found: int32 = -1;
+	let vi: int32 = 0;
+	for (const child of formal.typeChildren) {
+		if (child !== null && child.typeNames !== null && child.typeNames.length === names.length) {
+			let same = true;
+			for (let fi = 0; fi < names.length; fi += 1) {
+				if (child.typeNames[fi] !== names[fi]) { same = false; break; }
+			}
+			if (same && types !== null && child.typeChildren !== null
+					&& child.typeChildren.length === types.length) {
+				for (let fi = 0; fi < types.length; fi += 1) {
+					const want = types[fi];
+					const have = child.typeChildren[fi];
+					if (want === null || have === null) continue;
+					if (want.kind !== have.kind || want.typeName !== have.typeName) { same = false; break; }
+				}
+			}
+			if (same) {
+				if (found >= 0) return -1;
+				found = vi;
+			}
+		}
+		vi += 1;
+	}
+	return found;
+}
+
+// A variant value meeting a union formal needs a real conversion: the C layouts
+// differ (variant = plain struct, union = tag + variant slots), and codegen
+// picks a temp's type from the STATIC type — so without this node it passes a
+// bare variant struct where the union is expected and clang only warns.
+// Reference: sigmatch.nim implicitConv(nkHiddenSubConv, ...).
+function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): Node {
+	const vi = variantIndexInUnion(formal, exprType);
+	if (vi < 0) return null as unknown as Node;
+	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
+	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: formal }, convTok);
+	convNode.nodeType = formal;
+	// Same stamp convention as the object-literal path: codegen reads the slot,
+	// it never re-derives one (+1 so 0 keeps meaning "not set").
+	convNode.flags = convNode.flags | NodeFlag.Sem | (((vi + 1) as int32) << 16);
+	return convNode;
+}
+
 export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
 	if (formal === null || exprType === null) return expr;
 	if (formal.kind === TypeKind.Unknown) {
@@ -3833,6 +3897,22 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	// matched" with "which symbol gets emitted".
 	d.resolvedOverloadIdx = bestIdx;
 	callNode.resolvedSym = sym;
+	// Signature → implementation reconciliation. Codegen mangles the call to
+	// the body-bearing impl, so an argument that satisfied a body-LESS signature
+	// must also satisfy the impl's parameter type. Load-bearing for DUs: the
+	// per-variant sigs (`data: TypeUnionData`) all redirect to one impl taking
+	// the union (`data: NodeData`), and handing it a bare variant struct
+	// corrupts memory — clang only warns on the pointer mismatch.
+	if (impl !== null && impl.symbolType !== null && impl.symbolType.typeChildren !== null
+			&& d.arguments.length === impl.symbolType.typeChildren.length) {
+		const implParams = impl.symbolType.typeChildren;
+		for (let ri = 0; ri < d.arguments.length; ri += 1) {
+			const implArgType = d.arguments[ri].nodeType;
+			if (implArgType === null) continue;
+			const reconciled = widenVariantToUnion(d.arguments[ri], implParams[ri], implArgType);
+			if (reconciled !== null as unknown as Node) d.arguments[ri] = reconciled;
+		}
+	}
 	if (d.callee !== null && d.callee.kind === NodeKind.Identifier) {
 		d.callee.resolvedSym = sym;
 		if (sym.symbolType !== null) d.callee.nodeType = sym.symbolType;

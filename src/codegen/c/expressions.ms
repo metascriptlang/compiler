@@ -1789,10 +1789,18 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		if (d.convType.kind === TypeKind.Union && d.convType.typeChildren !== null) {
 			const srcType = d.convExpr.nodeType;
 			let vi = 0;
-			for (const child of d.convType.typeChildren) {
-				if (srcType !== null && srcType.kind === TypeKind.Struct && child.kind === TypeKind.Struct
-					&& child.typeName === srcType.typeName) break;
-				vi += 1;
+			// Checker-stamped slot wins: union variants are frequently anonymous,
+			// so re-deriving one by type NAME here silently found nothing and
+			// emitted the bare variant struct.
+			const stampedSlot = ((node.flags >> 16) & 65535) as int32;
+			if (stampedSlot > 0) {
+				vi = stampedSlot - 1;
+			} else {
+				for (const child of d.convType.typeChildren) {
+					if (srcType !== null && srcType.kind === TypeKind.Struct && child.kind === TypeKind.Struct
+						&& child.typeName === srcType.typeName) break;
+					vi += 1;
+				}
 			}
 			if (vi < d.convType.typeChildren.length) {
 				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${inner}})`);
