@@ -80,7 +80,9 @@ export function compileToC(source: string): CompileResult {
 	const transformed = transformProgram(macroExpanded, checkerCtx, false);
 	const nativeCtx = createTransformContextWithChecker(checkerCtx);
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
+	const preAnErrors = checkerCtx.errors.length;
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
+	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
 	const aliveSet = createAliveSet();
 	const preCgErrors = checkerCtx.errors.length;
 	const cCode = generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false);
@@ -126,7 +128,9 @@ export function compileToCWithStd(source: string): CompileResult {
 	const transformed = transformProgram(macroExpanded, checkerCtx, false);
 	const nativeCtx = createTransformContextWithChecker(checkerCtx);
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
+	const preAnErrors = checkerCtx.errors.length;
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
+	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
 	const aliveSet = createAliveSet();
 	const preCgErrors = checkerCtx.errors.length;
 	const cCode = generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false);
