@@ -414,19 +414,25 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 		const bodies = armBodies[gi];
 		const caseStmts: Node[] = [];
 
-		// Chain guard-body pairs as if-else: if (g1) { body1 } if (g2) { body2 } body_unguarded
-		for (let ai = 0; ai < guards.length; ai += 1) {
+		// Chain guard-body pairs as if/else-if/else — first-match-wins. Built
+		// back to front; an unguarded arm terminates the chain (arms after it
+		// are unreachable). Sibling `if`s with empty elses ran EVERY arm whose
+		// guard held plus the unguarded sibling (bug080: assign mode overwrote
+		// the matched result, stmt mode ran two bodies).
+		let chained: Node = makeBlock([], loc);
+		for (let ai = guards.length - 1; ai >= 0; ai -= 1) {
 			let armBody = bodies[ai];
 			if (needsFlag) {
 				const setMatched = makeExprStmt(makeAssign(makeIdentResolved(matchedSym, loc), makeBool(true, loc), loc), loc);
 				armBody = makeBlock([setMatched, armBody], loc);
 			}
 			if (guards[ai] !== null) {
-				caseStmts.push(makeIf(guards[ai], armBody, makeBlock([], loc), loc));
+				chained = makeIf(guards[ai], armBody, chained, loc);
 			} else {
-				caseStmts.push(armBody);
+				chained = armBody;
 			}
 		}
+		caseStmts.push(chained);
 
 		switchCases.push(makeSwitchCase(patternTests[gi], caseStmts, false, loc));
 	}
@@ -707,6 +713,10 @@ function isAllStringCases(cases: Node[]): boolean {
 	let stringCount = 0;
 	for (let i = 0; i < cases.length; i += 1) {
 		const caseData = cases[i].data as MatchCaseData;
+		// Hash dispatch has no guard support — buildHashSwitch matches on
+		// string equality alone and would DROP a `when` guard silently.
+		// Guarded matches take the if-chain path instead (correct, unoptimized).
+		if (caseData.caseGuard !== null) return false;
 		if (isWildcard(caseData.casePatterns)) continue;
 		if (isBindingPattern(caseData.casePatterns)) return false;
 		// Check all patterns in this arm are string literals
