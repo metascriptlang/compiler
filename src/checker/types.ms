@@ -1266,7 +1266,7 @@ export function pendingType(): Type { return getSysType(TypeKind.Pending); }
 // docs/UNKNOWN-BUG.md Phase 2 split; pointer repr (void*).
 export function unknownType(): Type { return getSysType(TypeKind.Unknown); }
 
-export function isUserUnknown(t: Type | null): boolean {
+export function isUnknownType(t: Type | null): boolean {
 	return t !== null && t.kind === TypeKind.Unknown;
 }
 export function neverType(): Type { return getSysType(TypeKind.Never); }

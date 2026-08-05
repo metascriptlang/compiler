@@ -14,7 +14,7 @@
 // the former disagreement cells now assert agreement. Cells still marked DEBT
 // pin behaviour that flips at Phase 3 (pending-at-emission population).
 
-import { pendingType, unknownType, isUserUnknown, isPointerShapedForUnknown } from "../../checker/types";
+import { pendingType, unknownType, isUnknownType, isPointerShapedForUnknown } from "../../checker/types";
 import { isPointerType, getTypeDesc } from "../../codegen/c/types";
 import { createCGen } from "../../codegen/c/context";
 import { hasErrors } from "../../checker/context";
@@ -24,7 +24,7 @@ import { compileToC } from "../helpers";
 // ===== A. user `unknown` — all three readers must agree it is a pointer =====
 
 test "user unknown has its own kind" {
-	assert isUserUnknown(unknownType());
+	assert isUnknownType(unknownType());
 }
 
 test "checker reader: user unknown is pointer-shaped" {
@@ -62,7 +62,7 @@ test "emission reader: the call passes the value, not its address" {
 // ===== B. Pending — post-split, the readers agree it is not a pointer =====
 
 test "a Pending type is not user unknown" {
-	assert !isUserUnknown(pendingType());
+	assert !isUnknownType(pendingType());
 }
 
 test "post-split: checker and ABI readers agree a Pending type is not a pointer" {
