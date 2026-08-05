@@ -127,6 +127,15 @@ function jsonNumberStr(v: number): string {
 	return v.toString();
 }
 
+// A surrogate code point encodes as ED A0..BF xx in WTF-8; well-formed UTF-8
+// never produces that pair, so this signature identifies exactly the code
+// points that have no valid UTF-8 encoding and must leave as \uXXXX escapes.
+const WTF8_SURROGATE_LEAD: int32 = 237;
+
+function isWtf8SurrogateCont(b: int32): boolean {
+	return b >= 160 && b <= 191;
+}
+
 function escapeString(s: string): string {
 	let result = "\"";
 	let i = 0;
@@ -138,6 +147,15 @@ function escapeString(s: string): string {
 	let runStart = 0;
 	while (i < len) {
 		const ch = s.byteAt(i);
+		if (ch === WTF8_SURROGATE_LEAD && i + 2 < len && isWtf8SurrogateCont(s.byteAt(i + 1))) {
+			if (runStart < i) result += s.byteSlice(runStart, i);
+			const cp = ((ch & 15) << 12) | ((s.byteAt(i + 1) & 63) << 6) | (s.byteAt(i + 2) & 63);
+			result += "\\u" + hexDigit((cp >> 12) & 15) + hexDigit((cp >> 8) & 15)
+				+ hexDigit((cp >> 4) & 15) + hexDigit(cp & 15);
+			i = i + 3;
+			runStart = i;
+			continue;
+		}
 		if (ch === "\"".code || ch === "\\".code || ch < 32) {
 			if (runStart < i) result += s.byteSlice(runStart, i);
 			result += match (ch) {
@@ -231,4 +249,56 @@ test "stringify nested" {
 	const keys: string[] = ["data"];
 	const vals: JsonValue[] = [jsonArray(inner)];
 	assert stringify(jsonObject(keys, vals)) === "{\"data\":[1,true]}";
+}
+
+// Well-formed output (ES2019 JSON.stringify): a lone surrogate has no valid
+// UTF-8 encoding, so it is emitted as a \uXXXX escape rather than passed
+// through as raw WTF-8. A valid pair is NOT escaped — it is a real character.
+// Without this the C backend emitted invalid UTF-8 and the JS backend replaced
+// the code point with U+FFFD, i.e. the two backends corrupted it differently.
+
+test "stringify escapes a lone high surrogate" {
+	assert stringify(jsonString(fromCodePoint(55296))) === "\"\\ud800\"";
+}
+
+test "stringify escapes a lone low surrogate" {
+	assert stringify(jsonString(fromCodePoint(57343))) === "\"\\udfff\"";
+}
+
+test "stringify escapes a lone surrogate between ascii" {
+	const s = "a" + fromCodePoint(55296) + "b";
+	assert stringify(jsonString(s)) === "\"a\\ud800b\"";
+}
+
+test "stringify does NOT escape a valid surrogate pair" {
+	assert stringify(jsonString(fromCodePoint(128512))) === "\"\u{1F600}\"";
+}
+
+test "stringify escapes consecutive lone surrogates" {
+	const s = fromCodePoint(55296) + fromCodePoint(55296);
+	assert stringify(jsonString(s)) === "\"\\ud800\\ud800\"";
+}
+
+test "stringify escapes a reversed surrogate pair" {
+	const s = fromCodePoint(56320) + fromCodePoint(55296);
+	assert stringify(jsonString(s)) === "\"\\udc00\\ud800\"";
+}
+
+// Key ordering is a DELIBERATE divergence from the JS engine (docs/JSON.md,
+// "Deliberate divergences"): JS objects float array-index keys to the front,
+// JSON itself defines objects as unordered, and both our backends agree on
+// insertion order. This test exists so the decision cannot be undone silently.
+
+test "stringify keeps object keys in insertion order" {
+	const keys: string[] = ["b", "2", "a", "1"];
+	const vals: JsonValue[] = [jsonNumber(1), jsonNumber(2), jsonNumber(3), jsonNumber(4)];
+	assert stringify(jsonObject(keys, vals)) === "{\"b\":1,\"2\":2,\"a\":3,\"1\":4}";
+}
+
+test "stringifyPretty keeps object keys in insertion order" {
+	const keys: string[] = ["10", "9", "1"];
+	const vals: JsonValue[] = [jsonNumber(1), jsonNumber(2), jsonNumber(3)];
+	const out = stringifyPretty(jsonObject(keys, vals), 0);
+	assert out.indexOf("\"10\"") < out.indexOf("\"9\""), out;
+	assert out.indexOf("\"9\"") < out.indexOf("\"1\""), out;
 }
