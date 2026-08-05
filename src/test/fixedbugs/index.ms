@@ -89,3 +89,4 @@ import "./bug073MatchShadowedLetSlot";
 import "./bug074BrandIntersectionDistinct";
 import "./bug075VisitorNullChildSlot";
 import "./bug076ClosureUnknownReturnRepr";
+import "./bug077MacroArgArrayAccessDoubleDeref";
