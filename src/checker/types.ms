@@ -1262,17 +1262,12 @@ export function voidType(): Type { return getSysType(TypeKind.Void); }
 export function nullType(): Type { return getSysType(TypeKind.Null); }
 export function pendingType(): Type { return getSysType(TypeKind.Pending); }
 
-// Annotation-written `unknown` — strict top type. A FRESH Type (not the shared
-// pending-inference singleton) stamped UserUnknown so conversion sites can
-// enforce the void*-repr rules only on user-declared unknowns.
-export function userUnknownType(): Type {
-	const t = createPrimitive(TypeKind.Pending);
-	t.typeFlags = TypeFlag.UserUnknown as int32;
-	return t;
-}
+// Annotation-written `unknown` — strict top type, its own kind since the
+// docs/UNKNOWN-BUG.md Phase 2 split; pointer repr (void*).
+export function unknownType(): Type { return getSysType(TypeKind.Unknown); }
 
 export function isUserUnknown(t: Type | null): boolean {
-	return t !== null && t.kind === TypeKind.Pending && (t.typeFlags & TypeFlag.UserUnknown) !== 0;
+	return t !== null && t.kind === TypeKind.Unknown;
 }
 export function neverType(): Type { return getSysType(TypeKind.Never); }
 export function errorType(): Type { return getSysType(TypeKind.Error); }
@@ -1556,7 +1551,7 @@ export function isMaybeWrappable(t: Type | null): boolean {
 	if (t.kind === TypeKind.Null) return false;
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return false;
 	// unknown is void* in C — pointer branch of the SomePointer split, same as Ref/Ptr
-	if (t.kind === TypeKind.Pending) return false;
+	if (t.kind === TypeKind.Pending || t.kind === TypeKind.Unknown) return false;
 	if (t.kind === TypeKind.Function) return true;
 	if (isStructType(t)) return true;
 	if (isPrimitiveKind(t.kind)) return true;
@@ -1582,7 +1577,7 @@ export function isPointerShapedForUnknown(t: Type | null): boolean {
 	if (inner === null) return true;
 	if (inner.kind === TypeKind.Union) return unwrapRefNullUnion(inner) !== null;
 	return match (inner.kind) {
-		TypeKind.Pending | TypeKind.Null | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow
+		TypeKind.Unknown | TypeKind.Null | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow
 			| TypeKind.CString | TypeKind.GenericParam | TypeKind.Error | TypeKind.Never => true,
 		_ => false,
 	};
@@ -1609,8 +1604,8 @@ export function unwrapRefNullUnion(t: Type): Type | null {
 	const a = t.typeChildren[0];
 	const b = t.typeChildren[1];
 	if (a === null || b === null) return null;
-	if ((a.kind === TypeKind.Ref || a.kind === TypeKind.Ptr || a.kind === TypeKind.Pending) && b.kind === TypeKind.Null) return a;
-	if ((b.kind === TypeKind.Ref || b.kind === TypeKind.Ptr || b.kind === TypeKind.Pending) && a.kind === TypeKind.Null) return b;
+	if ((a.kind === TypeKind.Ref || a.kind === TypeKind.Ptr || a.kind === TypeKind.Pending || a.kind === TypeKind.Unknown) && b.kind === TypeKind.Null) return a;
+	if ((b.kind === TypeKind.Ref || b.kind === TypeKind.Ptr || b.kind === TypeKind.Pending || b.kind === TypeKind.Unknown) && a.kind === TypeKind.Null) return b;
 	return null;
 }
 
@@ -1858,7 +1853,7 @@ export function substituteType(t: Type | null, paramName: string, concrete: Type
 	substituteSetFlag(t);
 	const result = match (t.kind) {
 			TypeKind.Number | TypeKind.String | TypeKind.Boolean |
-			TypeKind.Void | TypeKind.Null | TypeKind.Pending |
+			TypeKind.Void | TypeKind.Null | TypeKind.Pending | TypeKind.Unknown |
 			TypeKind.Never | TypeKind.Error | TypeKind.GenericParam |
 			TypeKind.CString => t,
 			TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
@@ -2327,6 +2322,7 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind === TypeKind.EnumLiteral
 		|| kind === TypeKind.Never
 		|| kind === TypeKind.Pending
+		|| kind === TypeKind.Unknown
 		|| kind === TypeKind.Char
 		|| kind === TypeKind.CString
 		|| kind === TypeKind.StringLiteral
@@ -2440,6 +2436,7 @@ export function typeDisplayName(t: Type | null): string {
 		TypeKind.Null => "null",
 		TypeKind.Void => "void",
 		TypeKind.Never => "never",
+		TypeKind.Unknown => "unknown",
 		TypeKind.Pending => "unknown",
 		TypeKind.Error => "<error>",
 		TypeKind.Function => "function",

@@ -341,9 +341,9 @@ export function isPointerType(t: Type): boolean {
 	if (inner.kind === TypeKind.Union && unwrapRefNullUnion(inner) !== null) return true;
 	return match (inner.kind) {
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => true,
-		// user `unknown` is void*; PENDING-inference Unknown must stay non-pointer
+		// user `unknown` is void*; a Pending type must stay non-pointer
 		// or arg shims deref/addr pending-typed scalar exprs (types.ms:1805 trap)
-		TypeKind.Pending => (inner.typeFlags & TypeFlag.UserUnknown) !== 0,
+		TypeKind.Unknown => true,
 		_ => false,
 	};
 }
@@ -732,12 +732,12 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			return genUnionType(g, t);
 		},
 		TypeKind.Tuple => genTupleType(g, t),
+		TypeKind.Unknown => "void*",
 		// Nim getTypeDescAux else-branch: an unresolved type reaching codegen is an
-		// internal error. Interim flag read until the kind split — docs/UNKNOWN-BUG.md §9.
+		// internal error — deferred until Phase 3 empties the pending-at-emission
+		// population (docs/UNKNOWN-BUG.md §8).
 		TypeKind.Pending => {
-			if ((t.typeFlags & TypeFlag.UserUnknown) === 0) {
-				gateFlaglessUnknown(g, t);
-			}
+			gateFlaglessUnknown(g, t);
 			return "void*";
 		},
 		TypeKind.GenericParam => "void*",

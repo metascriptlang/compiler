@@ -563,9 +563,11 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	const receiverType = fnType.typeChildren[0];
 	// Erased object (unknown) binds only the unknown catch-all, never a concrete
 	// overload — Nim parity: an unresolved receiver isn't matchable by a concrete param.
-	if (objType.kind === TypeKind.Pending) return receiverType.kind === TypeKind.Pending;
-	// Unknown receiver: match any (conservative — unresolved type)
-	if (receiverType.kind === TypeKind.Pending) return true;
+	if (objType.kind === TypeKind.Pending || objType.kind === TypeKind.Unknown) {
+		return receiverType.kind === TypeKind.Pending || receiverType.kind === TypeKind.Unknown;
+	}
+	// `unknown` receiver: the catch-all — matches any object
+	if (receiverType.kind === TypeKind.Pending || receiverType.kind === TypeKind.Unknown) return true;
 	// Array methods are Ref-agnostic: T[] (Ref<Array>) and Vec<T> (value Array) share
 	// one element-typed method set. Unwrap the Ref<Array> envelope on both sides so
 	// matching compares element types; codegen dispatches &value vs ptr on the receiver.
@@ -591,7 +593,8 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		const recvElem = recvT.typeReturn;
 		const objElem = objT.typeReturn;
 		if (recvElem === null || objElem === null) return false;
-		if (recvElem.kind === TypeKind.Pending || objElem.kind === TypeKind.Pending) return false;
+		if (recvElem.kind === TypeKind.Pending || objElem.kind === TypeKind.Pending
+			|| recvElem.kind === TypeKind.Unknown || objElem.kind === TypeKind.Unknown) return false;
 		if (isReinterpretUnsafe(objT, recvT)) return false;
 		return isAssignable(objElem, recvElem);
 	}

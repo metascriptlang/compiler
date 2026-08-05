@@ -1526,7 +1526,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.nodeType = targetType;
 			}
 			const castSrcUnknown = (srcType !== null && srcType.kind === TypeKind.Union) ? unwrapRefNullUnion(srcType) : srcType;
-			if (castSrcUnknown !== null && castSrcUnknown.kind === TypeKind.Pending && isUserUnknown(castSrcUnknown)
+			if (castSrcUnknown !== null && isUserUnknown(castSrcUnknown)
 				&& targetType.kind !== TypeKind.Pending && !isPointerShapedForUnknown(targetType)) {
 				addError(ctx, "cannot cast unknown to value type " + typeDisplayName(targetType) + " — no void* representation to reinterpret", asLoc.line, asLoc.column);
 			}
@@ -2164,7 +2164,7 @@ function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): Node {
 
 export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
 	if (formal === null || exprType === null) return expr;
-	if (formal.kind === TypeKind.Pending) {
+	if (formal.kind === TypeKind.Unknown || formal.kind === TypeKind.Pending) {
 		if (isUserUnknown(formal)) {
 			let srcT = exprType;
 			let probe = expr;
@@ -2182,10 +2182,10 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		}
 		return expr;
 	}
-	if (exprType.kind === TypeKind.Pending) {
+	if (exprType.kind === TypeKind.Unknown || exprType.kind === TypeKind.Pending) {
 		const collapsed = formal.kind === TypeKind.Union ? unwrapRefNullUnion(formal) : null;
 		const unknownFamilyFormal = formal.kind === TypeKind.GenericParam
-			|| (collapsed !== null && collapsed.kind === TypeKind.Pending);
+			|| (collapsed !== null && (collapsed.kind === TypeKind.Unknown || collapsed.kind === TypeKind.Pending));
 		if (isUserUnknown(exprType) && !unknownFamilyFormal) {
 			addError(ctx, "unknown is not assignable to " + typeDisplayName(formal) + " — narrow with an explicit cast", expr.location.line, expr.location.column);
 		}
@@ -3101,7 +3101,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				continue;
 			}
 			if (argTypes[pi] === null || argTypes[pi] === null) continue;
-			if (paramType.kind === TypeKind.Pending && isUserUnknown(paramType)) {
+			if (isUserUnknown(paramType)) {
 				let argSrcT = argTypes[pi];
 				let argProbe = d.arguments[pi];
 				while (argProbe.kind === NodeKind.TypeAssertion) {
@@ -3113,9 +3113,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				if (!isPointerShapedForUnknown(argSrcT) && !argCastOk) {
 					addError(ctx, "Argument " + String(pi) + ": cannot pass value type " + typeDisplayName(argSrcT) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", node.location.line, node.location.column);
 				}
-			} else if (argTypes[pi].kind === TypeKind.Pending && isUserUnknown(argTypes[pi]) && paramType.kind !== TypeKind.Pending && paramType.kind !== TypeKind.GenericParam) {
+			} else if (isUserUnknown(argTypes[pi]) && paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.Pending && paramType.kind !== TypeKind.GenericParam) {
 				const collapsedParam = paramType.kind === TypeKind.Union ? unwrapRefNullUnion(paramType) : null;
-				if (collapsedParam === null || collapsedParam.kind !== TypeKind.Pending) {
+				if (collapsedParam === null || (collapsedParam.kind !== TypeKind.Unknown && collapsedParam.kind !== TypeKind.Pending)) {
 					addError(ctx, "Argument " + String(pi) + ": unknown is not assignable to " + typeDisplayName(paramType) + " — narrow with an explicit cast", node.location.line, node.location.column);
 				}
 			}
@@ -5546,7 +5546,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	if (returnTypeAnnotation === "void") {
 		return createClosureType(types, params, voidType());
 	}
-	if (inferredRet.kind !== TypeKind.Pending || isUserUnknown(inferredRet)) {
+	if (inferredRet.kind !== TypeKind.Pending) {
 		return createClosureType(types, params, inferredRet);
 	}
 	return createClosureType(types, params, pendingType());

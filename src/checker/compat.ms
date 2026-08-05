@@ -277,8 +277,10 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		return isAssignable(source, target.typeReturn);
 	}
 
-	// Unknown on either side: inference pending, allow
-	if (source.kind === TypeKind.Pending || target.kind === TypeKind.Pending) {
+	// Pending on either side: inference pending, allow. User unknown keeps the
+	// same leniency here — shape rules are enforced at fitNode (Phase 3 scopes this).
+	if (source.kind === TypeKind.Pending || target.kind === TypeKind.Pending
+		|| source.kind === TypeKind.Unknown || target.kind === TypeKind.Unknown) {
 		return true;
 	}
 
@@ -737,7 +739,8 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	}
 
 	// Unknown = inference pending
-	if (formal.kind === TypeKind.Pending || actual.kind === TypeKind.Pending) {
+	if (formal.kind === TypeKind.Pending || actual.kind === TypeKind.Pending
+		|| formal.kind === TypeKind.Unknown || actual.kind === TypeKind.Unknown) {
 		return TypeRelation.Generic;
 	}
 	// GenericParam = inference pending
@@ -969,7 +972,7 @@ function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 let sumGenericDepth = 0;
 function sumGeneric(t: Type | null): number {
 	if (t === null) return 0;
-	if (t.kind === TypeKind.GenericParam || t.kind === TypeKind.Pending) return 1;
+	if (t.kind === TypeKind.GenericParam || t.kind === TypeKind.Pending || t.kind === TypeKind.Unknown) return 1;
 	if (sumGenericDepth > 20) return 0;
 	sumGenericDepth = sumGenericDepth + 1;
 	let childSum = 0;
