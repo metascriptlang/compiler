@@ -181,7 +181,7 @@ function inheritContainerInfo(fieldSym: Symbol, ctx: CheckerContext, typeName: s
 export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	if (node === null) return;
 	if ((node.flags & NodeFlag.Sem) !== 0 && node.nodeType !== null) return;
-	if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { node.nodeType = pendingType(); return; }
+	if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { node.nodeType = errorType(); return; }
 	checkExprInner(ctx, node, expectedType);
 	node.flags = node.flags | NodeFlag.Sem;
 }
