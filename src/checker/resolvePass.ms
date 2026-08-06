@@ -1261,6 +1261,27 @@ function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: str
 	addWarning(ctx, "owning self-referential field '" + fieldName + "' in '" + typeName + "': destroy recurses per node — a long chain overflows the stack; for non-owning links use Ptr<" + typeName + "> with an arena/array owner (docs/NIM-REF.md §4)", line, col);
 }
 
+function interfaceCycleChain(ctx: CheckerContext, currentName: string, targetName: string, visited: string[]): string {
+	for (const v of visited) {
+		if (v === currentName) return "";
+	}
+	visited.push(currentName);
+	const sym = lookupSymbol(ctx.table, currentName);
+	if (sym === null || sym.declNode === null) return "";
+	if (sym.declNode.kind !== NodeKind.InterfaceDecl) return "";
+	const pd = sym.declNode.data as InterfaceDeclData;
+	for (const parentExpr of pd.interfaceExtends) {
+		const bare = parentExpr.indexOf("<") >= 0
+			? parentExpr.slice(0, parentExpr.indexOf("<"))
+			: parentExpr;
+		const parentName = bare.trim();
+		if (parentName === targetName) return currentName + "' extends '" + targetName;
+		const chain = interfaceCycleChain(ctx, parentName, targetName, visited);
+		if (chain !== "") return currentName + "' extends '" + chain;
+	}
+	return "";
+}
+
 function resolveInterface(ctx: CheckerContext, node: Node): void {
 	const d = node.data as InterfaceDeclData;
 	const sym = lookupSymbol(ctx.table, d.interfaceName);
@@ -1291,7 +1312,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	// Phase 2: Resolve parent type expressions (extends list / `= A & B` operands)
 	// inside generic scope so refs to T in parent (e.g. `extends Container<T>`)
 	// resolve to local generic param. See LANG.md §4.6 + §5.3.
-	// Phase 8: detect direct self-cycle (`interface A extends A`) — error.
+	// Phase 8: detect extends cycles (direct `A extends A` and indirect chains) — error.
 	const parentTypes: Type[] = [];
 	for (const parentExpr of d.interfaceExtends) {
 		const bareParentName = parentExpr.indexOf("<") >= 0
@@ -1299,6 +1320,12 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 			: parentExpr;
 		if (bareParentName.trim() === d.interfaceName) {
 			addError(ctx, "'" + d.interfaceName + "' cannot extend itself (cyclic inheritance)", node.location.line, node.location.column);
+			parentTypes.push(errorType());
+			continue;
+		}
+		const cycleChain = interfaceCycleChain(ctx, bareParentName.trim(), d.interfaceName, []);
+		if (cycleChain !== "") {
+			addError(ctx, "'" + d.interfaceName + "' has a cyclic extends chain ('" + d.interfaceName + "' extends '" + cycleChain + "')", node.location.line, node.location.column);
 			parentTypes.push(errorType());
 			continue;
 		}
