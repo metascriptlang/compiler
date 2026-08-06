@@ -14,7 +14,8 @@
 // the former disagreement cells now assert agreement. Cells still marked DEBT
 // pin behaviour that flips at Phase 3 (pending-at-emission population).
 
-import { pendingType, unknownType, isUnknownType, isPointerShapedForUnknown } from "../../checker/types";
+import { TypeKind } from "../../ast/node";
+import { createPrimitive, unknownType, isUnknownType, isPointerShapedForUnknown } from "../../checker/types";
 import { isPointerType, getTypeDesc } from "../../codegen/c/types";
 import { createCGen } from "../../codegen/c/context";
 import { hasErrors } from "../../checker/context";
@@ -62,12 +63,12 @@ test "emission reader: the call passes the value, not its address" {
 // ===== B. Pending — post-split, the readers agree it is not a pointer =====
 
 test "a Pending type is not user unknown" {
-	assert !isUnknownType(pendingType());
+	assert !isUnknownType(createPrimitive(TypeKind.Pending));
 }
 
 test "post-split: checker and ABI readers agree a Pending type is not a pointer" {
 	// Inverted when §8 Phase 2 landed — this was the §3 disagreement cell.
-	const pending = pendingType();
+	const pending = createPrimitive(TypeKind.Pending);
 	assert !isPointerShapedForUnknown(pending), "checker reader changed — update docs/UNKNOWN-BUG.md §3";
 	assert !isPointerType(pending), "ABI reader changed — update docs/UNKNOWN-BUG.md §3";
 }
@@ -125,17 +126,16 @@ test "DEBT: uninferrable T is not diagnosed and reaches codegen" {
 // ===== E. emission seam (docs/UNKNOWN-BUG.md §9) — flips to an error cell when
 // Phase 3 clears the pending-at-emission population =====
 
-test "DEBT: flagless Unknown at getTypeDesc emits void* silently" {
-	// 2026-08-05 enumeration: real user shapes (match exprs, try/Result unwrap,
-	// toString) still reach emission with a pending sentinel, so the Nim-style
-	// internal error is premature. Pin today's silent answer; when the producers
-	// are cleaned this cell must flip to assert an error is raised.
+test "a Pending type at getTypeDesc raises the internal error (B4, Nim else-branch)" {
+	// Inverted 2026-08-06 when B4 armed the seam. pendingType() is deleted;
+	// only adversarial construction can produce this kind, and emission
+	// answers it with the internal error instead of silent void*.
 	const ctx = checkSource("function main(): void { }");
 	assert ctx !== null;
 	assert !hasErrors(ctx);
 	const g = createCGen(ctx, "gate.ms");
-	assert getTypeDesc(g, pendingType()) === "void*";
-	assert !hasErrors(ctx), "emission now errors on flagless Unknown — flip this cell, docs/UNKNOWN-BUG.md §9";
+	getTypeDesc(g, createPrimitive(TypeKind.Pending));
+	assert hasErrors(ctx), "seam went silent again — docs/UNKNOWN-BUG.md §8 B4";
 }
 
 test "emission gate control: user unknown emits void* with no error" {

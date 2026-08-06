@@ -8,7 +8,7 @@
 // pointer-shaped answer for a non-pointer value is the §5 corruption family.
 
 import { TypeKind } from "../../ast/node";
-import { noneType, pendingType, isUnknownType, isPointerShapedForUnknown, typeDisplayName, numberType } from "../../checker/types";
+import { noneType, isUnknownType, isPointerShapedForUnknown, typeDisplayName, numberType } from "../../checker/types";
 import { isAssignable, typeRelation, TypeRelation } from "../../checker/compat";
 import { isPointerType, getTypeDesc } from "../../codegen/c/types";
 import { createCGen } from "../../codegen/c/context";
@@ -28,7 +28,7 @@ test "producer: a regex literal's binding carries TypeKind.None" {
 
 test "None is its own kind, not Pending, not user unknown" {
 	assert noneType().kind === TypeKind.None;
-	assert noneType().kind !== pendingType().kind;
+	assert noneType().kind !== TypeKind.Pending;
 	assert !isUnknownType(noneType());
 }
 
@@ -51,13 +51,12 @@ test "None displays as <none>" {
 	assert typeDisplayName(noneType()) === "<none>";
 }
 
-test "DEBT: None at getTypeDesc emits void* silently" {
-	// Mirrors the Pending DEBT cell: when Phase 3's exit criterion lands
-	// (pendingType() unconstructible), this must flip to assert an error —
-	// a None type reaching emission is a compiler bug, Nim's else-branch.
+test "None at getTypeDesc raises the internal error (B4, Nim else-branch)" {
+	// Inverted 2026-08-06 when B4 armed the seam: a None type reaching
+	// emission is a compiler bug, Nim's else-branch.
 	const ctx = checkSource("function main(): void { }");
 	assert ctx !== null;
 	const g = createCGen(ctx, "gate.ms");
-	assert getTypeDesc(g, noneType()) === "void*";
-	assert !hasErrors(ctx), "emission now errors on None — flip this cell, docs/UNKNOWN-BUG.md §8";
+	getTypeDesc(g, noneType());
+	assert hasErrors(ctx), "seam went silent again — docs/UNKNOWN-BUG.md §8 B4";
 }

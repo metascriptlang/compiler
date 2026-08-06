@@ -10,7 +10,7 @@
 // them to it exclusively.
 
 import { TypeKind } from "../../ast/node";
-import { inferredType, noneType, pendingType, isUnknownType, isPointerShapedForUnknown, typeDisplayName, numberType } from "../../checker/types";
+import { inferredType, noneType, isUnknownType, isPointerShapedForUnknown, typeDisplayName, numberType } from "../../checker/types";
 import { isAssignable, typeRelation, TypeRelation } from "../../checker/compat";
 import { isPointerType, getTypeDesc } from "../../codegen/c/types";
 import { createCGen } from "../../codegen/c/context";
@@ -21,7 +21,7 @@ import { createTransformContext, freshTempSym } from "../../transform/context";
 
 test "Inferred is its own kind, not Pending, not None, not user unknown" {
 	assert inferredType().kind === TypeKind.Inferred;
-	assert inferredType().kind !== pendingType().kind;
+	assert inferredType().kind !== TypeKind.Pending;
 	assert inferredType().kind !== noneType().kind;
 	assert !isUnknownType(inferredType());
 }
@@ -59,14 +59,12 @@ test "producer: an untyped transform temp carries None, not Pending" {
 	assert sym.symbolType.kind === TypeKind.None;
 }
 
-test "DEBT: Inferred at getTypeDesc emits void* silently" {
-	// Mirrors the Pending/None DEBT cells: when B4 lands (pendingType()
-	// unconstructible, seam becomes Nim's else-branch internal error), this
-	// must flip to assert an error — an unresolved Inferred reaching
-	// emission is a compiler bug (tyInferred never arrives raw at cgen).
+test "Inferred at getTypeDesc raises the internal error (B4, Nim else-branch)" {
+	// Inverted 2026-08-06 when B4 armed the seam: an unresolved Inferred
+	// reaching emission is a compiler bug (tyInferred never arrives raw at cgen).
 	const ctx = checkSource("function main(): void { }");
 	assert ctx !== null;
 	const g = createCGen(ctx, "gate.ms");
-	assert getTypeDesc(g, inferredType()) === "void*";
-	assert !hasErrors(ctx), "emission now errors on Inferred — flip this cell, docs/UNKNOWN-BUG.md §8";
+	getTypeDesc(g, inferredType());
+	assert hasErrors(ctx), "seam went silent again — docs/UNKNOWN-BUG.md §8 B4";
 }

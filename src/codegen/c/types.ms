@@ -80,7 +80,6 @@ function anonFieldKey(t: Type | null): string {
 			return k + "):" + anonFieldKey(t.typeReturn);
 		},
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
-		TypeKind.Pending => "unknown",
 		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0]) : "unknown",
 		_ => {
 			const simple = getSimpleTypeDesc(t);
@@ -638,12 +637,12 @@ export function ensureRefArrayCellTypeInfo(g: CGen, cellName: string, destroyFn:
 // Emits type definitions to CGen sections as side effect.
 
 // Emission probe for the flagless-Unknown debt (docs/UNKNOWN-BUG.md §9).
-// 2026-08-05 enumeration: real user shapes (match exprs, try/Result unwrap,
-// toString) and ~846 test-mode pending sentinels still reach this arm, so the
-// Nim-style internal error is premature — its precondition (sem never leaves a
-// pending type on emitted code) is Phase 3's exit criterion. No-op seam until
-// then: point it at addError/console.log to re-enumerate producers.
+// Nim getTypeDescAux else-branch (ccgtypes.nim internalError): an unresolved
+// type reaching codegen is a compiler bug. Population measured empty 2026-08-06
+// (battery + Neon sweep + self-build, B4 arc) before this was armed.
 function gateFlaglessUnknown(g: CGen, t: Type): void {
+	const pn = g.currentProc !== null ? g.currentProc.name : "<toplevel>";
+	addError(g.checkerCtx, "internal: unresolved type (kind=" + (t.kind as number).toString() + ") reached codegen in " + g.modulePath + " proc " + pn, 0, 0);
 }
 
 export function getTypeDesc(g: CGen, t: Type | null): string {
@@ -1482,7 +1481,7 @@ function genTupleType(g: CGen, t: Type): string {
 
 import { createPrimitive, createStruct, createArray, createEnum, createRef, createTuple } from "../../checker/types";
 import { createCGen } from "./context";
-import { CheckerContext, GcMode } from "../../checker/context";
+import { CheckerContext, GcMode, addError } from "../../checker/context";
 test "primitive keys" {
 	assert typeKey(createPrimitive(TypeKind.Number)) === "number";
 	assert typeKey(createPrimitive(TypeKind.String)) === "string";
