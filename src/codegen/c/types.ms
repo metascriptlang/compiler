@@ -740,6 +740,10 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			gateFlaglessUnknown(g, t);
 			return "void*";
 		},
+		TypeKind.None => {
+			gateFlaglessUnknown(g, t);
+			return "void*";
+		},
 		TypeKind.GenericParam => "void*",
 		// GenericInstance: resolve to monomorphized C struct name
 		TypeKind.GenericInstance => {

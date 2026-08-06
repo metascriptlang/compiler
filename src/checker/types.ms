@@ -1269,6 +1269,7 @@ export function unknownType(): Type { return getSysType(TypeKind.Unknown); }
 export function isUnknownType(t: Type | null): boolean {
 	return t !== null && t.kind === TypeKind.Unknown;
 }
+export function noneType(): Type { return getSysType(TypeKind.None); }
 export function neverType(): Type { return getSysType(TypeKind.Never); }
 export function errorType(): Type { return getSysType(TypeKind.Error); }
 export function charType(): Type { return getSysType(TypeKind.Char); }
@@ -1579,6 +1580,7 @@ export function isPointerShapedForUnknown(t: Type | null): boolean {
 	return match (inner.kind) {
 		TypeKind.Unknown | TypeKind.Null | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow
 			| TypeKind.CString | TypeKind.GenericParam | TypeKind.Error | TypeKind.Never => true,
+		TypeKind.None => false,
 		_ => false,
 	};
 }
@@ -1854,7 +1856,7 @@ export function substituteType(t: Type | null, paramName: string, concrete: Type
 	const result = match (t.kind) {
 			TypeKind.Number | TypeKind.String | TypeKind.Boolean |
 			TypeKind.Void | TypeKind.Null | TypeKind.Pending | TypeKind.Unknown |
-			TypeKind.Never | TypeKind.Error | TypeKind.GenericParam |
+			TypeKind.Never | TypeKind.Error | TypeKind.None | TypeKind.GenericParam |
 			TypeKind.CString => t,
 			TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.SizedArray => createSizedArray(substituteType(t.typeReturn, paramName, concrete), t.typeFlags - TypeFlag.Substituting),
@@ -2327,7 +2329,8 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind === TypeKind.CString
 		|| kind === TypeKind.StringLiteral
 		|| kind === TypeKind.BooleanLiteral
-		|| kind === TypeKind.Error;
+		|| kind === TypeKind.Error
+		|| kind === TypeKind.None;
 }
 
 // typeNameOf — IDENTITY name. Returns the canonical string name used for
@@ -2439,6 +2442,7 @@ export function typeDisplayName(t: Type | null): string {
 		TypeKind.Unknown => "unknown",
 		TypeKind.Pending => "unknown",
 		TypeKind.Error => "<error>",
+		TypeKind.None => "<none>",
 		TypeKind.Function => "function",
 		TypeKind.GenericParam => t.typeName !== "" ? t.typeName : "<T>",
 		// Anonymous struct (object literal type) — typeName is "" so typeNameOf

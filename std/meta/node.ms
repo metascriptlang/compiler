@@ -38,6 +38,7 @@ export enum TypeKind {
 	// codegen + isAssignable peel it via unwrapVarargs.
 	Varargs,
 	Unknown,
+	None,
 }
 
 // ===== Calling Convention =====
