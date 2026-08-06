@@ -5584,7 +5584,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	if (!isUnresolvedType(inferredRet)) {
 		return createClosureType(types, params, inferredRet);
 	}
-	return createClosureType(types, params, inferredType());
+	return createClosureType(types, params, voidType());
 }
 
 function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
