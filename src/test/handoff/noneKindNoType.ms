@@ -1,4 +1,5 @@
-// Phase 3 Batch 2 guard for TypeKind.None — docs/UNKNOWN-BUG.md §8.
+// Phase 3 Batch 2 guard for TypeKind.None — NIM-REF.md row 58 (kind split);
+// canonical kind semantics: the sentinel-kind map at unknownType (checker/types.ms).
 //
 // None answers "this node kind has no type" (RegexLiteral / QuoteExpr / JSXText
 // and the JSX element family), distinct from Pending ("inference not finished")
@@ -58,5 +59,5 @@ test "None at getTypeDesc raises the internal error (B4, Nim else-branch)" {
 	assert ctx !== null;
 	const g = createCGen(ctx, "gate.ms");
 	getTypeDesc(g, noneType());
-	assert hasErrors(ctx), "seam went silent again — docs/UNKNOWN-BUG.md §8 B4";
+	assert hasErrors(ctx), "seam went silent again — gateFlaglessUnknown must addError (codegen/c/types.ms)";
 }

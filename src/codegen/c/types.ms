@@ -636,10 +636,10 @@ export function ensureRefArrayCellTypeInfo(g: CGen, cellName: string, destroyFn:
 // Main entry point: returns C type name string for a MetaScript Type.
 // Emits type definitions to CGen sections as side effect.
 
-// Emission probe for the flagless-Unknown debt (docs/UNKNOWN-BUG.md §9).
-// Nim getTypeDescAux else-branch (ccgtypes.nim internalError): an unresolved
-// type reaching codegen is a compiler bug. Population measured empty 2026-08-06
-// (battery + Neon sweep + self-build, B4 arc) before this was armed.
+// Nim getTypeDescAux else-branch (ccgtypes.nim internalError): a sentinel kind
+// reaching codegen is a checker bug, never codegen leniency — see the
+// sentinel-kind map at unknownType (checker/types.ms). Population measured
+// empty 2026-08-06 (battery + Neon sweep + self-build) before this was armed.
 function gateFlaglessUnknown(g: CGen, t: Type): void {
 	const pn = g.currentProc !== null ? g.currentProc.name : "<toplevel>";
 	addError(g.checkerCtx, "internal: unresolved type (kind=" + (t.kind as number).toString() + ") reached codegen in " + g.modulePath + " proc " + pn, 0, 0);
@@ -732,9 +732,8 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 		},
 		TypeKind.Tuple => genTupleType(g, t),
 		TypeKind.Unknown => "void*",
-		// Nim getTypeDescAux else-branch: an unresolved type reaching codegen is an
-		// internal error — deferred until Phase 3 empties the pending-at-emission
-		// population (docs/UNKNOWN-BUG.md §8).
+		// Sentinel kinds must never reach emission (Nim getTypeDescAux else-branch);
+		// Pending is unconstructible, Inferred must resolve or error in sem.
 		TypeKind.Pending => {
 			gateFlaglessUnknown(g, t);
 			return "void*";

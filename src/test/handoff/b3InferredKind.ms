@@ -1,4 +1,5 @@
-// Phase 3 Batch 3 guard for TypeKind.Inferred — docs/UNKNOWN-BUG.md §8.4 item 3.
+// Phase 3 Batch 3 guard for TypeKind.Inferred — NIM-REF.md row 58 (kind split);
+// canonical kind semantics: the sentinel-kind map at unknownType (checker/types.ms).
 //
 // Inferred answers "inference in progress / signature intentionally open"
 // (Nim analog: tyInferred — constraint in base, candidate in last). Distinct
@@ -66,5 +67,5 @@ test "Inferred at getTypeDesc raises the internal error (B4, Nim else-branch)" {
 	assert ctx !== null;
 	const g = createCGen(ctx, "gate.ms");
 	getTypeDesc(g, inferredType());
-	assert hasErrors(ctx), "seam went silent again — docs/UNKNOWN-BUG.md §8 B4";
+	assert hasErrors(ctx), "seam went silent again — gateFlaglessUnknown must addError (codegen/c/types.ms)";
 }

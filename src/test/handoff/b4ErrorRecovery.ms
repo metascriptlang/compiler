@@ -1,5 +1,5 @@
 // Phase 3 Batch 4 guard — Error-scrutiny for post-addError recovery sites.
-// docs/UNKNOWN-BUG.md §8.4 item 4 (a).
+// NIM-REF.md row 58 (kind split), final batch.
 //
 // A site that has ALREADY reported an error must recover with TypeKind.Error
 // (Nim: errorType after localError), not Inferred — Inferred means "inference

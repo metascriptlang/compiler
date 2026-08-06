@@ -1,4 +1,5 @@
-// Phase 0 guard for the TypeKind.Pending kind-split debt — docs/UNKNOWN-BUG.md.
+// Phase 0 guard for the TypeKind.Pending kind-split debt — NIM-REF.md row 58;
+// canonical kind semantics: the sentinel-kind map at unknownType (checker/types.ms).
 //
 // Two holes were found by probe on 2026-08-04 and had NO test, so a refactor
 // could change either one silently:
@@ -10,7 +11,7 @@
 //   §4.1 — a generic whose T is not inferrable reaches codegen with no checker
 //        diagnostic and emits a call to a specialisation that was never emitted.
 //
-// §8 Phase 2 landed: user `unknown` is TypeKind.Unknown, the flag is gone, and
+// The Phase 2 kind split landed: user `unknown` is TypeKind.Unknown, the flag is gone, and
 // the former disagreement cells now assert agreement. Cells still marked DEBT
 // pin behaviour that flips at Phase 3 (pending-at-emission population).
 
@@ -69,8 +70,8 @@ test "a Pending type is not user unknown" {
 test "post-split: checker and ABI readers agree a Pending type is not a pointer" {
 	// Inverted when §8 Phase 2 landed — this was the §3 disagreement cell.
 	const pending = createPrimitive(TypeKind.Pending);
-	assert !isPointerShapedForUnknown(pending), "checker reader changed — update docs/UNKNOWN-BUG.md §3";
-	assert !isPointerType(pending), "ABI reader changed — update docs/UNKNOWN-BUG.md §3";
+	assert !isPointerShapedForUnknown(pending), "checker reader changed — update the sentinel-kind map (checker/types.ms)";
+	assert !isPointerType(pending), "ABI reader changed — update the sentinel-kind map (checker/types.ms)";
 }
 
 // ===== C. the stamp survives an alias (§4 — must stay true across the split) =====
@@ -113,7 +114,7 @@ test "DEBT: uninferrable T is not diagnosed and reaches codegen" {
 	// generic Ref repr instead of the element-typed one.
 	const un = compileToC("function mk<T>(): T[] { return []; }\nfunction main(): void { const a = mk(); }");
 	const ex = compileToC("function mk<T>(): T[] { return []; }\nfunction main(): void { const a = mk<number>(); }");
-	assert un.ok, "uninferrable T is now diagnosed — flip this cell, see docs/UNKNOWN-BUG.md §4.1";
+	assert un.ok, "uninferrable T is now diagnosed — flip this cell (see the §4.1 note in this file's header)";
 	assert ex.ok;
 	if (un.ok && ex.ok) {
 		assert ex.value.contains("mk__number__"), "control: an explicit targ must bind T into the symbol name";
@@ -123,8 +124,8 @@ test "DEBT: uninferrable T is not diagnosed and reaches codegen" {
 	}
 }
 
-// ===== E. emission seam (docs/UNKNOWN-BUG.md §9) — flips to an error cell when
-// Phase 3 clears the pending-at-emission population =====
+// ===== E. emission seam (gateFlaglessUnknown, codegen/c/types.ms) — armed as
+// Nim's else-branch internal error since B4 =====
 
 test "a Pending type at getTypeDesc raises the internal error (B4, Nim else-branch)" {
 	// Inverted 2026-08-06 when B4 armed the seam. pendingType() is deleted;
@@ -135,7 +136,7 @@ test "a Pending type at getTypeDesc raises the internal error (B4, Nim else-bran
 	assert !hasErrors(ctx);
 	const g = createCGen(ctx, "gate.ms");
 	getTypeDesc(g, createPrimitive(TypeKind.Pending));
-	assert hasErrors(ctx), "seam went silent again — docs/UNKNOWN-BUG.md §8 B4";
+	assert hasErrors(ctx), "seam went silent again — gateFlaglessUnknown must addError (codegen/c/types.ms)";
 }
 
 test "emission gate control: user unknown emits void* with no error" {

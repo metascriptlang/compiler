@@ -1261,8 +1261,24 @@ export function booleanType(): Type { return getSysType(TypeKind.Boolean); }
 export function voidType(): Type { return getSysType(TypeKind.Void); }
 export function nullType(): Type { return getSysType(TypeKind.Null); }
 
-// Annotation-written `unknown` — strict top type, its own kind since the
-// docs/UNKNOWN-BUG.md Phase 2 split; pointer repr (void*).
+// ===== Sentinel kinds — one meaning per kind, never a classifying flag =====
+// (Nim model: tyPointer / tyInferred / tyError / tyNone — astdef.nim)
+//   TypeKind.Unknown   user-written `unknown`: strict top type, pointer repr
+//                      (void*). Anything → unknown is legal; unknown → anything
+//                      needs narrowing (fat values have no void* repr).
+//   TypeKind.Inferred  inference in progress — the ONLY kind isUnresolvedType
+//                      matches, and the only one compat.ms leniency serves.
+//   TypeKind.Error     error recovery + cancelled checks.
+//   TypeKind.None      node kinds with no type to speak of (regex/quote/JSXText).
+//   Ptr<void>          deliberate raw pointers (boxed closure returns, $up env
+//                      chain, actor dispatch, async stepper) — never a sentinel.
+// TypeKind.Pending is the unconstructible legacy kind (ctor deleted 2026-08-06):
+// all these meanings once shared it behind TypeFlag.UserUnknown, and readers
+// disagreeing about its pointer-ness produced memory corruption four times
+// (NIM-REF.md row 58). A new meaning gets a NEW kind — never a flag, never a
+// shared singleton.
+// Unknown sits past the 0..Error getSysType preallocation on purpose
+// (bootstrap-stable ordinals) — this accessor returns a fresh type per call.
 export function unknownType(): Type { return getSysType(TypeKind.Unknown); }
 
 export function isUnresolvedType(t: Type | null): boolean {
