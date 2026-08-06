@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { pendingType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isBrandDistinct } from "./types";
+import { pendingType, noneType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isBrandDistinct } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorExt, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
@@ -358,7 +358,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			node.nodeType = booleanType(); return;
 		},
 		NodeKind.NullLiteral => nullType(),
-		NodeKind.RegexLiteral | NodeKind.QuoteExpr | NodeKind.JSXText => pendingType(),
+		NodeKind.RegexLiteral | NodeKind.QuoteExpr | NodeKind.JSXText => noneType(),
 		// JSX is a compile-time `Node` (like quote {}) — typed unknown, consumed by a macro before
 		// codegen. Still walk the embedded expressions/attribute values so their symbols resolve.
 		NodeKind.JSXElement => {
@@ -368,29 +368,29 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			reportUnconsumedJsx(ctx, node, "JSX expression", expectedType);
 			checkJsxConsumed(ctx, d.jsxAttrs);
 			checkJsxConsumed(ctx, d.jsxChildren);
-			node.nodeType = pendingType(); return;
+			node.nodeType = noneType(); return;
 		},
 		NodeKind.JSXFragment => {
 			const d = node.data as JSXFragmentData;
 			if (tryConverterAtBoundary(ctx, node, expectedType)) { return; }
 			reportUnconsumedJsx(ctx, node, "JSX fragment", expectedType);
 			checkJsxConsumed(ctx, d.jsxFragChildren);
-			node.nodeType = pendingType(); return;
+			node.nodeType = noneType(); return;
 		},
 		NodeKind.JSXExpressionContainer => {
 			const d = node.data as JSXExpressionContainerData;
 			checkExpr(ctx, d.jsxExpr, null);
-			node.nodeType = pendingType(); return;
+			node.nodeType = noneType(); return;
 		},
 		NodeKind.JSXAttribute => {
 			const d = node.data as JSXAttributeData;
 			checkExpr(ctx, d.jsxAttrValue, null);
-			node.nodeType = pendingType(); return;
+			node.nodeType = noneType(); return;
 		},
 		NodeKind.JSXSpreadAttribute => {
 			const d = node.data as JSXSpreadAttributeData;
 			checkExpr(ctx, d.jsxSpreadArg, null);
-			node.nodeType = pendingType(); return;
+			node.nodeType = noneType(); return;
 		},
 		NodeKind.ComptimeBlock => {
 			// Eagerly fold @comptime block — mirrors Phase B+ macro eager
