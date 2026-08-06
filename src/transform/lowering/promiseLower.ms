@@ -34,7 +34,7 @@ import { makeIdent, makeCall, makeNumber, makeNull, inlineInFuture, unboxVoidPtr
 function typeTagFor(t: Type | null): number {
 	if (t === null) return 0;
 	return match (t.kind) {
-		TypeKind.Void | TypeKind.Pending => 0,
+		TypeKind.Void => 0,
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => 2,
 		TypeKind.String => 3,
 		TypeKind.Struct | TypeKind.Ref | TypeKind.Ptr | TypeKind.Array => 0,
