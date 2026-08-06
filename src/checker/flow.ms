@@ -903,7 +903,7 @@ function narrowTypeByPredicate(t: Type | null, callExpr: Node, refNode: Node, as
 	const fnType = sym.symbolType;
 	if (fnType.kind !== TypeKind.Function) return t;
 	const sentinel = fnType.typeExtra;
-	if (sentinel === null || sentinel.kind !== TypeKind.Pending) return t;
+	if (sentinel === null || sentinel.kind !== TypeKind.None) return t;
 	const predicateTarget = sentinel.typeReturn;
 	if (predicateTarget === null) return t;
 	const paramName = sentinel.typeName;
@@ -1182,7 +1182,7 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 	if (literalExpr.kind !== NodeKind.StringLiteral) return t;
 	const d = literalExpr.data as StringLiteralData;
 	const targetKind = typeKindOfTypeofString(d.value);
-	if (targetKind === TypeKind.Pending) return t;  // unknown typeof string, no narrow
+	if (targetKind === TypeKind.None) return t;  // unknown typeof string, no narrow
 	// For union types, filter variants by whether their kind matches.
 	if (t.kind === TypeKind.Union) {
 		const remaining: Type[] = [];
@@ -1222,7 +1222,7 @@ function typeKindOfTypeofString(s: string): TypeKind {
 	if (s === "string") return TypeKind.String;
 	if (s === "number") return TypeKind.Number;
 	if (s === "boolean") return TypeKind.Boolean;
-	return TypeKind.Pending;
+	return TypeKind.None;
 }
 
 // Narrow a discriminated-union type by a discriminant property equality.
