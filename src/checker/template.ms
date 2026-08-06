@@ -16,7 +16,7 @@ import {
 	Type, Symbol,
 } from "../ast/node";
 import { CheckerContext, addError } from "./context";
-import { inferredType } from "./types";
+import { inferredType, errorType } from "./types";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { callCheckExpr } from "./checkerCallbacks";
 
@@ -39,7 +39,7 @@ export function expandTemplate(ctx: CheckerContext, sym: Symbol, callNode: Node,
 	if (_templateDepth >= TEMPLATE_DEPTH_LIMIT) {
 		addError(ctx, `Template '${sym.name}' instantiation too deep (limit ${TEMPLATE_DEPTH_LIMIT})`,
 			callNode.location.line, callNode.location.column);
-		return inferredType();
+		return errorType();
 	}
 	_templateDepth = _templateDepth + 1;
 	const result = expandTemplateInner(ctx, sym, callNode, callData, expectedType);
@@ -61,7 +61,7 @@ function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, c
 	if (callData.arguments.length !== paramNames.length) {
 		addError(ctx, `Template '${sym.name}' expects ${paramNames.length} args, got ${callData.arguments.length}`,
 			callNode.location.line, callNode.location.column);
-		return inferredType();
+		return errorType();
 	}
 
 	// Check args first so they have nodeType set

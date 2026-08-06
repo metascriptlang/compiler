@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { inferredType, noneType, isUnresolvedType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createArc, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, unknownType, createBrandDistinct } from "./types";
+import { inferredType, errorType, noneType, isUnresolvedType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createArc, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, unknownType, createBrandDistinct } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -675,7 +675,10 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		"never" => neverType(),
 		"unknown" => unknownType(),
 		"any" => {
-			if (line > 0) addError(ctx, "'any' is not a MetaScript type - use 'unknown' with an explicit cast", line, col);
+			if (line > 0) {
+				addError(ctx, "'any' is not a MetaScript type - use 'unknown' with an explicit cast", line, col);
+				return errorType();
+			}
 			return inferredType();
 		},
 		"undefined" => {
@@ -735,6 +738,7 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: number, 
 		// pointer — a silent memory-corruption miscompile, far worse than failing
 		// the build (the missing-NameSet-import incident, docs/NIM-REF.md §4).
 		addError(ctx, `Unresolved type '${name}' - missing import?`, line, col);
+		return errorType();
 	}
 	// Reference parity: unresolved types become inferredType, never TypeReference.
 	// All valid types must be resolved during semantic analysis — if lookupSymbol fails,
@@ -1161,11 +1165,11 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 			const targetType = resolveAnnotation(targetText, ctx, retLoc.line, retLoc.column);
 			// Predicates return boolean; assertions return void (they throw on failure).
 			returnType = isAssertion ? voidType() : booleanType();
-			// Sentinel: kind=Pending on Function.typeExtra. typeName holds the
+			// Sentinel: kind=None marker on Function.typeExtra. typeName holds the
 			// parameter name (prefixed with "asserts:" for assertion functions).
 			// typeReturn holds the narrowing target type.
 			predicateSentinel = emptyType();
-			predicateSentinel.kind = TypeKind.Pending;
+			predicateSentinel.kind = TypeKind.None;
 			predicateSentinel.typeName = isAssertion ? `asserts:${paramName}` : paramName;
 			predicateSentinel.typeReturn = targetType;
 		} else {
@@ -1295,7 +1299,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 			: parentExpr;
 		if (bareParentName.trim() === d.interfaceName) {
 			addError(ctx, "'" + d.interfaceName + "' cannot extend itself (cyclic inheritance)", node.location.line, node.location.column);
-			parentTypes.push(inferredType());
+			parentTypes.push(errorType());
 			continue;
 		}
 		const pt = resolveAnnotation(parentExpr, ctx, node.location.line, node.location.column);
@@ -1315,6 +1319,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	for (let xi = 0; xi < d.interfaceExtends.length; xi += 1) {
 		const parentExpr = d.interfaceExtends[xi];
 		const pt = parentTypes[xi];
+		if (pt !== null && pt.kind === TypeKind.Error) continue;
 		if (pt === null || isUnresolvedType(pt)) {
 			addError(ctx, "cannot resolve parent type '" + parentExpr + "'", node.location.line, node.location.column);
 			continue;

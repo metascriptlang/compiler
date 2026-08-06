@@ -178,6 +178,19 @@ function inheritContainerInfo(fieldSym: Symbol, ctx: CheckerContext, typeName: s
 // Public API: check expression, store type on node. Callers read node.nodeType.
 // Returns void — reference parity (standard checker returns the node, type accessed via field).
 // No Type return eliminates DRC borrowed-ref-as-fresh use-after-free.
+function retypeEmptyArrayBranch(branch: Node, otherType: Type | null): void {
+	if (otherType === null || branch.kind !== NodeKind.ArrayLiteral) return;
+	const d = branch.data as ArrayLiteralData;
+	if (d.elements.length !== 0) return;
+	let own = branch.nodeType;
+	if (own !== null && own.kind === TypeKind.Ref) own = own.typeReturn;
+	if (own === null || own.kind !== TypeKind.Array || own.typeReturn === null || own.typeReturn.kind !== TypeKind.Inferred) return;
+	let other = otherType;
+	if (other.kind === TypeKind.Ref && other.typeReturn !== null) other = other.typeReturn;
+	if (other.kind !== TypeKind.Array || other.typeReturn === null || isUnresolvedType(other.typeReturn)) return;
+	branch.nodeType = otherType;
+}
+
 export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	if (node === null) return;
 	if ((node.flags & NodeFlag.Sem) !== 0 && node.nodeType !== null) return;
@@ -660,7 +673,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 								addError(ctx,
 									`compound assignment '${d.operator}' is not supported on dynamic field '${md.property}'; rewrite as 'expr.${md.property} = expr.${md.property} ${lhsRead} value'`,
 									node.location.line, node.location.column);
-								node.nodeType = inferredType(); return;
+								node.nodeType = errorType(); return;
 							}
 							const keyLit = createNodeAt(NodeKind.StringLiteral, { value: md.property }, node.location);
 							const wargs: Node[] = [];
@@ -846,8 +859,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// VM round-trip lost the field). Convert null deref into diagnostic.
 			if (d.array === null) {
 				addError(ctx, "internal: ArrayAccess with null array sub-expression", node.location.line, node.location.column);
-				node.nodeType = inferredType();
-				node.nodeType = inferredType(); return;
+				node.nodeType = errorType(); return;
 			}
 			checkExpr(ctx, d.array, null);
 			let arrType = d.array.nodeType;
@@ -867,8 +879,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// symbol's type yet. Diagnostic instead of null deref.
 			if (arrType === null) {
 				addError(ctx, "internal: array type unresolved in ArrayAccess (child kind=" + d.array.kind + ")", node.location.line, node.location.column);
-				node.nodeType = inferredType();
-				node.nodeType = inferredType(); return;
+				node.nodeType = errorType(); return;
 			}
 			// Enum reverse index E[v]: TS numeric-enum reverse mapping, value → member-name string.
 			// Base must be the enum TYPE symbol itself (not a value of enum type).
@@ -1460,6 +1471,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (expectedType !== null) {
 				d.ternaryConsequent = fitNode(ctx, d.ternaryConsequent, expectedType, d.ternaryConsequent.nodeType);
 				d.ternaryAlternate = fitNode(ctx, d.ternaryAlternate, expectedType, d.ternaryAlternate.nodeType);
+			} else {
+				retypeEmptyArrayBranch(d.ternaryConsequent, d.ternaryAlternate.nodeType);
+				retypeEmptyArrayBranch(d.ternaryAlternate, d.ternaryConsequent.nodeType);
 			}
 			node.nodeType = d.ternaryConsequent.nodeType; return;
 		},
@@ -1663,7 +1677,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (ctx.macroExpansionDepth >= 16) {
 					addError(ctx, "macro expansion depth limit (16) exceeded for '" + md.macroName + "' — possible recursive macro",
 						node.location.line, node.location.column);
-					node.nodeType = inferredType(); return;
+					node.nodeType = errorType(); return;
 				}
 				if (anyArgIsParametric(md.macroArgs)) { node.nodeType = inferredType(); return; }
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
@@ -1676,8 +1690,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				// "possible recursive macro" warning. Detect by kind preservation.
 				if (expanded.kind === NodeKind.MacroInvocation) {
 					ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
-					node.nodeType = inferredType();
-					node.nodeType = inferredType(); return;
+					node.nodeType = errorType(); return;
 				}
 				node.kind = expanded.kind;
 				node.data = expanded.data;
@@ -2673,8 +2686,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			if (ctx.macroExpansionDepth >= 16) {
 				addError(ctx, "macro expansion depth limit (16) exceeded for '" + calleeName + "' — possible recursive macro",
 					node.location.line, node.location.column);
-				node.nodeType = inferredType();
-				return inferredType();
+				node.nodeType = errorType();
+				return errorType();
 			}
 			// Type-check args first (errors inside them are reported)
 			foldComptimeNodeAliasArgs(ctx, d.arguments);
@@ -2722,8 +2735,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			// to avoid duplicating diagnostics + spurious recursive-macro warning.
 			if (expanded.kind === NodeKind.MacroInvocation) {
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
-				node.nodeType = inferredType();
-				return inferredType();
+				node.nodeType = errorType();
+				return errorType();
 			}
 			// Replace current node contents with the expanded result.
 			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
@@ -3284,7 +3297,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		// `assertString(val)` narrow `val` for subsequent statements.
 		if (calleeType !== null && calleeType.kind === TypeKind.Function
 				&& calleeType.typeExtra !== null
-				&& isUnresolvedType(calleeType.typeExtra)
+				&& calleeType.typeExtra.kind === TypeKind.None
 				&& calleeType.typeExtra.typeName.length > 8
 				&& calleeType.typeExtra.typeName.slice(0, 8) === "asserts:") {
 			applyAssertionNarrowing(calleeType, d.arguments);
