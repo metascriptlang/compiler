@@ -345,6 +345,16 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	}
 	checkExpr(ctx, d.initializer, declType);
 	const initType = d.initializer !== null ? d.initializer.nodeType : null;
+	if (declType === null && initType !== null && d.initializer !== null
+			&& (d.initializer.kind === NodeKind.ArrayLiteral
+				|| d.initializer.kind === NodeKind.ConditionalExpr
+				|| d.initializer.kind === NodeKind.MatchExpr)) {
+		let it = initType;
+		if (it.kind === TypeKind.Ref && it.typeReturn !== null) it = it.typeReturn;
+		if (it.kind === TypeKind.Array && it.typeReturn !== null && it.typeReturn.kind === TypeKind.Inferred) {
+			addError(ctx, "cannot infer the element type of an empty array literal — annotate the variable type", d.nameLocation.line, d.nameLocation.column);
+		}
+	}
 	// PARALOCK Phase 1: explicit `: Promise<T>` annotation on a affine Promise-producing
 	// initializer strips affine tracking. Warn so the opt-out is deliberate, not accidental.
 	if (declType !== null && initType !== null
