@@ -39,6 +39,7 @@ export enum TypeKind {
 	Varargs,
 	Unknown,
 	None,
+	Inferred,
 }
 
 // ===== Calling Convention =====
