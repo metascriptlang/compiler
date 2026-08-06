@@ -5301,6 +5301,21 @@ function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			returnType = bodyType;
 		}
 	}
+	for (const c of d.matchCases) {
+		const cd = c.data as MatchCaseData;
+		if (cd.caseBody.kind === NodeKind.BlockStmt) {
+			const bd = cd.caseBody.data as BlockStmtData;
+			if (bd.statements.length > 0) {
+				const last = bd.statements[bd.statements.length - 1];
+				if (last.kind === NodeKind.ReturnStmt) {
+					const rd = last.data as ReturnStmtData;
+					if (rd.argument !== null) retypeEmptyArrayBranch(rd.argument, returnType);
+				}
+			}
+		} else {
+			retypeEmptyArrayBranch(cd.caseBody, returnType);
+		}
+	}
 	checkDuplicatePatterns(ctx, d.matchCases);
 
 	// Match is exhaustive if has wildcard (_) or covers all enum members / string DU variants
