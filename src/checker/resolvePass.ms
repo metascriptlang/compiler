@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { pendingType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createArc, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, unknownType, createBrandDistinct } from "./types";
+import { inferredType, noneType, isUnresolvedType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createArc, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, unknownType, createBrandDistinct } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -69,12 +69,12 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: number, co
 			if (depth === 0) { closeIdx = i; break; }
 		}
 	}
-	if (closeIdx < 0) return pendingType();
+	if (closeIdx < 0) return inferredType();
 
 	const paramsStr = text.slice(1, closeIdx).trim();
 	const afterParen = text.slice(closeIdx + 1, text.length).trim();
-	if (afterParen.length < 2) return pendingType();
-	if (afterParen.charAt(0) !== "=" || afterParen.charAt(1) !== ">") return pendingType();
+	if (afterParen.length < 2) return inferredType();
+	if (afterParen.charAt(0) !== "=" || afterParen.charAt(1) !== ">") return inferredType();
 	const retStr = afterParen.slice(2, afterParen.length).trim();
 
 	const returnType = (retStr !== "") ? resolveAnnotation(retStr, ctx, line, col) : voidType();
@@ -202,7 +202,7 @@ function warnOncePerLine(ctx: CheckerContext, msg: string, line: number, col: nu
 
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: number, col: number): Type {
 	let trimmed = text.trim();
-	if (trimmed === "") return pendingType();
+	if (trimmed === "") return inferredType();
 	// Strip outer parens that wrap the entire expression (not function type form `(...) => ...`).
 	// `(T | null)`, `(A & B)`, etc. — needed when `(...)` surrounds the type before an array
 	// suffix `[]` strips down to the parenthesised form. Without this, splitTopLevel("|") sees
@@ -599,8 +599,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 					if (colonPos > 0) {
 						const constraintName = paramStr.slice(colonPos + 1, paramStr.length).trim();
 						const constraintType = resolveAnnotation(constraintName, ctx, line, col);
-						if (constraintType.kind !== TypeKind.Pending
-								&& resolvedArgs[ci].kind !== TypeKind.Pending
+						if (!isUnresolvedType(constraintType)
+								&& !isUnresolvedType(resolvedArgs[ci])
 								&& resolvedArgs[ci].kind !== TypeKind.GenericParam
 								&& !isAssignableCheck(resolvedArgs[ci], constraintType)) {
 							const paramName = paramStr.slice(0, colonPos).trim();
@@ -659,7 +659,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 					if (line > 0) {
 						addWarning(ctx, `Enum '${enumName}' has no member '${memberName}'`, line, col);
 					}
-					return pendingType();
+					return inferredType();
 				}
 			}
 		}
@@ -676,7 +676,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		"unknown" => unknownType(),
 		"any" => {
 			if (line > 0) addError(ctx, "'any' is not a MetaScript type - use 'unknown' with an explicit cast", line, col);
-			return pendingType();
+			return inferredType();
 		},
 		"undefined" => {
 			if (line > 0) warnOncePerLine(ctx, "'undefined' is an alias of 'null' - prefer 'null'", line, col);
@@ -730,16 +730,16 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: number, 
 	if (line > 0 && isValidTypeIdentifier(name)
 			&& name.indexOf("__") < 0 && name.indexOf("typeof ") < 0
 			&& name !== "unknown" && name !== "never") {
-		// Hard error, not warning: the pendingType() recovery reaches codegen as
+		// Hard error, not warning: the inferredType() recovery reaches codegen as
 		// void*, and call sites then pass &global for what should be an object
 		// pointer — a silent memory-corruption miscompile, far worse than failing
 		// the build (the missing-NameSet-import incident, docs/NIM-REF.md §4).
 		addError(ctx, `Unresolved type '${name}' - missing import?`, line, col);
 	}
-	// Reference parity: unresolved types become pendingType, never TypeReference.
+	// Reference parity: unresolved types become inferredType, never TypeReference.
 	// All valid types must be resolved during semantic analysis — if lookupSymbol fails,
 	// it's a genuine error (missing import, typo). Codegen never does name resolution.
-	return pendingType();
+	return inferredType();
 }
 
 // ===== TypeExpr Recording (standard parity: markUsed in semTypeNode) =====
@@ -897,8 +897,8 @@ export function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 	for (let i = 0; i < args.length; i += 1) {
 		if (i > 0) key = key + "_";
 		const trimmed = args[i].trim();
-		const resolved = trimmed !== "" ? resolveAnnotation(trimmed, ctx, 0, 0) : pendingType();
-		const canonical = resolved.kind !== TypeKind.Pending ? monoTypeKey(resolved) : trimmed;
+		const resolved = trimmed !== "" ? resolveAnnotation(trimmed, ctx, 0, 0) : inferredType();
+		const canonical = !isUnresolvedType(resolved) ? monoTypeKey(resolved) : trimmed;
 		key = key + canonical;
 	}
 	return key;
@@ -1007,7 +1007,7 @@ function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerConte
 		if (i < typeStrs.length && typeStrs[i] !== "") {
 			types.push(resolveAnnotation(typeStrs[i], ctx, line, col));
 		} else {
-			types.push(pendingType());
+			types.push(inferredType());
 		}
 	}
 	return types;
@@ -1161,7 +1161,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 			const targetType = resolveAnnotation(targetText, ctx, retLoc.line, retLoc.column);
 			// Predicates return boolean; assertions return void (they throw on failure).
 			returnType = isAssertion ? voidType() : booleanType();
-			// Sentinel: kind=Unknown on Function.typeExtra. typeName holds the
+			// Sentinel: kind=Pending on Function.typeExtra. typeName holds the
 			// parameter name (prefixed with "asserts:" for assertion functions).
 			// typeReturn holds the narrowing target type.
 			predicateSentinel = emptyType();
@@ -1172,7 +1172,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 			returnType = resolveAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column);
 		}
 	} else {
-		returnType = pendingType();
+		returnType = inferredType();
 	}
 	// Record return type annotation positions for LSP
 	resolveTypeExpr(node.typeExpr, ctx);
@@ -1202,10 +1202,10 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 
 	// Overload handling: resolve in declaration order
-	if (sym.overloads.length > 0 && sym.symbolType.kind !== TypeKind.Pending) {
+	if (sym.overloads.length > 0 && !isUnresolvedType(sym.symbolType)) {
 		// Primary already resolved — assign to first unresolved overload
 		for (const overload of sym.overloads) {
-			if (overload.symbolType.kind === TypeKind.Pending) {
+			if (isUnresolvedType(overload.symbolType)) {
 				overload.symbolType = fnType;
 				// Ensure overload sym also points to its declNode
 				overload.declNode = node;
@@ -1295,7 +1295,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 			: parentExpr;
 		if (bareParentName.trim() === d.interfaceName) {
 			addError(ctx, "'" + d.interfaceName + "' cannot extend itself (cyclic inheritance)", node.location.line, node.location.column);
-			parentTypes.push(pendingType());
+			parentTypes.push(inferredType());
 			continue;
 		}
 		const pt = resolveAnnotation(parentExpr, ctx, node.location.line, node.location.column);
@@ -1315,7 +1315,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	for (let xi = 0; xi < d.interfaceExtends.length; xi += 1) {
 		const parentExpr = d.interfaceExtends[xi];
 		const pt = parentTypes[xi];
-		if (pt === null || pt.kind === TypeKind.Pending) {
+		if (pt === null || isUnresolvedType(pt)) {
 			addError(ctx, "cannot resolve parent type '" + parentExpr + "'", node.location.line, node.location.column);
 			continue;
 		}
@@ -1582,7 +1582,7 @@ function resolveVariable(ctx: CheckerContext, node: Node): void {
 		// instead of the 3-pass order-independence the checker guarantees.
 		// Mirrors resolveExtern below; Shaping machinery handles forward aliases.
 		const sym = lookupSymbol(ctx.table, d.declName);
-		if (sym !== null && sym.symbolType.kind === TypeKind.Pending) {
+		if (sym !== null && isUnresolvedType(sym.symbolType)) {
 			sym.symbolType = resolveAnnotation(d.declType, ctx, node.location.line, node.location.column);
 		}
 		return;
@@ -1592,7 +1592,7 @@ function resolveVariable(ctx: CheckerContext, node: Node): void {
 	// Full inference happens in Pass 3; this is a lightweight early approximation.
 	if (d.declKind === DeclKind.Const && d.initializer !== null && d.initializer.kind === NodeKind.ObjectLiteral) {
 		const sym = lookupSymbol(ctx.table, d.declName);
-		if (sym !== null && sym.symbolType.kind === TypeKind.Pending) {
+		if (sym !== null && isUnresolvedType(sym.symbolType)) {
 			const objData = d.initializer.data as ObjectLiteralData;
 			const fieldNames: string[] = [];
 			const fieldTypes: Type[] = [];
@@ -1605,7 +1605,7 @@ function resolveVariable(ctx: CheckerContext, node: Node): void {
 					const resolved = resolveAnnotation(ta.asType, ctx, node.location.line, node.location.column);
 					fieldTypes.push(resolved);
 				} else {
-					fieldTypes.push(pendingType());
+					fieldTypes.push(inferredType());
 				}
 			}
 			sym.symbolType = createStruct("", fieldNames, fieldTypes, true);
@@ -1624,7 +1624,7 @@ function resolveExtern(ctx: CheckerContext, node: Node): void {
 	// Resolve type annotation if present
 	if (d.externType !== "") {
 		const resolved = resolveAnnotation(d.externType, ctx, node.location.line, node.location.column);
-		if (resolved.kind !== TypeKind.Pending) {
+		if (!isUnresolvedType(resolved)) {
 			sym.symbolType = resolved;
 			resolved.sym = sym;
 			node.nodeType = resolved;
@@ -1698,7 +1698,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			}
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
 			resolveTypeExprs(member.typeExprs, ctx);
-			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : pendingType();
+			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);
@@ -1720,7 +1720,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			const pd = member.data as PropertyDeclData;
 			if (pd.propIsStatic) {
 				// Resolve static property type and update the staticFields symbol
-				let staticType = pendingType();
+				let staticType = inferredType();
 				if (pd.propType !== "") {
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
@@ -1746,7 +1746,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 						warnOwningSelfRef(ctx, pd.propName, d.className, member.location.line, member.location.column);
 					}
 				} else {
-					memberTypes.push(pendingType());
+					memberTypes.push(inferredType());
 				}
 			}
 		} else if (member.kind === NodeKind.ConstructorDecl) {
@@ -1823,7 +1823,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		if (parentSym !== null) ensureShaped(parentSym, ctx);
 		// resolveAnnotation handles both "Bar" and "Bar<T>" forms (Phase 1c).
 		const parentType = resolveAnnotation(parentExpr, ctx, node.location.line, node.location.column);
-		if (parentType.kind !== TypeKind.Pending) {
+		if (!isUnresolvedType(parentType)) {
 			inner.typeExtra = parentType;
 			const parentStruct = unwrapToStruct(parentType);
 			// B8: only struct/class parents allowed.
@@ -1907,7 +1907,7 @@ function resolveActor(ctx: CheckerContext, node: Node): void {
 			}
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
 			resolveTypeExprs(member.typeExprs, ctx);
-			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : pendingType();
+			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);
@@ -1931,7 +1931,7 @@ function resolveActor(ctx: CheckerContext, node: Node): void {
 				member.nodeType = propType;
 				memberTypes.push(propType);
 			} else {
-				memberTypes.push(pendingType());
+				memberTypes.push(inferredType());
 			}
 		} else if (member.kind === NodeKind.ConstructorDecl) {
 			resolveConstructorType(member, sym, ctx);
@@ -1990,9 +1990,9 @@ test "int32" { assert resolveWith("int32").kind === TypeKind.Int32; }
 
 test "float64" { assert resolveWith("float64").kind === TypeKind.Float64; }
 
-test "unknown name" { assert resolveWith("Foo").kind === TypeKind.Pending; }
+test "unknown name" { assert resolveWith("Foo").kind === TypeKind.Inferred; }
 
-test "empty" { assert resolveWith("").kind === TypeKind.Pending; }
+test "empty" { assert resolveWith("").kind === TypeKind.Inferred; }
 
 test "number[]" {
 	const t = resolveWith("number[]");
@@ -2061,7 +2061,7 @@ test "known symbol" {
 
 test "function gets Function type" {
 	const ctx = createContext();
-	const symStub = makeSymbol("foo", SymbolKind.Function, pendingType(), false);
+	const symStub = makeSymbol("foo", SymbolKind.Function, noneType(), false);
 	defineSymbol(ctx.table, symStub);
 	// Simulate a FunctionDecl node
 	const zl = makeLoc(0, 0);
@@ -2079,7 +2079,7 @@ test "function gets Function type" {
 
 test "function with typed params" {
 	const ctx = createContext();
-	const symStub = makeSymbol("add", SymbolKind.Function, pendingType(), false);
+	const symStub = makeSymbol("add", SymbolKind.Function, noneType(), false);
 	defineSymbol(ctx.table, symStub);
 	const zl = makeLoc(0, 0);
 	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "add", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number", fnDefaults: [], nameLocation: zl }, zl);
@@ -2097,7 +2097,7 @@ test "function with typed params" {
 
 test "decorated function gets resolved" {
 	const ctx = createContext();
-	const symStub = makeSymbol("floor", SymbolKind.Function, pendingType(), false);
+	const symStub = makeSymbol("floor", SymbolKind.Function, noneType(), false);
 	defineSymbol(ctx.table, symStub);
 	const zl = makeLoc(0, 0);
 	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "floor", params: ["x"], fnParamTypes: ["number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number", fnDefaults: [], nameLocation: zl }, zl);
@@ -2119,8 +2119,8 @@ test "Box<number> records instantiation" {
 	updateGenericDeclFields("Box", "value", "T");
 	const ctx = createContext();
 	const t = resolveAnnotation("Box<number>", ctx, 0, 0);
-	// No symbol "Box" in scope → pendingType()
-	assert t.kind === TypeKind.Pending;
+	// No symbol "Box" in scope → inferredType()
+	assert t.kind === TypeKind.Inferred;
 	// Check instantiation was recorded (happens before symbol lookup)
 	assert getGenericTypeInstCount() === 1;
 	assert getGenericTypeInstBaseName(0) === "Box";
@@ -2137,7 +2137,7 @@ test "Pair<string, number> records instantiation" {
 	updateGenericDeclFields("Pair", "first|second", "A|B");
 	const ctx = createContext();
 	const t = resolveAnnotation("Pair<string, number>", ctx, 0, 0);
-	assert t.kind === TypeKind.Pending;
+	assert t.kind === TypeKind.Inferred;
 	const idx = findGenericTypeInstIdx("Pair", "string_number");
 	assert idx >= 0;
 	assert getGenericTypeInstFieldNames(idx) === "first|second";
@@ -2175,7 +2175,7 @@ test "generic class Container<T> records instantiation" {
 	updateGenericDeclFields("Container", "item|count", "T|number");
 	const ctx = createContext();
 	const t = resolveAnnotation("Container<string>", ctx, 0, 0);
-	assert t.kind === TypeKind.Pending;
+	assert t.kind === TypeKind.Inferred;
 	assert getGenericTypeInstCount() === 1;
 	assert getGenericTypeInstFieldNames(0) === "item|count";
 	assert getGenericTypeInstFieldTypes(0) === "string|number";
@@ -2214,7 +2214,7 @@ test "constrained interface Box<T extends number>" {
 	updateGenericDeclFields("Box", "value", "T");
 	const ctx = createContext();
 	const t = resolveAnnotation("Box<number>", ctx, 0, 0);
-	assert t.kind === TypeKind.Pending;
+	assert t.kind === TypeKind.Inferred;
 }
 
 test "fnDefaults on FunctionDeclData" {

@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { pendingType, noneType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isBrandDistinct } from "./types";
+import { inferredType, noneType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorExt, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
@@ -198,7 +198,7 @@ function checkJsxConsumed(ctx: CheckerContext, nodes: Node[]): void {
 function reportUnconsumedJsx(ctx: CheckerContext, node: Node, what: string, expectedType: Type | null): void {
 	if (ctx.jsxMacroArgDepth === 0) {
 		let msg = what + " must be consumed by a macro (it produces a compile-time Node)";
-		if (expectedType !== null && expectedType.kind !== TypeKind.Pending) {
+		if (expectedType !== null && !isUnresolvedType(expectedType)) {
 			msg = msg + "; import a converter targeting '" + typeDisplayName(expectedType) + "' to lower it at this boundary";
 		}
 		addError(ctx, msg, node.location.line, node.location.column);
@@ -211,7 +211,7 @@ function reportUnconsumedJsx(ctx: CheckerContext, node: Node, what: string, expe
 // Never fires inside macro args (jsxMacroArgDepth) or where no expected type is settled.
 function tryConverterAtBoundary(ctx: CheckerContext, node: Node, expectedType: Type | null): boolean {
 	if (expectedType === null) return false;
-	if (expectedType.kind === TypeKind.Pending || expectedType.kind === TypeKind.GenericParam) return false;
+	if (isUnresolvedType(expectedType) || expectedType.kind === TypeKind.GenericParam) return false;
 	if (ctx.jsxMacroArgDepth > 0) return false;
 	const targetName = typeDisplayName(expectedType);
 	if (!ctx.converterTargets.has(targetName)) return false;
@@ -558,7 +558,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// protocol does not express.
 			if (isAsgn && d.left.kind === NodeKind.MemberExpr
 					&& d.left.nodeType !== null
-					&& d.left.nodeType.kind === TypeKind.Pending
+					&& isUnresolvedType(d.left.nodeType)
 					&& ctx.extensionRegistry !== null) {
 				const md = d.left.data as MemberExprData;
 				if (md.object.nodeType !== null && md.property !== "setDynamicField") {
@@ -587,7 +587,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					}
 					const peeled = peelToStructOrUnion(probeType);
 					if (peeled !== null) probeType = peeled;
-					let propertyExists = getProperty(probeType, md.property).kind !== TypeKind.Pending
+					let propertyExists = !isUnresolvedType(getProperty(probeType, md.property))
 						|| (probeType.typeNames !== null && probeType.typeNames.indexOf(md.property) >= 0);
 					if (!propertyExists && probeType.typeName !== "") {
 						const classSym = lookupSymbol(ctx.table, probeType.typeName);
@@ -601,7 +601,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 								classStruct = classStruct.typeReturn;
 							}
 							if (classStruct !== null && (classStruct.kind === TypeKind.Struct || classStruct.kind === TypeKind.Union)) {
-								if (getProperty(classStruct, md.property).kind !== TypeKind.Pending) {
+								if (!isUnresolvedType(getProperty(classStruct, md.property))) {
 									propertyExists = true;
 								}
 							}
@@ -623,7 +623,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 							break;
 						}
 						if (symType !== null && (symType.kind === TypeKind.Struct || symType.kind === TypeKind.Union)
-								&& getProperty(symType, md.property).kind !== TypeKind.Pending) {
+								&& !isUnresolvedType(getProperty(symType, md.property))) {
 							propertyExists = true;
 						}
 					}
@@ -660,7 +660,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 								addError(ctx,
 									`compound assignment '${d.operator}' is not supported on dynamic field '${md.property}'; rewrite as 'expr.${md.property} = expr.${md.property} ${lhsRead} value'`,
 									node.location.line, node.location.column);
-								node.nodeType = pendingType(); return;
+								node.nodeType = inferredType(); return;
 							}
 							const keyLit = createNodeAt(NodeKind.StringLiteral, { value: md.property }, node.location);
 							const wargs: Node[] = [];
@@ -787,7 +787,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				const maybeSide = isMaybeType(effLeft) ? effLeft : effRight;
 				const innerName = maybeSide.typeReturn !== null ? typeDisplayName(maybeSide.typeReturn) : "T";
 				addError(ctx, "operand of '" + d.operator + "' is possibly null (" + innerName + " | null) — unwrap with '!', '??', or a null check first", node.location.line, node.location.column);
-				node.nodeType = isRelational ? booleanType() : ((maybeSide.typeReturn !== null) ? maybeSide.typeReturn : pendingType());
+				node.nodeType = isRelational ? booleanType() : ((maybeSide.typeReturn !== null) ? maybeSide.typeReturn : inferredType());
 				return;
 			}
 			node.nodeType = inferBinaryOp(d.operator, effLeft, effRight); return;
@@ -846,8 +846,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// VM round-trip lost the field). Convert null deref into diagnostic.
 			if (d.array === null) {
 				addError(ctx, "internal: ArrayAccess with null array sub-expression", node.location.line, node.location.column);
-				node.nodeType = pendingType();
-				node.nodeType = pendingType(); return;
+				node.nodeType = inferredType();
+				node.nodeType = inferredType(); return;
 			}
 			checkExpr(ctx, d.array, null);
 			let arrType = d.array.nodeType;
@@ -867,8 +867,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// symbol's type yet. Diagnostic instead of null deref.
 			if (arrType === null) {
 				addError(ctx, "internal: array type unresolved in ArrayAccess (child kind=" + d.array.kind + ")", node.location.line, node.location.column);
-				node.nodeType = pendingType();
-				node.nodeType = pendingType(); return;
+				node.nodeType = inferredType();
+				node.nodeType = inferredType(); return;
 			}
 			// Enum reverse index E[v]: TS numeric-enum reverse mapping, value → member-name string.
 			// Base must be the enum TYPE symbol itself (not a value of enum type).
@@ -932,7 +932,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				d.index = wrapInConv(d.index, createPrimitive(TypeKind.Int64));
 			}
 			// Range access: arr[start..end] returns Span<elemType>
-			let accessType: Type = pendingType();
+			let accessType: Type = inferredType();
 			if (d.index.kind === NodeKind.BinaryExpr) {
 				const bd = d.index.data as BinaryExprData;
 				if (bd.operator === ".." || bd.operator === "...") {
@@ -949,7 +949,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					&& arrType.typeChildren !== null) {
 				const idx = (d.index.data as NumberLiteralData).value;
 				accessType = (idx >= 0 && idx < arrType.typeChildren.length)
-					? arrType.typeChildren[idx] : pendingType();
+					? arrType.typeChildren[idx] : inferredType();
 			} else {
 				accessType = getElementType(arrType);
 			}
@@ -1131,8 +1131,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					const propActual = d.properties[fi].nodeType;
 					const fe = fieldExpected;
 					if (fe !== null && propActual !== null) {
-						if (fe.kind !== TypeKind.Pending
-								&& propActual.kind !== TypeKind.Pending
+						if (!isUnresolvedType(fe)
+								&& !isUnresolvedType(propActual)
 								&& propActual.kind !== TypeKind.Error
 								&& !(typeNameOf(propActual) !== "" && typeNameOf(propActual) === typeNameOf(fe))
 								&& !isAssignable(propActual, fe)) {
@@ -1377,7 +1377,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (arrExpected !== null && (arrExpected.kind === TypeKind.SizedArray || arrExpected.kind === TypeKind.Array)) {
 					node.nodeType = refArrayWrap !== null ? refArrayWrap : arrExpected; return;
 				} else {
-					node.nodeType = createRef(createArray(pendingType())); return;
+					node.nodeType = createRef(createArray(inferredType())); return;
 				}
 			} else {
 				for (let i = 0; i < d.elements.length; i += 1) {
@@ -1473,18 +1473,18 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (st0 !== null && isMaybeType(st0) && st0.typeReturn !== null) {
 					node.nodeType = st0.typeReturn;
 				} else {
-					node.nodeType = st0 !== null ? st0 : pendingType();
+					node.nodeType = st0 !== null ? st0 : inferredType();
 				}
 				node.flags = node.flags | NodeFlag.Sem;
 				return;
 			}
 			const asLoc = node.typeExpr !== null ? node.typeExpr.location : node.location;
-			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx, asLoc.line, asLoc.column) : pendingType();
+			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx, asLoc.line, asLoc.column) : inferredType();
 			// TS parity: `expr as T` propagates T as contextual type to expr.
 			// Critical for object literals: `{ a: 1 } as Foo` must construct a Foo
 			// (not an anonymous struct that codegen then can't cast to Foo).
 			// `as unknown` is a type-system escape hatch — don't use it as context.
-			const innerExpected = (targetType.kind !== TypeKind.Pending) ? targetType : null;
+			const innerExpected = (!isUnresolvedType(targetType)) ? targetType : null;
 			checkExpr(ctx, d.asExpr, innerExpected);
 			let srcType = d.asExpr.nodeType;
 			// Record type annotation position for LSP
@@ -1492,7 +1492,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// General rule: `expr as unknown as T` → collapse to `expr as T`.
 			// `as unknown` is a TS type-system escape hatch with zero runtime meaning.
 			// Unwrap it so downstream handlers see the real source expression/type.
-			if (targetType.kind !== TypeKind.Pending) {
+			if (!isUnresolvedType(targetType)) {
 				const innerExpr = unwrapAsUnknown(d.asExpr);
 				if (innerExpr !== null) {
 					node.data = { asExpr: innerExpr, asType: d.asType };
@@ -1501,7 +1501,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 			}
 			// Nil typing: collapse `null as T` into typed NullLiteral.
-			if (targetType.kind !== TypeKind.Pending && targetType.kind !== TypeKind.Null
+			if (!isUnresolvedType(targetType) && targetType.kind !== TypeKind.Null
 				&& d.asExpr !== null && d.asExpr.kind === NodeKind.NullLiteral) {
 				node.kind = NodeKind.NullLiteral;
 				node.data = { nullPlaceholder: true };
@@ -1534,7 +1534,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			const castSrcUnknown = (srcType !== null && srcType.kind === TypeKind.Union) ? unwrapRefNullUnion(srcType) : srcType;
 			if (castSrcUnknown !== null && isUnknownType(castSrcUnknown)
-				&& targetType.kind !== TypeKind.Pending && !isPointerShapedForUnknown(targetType)) {
+				&& !isUnresolvedType(targetType) && !isPointerShapedForUnknown(targetType)) {
 				addError(ctx, "cannot cast unknown to value type " + typeDisplayName(targetType) + " — no void* representation to reinterpret", asLoc.line, asLoc.column);
 			}
 			node.nodeType = node.nodeType; return;
@@ -1542,7 +1542,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
 			checkExpr(ctx, d.spreadArg, null);
-			node.nodeType = pendingType(); return;
+			node.nodeType = inferredType(); return;
 		},
 		NodeKind.NewExpr => checkNewExpr(ctx, node, expectedType),
 		NodeKind.TryExpr => checkTryExpr(ctx, node),
@@ -1553,7 +1553,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const argType = d.awaitArg.nodeType;
 			if (argType !== null && isAwaitable(argType)) {
 				const promiseInner = awaitedType(argType);
-				node.nodeType = promiseInner !== null ? promiseInner : pendingType();
+				node.nodeType = promiseInner !== null ? promiseInner : inferredType();
 				// PARALOCK Phase 1: consuming an affine-awaitable identifier records on
 				// TWO channels:
 				//   1. Branch-aware tracker (markConsumedName) — drives reuse detection
@@ -1571,12 +1571,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 				node.nodeType = node.nodeType; return;
 			}
-			node.nodeType = pendingType(); return;
+			node.nodeType = inferredType(); return;
 		},
 		NodeKind.YieldExpr => {
 			const d = node.data as YieldExprData;
 			checkExpr(ctx, d.yieldArg, null);
-			node.nodeType = pendingType(); return;
+			node.nodeType = inferredType(); return;
 		},
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
@@ -1604,7 +1604,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
 			checkExpr(ctx, d.outArg, null);
-			node.nodeType = pendingType(); return;
+			node.nodeType = inferredType(); return;
 		},
 		NodeKind.SizeofExpr => {
 			const d = node.data as SizeofExprData;
@@ -1657,15 +1657,15 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// Mirrors the CallExpr eager path. Only fires for
 			// user macros (in registry); builtin directives (emit, include, ...)
 			// keep the voidType behavior. If args still contain GenericParam
-			// (defer convention), return pendingType — let the next mono level
+			// (defer convention), return inferredType — let the next mono level
 			// or post-mono expand pass handle it.
 			if (ctx.macroBodyRegistry.has(md.macroName)) {
 				if (ctx.macroExpansionDepth >= 16) {
 					addError(ctx, "macro expansion depth limit (16) exceeded for '" + md.macroName + "' — possible recursive macro",
 						node.location.line, node.location.column);
-					node.nodeType = pendingType(); return;
+					node.nodeType = inferredType(); return;
 				}
-				if (anyArgIsParametric(md.macroArgs)) { node.nodeType = pendingType(); return; }
+				if (anyArgIsParametric(md.macroArgs)) { node.nodeType = inferredType(); return; }
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
 				const expanded = callExpandMacroInvocation(node, ctx, 0);
 				// When a user macro emits a sentinel error (or VM fails),
@@ -1676,8 +1676,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				// "possible recursive macro" warning. Detect by kind preservation.
 				if (expanded.kind === NodeKind.MacroInvocation) {
 					ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
-					node.nodeType = pendingType();
-					node.nodeType = pendingType(); return;
+					node.nodeType = inferredType();
+					node.nodeType = inferredType(); return;
 				}
 				node.kind = expanded.kind;
 				node.data = expanded.data;
@@ -1691,7 +1691,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			node.nodeType = voidType(); return;
 		},
-		_ => pendingType(),
+		_ => inferredType(),
 	};
 	node.nodeType = result;
 }
@@ -1733,14 +1733,14 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			if (rightType !== null && rightType.kind === TypeKind.Ptr) return rightType;
 			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
 			if (isNumeric(leftType) && isNumeric(rightType)) return promoteNumeric(leftType, rightType);
-			return pendingType();
+			return inferredType();
 		},
 		"-" => {
 			if (leftType !== null && leftType.kind === TypeKind.Ptr && rightType !== null && rightType.kind === TypeKind.Ptr) return int32Type();
 			if (leftType !== null && leftType.kind === TypeKind.Ptr) return leftType;
 			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
 			if (isNumeric(leftType) && isNumeric(rightType)) return promoteNumeric(leftType, rightType);
-			return pendingType();
+			return inferredType();
 		},
 		"*" | "/" | "%" | "**" => {
 			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
@@ -1757,7 +1757,7 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			if (isMaybeType(leftType) && leftType.typeReturn !== null) return leftType.typeReturn;
 			return leftType;
 		},
-		_ => pendingType(),
+		_ => inferredType(),
 	};
 }
 
@@ -1776,7 +1776,7 @@ function inferUnaryOp(op: string, operandType: Type): Type {
 			return int32Type();
 		},
 		"typeof" => stringType(),
-		_ => pendingType(),
+		_ => inferredType(),
 	};
 }
 
@@ -1985,7 +1985,7 @@ function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType: Type,
 		if (nn !== null && (nn.kind === TypeKind.Ref || nn.kind === TypeKind.Ptr) && nn.typeReturn !== null) {
 			nn = nn.typeReturn;
 		}
-		if (nn !== null && nn.kind !== TypeKind.Pending) targetType = nn;
+		if (nn !== null && !isUnresolvedType(nn)) targetType = nn;
 	}
 	const methodName = coercionMethodName(targetType);
 	if (methodName === "") return null as unknown as Node;
@@ -2018,7 +2018,7 @@ function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType: Type,
 	checkExpr(ctx, synthCall, null);
 	if (synthCall.nodeType === null) return null as unknown as Node;
 	if (synthCall.nodeType.kind === TypeKind.Error) return null as unknown as Node;
-	if (synthCall.nodeType.kind === TypeKind.Pending) return null as unknown as Node;
+	if (isUnresolvedType(synthCall.nodeType)) return null as unknown as Node;
 	return synthCall;
 }
 
@@ -2171,7 +2171,7 @@ function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): Node {
 
 export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
 	if (formal === null || exprType === null) return expr;
-	if (formal.kind === TypeKind.Unknown || formal.kind === TypeKind.Pending) {
+	if (formal.kind === TypeKind.Unknown || isUnresolvedType(formal)) {
 		if (isUnknownType(formal)) {
 			let srcT = exprType;
 			let probe = expr;
@@ -2189,10 +2189,10 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		}
 		return expr;
 	}
-	if (exprType.kind === TypeKind.Unknown || exprType.kind === TypeKind.Pending) {
+	if (exprType.kind === TypeKind.Unknown || isUnresolvedType(exprType)) {
 		const collapsed = formal.kind === TypeKind.Union ? unwrapRefNullUnion(formal) : null;
 		const unknownFamilyFormal = formal.kind === TypeKind.GenericParam
-			|| (collapsed !== null && (collapsed.kind === TypeKind.Unknown || collapsed.kind === TypeKind.Pending));
+			|| (collapsed !== null && (collapsed.kind === TypeKind.Unknown || isUnresolvedType(collapsed)));
 		if (isUnknownType(exprType) && !unknownFamilyFormal) {
 			addError(ctx, "unknown is not assignable to " + typeDisplayName(formal) + " — narrow with an explicit cast", expr.location.line, expr.location.column);
 		}
@@ -2593,7 +2593,7 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): T
 	if (resolvedType !== null && (resolvedType.kind === TypeKind.Struct || resolvedType.kind === TypeKind.Ref || resolvedType.kind === TypeKind.GenericInstance)) {
 		return resolvedType;
 	}
-	return pendingType();
+	return inferredType();
 }
 
 // ===== TryExpr =====
@@ -2673,8 +2673,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			if (ctx.macroExpansionDepth >= 16) {
 				addError(ctx, "macro expansion depth limit (16) exceeded for '" + calleeName + "' — possible recursive macro",
 					node.location.line, node.location.column);
-				node.nodeType = pendingType();
-				return pendingType();
+				node.nodeType = inferredType();
+				return inferredType();
 			}
 			// Type-check args first (errors inside them are reported)
 			foldComptimeNodeAliasArgs(ctx, d.arguments);
@@ -2702,7 +2702,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			//   function save<T>(t: T) { bson.encode(t); }   // defers
 			//   save<User>(u);                                // post-mono: fires with t: User
 			if (anyArgIsParametric(macroArgsRef)) {
-				// Defer expansion until post-mono. Use pendingType (not void)
+				// Defer expansion until post-mono. Use inferredType (not void)
 				// so the deferred MacroInvocation doesn't break declared return
 				// types of enclosing generic functions: e.g.,
 				//   function wrap<T>(x: T): string { return macro(x); }
@@ -2710,8 +2710,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				// declared `string`, which assignability rules allow. After
 				// monomorphize substitutes T → concrete and re-checks the
 				// cloned body, the macro expands and produces the real type.
-				node.nodeType = pendingType();
-				return pendingType();
+				node.nodeType = inferredType();
+				return inferredType();
 			}
 			// Eagerly expand right now via the Raiser VM. Track depth across the
 			// re-check below so recursive macros hit the limit cleanly.
@@ -2722,8 +2722,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			// to avoid duplicating diagnostics + spurious recursive-macro warning.
 			if (expanded.kind === NodeKind.MacroInvocation) {
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
-				node.nodeType = pendingType();
-				return pendingType();
+				node.nodeType = inferredType();
+				return inferredType();
 			}
 			// Replace current node contents with the expanded result.
 			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
@@ -2929,7 +2929,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 					let alreadyBound = false;
 					for (const bn of _argBindings.names) { if (bn === declParam) { alreadyBound = true; break; } }
 					if (!alreadyBound) {
-						paramExpected = substituteType(paramExpected, declParam, pendingType());
+						paramExpected = substituteType(paramExpected, declParam, inferredType());
 					}
 				}
 			}
@@ -3062,7 +3062,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		&& calleeType.typeReturn !== null && calleeType.typeReturn.kind === TypeKind.Function) {
 		addError(ctx, "callee is possibly null (" + typeDisplayName(calleeType.typeReturn) + " | null) — unwrap with '!' or a null check first",
 			node.location.line, node.location.column);
-		const nullableRet = calleeType.typeReturn.typeReturn !== null ? calleeType.typeReturn.typeReturn : pendingType();
+		const nullableRet = calleeType.typeReturn.typeReturn !== null ? calleeType.typeReturn.typeReturn : inferredType();
 		node.nodeType = nullableRet;
 		return nullableRet;
 	}
@@ -3120,9 +3120,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				if (!isPointerShapedForUnknown(argSrcT) && !argCastOk) {
 					addError(ctx, "Argument " + String(pi) + ": cannot pass value type " + typeDisplayName(argSrcT) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", node.location.line, node.location.column);
 				}
-			} else if (isUnknownType(argTypes[pi]) && paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.Pending && paramType.kind !== TypeKind.GenericParam) {
+			} else if (isUnknownType(argTypes[pi]) && paramType.kind !== TypeKind.Unknown && !isUnresolvedType(paramType) && paramType.kind !== TypeKind.GenericParam) {
 				const collapsedParam = paramType.kind === TypeKind.Union ? unwrapRefNullUnion(paramType) : null;
-				if (collapsedParam === null || (collapsedParam.kind !== TypeKind.Unknown && collapsedParam.kind !== TypeKind.Pending)) {
+				if (collapsedParam === null || (collapsedParam.kind !== TypeKind.Unknown && !isUnresolvedType(collapsedParam))) {
 					addError(ctx, "Argument " + String(pi) + ": unknown is not assignable to " + typeDisplayName(paramType) + " — narrow with an explicit cast", node.location.line, node.location.column);
 				}
 			}
@@ -3138,16 +3138,16 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				&& paramType.kind === TypeKind.Function
 				&& !hasGenericParams(paramType);
 			const fnKindMismatch = argIsFnValue
-				&& paramType.kind !== TypeKind.Function && paramType.kind !== TypeKind.Pending
+				&& paramType.kind !== TypeKind.Function && !isUnresolvedType(paramType)
 				&& paramType.kind !== TypeKind.GenericParam && !isMaybeType(paramType)
 				&& !hasGenericParams(paramType);
 			if (fnKindMismatch) {
 				const calleeName = getCalleeName(d.callee);
 				addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + explainStructuralPrefix(argTypes[pi], paramType), node.location.line, node.location.column);
 			}
-			if ((paramType.kind !== TypeKind.Pending && paramType.kind !== TypeKind.GenericParam
+			if ((!isUnresolvedType(paramType) && paramType.kind !== TypeKind.GenericParam
 				&& paramType.kind !== TypeKind.Function
-				&& argTypes[pi].kind !== TypeKind.Pending && argTypes[pi].kind !== TypeKind.Error
+				&& !isUnresolvedType(argTypes[pi]) && argTypes[pi].kind !== TypeKind.Error
 				&& (argTypes[pi].kind !== TypeKind.Function
 					|| (isMaybeType(paramType) && findFirstGenericParamName(paramType) === "")))
 				|| fnPairCheckable) {
@@ -3250,8 +3250,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 							continue;
 						}
 						if (argT === null || paramT === null) continue;
-						if (argT.kind === TypeKind.Pending || argT.kind === TypeKind.Error) continue;
-						if (paramT.kind === TypeKind.GenericParam || paramT.kind === TypeKind.Pending) continue;
+						if (isUnresolvedType(argT) || argT.kind === TypeKind.Error) continue;
+						if (paramT.kind === TypeKind.GenericParam || isUnresolvedType(paramT)) continue;
 						if (!isAssignable(argT, paramT)) {
 							const calleeName = getCalleeName(d.callee);
 							addError(ctx, `Argument type mismatch in '${calleeName}' arg ${pi}: got ${typeDisplayName(argT)}, expected ${typeDisplayName(paramT)}${explainStructuralPrefix(argT, paramT)}`, d.arguments[pi].location.line, d.arguments[pi].location.column);
@@ -3284,7 +3284,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		// `assertString(val)` narrow `val` for subsequent statements.
 		if (calleeType !== null && calleeType.kind === TypeKind.Function
 				&& calleeType.typeExtra !== null
-				&& calleeType.typeExtra.kind === TypeKind.Pending
+				&& isUnresolvedType(calleeType.typeExtra)
 				&& calleeType.typeExtra.typeName.length > 8
 				&& calleeType.typeExtra.typeName.slice(0, 8) === "asserts:") {
 			applyAssertionNarrowing(calleeType, d.arguments);
@@ -3297,7 +3297,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 // Resolve generic return type using explicit type arg (e.g. parse<Person>)
 function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expectedType: Type | null, explicitArg: string, ctx: CheckerContext, node: Node): Type {
 	let returnType = fnType.typeReturn;
-	if (returnType === null) return pendingType();
+	if (returnType === null) return inferredType();
 	// Resolve the explicit type arg to an actual type
 	const resolvedSym = lookupSymbol(ctx.table, explicitArg);
 	if (resolvedSym === null) return inferGenericReturn(fnType, argTypes, expectedType);
@@ -3397,9 +3397,9 @@ function applyAssertionNarrowing(calleeType: Type, args: Node[]): void {
 
 export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType: Type | null): Type {
 	let returnType = fnType.typeReturn;
-	if (returnType === null) return pendingType();
+	if (returnType === null) return inferredType();
 
-	const hasExpected = expectedType !== null && expectedType.kind !== TypeKind.Pending;
+	const hasExpected = expectedType !== null && !isUnresolvedType(expectedType);
 	// TS rule: when the return type is a NAKED generic param `T`, contextual type
 	// does NOT drive inference — args are the sole source. `function id<T>(x:T):T`
 	// called as `id(null)` infers T=null from the arg; the later assignment to a
@@ -3420,7 +3420,7 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 	for (let i = 0; i < fnType.typeChildren.length && i < argTypes.length; i += 1) {
 		const at = argTypes[i];
 		if (at === null) continue;
-		if (at.kind === TypeKind.Pending || at.kind === TypeKind.Error) continue;
+		if (isUnresolvedType(at) || at.kind === TypeKind.Error) continue;
 		if (skipNullArg && at.kind === TypeKind.Null) continue;
 		unifyType(fnType.typeChildren[i], at, argBindings);
 	}
@@ -3621,7 +3621,7 @@ function bindFromExplicitTypeArgs(node: Node, paramNames: string[], ctx: Checker
 		const argTypeStr = argNames[i].trim();
 		if (paramName === "" || argTypeStr === "") continue;
 		const resolved = resolveAnnotation(argTypeStr, ctx, node.location.line, node.location.column);
-		if (resolved !== null && resolved.kind !== TypeKind.Pending) {
+		if (resolved !== null && !isUnresolvedType(resolved)) {
 			result.names.push(paramName);
 			result.types.push(resolved);
 		}
@@ -3961,7 +3961,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 				if (newCalleeType.kind === TypeKind.Function && argTypes.length < newCalleeType.typeChildren.length) {
 					fillDefaultArgsForNode(ctx, callNode, sym.name, newCalleeType.typeChildren.length, 0);
 				}
-				return newCalleeType.typeReturn !== null ? newCalleeType.typeReturn : pendingType();
+				return newCalleeType.typeReturn !== null ? newCalleeType.typeReturn : inferredType();
 			}
 			// Mono didn't fire — restore primary sym for normal fall-through.
 			callNode.resolvedSym = savedSym;
@@ -3986,12 +3986,12 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	// and `this unknown` would otherwise tie into ambiguity. A catch-all
 	// `this unknown` receiver only participates when no concrete-receiver
 	// candidate matched (or the object itself is unknown).
-	if (objType !== null && objType.kind !== TypeKind.Pending && exts.length > 1) {
+	if (objType !== null && !isUnresolvedType(objType) && exts.length > 1) {
 		const specific: ExtensionMethod[] = [];
 		for (const e of exts) {
 			const ft = getExtFnType(e);
 			if (!e.isStatic && ft.kind === TypeKind.Function && ft.typeChildren.length > 0
-					&& ft.typeChildren[0] !== null && ft.typeChildren[0].kind === TypeKind.Pending) {
+					&& ft.typeChildren[0] !== null && isUnresolvedType(ft.typeChildren[0])) {
 				continue;
 			}
 			specific.push(e);
@@ -4030,7 +4030,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	if (idx === -2) {
 		// Tiebreaker: an exact receiver beats a widening one — `this uint8[]`
 		// wins over `this number[]` on a uint8[] object instead of tying.
-		if (objType !== null && objType.kind !== TypeKind.Pending) {
+		if (objType !== null && !isUnresolvedType(objType)) {
 			let exactIdx = -1;
 			let exactCount = 0;
 			let xi = 0;
@@ -4270,7 +4270,7 @@ function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 // Validate object literal construction against a discriminated union type.
 // Finds the discriminant field in the literal, resolves the variant, and validates fields.
 function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: ObjectLiteralData, unionType: Type | null, stampType: Type | null): Type {
-	if (unionType === null) return pendingType();
+	if (unionType === null) return inferredType();
 	const discName = unionType.typeNames[0]; // discriminant field name (e.g. "kind")
 
 	// Find the discriminant field in the object literal keys
@@ -4387,7 +4387,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	const d = node.data as MemberExprData;
 	checkExpr(ctx, d.object, null);
 	const objType = d.object.nodeType;
-	if (objType === null) return pendingType();
+	if (objType === null) return inferredType();
 	// Ref parity: strictNotNil — warn on unguarded class (heap pointer) member access.
 	// Phase 4: uses the flow graph's isDefinitelyNonNullAt walker (replaced the
 	// fact-stack-based impliesNotNull).
@@ -4463,7 +4463,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 				return expInfo.symType;
 			}
 			addError(ctx, `Module '${d.object.resolvedSym.name}' has no export '${d.property}'`, node.location.line, node.location.column);
-			return pendingType();
+			return inferredType();
 		}
 	}
 	// reference parity: strip Ref/Ptr BEFORE field resolution, insert deref AFTER
@@ -4524,13 +4524,13 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			|| d.object.resolvedSym.symbolKind === SymbolKind.TypeAlias
 			|| d.object.resolvedSym.symbolKind === SymbolKind.Interface
 			|| d.object.resolvedSym.symbolKind === SymbolKind.Struct);
-	let propType = isStaticClassAccess ? pendingType() : getProperty(resolvedObjType, d.property);
+	let propType = isStaticClassAccess ? inferredType() : getProperty(resolvedObjType, d.property);
 	// Engine (macro-body) view of Node.nodeType: the VM wire carries a type-AST
 	// Node tree (mapTypeToAst), not the checker Type the class declares. Type
 	// the member as Node so flat reads on it resolve via the NodeData
 	// unique-field-name rule below — same contract as reads on the node itself.
 	if (isEngineCheckMode() && d.property === "nodeType"
-			&& resolvedObjType.typeName === "Node" && propType.kind !== TypeKind.Pending) {
+			&& resolvedObjType.typeName === "Node" && !isUnresolvedType(propType)) {
 		// objType, not resolvedObjType: a Node-typed VALUE is Ref<Node> everywhere
 		// else (isPointerInC peels it above only to resolve the field). Handing back
 		// the peeled Struct makes `detectUnionDisc(tt)` fail against its Ref<Node>
@@ -4540,7 +4540,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	// Actor isolation: block external field access (only message-passing allowed).
 	// Allow access from inside the actor's own methods (ctx.currentActorName matches).
 	// Allow @nonisolated fields for read access (Swift parity).
-	if (!isStaticClassAccess && propType.kind !== TypeKind.Pending && resolvedObjType.typeName !== "") {
+	if (!isStaticClassAccess && !isUnresolvedType(propType) && resolvedObjType.typeName !== "") {
 		const fieldOwnerSym = lookupSymbol(ctx.table, resolvedObjType.typeName);
 		if (fieldOwnerSym !== null && fieldOwnerSym.symbolKind === SymbolKind.Actor
 			&& ctx.currentActorName !== resolvedObjType.typeName
@@ -4551,7 +4551,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		}
 	}
 	// Static property lookup: check class symbol's staticFields
-	if (isStaticClassAccess && propType.kind === TypeKind.Pending && d.object.resolvedSym !== null) {
+	if (isStaticClassAccess && isUnresolvedType(propType) && d.object.resolvedSym !== null) {
 		const staticField = findStaticField(d.object.resolvedSym, d.property);
 		if (staticField !== null) {
 			node.resolvedSym = staticField;
@@ -4564,7 +4564,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	// For generic classes, substitute class-level generic params (T, E) with concrete types
 	// from the actual object (e.g. Result<string, number> → T=string, E=number).
 	// Skip for static class access — static methods are found via class method lookup below.
-	if (propType.kind === TypeKind.Pending && !isStaticClassAccess && resolvedObjType.typeName !== "") {
+	if (isUnresolvedType(propType) && !isStaticClassAccess && resolvedObjType.typeName !== "") {
 		const classSym = lookupSymbol(ctx.table, resolvedObjType.typeName);
 		if (classSym !== null) {
 			ensureShaped(classSym, ctx);
@@ -4575,7 +4575,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			if (classStruct.kind === TypeKind.Struct) {
 				propType = getProperty(classStruct, d.property);
 				// Create synthetic resolvedSym for the field (needed by codegen/analyzer)
-				if (propType.kind !== TypeKind.Pending) {
+				if (!isUnresolvedType(propType)) {
 					const fieldSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
 					fieldSym.state = SymbolState.Shaped;
 					inheritContainerInfo(fieldSym, ctx, resolvedObjType.typeName);
@@ -4609,7 +4609,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 				// it via the union-wide getProperty above. Otherwise propType is
 				// already valid (a union of variant field types), and the user's
 				// intent is to use it without further narrowing — let it through.
-				if (propType.kind === TypeKind.Pending) {
+				if (isUnresolvedType(propType)) {
 					addError(ctx, `Property '${d.property}' does not exist on type '${typeDisplayName(narrowedObjType)}'. Available: ${narrowedObjType.typeNames.join(", ")}`,
 						node.location.line, node.location.column);
 					return propType;
@@ -4651,7 +4651,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		// bytes. Same-offset shared fields (identical type prefix) stay legal. No
 		// disc gate: structural no-disc unions route through v<N> in C just the same,
 		// and the helper only fires on a real cross-variant layout conflict.
-		if (narrowedSlot === 0 && propType.kind !== TypeKind.Pending
+		if (narrowedSlot === 0 && !isUnresolvedType(propType)
 				&& duSharedFieldOffsetDiffers(resolvedObjType, d.property)) {
 			addError(ctx, `field '${d.property}' sits at different offsets across variants of '${typeDisplayName(resolvedObjType)}' — narrow with match/if on the discriminant before accessing it`,
 				node.location.line, node.location.column);
@@ -4661,7 +4661,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		// v<N> index space from this sym at codegen, while the node's own nodeType may
 		// be flow-narrowed to a single variant below. Scoped to DU-typed fields only —
 		// blanket syms shift analyzer/DCE aliveness (self-host link regression).
-		if (node.resolvedSym === null && propType.kind !== TypeKind.Pending) {
+		if (node.resolvedSym === null && !isUnresolvedType(propType)) {
 			const peeledProp = peelToStructOrUnion(propType);
 			if (peeledProp !== null && peeledProp.kind === TypeKind.Union) {
 				const unionFieldSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
@@ -4671,7 +4671,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			}
 		}
 	}
-	if (propType.kind !== TypeKind.Pending) {
+	if (!isUnresolvedType(propType)) {
 		// reference parity: insert HiddenDeref AFTER field resolution succeeds
 		if (needsDeref && d.object.kind !== NodeKind.HiddenDeref) {
 			const tok = createToken(TokenKind.Ident, "", node.location.line);
@@ -4927,8 +4927,8 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	//   - obj's type has an extension `getDynamicField(this T, key: string): U`.
 	// Mirrors the toItems / toString synthesis pattern (see checkPass.ms:770-790).
 	// Type opts in by declaring the extension; non-opt-in types remain strict.
-	if (propType.kind === TypeKind.Pending
-			&& resolvedObjType.kind !== TypeKind.Pending
+	if (isUnresolvedType(propType)
+			&& !isUnresolvedType(resolvedObjType)
 			&& resolvedObjType.kind !== TypeKind.Error
 			&& d.property !== "getDynamicField"
 			&& ctx.initTracker.leftPartOfAsgn === 0
@@ -4949,7 +4949,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 				checkExpr(ctx, synthCall, null);
 				if (synthCall.nodeType !== null
 						&& synthCall.nodeType.kind !== TypeKind.Error
-						&& synthCall.nodeType.kind !== TypeKind.Pending) {
+						&& !isUnresolvedType(synthCall.nodeType)) {
 					// Rewrite this MemberExpr in-place to the synthesized CallExpr.
 					// Caller holds a reference to `node`; we mutate kind/data/type/flags so they see the call.
 					// Flags carry NodeFlag.ExtCall set by checkCallExpr — codegen reads it to emit
@@ -4971,7 +4971,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	// builtinLower resolves to the correct C function per type.
 	// Return the function type (not string) so CallExpr extracts the return type.
 	// Numeric types accept optional radix: .toString() or .toString(36)
-	if (d.property === "toString" && propType.kind === TypeKind.Pending) {
+	if (d.property === "toString" && isUnresolvedType(propType)) {
 		let toStrFnType: Type | null = null;
 		if (isNumeric(resolvedObjType)) {
 			toStrFnType = createFunction([int32Type()], ["radix"], stringType());
@@ -4986,7 +4986,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	}
 	// Unresolved member access — emit error with field suggestion if available
 	const propertyActuallyExists = resolvedObjType.typeNames !== null && resolvedObjType.typeNames.indexOf(d.property) >= 0;
-	if (propType.kind === TypeKind.Pending && resolvedObjType.kind !== TypeKind.Pending && !propertyActuallyExists) {
+	if (isUnresolvedType(propType) && !isUnresolvedType(resolvedObjType) && !propertyActuallyExists) {
 		// Suppress error in LHS-of-assignment context when type opts into the
 		// `setDynamicField` write protocol. The enclosing BinaryExpr handler
 		// rewrites the assignment as `obj.setDynamicField("key", value)`.
@@ -5003,7 +5003,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		// field. Without this, writes on alias-typed receivers (e.g.
 		// `MacroInvocationData.macroArgs`) would silently route through the
 		// protocol and surface a confusing setDynamicField type error.
-		let realFieldOnAlias = getProperty(resolvedObjType, d.property).kind !== TypeKind.Pending;
+		let realFieldOnAlias = !isUnresolvedType(getProperty(resolvedObjType, d.property));
 		if (!realFieldOnAlias && resolvedObjType.typeName !== "") {
 			const aliasSym = lookupSymbol(ctx.table, resolvedObjType.typeName);
 			if (aliasSym !== null) {
@@ -5017,7 +5017,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 					break;
 				}
 				if (inner !== null && (inner.kind === TypeKind.Struct || inner.kind === TypeKind.Union)
-						&& getProperty(inner, d.property).kind !== TypeKind.Pending) {
+						&& !isUnresolvedType(getProperty(inner, d.property))) {
 					realFieldOnAlias = true;
 				}
 			}
@@ -5036,7 +5036,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 				break;
 			}
 			if (symType !== null && (symType.kind === TypeKind.Struct || symType.kind === TypeKind.Union)
-					&& getProperty(symType, d.property).kind !== TypeKind.Pending) {
+					&& !isUnresolvedType(getProperty(symType, d.property))) {
 				realFieldOnAlias = true;
 			}
 		}
@@ -5183,7 +5183,7 @@ function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop:
 	if (found === null) return null;
 	if (conflict) {
 		addError(ctx, `field '${prop}' has different types across Node variants — narrow with a kind check or '.data as <Kind>Data' before accessing it`, node.location.line, node.location.column);
-		return pendingType();
+		return inferredType();
 	}
 	return found;
 }
@@ -5194,7 +5194,7 @@ function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 	const d = node.data as MatchExprData;
 	checkExpr(ctx, d.matchDisc, null);
 	const discType = d.matchDisc.nodeType;
-	let returnType = pendingType();
+	let returnType = inferredType();
 	let hasWildcard = false;
 	const coveredMembers: string[] = [];
 
@@ -5263,7 +5263,7 @@ function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		if (cd.caseGuard !== null) {
 			checkExpr(ctx, cd.caseGuard, null);
 		}
-		let bodyType = pendingType();
+		let bodyType = inferredType();
 		if (cd.caseBody.kind === NodeKind.BlockStmt) {
 			ctx.matchExprDepth = ctx.matchExprDepth + 1;
 			callCheckStmt(ctx, cd.caseBody);
@@ -5284,7 +5284,7 @@ function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchBreaks.push(breaksBlock(cd.caseBody));
-		if (returnType.kind === TypeKind.Pending && bodyType.kind !== TypeKind.Pending) {
+		if (isUnresolvedType(returnType) && !isUnresolvedType(bodyType)) {
 			returnType = bodyType;
 		}
 	}
@@ -5413,7 +5413,7 @@ export function checkDuplicatePatterns(ctx: CheckerContext, cases: Node[]): void
 
 export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[], returnTypeAnnotation: string, expectedType: Type | null): Type {
 	const savedReturn = ctx.inferredReturn;
-	ctx.inferredReturn = pendingType();
+	ctx.inferredReturn = inferredType();
 	const savedMatchDepth = ctx.matchExprDepth;
 	ctx.matchExprDepth = 0;
 
@@ -5471,7 +5471,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		&& fnExpected !== null
 		&& fnExpected.kind === TypeKind.Function
 		&& fnExpected.typeReturn !== null
-		&& fnExpected.typeReturn.kind !== TypeKind.Pending
+		&& !isUnresolvedType(fnExpected.typeReturn)
 		&& !hasGenericParams(fnExpected.typeReturn)) {
 		explicitReturnType = fnExpected.typeReturn;
 	}
@@ -5479,13 +5479,13 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	const savedFunction = ctx.currentFunction;
 	// Set explicit return type on function symbol BEFORE checking body, so return
 	// statements can use it as expectedType (semProcAux parity: annotation propagates)
-	const fnSymType = explicitReturnType !== null ? createFunction([], [], explicitReturnType) : pendingType();
+	const fnSymType = explicitReturnType !== null ? createFunction([], [], explicitReturnType) : inferredType();
 	const sym = makeSymbol(name, SymbolKind.Function, fnSymType, false);
 	ctx.currentFunction = sym;
 	openScope(ctx.table, ScopeKind.Function);
 	let pi = 0;
 	for (const p of params) {
-		let pType = pendingType();
+		let pType = inferredType();
 		if (pi < paramTypes.length && paramTypes[pi] !== "") {
 			pType = resolveAnnotation(paramTypes[pi], ctx, 0, 0);
 		} else if (ctxParamTypes !== null && pi < ctxParamTypes.length && ctxParamTypes[pi] !== null) {
@@ -5509,7 +5509,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	} else {
 		checkExpr(ctx, body, explicitReturnType);
 		const exprType = body.nodeType;
-		if (ctx.inferredReturn.kind === TypeKind.Pending) {
+		if (ctx.inferredReturn.kind === TypeKind.Inferred) {
 			ctx.inferredReturn = exprType;
 		}
 	}
@@ -5523,7 +5523,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	const types: Type[] = [];
 	let ti = 0;
 	for (const p of params) {
-		let pType = pendingType();
+		let pType = inferredType();
 		if (ti < paramTypes.length && paramTypes[ti] !== "") {
 			pType = resolveAnnotation(paramTypes[ti], ctx, 0, 0);
 		} else if (ctxParamTypes !== null && ti < ctxParamTypes.length && ctxParamTypes[ti] !== null) {
@@ -5553,10 +5553,10 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	if (returnTypeAnnotation === "void") {
 		return createClosureType(types, params, voidType());
 	}
-	if (inferredRet.kind !== TypeKind.Pending) {
+	if (!isUnresolvedType(inferredRet)) {
 		return createClosureType(types, params, inferredRet);
 	}
-	return createClosureType(types, params, pendingType());
+	return createClosureType(types, params, inferredType());
 }
 
 function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {

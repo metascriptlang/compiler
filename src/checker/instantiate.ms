@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName } from "./types";
+import { isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, addError } from "./context";
@@ -544,7 +544,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 export function instantiateClassConstructor(classSym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): void {
 	// Refuse unresolved types
 	for (const ct of concreteTypes) {
-		if (ct === null || ct.kind === TypeKind.GenericParam || ct.kind === TypeKind.Pending) return;
+		if (ct === null || ct.kind === TypeKind.GenericParam || isUnresolvedType(ct)) return;
 	}
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);

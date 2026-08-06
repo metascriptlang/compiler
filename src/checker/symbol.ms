@@ -1,5 +1,5 @@
 import { Node, Symbol, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
-import { pendingType } from "./types";
+import { noneType } from "./types";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 
 
@@ -253,7 +253,7 @@ test "create table" {
 
 test "define and lookup" {
 	const table = createSymbolTable();
-	const sym = makeSymbol("x", SymbolKind.Variable, pendingType(), false);
+	const sym = makeSymbol("x", SymbolKind.Variable, noneType(), false);
 	const result = defineSymbol(table, sym);
 	assert result.ok;
 	assert lookupSymbol(table, "x") !== null;
@@ -262,8 +262,8 @@ test "define and lookup" {
 
 test "duplicate error" {
 	const table = createSymbolTable();
-	const sym1 = makeSymbol("x", SymbolKind.Variable, pendingType(), false);
-	const sym2 = makeSymbol("x", SymbolKind.Variable, pendingType(), true);
+	const sym1 = makeSymbol("x", SymbolKind.Variable, noneType(), false);
+	const sym2 = makeSymbol("x", SymbolKind.Variable, noneType(), true);
 	defineSymbol(table, sym1);
 	const result = defineSymbol(table, sym2);
 	assert !result.ok;
@@ -271,9 +271,9 @@ test "duplicate error" {
 
 test "scope nesting" {
 	const table = createSymbolTable();
-	defineSymbol(table, makeSymbol("a", SymbolKind.Variable, pendingType(), false));
+	defineSymbol(table, makeSymbol("a", SymbolKind.Variable, noneType(), false));
 	openScope(table, ScopeKind.Block);
-	defineSymbol(table, makeSymbol("b", SymbolKind.Variable, pendingType(), false));
+	defineSymbol(table, makeSymbol("b", SymbolKind.Variable, noneType(), false));
 	// Inner scope sees both
 	assert lookupSymbol(table, "a") !== null;
 	assert lookupSymbol(table, "b") !== null;
@@ -285,9 +285,9 @@ test "scope nesting" {
 
 test "shadowing" {
 	const table = createSymbolTable();
-	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, pendingType(), false));
+	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, noneType(), false));
 	openScope(table, ScopeKind.Block);
-	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, pendingType(), true));
+	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, noneType(), true));
 	// Inner lookup finds inner (mutable) shadow
 	const inner = lookupSymbol(table, "x");
 	assert inner !== null;
@@ -301,7 +301,7 @@ test "shadowing" {
 
 test "lookupLocal" {
 	const table = createSymbolTable();
-	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, pendingType(), false));
+	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, noneType(), false));
 	openScope(table, ScopeKind.Block);
 	// lookupLocal does NOT find parent scope
 	assert lookupLocal(table, "x") === null;
@@ -312,10 +312,10 @@ test "lookupLocal" {
 
 test "function scope params" {
 	const table = createSymbolTable();
-	defineSymbol(table, makeSymbol("add", SymbolKind.Function, pendingType(), false));
+	defineSymbol(table, makeSymbol("add", SymbolKind.Function, noneType(), false));
 	openScope(table, ScopeKind.Function);
-	defineSymbol(table, makeSymbol("a", SymbolKind.Parameter, pendingType(), false));
-	defineSymbol(table, makeSymbol("b", SymbolKind.Parameter, pendingType(), false));
+	defineSymbol(table, makeSymbol("a", SymbolKind.Parameter, noneType(), false));
+	defineSymbol(table, makeSymbol("b", SymbolKind.Parameter, noneType(), false));
 	assert lookupSymbol(table, "a") !== null;
 	assert lookupSymbol(table, "b") !== null;
 	assert lookupSymbol(table, "add") !== null;
@@ -325,13 +325,13 @@ test "function scope params" {
 
 test "deeply nested" {
 	const table = createSymbolTable();
-	defineSymbol(table, makeSymbol("global", SymbolKind.Variable, pendingType(), false));
+	defineSymbol(table, makeSymbol("global", SymbolKind.Variable, noneType(), false));
 	openScope(table, ScopeKind.Function);
-	defineSymbol(table, makeSymbol("func", SymbolKind.Variable, pendingType(), false));
+	defineSymbol(table, makeSymbol("func", SymbolKind.Variable, noneType(), false));
 	openScope(table, ScopeKind.Block);
-	defineSymbol(table, makeSymbol("block", SymbolKind.Variable, pendingType(), false));
+	defineSymbol(table, makeSymbol("block", SymbolKind.Variable, noneType(), false));
 	openScope(table, ScopeKind.Loop);
-	defineSymbol(table, makeSymbol("loop", SymbolKind.Variable, pendingType(), false));
+	defineSymbol(table, makeSymbol("loop", SymbolKind.Variable, noneType(), false));
 	assert lookupSymbol(table, "global") !== null;
 	assert lookupSymbol(table, "func") !== null;
 	assert lookupSymbol(table, "block") !== null;
@@ -355,8 +355,8 @@ test "scope kind" {
 
 test "function overloads allowed" {
 	const table = createSymbolTable();
-	const sym1 = makeSymbol("add", SymbolKind.Function, pendingType(), false);
-	const sym2 = makeSymbol("add", SymbolKind.Function, pendingType(), false);
+	const sym1 = makeSymbol("add", SymbolKind.Function, noneType(), false);
+	const sym2 = makeSymbol("add", SymbolKind.Function, noneType(), false);
 	const r1 = defineSymbol(table, sym1);
 	assert r1.ok;
 	const r2 = defineSymbol(table, sym2);
@@ -368,20 +368,20 @@ test "function overloads allowed" {
 
 test "non-function duplicate still errors" {
 	const table = createSymbolTable();
-	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, pendingType(), false));
-	const r = defineSymbol(table, makeSymbol("x", SymbolKind.Variable, pendingType(), false));
+	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, noneType(), false));
+	const r = defineSymbol(table, makeSymbol("x", SymbolKind.Variable, noneType(), false));
 	assert !r.ok;
 }
 
 test "SymbolFlag.Exported default false" {
-	const sym = makeSymbol("x", SymbolKind.Variable, pendingType(), false);
+	const sym = makeSymbol("x", SymbolKind.Variable, noneType(), false);
 	assert !hasFlag(sym, SymbolFlag.Exported);
 }
 
 test "lookupExport finds exported" {
 	const table = createSymbolTable();
 	openScope(table, ScopeKind.Module);
-	const sym = makeSymbol("foo", SymbolKind.Function, pendingType(), false);
+	const sym = makeSymbol("foo", SymbolKind.Function, noneType(), false);
 	setFlag(sym, SymbolFlag.Exported);
 	defineSymbol(table, sym);
 	const found = lookupExport(table, "foo");
@@ -392,7 +392,7 @@ test "lookupExport finds exported" {
 test "lookupExport skips non-exported" {
 	const table = createSymbolTable();
 	openScope(table, ScopeKind.Module);
-	defineSymbol(table, makeSymbol("bar", SymbolKind.Variable, pendingType(), false));
+	defineSymbol(table, makeSymbol("bar", SymbolKind.Variable, noneType(), false));
 	const found = lookupExport(table, "bar");
 	assert found === null;
 }

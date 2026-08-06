@@ -16,7 +16,7 @@ import {
 	SwitchStmtData, SwitchCaseData, VariableDeclData, CallExprData,
 } from "../ast/node";
 import {
-	createUnion, pendingType, nullType, neverType,
+	createUnion, inferredType, nullType, neverType,
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isNumeric, isDiscriminatedUnion,
@@ -729,7 +729,7 @@ function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
 }
 
 function unionOfTypes(types: Type[], parent: Type | null): Type {
-	if (types.length === 0) return pendingType();
+	if (types.length === 0) return inferredType();
 	if (types.length === 1) return types[0];
 	const uniq: Type[] = [];
 	for (const t of types) {
@@ -742,7 +742,7 @@ function unionOfTypes(types: Type[], parent: Type | null): Type {
 		}
 		if (!seen) uniq.push(t);
 	}
-	if (uniq.length === 0) return pendingType();
+	if (uniq.length === 0) return inferredType();
 	if (uniq.length === 1) return uniq[0];
 	return joinNarrowedTypes(parent, uniq);
 }
@@ -1202,9 +1202,9 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 	// For non-union types: if the kind matches, keep/drop based on assumeTrue.
 	const matches = typeofStringMatches(t, d.value);
 	if (assumeTrue) {
-		return matches ? t : pendingType();
+		return matches ? t : inferredType();
 	}
-	return matches ? pendingType() : t;
+	return matches ? inferredType() : t;
 }
 
 // Family match for `typeof` narrowing: "number" covers every numeric kind —

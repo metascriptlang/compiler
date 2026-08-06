@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, ArrayAccessData, BinaryExprData, ConditionalExprData, TypeAssertionData, UpdateExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, HiddenDerefData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, pendingType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable } from "./types";
+import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, pendingType, noneType, isUnresolvedType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable } from "./types";
 import { ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
@@ -1366,7 +1366,7 @@ export function sgPickActiveOverload(callNode: Node, sym: Symbol): number {
 					&& arg.resolvedSym.symbolType.kind === TypeKind.EnumLiteral) {
 				argType = arg.resolvedSym.symbolType;
 			}
-			if (argType === null || argType.kind === TypeKind.Pending) continue;
+			if (argType === null || isUnresolvedType(argType)) continue;
 			const paramType = ct.typeChildren[ai];
 			if (paramType === null) continue;
 			// Exact match on EnumLiteral (both sides same enum + same member)
@@ -1742,7 +1742,7 @@ export function sgCompleteObjectFields(ctx: CheckerContext, prefix: string, root
 		if (already) continue;
 		const ps = sgPrefixMatch(prefix, fname);
 		if (ps > 0) {
-			const ft = fi < t.typeChildren.length ? t.typeChildren[fi] : pendingType();
+			const ft = fi < t.typeChildren.length ? t.typeChildren[fi] : noneType();
 			const loc = makeLoc(0, 0);
 			const item: SgSuggest = {
 				sym: null, name: fname, kind: SymbolKind.Property, symType: ft,
@@ -1786,7 +1786,7 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 			const ps = sgPrefixMatch(prefix, propName);
 			if (ps > 0) {
 				const propType = i < rt.typeChildren.length
-					? rt.typeChildren[i] : pendingType();
+					? rt.typeChildren[i] : noneType();
 				const loc = makeLoc(0, 0);
 				const item: SgSuggest = {
 					sym: null, name: propName, kind: SymbolKind.Property, symType: propType,
@@ -2297,7 +2297,7 @@ function sgCollectVarTypeHint(
 	if (sym === null) return;
 	if (sym.symbolKind !== SymbolKind.Variable && sym.symbolKind !== SymbolKind.Parameter) return;
 	if (sym.symbolType === null) return;
-	if (sym.symbolType.kind === TypeKind.Pending) return;
+	if (isUnresolvedType(sym.symbolType)) return;
 	if (sym.symbolType.kind === TypeKind.Error) return;
 
 	let typeStr = sgTypeToString(sym.symbolType);
@@ -2386,7 +2386,7 @@ function sgCollectReturnTypeHint(
 	if (sym.symbolType === null) return;
 	const retType = sym.symbolType.typeReturn;
 	if (retType === null) return;
-	if (retType.kind === TypeKind.Pending) return;
+	if (isUnresolvedType(retType)) return;
 	if (retType.kind === TypeKind.Error) return;
 	if (retType.kind === TypeKind.Void) return;
 
@@ -2915,7 +2915,7 @@ test "format function hover" {
 test "format interface hover" {
 	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
-		sym: null, name: "Point", kind: SymbolKind.Interface, symType: pendingType(),
+		sym: null, name: "Point", kind: SymbolKind.Interface, symType: noneType(),
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false, usageCount: 0,
@@ -2926,7 +2926,7 @@ test "format interface hover" {
 test "format class hover" {
 	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
-		sym: null, name: "Vec", kind: SymbolKind.Class, symType: pendingType(),
+		sym: null, name: "Vec", kind: SymbolKind.Class, symType: noneType(),
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false, usageCount: 0,
@@ -2937,7 +2937,7 @@ test "format class hover" {
 test "format enum hover" {
 	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
-		sym: null, name: "Color", kind: SymbolKind.Enum, symType: pendingType(),
+		sym: null, name: "Color", kind: SymbolKind.Enum, symType: noneType(),
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false, usageCount: 0,
@@ -3545,7 +3545,7 @@ test "doc comment JSDoc empty body" {
 test "sgFormatHoverDoc with doc comment" {
 	const suggest: SgSuggest = {
 		sym: null, name: "foo", kind: SymbolKind.Function,
-		symType: pendingType(), location: makeLoc(1, 0),
+		symType: noneType(), location: makeLoc(1, 0),
 		modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: true, isMutable: false, usageCount: 0,
@@ -3557,7 +3557,7 @@ test "sgFormatHoverDoc with doc comment" {
 test "sgFormatHoverDoc no comment" {
 	const suggest: SgSuggest = {
 		sym: null, name: "bar", kind: SymbolKind.Variable,
-		symType: pendingType(), location: makeLoc(1, 0),
+		symType: noneType(), location: makeLoc(1, 0),
 		modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false, usageCount: 0,

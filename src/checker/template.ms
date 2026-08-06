@@ -16,7 +16,7 @@ import {
 	Type, Symbol,
 } from "../ast/node";
 import { CheckerContext, addError } from "./context";
-import { pendingType } from "./types";
+import { inferredType } from "./types";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { callCheckExpr } from "./checkerCallbacks";
 
@@ -39,7 +39,7 @@ export function expandTemplate(ctx: CheckerContext, sym: Symbol, callNode: Node,
 	if (_templateDepth >= TEMPLATE_DEPTH_LIMIT) {
 		addError(ctx, `Template '${sym.name}' instantiation too deep (limit ${TEMPLATE_DEPTH_LIMIT})`,
 			callNode.location.line, callNode.location.column);
-		return pendingType();
+		return inferredType();
 	}
 	_templateDepth = _templateDepth + 1;
 	const result = expandTemplateInner(ctx, sym, callNode, callData, expectedType);
@@ -49,9 +49,9 @@ export function expandTemplate(ctx: CheckerContext, sym: Symbol, callNode: Node,
 
 function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, callData: CallExprData, expectedType: Type | null): Type {
 	const fnDecl = sym.declNode;
-	if (fnDecl === null) return pendingType();
+	if (fnDecl === null) return inferredType();
 	const fd = fnDecl.data as FunctionDeclData;
-	if (fd.fnBody === null) return pendingType();
+	if (fd.fnBody === null) return inferredType();
 
 	// Check arity (exclude 'this' param for extension methods)
 	const paramNames: string[] = [];
@@ -61,7 +61,7 @@ function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, c
 	if (callData.arguments.length !== paramNames.length) {
 		addError(ctx, `Template '${sym.name}' expects ${paramNames.length} args, got ${callData.arguments.length}`,
 			callNode.location.line, callNode.location.column);
-		return pendingType();
+		return inferredType();
 	}
 
 	// Check args first so they have nodeType set
@@ -102,7 +102,7 @@ function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, c
 	callNode.nodeType = expandedExpr.nodeType;
 	callNode.resolvedSym = expandedExpr.resolvedSym;
 
-	return expandedExpr.nodeType !== null ? expandedExpr.nodeType : pendingType();
+	return expandedExpr.nodeType !== null ? expandedExpr.nodeType : inferredType();
 }
 
 // ===== Parameter substitution walker =====

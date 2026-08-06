@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
-import { pendingType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
+import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym } from "./context";
 import { isGlobalImport } from "./prelude";
@@ -138,7 +138,7 @@ function collectExportLocal(ctx: CheckerContext, node: Node): void {
 function collectVariable(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
 	const mutable = d.declKind !== DeclKind.Const;
-	const sym = makeSymbol(d.declName, SymbolKind.Variable, pendingType(), mutable);
+	const sym = makeSymbol(d.declName, SymbolKind.Variable, inferredType(), mutable);
 	sym.symbolType.sym = sym;
 	defineOrError(ctx, sym, node);
 	// Reference parity: attach symbol to VarDecl node (like FunctionDecl).
@@ -217,7 +217,7 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 		return;
 	}
 	// Define symbol first — needed so extension can link to it
-	const sym = makeSymbol(d.fnName, SymbolKind.Function, pendingType(), false);
+	const sym = makeSymbol(d.fnName, SymbolKind.Function, inferredType(), false);
 	sym.symbolType.sym = sym;
 	// Tier 1: overload signature (body-less) — typecheck-only, codegen skips emission
 	if (d.fnFlags.indexOf("overload", 0) >= 0) {
@@ -241,7 +241,7 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 	// Register extension (instance or static) with direct sym link
 	const extTypeName = getExtTypeName(d.fnFlags);
 	if (extTypeName !== "" && ctx.extensionRegistry !== null) {
-		registerExtension(ctx.extensionRegistry, createExtMethod(d.fnName, extTypeName, "", pendingType(), isStaticExtensionFlag(d.fnFlags), sym, 1));
+		registerExtension(ctx.extensionRegistry, createExtMethod(d.fnName, extTypeName, "", noneType(), isStaticExtensionFlag(d.fnFlags), sym, 1));
 	}
 }
 
@@ -257,7 +257,7 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 			const pd = member.data as PropertyDeclData;
 			if (!pd.propIsStatic) {
 				memberNames.push(pd.propName);
-				memberTypes.push(pendingType());
+				memberTypes.push(inferredType());
 			}
 		}
 	}
@@ -285,7 +285,7 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 		if (member.kind === NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (pd.propIsStatic) {
-				const staticSym = makeSymbol(d.className + "." + pd.propName, SymbolKind.Variable, pendingType(), true);
+				const staticSym = makeSymbol(d.className + "." + pd.propName, SymbolKind.Variable, inferredType(), true);
 				setFlag(staticSym, SymbolFlag.Static);
 				staticSym.declNode = member;
 				sym.staticFields.push(staticSym);
@@ -317,7 +317,7 @@ function collectActor(ctx: CheckerContext, node: Node): void {
 			const pd = member.data as PropertyDeclData;
 			if (!pd.propIsStatic) {
 				memberNames.push(pd.propName);
-				memberTypes.push(pendingType());
+				memberTypes.push(inferredType());
 			}
 		}
 	}
@@ -389,7 +389,7 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 			md.methodDefaults = newDefaults;
 		}
 	}
-	const fnType = createFunction([], [], pendingType());
+	const fnType = createFunction([], [], inferredType());
 	if (md.nativeName !== null && md.nativeName !== "") {
 		fnType.typeName = md.nativeName;
 	}
@@ -494,7 +494,7 @@ function collectExtern(ctx: CheckerContext, node: Node): void {
 		ExternKind.Type => SymbolKind.TypeAlias,
 		_ => SymbolKind.Variable,
 	};
-	const sym = makeSymbol(d.externName, kind, pendingType(), false);
+	const sym = makeSymbol(d.externName, kind, inferredType(), false);
 	sym.symbolType.sym = sym;
 	setFlag(sym, SymbolFlag.ImportC);
 	// Wire nativeName from AST 'from "c_name"' clause
@@ -511,7 +511,7 @@ function collectMacro(ctx: CheckerContext, node: Node): void {
 	// Phase B+: Use SymbolKind.Macro so checkCallExpr can detect macro calls
 	// and rewrite them to MacroInvocation (enables bare-call invocation: foo(args)
 	// instead of @foo(args)).
-	const sym = makeSymbol(d.macroDeclName, SymbolKind.Macro, pendingType(), false);
+	const sym = makeSymbol(d.macroDeclName, SymbolKind.Macro, noneType(), false);
 	sym.symbolType.sym = sym;
 	defineOrError(ctx, sym, node);
 	ctx.macroBodyRegistry.set(d.macroDeclName, d.macroDeclBody);
@@ -760,7 +760,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 	if (d.importNames.length === 1 && d.importNames[0] === "*") {
 		const nsAlias = d.importAliases[0];
 		if (lookupLocal(ctx.table, nsAlias) !== null) return;
-		const nsSym = makeSymbol(nsAlias, SymbolKind.Module, pendingType(), false);
+		const nsSym = makeSymbol(nsAlias, SymbolKind.Module, noneType(), false);
 		nsSym.modulePath = sourcePath;
 		nsSym.location = node.location;
 		defineSymbol(ctx.table, nsSym);
@@ -867,7 +867,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				}
 				// If imported symbol is an extension method, register primary locally.
 				// Reference parity: sym is the single source of truth for the type.
-				// When sym is available, fnType = pendingType() to avoid double-decref.
+				// When sym is available, fnType = noneType() to avoid double-decref.
 				if (exportInfo.extReceiverType !== "" && ctx.extensionRegistry !== null) {
 					registerExtension(ctx.extensionRegistry, createExtMethod(localAlias, exportInfo.extReceiverType, sourcePath, exportInfo.symType, exportInfo.extIsStatic, primarySym !== null ? primarySym : null as unknown as Symbol, 1));
 				}
@@ -880,7 +880,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				if (!isCircular) {
 					addError(ctx, "'" + importName + "' is not exported from '" + d.importSource + "'", node.location.line, node.location.column);
 				}
-				defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, pendingType(), false), node);
+				defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, inferredType(), false), node);
 			}
 		} else {
 			// Crash-fast: source module couldn't be resolved. Silent fallback to
@@ -888,7 +888,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 			// instantiations like Result<MyNode, X>, surfacing later as misleading
 			// "Property does not exist" errors. Fail loud at the import site.
 			addError(ctx, "Cannot resolve module '" + d.importSource + "' to import '" + importName + "'", node.location.line, node.location.column);
-			defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, pendingType(), false), node);
+			defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, inferredType(), false), node);
 		}
 	}
 
@@ -1077,10 +1077,10 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 							if (!isCirc) {
 								addError(ctx, "'" + importName + "' is not exported from '" + imp.importSource + "'", node.location.line, node.location.column);
 							}
-							defineOrError(ctx, makeSymbol(alias, SymbolKind.Variable, pendingType(), false), node);
+							defineOrError(ctx, makeSymbol(alias, SymbolKind.Variable, inferredType(), false), node);
 						}
 					} else {
-						defineOrError(ctx, makeSymbol(alias, SymbolKind.Variable, pendingType(), false), node);
+						defineOrError(ctx, makeSymbol(alias, SymbolKind.Variable, inferredType(), false), node);
 					}
 				}
 			}
@@ -1466,7 +1466,7 @@ test "re-export preserves original location and records sgSymRecord" {
 	ctx.modulePath = "/test/hub/index.ms";
 	const origLoc = makeLoc(51, 17);
 	const fakeExport: ExportedSymInfo = {
-		name: "get", kind: SymbolKind.Function, symType: pendingType(),
+		name: "get", kind: SymbolKind.Function, symType: noneType(),
 		overloadTypes: [], extReceiverType: "", extIsStatic: false,
 		overloadExtReceiverTypes: [], overloadExtIsStatic: [],
 		nativeName: "", builtinKind: "",
