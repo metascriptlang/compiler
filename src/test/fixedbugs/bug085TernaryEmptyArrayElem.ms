@@ -36,3 +36,38 @@ function main(): void { console.log(f(false, [1])); }
 	const c = compileToC(src);
 	assert c.ok;
 }
+
+test "bug085: match arm empty array adopts the other arm's type" {
+	const src = `function f(n: number, xs: number[]): number[] {
+	const r = match (n) { 1 => xs, _ => [] };
+	return r;
+}
+function main(): void { console.log(f(2, [7, 8]).length); }
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
+test "bug085: both-empty ternary is a located checker error, not an internal one" {
+	const src = `function f(flag: boolean): number {
+	const both = flag ? [] : [];
+	return both.length;
+}
+`;
+	const c = compileToC(src);
+	assert !c.ok;
+	assert c.error.contains("cannot infer the element type");
+	assert !c.error.contains("internal:");
+}
+
+test "bug085: bare empty array decl without annotation is a located checker error" {
+	const src = `function main(): void {
+	const x = [];
+	x.push(1);
+}
+`;
+	const c = compileToC(src);
+	assert !c.ok;
+	assert c.error.contains("cannot infer the element type");
+	assert !c.error.contains("internal:");
+}
