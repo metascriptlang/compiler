@@ -1747,6 +1747,27 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				return;
 			}
 		}
+		// A flow-narrowed `unknown` keeps its declared void* repr in C, so the
+		// deref the narrow implies needs the pointer cast spelled out. The
+		// narrowed type rides the deref node when the operand is an assertion
+		// (`(u as Box).n`), the operand itself otherwise.
+		let declOperand: Node = hd.expr;
+		while (declOperand !== null && declOperand.kind === NodeKind.TypeAssertion) {
+			declOperand = (declOperand.data as TypeAssertionData).asExpr;
+		}
+		if (declOperand !== null && declOperand.resolvedSym !== null) {
+			const declT = declOperand.resolvedSym.symbolType;
+			let narrowed = hd.expr.nodeType !== null ? hd.expr.nodeType : node.nodeType;
+			if (declT !== null && declT.kind === TypeKind.Unknown
+					&& narrowed !== null && narrowed.kind !== TypeKind.Unknown) {
+				const nDesc = getTypeDesc(g, narrowed);
+				if (nDesc !== "void*" && nDesc !== "void") {
+					const castDesc = isPointerType(narrowed) ? nDesc : nDesc + "*";
+					ctx.results.push(`(*(${castDesc})${inner})`);
+					return;
+				}
+			}
+		}
 		ctx.results.push(`(*${inner})`);
 		return;
 	}
