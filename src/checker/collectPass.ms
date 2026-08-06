@@ -477,7 +477,7 @@ function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 
 function collectTypeAlias(ctx: CheckerContext, node: Node): void {
 	const d = node.data as TypeAliasDeclData;
-	const aliasType = emptyType();
+	const aliasType = inferredType();
 	const sym = makeSymbol(d.aliasName, SymbolKind.TypeAlias, aliasType, false);
 	aliasType.sym = sym;
 	defineOrError(ctx, sym, node);

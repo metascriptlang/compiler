@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { pendingType, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
+import { noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag } from "./symbol";
 import { IdentCache } from "./idents";

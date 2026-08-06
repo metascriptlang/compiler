@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, ArrayAccessData, BinaryExprData, ConditionalExprData, TypeAssertionData, UpdateExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, HiddenDerefData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, pendingType, noneType, isUnresolvedType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable } from "./types";
+import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, noneType, isUnresolvedType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable } from "./types";
 import { ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
@@ -273,7 +273,7 @@ function sgTypeToStringDepth(t: Type | null, depth: number): string {
 	const prim = match (t.kind) {
 		TypeKind.Number => "number", TypeKind.String => "string",
 		TypeKind.Boolean => "boolean", TypeKind.Void => "void",
-		TypeKind.Null => "null", TypeKind.Pending => "unknown",
+		TypeKind.Null => "null",
 		TypeKind.Never => "never", TypeKind.Error => "error",
 		TypeKind.Int8 => "int8", TypeKind.Int16 => "int16",
 		TypeKind.Int32 => "int32", TypeKind.Int64 => "int64",
@@ -2840,8 +2840,6 @@ test "boolean" { assert sgTypeToString(booleanType()) === "boolean"; }
 test "void" { assert sgTypeToString(voidType()) === "void"; }
 
 test "null" { assert sgTypeToString(nullType()) === "null"; }
-
-test "unknown" { assert sgTypeToString(pendingType()) === "unknown"; }
 
 test "never" { assert sgTypeToString(neverType()) === "never"; }
 

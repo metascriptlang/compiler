@@ -88,7 +88,7 @@ export function assignType(target: Type, source: Type): void {
 
 export function emptyType(): Type {
 	return {
-		kind: TypeKind.Pending,
+		kind: TypeKind.None,
 		typeName: "",
 		typeNames: [],
 		typeChildren: [],
@@ -1260,14 +1260,13 @@ export function stringType(): Type { return getSysType(TypeKind.String); }
 export function booleanType(): Type { return getSysType(TypeKind.Boolean); }
 export function voidType(): Type { return getSysType(TypeKind.Void); }
 export function nullType(): Type { return getSysType(TypeKind.Null); }
-export function pendingType(): Type { return getSysType(TypeKind.Pending); }
 
 // Annotation-written `unknown` — strict top type, its own kind since the
 // docs/UNKNOWN-BUG.md Phase 2 split; pointer repr (void*).
 export function unknownType(): Type { return getSysType(TypeKind.Unknown); }
 
 export function isUnresolvedType(t: Type | null): boolean {
-	return t !== null && (t.kind === TypeKind.Pending || t.kind === TypeKind.Inferred);
+	return t !== null && t.kind === TypeKind.Inferred;
 }
 export function isUnknownType(t: Type | null): boolean {
 	return t !== null && t.kind === TypeKind.Unknown;
@@ -1556,7 +1555,7 @@ export function isMaybeWrappable(t: Type | null): boolean {
 	if (t.kind === TypeKind.Null) return false;
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return false;
 	// unknown is void* in C — pointer branch of the SomePointer split, same as Ref/Ptr
-	if (t.kind === TypeKind.Pending || t.kind === TypeKind.Unknown) return false;
+	if (t.kind === TypeKind.Unknown) return false;
 	if (t.kind === TypeKind.Function) return true;
 	if (isStructType(t)) return true;
 	if (isPrimitiveKind(t.kind)) return true;
@@ -1610,8 +1609,8 @@ export function unwrapRefNullUnion(t: Type): Type | null {
 	const a = t.typeChildren[0];
 	const b = t.typeChildren[1];
 	if (a === null || b === null) return null;
-	if ((a.kind === TypeKind.Ref || a.kind === TypeKind.Ptr || a.kind === TypeKind.Pending || a.kind === TypeKind.Unknown) && b.kind === TypeKind.Null) return a;
-	if ((b.kind === TypeKind.Ref || b.kind === TypeKind.Ptr || b.kind === TypeKind.Pending || b.kind === TypeKind.Unknown) && a.kind === TypeKind.Null) return b;
+	if ((a.kind === TypeKind.Ref || a.kind === TypeKind.Ptr || a.kind === TypeKind.Unknown) && b.kind === TypeKind.Null) return a;
+	if ((b.kind === TypeKind.Ref || b.kind === TypeKind.Ptr || b.kind === TypeKind.Unknown) && a.kind === TypeKind.Null) return b;
 	return null;
 }
 
@@ -1859,7 +1858,7 @@ export function substituteType(t: Type | null, paramName: string, concrete: Type
 	substituteSetFlag(t);
 	const result = match (t.kind) {
 			TypeKind.Number | TypeKind.String | TypeKind.Boolean |
-			TypeKind.Void | TypeKind.Null | TypeKind.Pending | TypeKind.Unknown |
+			TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
 			TypeKind.Never | TypeKind.Error | TypeKind.None | TypeKind.Inferred |
 			TypeKind.GenericParam | TypeKind.CString => t,
 			TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
@@ -2327,7 +2326,6 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind === TypeKind.Enum
 		|| kind === TypeKind.EnumLiteral
 		|| kind === TypeKind.Never
-		|| kind === TypeKind.Pending
 		|| kind === TypeKind.Unknown
 		|| kind === TypeKind.Char
 		|| kind === TypeKind.CString
@@ -2445,7 +2443,6 @@ export function typeDisplayName(t: Type | null): string {
 		TypeKind.Void => "void",
 		TypeKind.Never => "never",
 		TypeKind.Unknown => "unknown",
-		TypeKind.Pending => "unknown",
 		TypeKind.Error => "<error>",
 		TypeKind.None => "<none>",
 		TypeKind.Inferred => "<inferring>",
@@ -2582,7 +2579,6 @@ test "primitive kinds" {
 	assert booleanType().kind === TypeKind.Boolean;
 	assert voidType().kind === TypeKind.Void;
 	assert nullType().kind === TypeKind.Null;
-	assert pendingType().kind === TypeKind.Pending;
 	assert neverType().kind === TypeKind.Never;
 	assert errorType().kind === TypeKind.Error;
 }
