@@ -29,7 +29,7 @@ import {
 	makeFnDecl, makeInterfaceDeclFromTypes, makeObjectLiteral, makeHiddenDeref,
 	makeNull, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr,
 } from "../util";
-import { createPtr, createRef, pendingType } from "../../checker/types";
+import { createPtr, createRef, voidType, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 import {
@@ -145,13 +145,13 @@ function preserveResolvedTypes(fnNode: Node, originalNodeType: Type): void {
 		const origCount = originalNodeType.typeChildren.length;
 		for (let pi = 0; pi < origCount; pi += 1) {
 			if (pi < fnNode.nodeType.typeChildren.length
-				&& originalNodeType.typeChildren[pi].kind !== TypeKind.Pending) {
+				&& !isUnresolvedType(originalNodeType.typeChildren[pi])) {
 				fnNode.nodeType.typeChildren[pi] = originalNodeType.typeChildren[pi];
 			}
 		}
 	}
 	if (originalNodeType.typeReturn !== null
-		&& originalNodeType.typeReturn.kind !== TypeKind.Pending) {
+		&& !isUnresolvedType(originalNodeType.typeReturn)) {
 		fnNode.nodeType.typeReturn = originalNodeType.typeReturn;
 	}
 }
@@ -492,7 +492,7 @@ function chainWalkFrom(access0: Node, curType0: Type, fieldName: string, chainNa
 	let k = 0;
 	while (k <= targetIdx) {
 		const upMember = makeMember(access, UP_FIELD, loc);
-		upMember.nodeType = pendingType();  // read $up (owning Ref<parent>, or void* at a root env) then cast
+		upMember.nodeType = createPtr(voidType());  // read $up (owning Ref<parent>, or void* at a root env) then cast
 		const nextCast = createNode(NodeKind.TypeAssertion, { asExpr: upMember, asType: chainNames[k] }, syntheticToken(loc));
 		nextCast.nodeType = createPtr(chainTypes[k]);
 		access = makeHiddenDeref(nextCast, loc);
@@ -669,7 +669,7 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 		// shared env at closure construction time. Drives chain walk in rewriteNode.
 		envFields.push(UP_FIELD);
 		envFieldTypes.push("unknown");
-		envResolvedTypes.push(pendingType());
+		envResolvedTypes.push(createPtr(voidType()));
 		for (const name of captures.items) {
 			// Grandparent captures (vars defined in a scope that is NOT the
 			// immediate function frame and NOT module-level) are not stored in
@@ -961,7 +961,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 		envResolvedTypes.push(createRef(outerEnvStructType));
 	} else {
 		envFieldTypes.push("unknown");
-		envResolvedTypes.push(pendingType());
+		envResolvedTypes.push(createPtr(voidType()));
 	}
 	for (const name of allCaptures.items) {
 		// Ancestor capture: an enclosing env already stores this var. Do NOT add a

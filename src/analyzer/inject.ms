@@ -11,7 +11,7 @@
 
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { createPrimitive, isAwaitable } from "../checker/types";
+import { createPrimitive, isAwaitable, isUnresolvedType } from "../checker/types";
 import { lookupSymbol, hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
@@ -2191,7 +2191,7 @@ function processTryCatch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 		// on stmt.nodeType by the checker.
 		const catchType = stmt.nodeType;
 		let handled = false;
-		if (d.catchName !== "" && catchType !== null && catchType.kind !== TypeKind.Pending && catchType.kind !== TypeKind.Error) {
+		if (d.catchName !== "" && catchType !== null && !isUnresolvedType(catchType) && catchType.kind !== TypeKind.Error) {
 			const rcInfo = classifyType(catchType, dctx.ctx);
 			if (rcInfo.needsCleanup) {
 				pushScope(dctx, false, false);

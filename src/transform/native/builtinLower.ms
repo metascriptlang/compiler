@@ -13,7 +13,7 @@
 // kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { isNumeric, createResult, createArray, createPrimitive, stringType, pendingType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType } from "../../checker/types";
+import { isNumeric, createResult, createArray, createPrimitive, stringType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType } from "../../checker/types";
 import { findExtension, requestEnumToString } from "../../checker/context";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -272,7 +272,7 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 			if (isOk) {
 				resType = createResult(cd.arguments[0].nodeType, stringType());
 			} else {
-				resType = createResult(pendingType(), cd.arguments[0].nodeType);
+				resType = createResult(inferredType(), cd.arguments[0].nodeType);
 			}
 			node.nodeType = resType;
 		}

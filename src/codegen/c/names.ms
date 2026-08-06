@@ -6,7 +6,7 @@
 
 import { Symbol, SymbolKind } from "../../ast/node";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../../checker/symbol";
-import { pendingType } from "../../checker/types";
+import { noneType } from "../../checker/types";
 
 
 // ===== C Keywords — identifiers that need escaping =====
@@ -350,25 +350,25 @@ test "mangledGlobalName no sym falls through to safeName" {
 }
 
 test "mangledGlobalName no modulePath falls through to safeName" {
-	const sym = makeSymbol("FOO", SymbolKind.Variable, pendingType(), false);
+	const sym = makeSymbol("FOO", SymbolKind.Variable, noneType(), false);
 	assert mangledGlobalName(sym, "FOO") === "FOO";
 }
 
 test "mangledGlobalName extern nativeName bypass" {
-	const sym = makeSymbol("x", SymbolKind.Variable, pendingType(), false);
+	const sym = makeSymbol("x", SymbolKind.Variable, noneType(), false);
 	sym.nativeName = "my_c_sym";
 	sym.modulePath = "src/foo.ms";
 	assert mangledGlobalName(sym, "FOO") === "my_c_sym";
 }
 
 test "mangledGlobalName module-qualified" {
-	const sym = makeSymbol("MAX", SymbolKind.Variable, pendingType(), false);
+	const sym = makeSymbol("MAX", SymbolKind.Variable, noneType(), false);
 	sym.modulePath = "src/foo.ms";
 	assert mangledGlobalName(sym, "MAX") === "MAX__srcZfooOms";
 }
 
 test "mangledGlobalName prefers originalName over import alias" {
-	const sym = makeSymbol("aliased", SymbolKind.Variable, pendingType(), false);
+	const sym = makeSymbol("aliased", SymbolKind.Variable, noneType(), false);
 	sym.modulePath = "src/foo.ms";
 	sym.originalName = "ORIG";
 	assert mangledGlobalName(sym, "aliased") === "ORIG__srcZfooOms";
@@ -383,20 +383,20 @@ test "mangledFunctionName plain name no sym" {
 }
 
 test "mangledFunctionName module-qualified" {
-	const sym = makeSymbol("bar", SymbolKind.Function, pendingType(), false);
+	const sym = makeSymbol("bar", SymbolKind.Function, noneType(), false);
 	sym.modulePath = "src/foo.ms";
 	assert mangledFunctionName(sym, "bar", 0) === "bar__srcZfooOms_u0";
 }
 
 test "mangledFunctionName nativeName bypass (extern)" {
-	const sym = makeSymbol("printf", SymbolKind.Function, pendingType(), false);
+	const sym = makeSymbol("printf", SymbolKind.Function, noneType(), false);
 	sym.nativeName = "printf";
 	sym.modulePath = "std/io.ms";
 	assert mangledFunctionName(sym, "printf", 0) === "printf";
 }
 
 test "mangledFunctionName ImportC bypass" {
-	const sym = makeSymbol("malloc", SymbolKind.Function, pendingType(), false);
+	const sym = makeSymbol("malloc", SymbolKind.Function, noneType(), false);
 	sym.modulePath = "std/core.ms";
 	setFlag(sym, SymbolFlag.ImportC);
 	// malloc is in isCStdlibName → safeName adds trailing underscore
@@ -404,13 +404,13 @@ test "mangledFunctionName ImportC bypass" {
 }
 
 test "mangledFunctionName overloadIdx disambiguates" {
-	const sym = makeSymbol("foo", SymbolKind.Function, pendingType(), false);
+	const sym = makeSymbol("foo", SymbolKind.Function, noneType(), false);
 	sym.modulePath = "src/bar.ms";
 	assert mangledFunctionName(sym, "foo", 2) === "foo__srcZbarOms_u2";
 }
 
 test "mangledFunctionName prefers originalName over import alias" {
-	const sym = makeSymbol("aliasedFn", SymbolKind.Function, pendingType(), false);
+	const sym = makeSymbol("aliasedFn", SymbolKind.Function, noneType(), false);
 	sym.modulePath = "src/bar.ms";
 	sym.originalName = "realFn";
 	assert mangledFunctionName(sym, "aliasedFn", 0) === "realFn__srcZbarOms_u0";

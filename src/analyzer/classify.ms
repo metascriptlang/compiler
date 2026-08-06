@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, pendingType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUnknownType } from "../checker/types";
+import { isPrimitiveKind, isUnresolvedType, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, inferredType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUnknownType } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
@@ -279,7 +279,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				if (refInner.kind === TypeKind.Ptr) return noRcInfo();
 				// unknown | null: same bare-void* repr; unknown is a non-owning view
 				// (Nim parity: `pointer` is RC-inert) and may hold foreign handles.
-				if (refInner.kind === TypeKind.Pending) return noRcInfo();
+				if (isUnresolvedType(refInner)) return noRcInfo();
 				if (refInner.sym !== null && refInner.sym.symbolKind === SymbolKind.Actor) return noRcInfo();
 				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {
 					return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
@@ -370,7 +370,7 @@ test "null → None" {
 
 test "unknown → None" {
 	const ctx = createTransformContext();
-	const info = classifyType(pendingType(), ctx);
+	const info = classifyType(inferredType(), ctx);
 	assert info.rcKind === RcKind.None;
 }
 

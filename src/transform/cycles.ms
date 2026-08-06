@@ -19,7 +19,7 @@
 
 import { Type, TypeKind } from "../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
-import { isAwaitable, unwrapRefNullUnion } from "../checker/types";
+import { isAwaitable, unwrapRefNullUnion, isUnresolvedType } from "../checker/types";
 import { anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { mangleMonoName } from "../monomorphize/registry";
 
@@ -100,7 +100,7 @@ export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache
 		if (refInner !== null) subject = refInner;
 	}
 	if (subject.kind === TypeKind.Function) return true;
-	if (subject.kind === TypeKind.Ptr || subject.kind === TypeKind.Pending) return false;
+	if (subject.kind === TypeKind.Ptr || isUnresolvedType(subject)) return false;
 	if (subject.kind === TypeKind.Ref) {
 		if (subject.typeReturn === null) return true;
 		subject = subject.typeReturn;

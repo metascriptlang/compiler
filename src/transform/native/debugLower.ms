@@ -5,7 +5,7 @@
 // json builders (jsonObject/jsonString/jsonNumber/jsonBool) + stringify from std/core/json.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, createNode } from "../../ast/node";
-import { isNumeric, isWideInteger, stringType, pendingType, createArray, unwrapRef } from "../../checker/types";
+import { isNumeric, isWideInteger, stringType, createPtr, voidType, createArray, unwrapRef } from "../../checker/types";
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension, requestEnumToString } from "../../checker/context";
@@ -156,7 +156,7 @@ function buildNestedJsonObject(obj: Node, structType: Type | null, loc: SourceLo
 		const keysArrEmpty = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticToken(loc));
 		keysArrEmpty.nodeType = createArray(stringType());
 		const valsArrEmpty = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, syntheticToken(loc));
-		valsArrEmpty.nodeType = createArray(pendingType());
+		valsArrEmpty.nodeType = createArray(createPtr(voidType()));
 		return makeCall(resolveDbgIdent("jsonObject", ctx, loc), [keysArrEmpty, valsArrEmpty], loc);
 	}
 	let fi = 0;
@@ -171,7 +171,7 @@ function buildNestedJsonObject(obj: Node, structType: Type | null, loc: SourceLo
 	const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticToken(loc));
 	keysArr.nodeType = createArray(stringType());
 	const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, syntheticToken(loc));
-	valsArr.nodeType = createArray(pendingType());
+	valsArr.nodeType = createArray(createPtr(voidType()));
 	return makeCall(resolveDbgIdent("jsonObject", ctx, loc), [keysArr, valsArr], loc);
 }
 

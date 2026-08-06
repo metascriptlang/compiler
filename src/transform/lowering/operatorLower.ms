@@ -435,7 +435,7 @@ export function lowerOperators(program: Node, ctx: TransformContext): Node {
 // ===== Tests =====
 
 import { createContext, createExtensionRegistry, registerExtension } from "../../checker/context";
-import { createStruct, createFunction, createTuple, createRef, createPtr, createMaybeType, pendingType, numberType, stringType, booleanType } from "../../checker/types";
+import { createStruct, createFunction, createTuple, createRef, createPtr, createMaybeType, inferredType, numberType, stringType, booleanType } from "../../checker/types";
 import { defineSymbol, makeSymbol } from "../../checker/symbol";
 import { createTransformContextWithChecker } from "../context";
 import { parseInput, getStmts, firstExprKind } from "../testUtil";
@@ -445,7 +445,7 @@ function makeOpExt(receiverType: string, opName: string): ExtensionMethod {
 		methodName: opName,
 		receiverTypeName: receiverType,
 		sourcePath: "",
-		fnType: createFunction([pendingType(), pendingType()], ["a", "b"], pendingType()),
+		fnType: createFunction([inferredType(), inferredType()], ["a", "b"], inferredType()),
 		isStatic: false,
 		sym: null as unknown as Symbol,
 	};
@@ -487,7 +487,7 @@ test "operator lower does not rewrite builtin types without override" {
 	// No explicit extension for number — native == used
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
-	const numType = pendingType(); // number-like
+	const numType = inferredType(); // number-like
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, numType, false));
 	defineSymbol(checkerCtx.table, makeSymbol("b", SymbolKind.Variable, numType, false));
 	const ctx = createTransformContextWithChecker(checkerCtx);

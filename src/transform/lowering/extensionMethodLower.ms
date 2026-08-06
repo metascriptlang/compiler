@@ -10,7 +10,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";
 import { defineSymbol, makeSymbol } from "../../checker/symbol";
-import { pendingType, createFunction } from "../../checker/types";
+import { inferredType, createFunction } from "../../checker/types";
 import { createContext, registerExtension, ExtensionMethod } from "../../checker/context";
 import { parseInput, getStmts, firstCalleeKind, firstCallArgCount } from "../testUtil";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
@@ -111,7 +111,7 @@ function makeTrimExt(): ExtensionMethod {
 		methodName: "trim",
 		receiverTypeName: "string",
 		sourcePath: "",
-		fnType: createFunction([], [], pendingType()),
+		fnType: createFunction([], [], inferredType()),
 		isStatic: false,
 		sym: null as unknown as Symbol,
 	};
@@ -123,7 +123,7 @@ function makePushExt(): ExtensionMethod {
 		methodName: "push",
 		receiverTypeName: "Array",
 		sourcePath: "",
-		fnType: createFunction([pendingType()], ["x"], pendingType()),
+		fnType: createFunction([inferredType()], ["x"], inferredType()),
 		isStatic: false,
 		sym: null as unknown as Symbol,
 	};
@@ -195,7 +195,7 @@ test "static extension no receiver prepend" {
 		methodName: "floor",
 		receiverTypeName: "Math",
 		sourcePath: "",
-		fnType: createFunction([pendingType()], ["x"], pendingType()),
+		fnType: createFunction([inferredType()], ["x"], inferredType()),
 		isStatic: true,
 		sym: null as unknown as Symbol,
 	};

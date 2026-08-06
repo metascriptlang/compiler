@@ -14,7 +14,7 @@
 import { Node, NodeKind, Symbol, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, SpreadExprData, BinaryExprData, UnaryExprData, ConditionalExprData, ExprStmtData, TypeKind, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, makeSymbol } from "../checker/symbol";
-import { pendingType } from "../checker/types";
+import { noneType } from "../checker/types";
 import { parseInput } from "../transform/testUtil";
 
 // ===== AliasKind =====
@@ -279,7 +279,7 @@ export function deepAliases(dest: Node, ri: Node): boolean {
 // ===== Test Helpers =====
 
 function makeTestSym(name: string): Symbol {
-	return makeSymbol(name, SymbolKind.Variable, pendingType(), false);
+	return makeSymbol(name, SymbolKind.Variable, noneType(), false);
 }
 
 function getExpr(input: string): Node {

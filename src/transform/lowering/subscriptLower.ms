@@ -13,7 +13,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";
 import { lookupSymbol, defineSymbol, makeSymbol } from "../../checker/symbol";
-import { pendingType, createStruct, createFunction, createArray, typeNameOf, isIndexableMapType } from "../../checker/types";
+import { inferredType, createStruct, createFunction, createArray, typeNameOf, isIndexableMapType } from "../../checker/types";
 import { ExtensionMethod, createContext, registerExtension, findExtension } from "../../checker/context";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
 import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testUtil";
@@ -108,7 +108,7 @@ function makeGetterExt(receiverType: string): ExtensionMethod {
 		methodName: "[]",
 		receiverTypeName: receiverType,
 		sourcePath: "",
-		fnType: createFunction([pendingType()], ["index"], pendingType()),
+		fnType: createFunction([inferredType()], ["index"], inferredType()),
 		isStatic: false,
 		sym: null as unknown as Symbol,
 	};
@@ -120,7 +120,7 @@ function makeSetterExt(receiverType: string): ExtensionMethod {
 		methodName: "[]=",
 		receiverTypeName: receiverType,
 		sourcePath: "",
-		fnType: createFunction([pendingType(), pendingType()], ["index", "value"], pendingType()),
+		fnType: createFunction([inferredType(), inferredType()], ["index", "value"], inferredType()),
 		isStatic: false,
 		sym: null as unknown as Symbol,
 	};
@@ -167,7 +167,7 @@ test "builtin array unchanged" {
 	const cc = createContext();
 	const getter = makeGetterExt("Array");
 	registerExtension(cc.extensionRegistry, getter);
-	const arrType = createArray(pendingType());
+	const arrType = createArray(inferredType());
 	const arrSym = makeSymbol("arr", SymbolKind.Variable, arrType, false);
 	defineSymbol(cc.table, arrSym);
 	const ctx = createTransformContextWithChecker(cc);

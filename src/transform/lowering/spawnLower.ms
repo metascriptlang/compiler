@@ -6,7 +6,7 @@
 // C runtime can store them as void* in msFuture.value.
 
 import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, Type, TypeKind, createNode } from "../../ast/node";
-import { pendingType, isAwaitable, awaitedType } from "../../checker/types";
+import { createPtr, voidType, isAwaitable, awaitedType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeNull, makeObjectLiteral, syntheticToken } from "../util";
@@ -136,7 +136,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 				}, syntheticToken(loc));
 				wrapper.nodeType = closureArg.nodeType;
 				if (wrapper.nodeType !== null && wrapper.nodeType.kind === TypeKind.Function) {
-					wrapper.nodeType.typeReturn = pendingType();
+					wrapper.nodeType.typeReturn = createPtr(voidType());
 				}
 				cd.arguments[0] = wrapper;
 				return node;
@@ -159,7 +159,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 			}
 			// Update closure return type to void* (boxed) so codegen emits correct signature
 			if (closureArg.nodeType !== null && closureArg.nodeType.kind === TypeKind.Function) {
-				closureArg.nodeType.typeReturn = pendingType();
+				closureArg.nodeType.typeReturn = createPtr(voidType());
 			}
 		}
 

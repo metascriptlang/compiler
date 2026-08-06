@@ -28,7 +28,7 @@ import {
 import { TransformContext } from "../context";
 import { walkExpandBlocksHooked } from "../walker";
 import { makeIdent, makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral } from "../util";
-import { awaitedType, pendingType } from "../../checker/types";
+import { awaitedType, createPtr, voidType } from "../../checker/types";
 import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, makeUnboxCall, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";
 import { boxReturns, boxForType } from "./spawnLower";
@@ -128,7 +128,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 				}
 			}
 			if (slot.closure.nodeType !== null && slot.closure.nodeType.kind === TypeKind.Function) {
-				slot.closure.nodeType.typeReturn = pendingType();
+				slot.closure.nodeType.typeReturn = createPtr(voidType());
 			}
 		}
 		// Wrap bare function reference as msClosure {fn, env: null}

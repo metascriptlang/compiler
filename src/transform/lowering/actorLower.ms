@@ -23,7 +23,7 @@ import {
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
 	isValueLayoutType, makeHiddenAddr,
 } from "../util";
-import { voidType, pendingType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType, instantiateGenericBody, typeDisplayName } from "../../checker/types";
+import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType, instantiateGenericBody, typeDisplayName } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 
 // msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
@@ -268,7 +268,7 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 	// This tells codegen the argument is already a pointer, preventing &() struct promotion.
 	const actorRefType = createRef(createStruct(actorName, [], [], true));
 	const thisIdent = makeIdent("this", loc);
-	thisIdent.nodeType = pendingType();
+	thisIdent.nodeType = createPtr(voidType());
 	const castThis = createNode(NodeKind.HiddenStdConv, {
 		convExpr: thisIdent,
 		convType: actorRefType,
@@ -477,7 +477,7 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 				implNode.nodeType = m.nodeType;
 				implNode.typeExprs = m.typeExprs;
 				implNode.paramLocations = m.paramLocations;
-				const implSym = makeSymbol(implNativeName, SymbolKind.Function, m.nodeType !== null ? m.nodeType : pendingType(), false);
+				const implSym = makeSymbol(implNativeName, SymbolKind.Function, m.nodeType !== null ? m.nodeType : noneType(), false);
 				implSym.nativeName = implNativeName;
 				implSym.state = SymbolState.Checked;
 				implNode.resolvedSym = implSym;
@@ -509,7 +509,7 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 				implNode.nodeType = m.nodeType;
 				implNode.typeExprs = m.typeExprs;
 				implNode.paramLocations = m.paramLocations;
-				const implSym = makeSymbol(implNativeName, SymbolKind.Function, m.nodeType !== null ? m.nodeType : pendingType(), false);
+				const implSym = makeSymbol(implNativeName, SymbolKind.Function, m.nodeType !== null ? m.nodeType : noneType(), false);
 				implSym.nativeName = implNativeName;
 				implSym.state = SymbolState.Checked;
 				implNode.resolvedSym = implSym;
@@ -529,12 +529,12 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 			//   1. await can unwrap correctly (looks for awaitable)
 			//   2. C codegen does NOT apply NRVO at the call site (Promise<T> is
 			//      a pointer to msFuture_<T>, fits in void*). Previously this was
-			//      pendingType() which caused the C compiler to emit out-param
+			//      noneType() which caused the C compiler to emit out-param
 			//      calling convention for value-layout T (Result/struct/tuple),
 			//      but the proxy's actual C signature returns void* — argument
 			//      count mismatch at the call site.
 			const proxyRetType = isVoid ? voidType()
-				: methodRetType !== null ? createPromise(methodRetType) : pendingType();
+				: methodRetType !== null ? createPromise(methodRetType) : noneType();
 			const proxyFnType = createFunction(proxyParamTypes, md.methodParams, proxyRetType);
 			const proxyNode = createNode(NodeKind.FunctionDecl, {
 				fnName: name + "_" + md.methodName,
@@ -626,7 +626,7 @@ function emitActorDispatch(d: ActorDeclData, name: string, methods: Node[], loc:
 		nameLocation: d.nameLocation,
 	}, syntheticToken(loc));
 	// Build Function type so codegen emits prototype (nodeType=null → skipped)
-	const dispatchType = createFunction([pendingType(), pendingType()], ["this", "_dmsg"], voidType());
+	const dispatchType = createFunction([createPtr(voidType()), createPtr(voidType())], ["this", "_dmsg"], voidType());
 	fnNode.nodeType = dispatchType;
 	const dispatchSym = makeSymbol(dispatchNativeName, SymbolKind.Function, dispatchType, false);
 	dispatchSym.nativeName = dispatchNativeName;
@@ -757,7 +757,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 			fnFlags: "", fnReturnType: "void", fnDefaults: [],
 			nativeName: sysHandlerName, nameLocation: d.nameLocation,
 		}, syntheticToken(loc));
-		const sysType = createFunction([pendingType(), pendingType()], ["this", "_smsg"], voidType());
+		const sysType = createFunction([createPtr(voidType()), createPtr(voidType())], ["this", "_smsg"], voidType());
 		sysHandlerNode.nodeType = sysType;
 		const sysSym = makeSymbol(sysHandlerName, SymbolKind.Function, sysType, false);
 		sysSym.nativeName = sysHandlerName;
@@ -1204,7 +1204,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 			implNode.typeExprs = m.typeExprs;
 			implNode.paramLocations = m.paramLocations;
 			const implSym = makeSymbol(implNativeName, SymbolKind.Function,
-				implType !== null ? implType : pendingType(), false);
+				implType !== null ? implType : noneType(), false);
 			implSym.nativeName = implNativeName;
 			implSym.state = SymbolState.Checked;
 			implNode.resolvedSym = implSym;

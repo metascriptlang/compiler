@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind } from "../ast/node";
-import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, pendingType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
@@ -409,7 +409,7 @@ export function makeInterfaceDeclFromTypes(name: string, fields: string[], field
 // Handles primitives and array annotations. Non-primitive types resolve to Unknown —
 // actual types come from the checker via node.nodeType (no TypeReference).
 export function resolveSimpleTypeStr(annotation: string): Type {
-	if (annotation === "") return pendingType();
+	if (annotation === "") return noneType();
 	if (annotation === "void*") return createPtr(voidType());  // raw pointer — reference: getSysType(pointer)
 	// Handle array annotations: "Foo[]", "Foo [ ]" (parser joins tokens with spaces)
 	// Strip trailing whitespace-surrounded brackets to get element type
@@ -432,7 +432,7 @@ export function resolveSimpleTypeStr(annotation: string): Type {
 		"uint32" => getSysType(TypeKind.Uint32),
 		"uint64" => getSysType(TypeKind.Uint64),
 		"float32" => getSysType(TypeKind.Float32),
-		_ => pendingType(),
+		_ => noneType(),
 	};
 }
 
@@ -572,7 +572,7 @@ export function boolToDeclKind(isConst: boolean): DeclKind {
 // Returns { decl: const $tmp_N = expr, ref: $tmp_N identifier }.
 // Follows the reference evalOnce pattern.
 export function evalOnce(expr: Node, ctx: TransformContext, loc: SourceLocation): { decl: Node, ref: Node } {
-	const exprType = expr !== null && expr.nodeType !== null ? expr.nodeType : pendingType();
+	const exprType = expr !== null && expr.nodeType !== null ? expr.nodeType : noneType();
 	const sym = freshTempSym(ctx, "tmp", exprType);
 	const decl = makeVarDecl(sym.name, expr, DeclKind.Const, loc);
 	decl.resolvedSym = sym;

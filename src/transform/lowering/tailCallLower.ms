@@ -22,7 +22,7 @@ import {
 	IdentifierData, BlockStmtData, IfStmtData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { pendingType } from "../../checker/types";
+import { noneType } from "../../checker/types";
 import { walkNode } from "../walker";
 import {
 	makeBool, makeBlock, makeWhile, makeVarDecl,
@@ -146,7 +146,7 @@ function buildTailCallReplacement(callExpr: Node, params: string[], loc: SourceL
 	// 1. Evaluate all arguments into temps (avoid order-of-evaluation issues)
 	const tempSyms: Symbol[] = [];
 	for (let i = 0; i < cd.arguments.length && i < params.length; i += 1) {
-		const argType = cd.arguments[i].nodeType !== null ? cd.arguments[i].nodeType : pendingType();
+		const argType = cd.arguments[i].nodeType !== null ? cd.arguments[i].nodeType : noneType();
 		const sym = freshTempSym(ctx, "tc", argType);
 		tempSyms.push(sym);
 		const tcDecl = makeVarDecl(sym.name, cd.arguments[i], DeclKind.Const, loc);

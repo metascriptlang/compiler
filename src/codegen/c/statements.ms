@@ -4,7 +4,7 @@
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
 import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isStructType, unwrapRefNullUnion } from "../../checker/types";
+import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	CGen, CProc,
@@ -731,7 +731,7 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 		setStmtsIndent(p, oldIndent + 2);
 		if (d.catchName !== "") {
 			const ct = node.nodeType;
-			if (ct !== null && ct.kind !== TypeKind.Pending && ct.kind !== TypeKind.Error) {
+			if (ct !== null && !isUnresolvedType(ct) && ct.kind !== TypeKind.Error) {
 				const cty = getTypeDesc(g, ct);
 				emitStmtsLine(p, `${cty} ${safeName(d.catchName)} = (${cty})msCurrException;`);
 			} else {

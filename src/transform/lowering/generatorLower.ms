@@ -39,7 +39,7 @@ import {
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
 	collectDeclNames, makeTryCatch, makeMoveExpr,
 } from "../util";
-import { numberType, pendingType } from "../../checker/types";
+import { numberType, noneType } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Data Structures =====
@@ -494,7 +494,7 @@ export function wrapExcRouting(dispatch: Node, sc: StateCollector, loc: SourceLo
 
 export function makeCurExcDecl(sc: StateCollector, loc: SourceLocation): Node {
 	const curExcDecl = makeVarDecl("$curExc", makeNull(loc), DeclKind.Let, loc);
-	curExcDecl.nodeType = sc.excType !== null ? sc.excType : pendingType();
+	curExcDecl.nodeType = sc.excType !== null ? sc.excType : noneType();
 	return curExcDecl;
 }
 
