@@ -315,6 +315,19 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	if (varType !== null && varType.kind === TypeKind.Var && varType.typeReturn !== null) {
 		varType = varType.typeReturn;
 	}
+	// Generic instantiated at T=void: the local has no C storage. Reference discards
+	// void expressions (isEmptyType) — emit the initializer for effect only.
+	const declIsVoid = (varType !== null && varType.kind === TypeKind.Void)
+		|| (varType === null && d.initializer !== null && d.initializer.nodeType !== null
+			&& d.initializer.nodeType.kind === TypeKind.Void);
+	if (declIsVoid) {
+		if (d.initializer !== null) {
+			const snippet = genExpr(g, p, d.initializer);
+			emitStmtsLine(p, `${snippet};`);
+			emitCallRaiseCheck(p, d.initializer);
+		}
+		return;
+	}
 	if (varType !== null) {
 		cType = getTypeDesc(g, varType);
 	} else if (d.initializer !== null && d.initializer.nodeType !== null) {
@@ -564,6 +577,21 @@ function genReturnStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ReturnStmtData;
 	// NRVO: assign to *__result instead of returning (boolean flag, not name prefix)
 	const isNrvo = p.isNrvo;
+	// `return expr` where expr is void (T=void instantiation): C forbids returning a
+	// void expression. A void local has no storage, so an identifier emits nothing.
+	const argIsVoid = d.argument !== null && !isNrvo
+		&& ((p.returnType !== null && p.returnType.kind === TypeKind.Void)
+			|| (d.argument.nodeType !== null && d.argument.nodeType.kind === TypeKind.Void));
+	if (argIsVoid && d.argument !== null) {
+		if (d.argument.kind !== NodeKind.Identifier) {
+			const snippet = genExpr(g, p, d.argument);
+			emitStmtsLine(p, `${snippet};`);
+			emitCallRaiseCheck(p, d.argument);
+		}
+		blockLeaveActions(g, p, p.nestedFinally.length);
+		emitStmtsLine(p, "return;");
+		return;
+	}
 	if (d.argument !== null) {
 		const snippet = genExpr(g, p, d.argument);
 		if (isNrvo) {
