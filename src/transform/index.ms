@@ -44,6 +44,7 @@ import { lowerStringTruthiness } from "./coercion/stringTruthiness";
 import { eraseBrandTypes } from "./coercion/brandErase";
 import { lowerDestructuring } from "./desugar/destructuringLower";
 import { lowerSpread } from "./desugar/spreadExpand";
+import { lowerObjectSpread } from "./desugar/objectSpreadLower";
 import { lowerArrayMethodInline } from "./desugar/arrayMethodInline";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
@@ -88,6 +89,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = jsBackend ? lowerPowerAssert(result, ctx) : result;
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
+	result = lowerObjectSpread(result, ctx);
 	if (ctx.jsBackend) {
 		result = lowerObjectLiteralComplete(result, ctx);
 	}
