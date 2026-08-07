@@ -97,3 +97,4 @@ import "./bug081ExplicitMoveImplicitCopy";
 import "./bug082VariantCastWidening";
 import "./bug083EnumMemberMissing";
 import "./bug084UnknownOperandOps";
+import "./bug092LoopNestedClosureSnapshotEnv";
