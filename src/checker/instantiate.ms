@@ -205,6 +205,18 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 		tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
 		return;
 	}
+	if (t.kind === TypeKind.Union) {
+		if (t.typeName !== "") {
+			tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
+		}
+		injectConcreteTypeSyms(t.typeExtra, ctx, callerCtx, injected);
+		if (t.typeChildren !== null) {
+			for (const child of t.typeChildren) {
+				injectConcreteTypeSyms(child, ctx, callerCtx, injected);
+			}
+		}
+		return;
+	}
 	if (t.kind === TypeKind.GenericInstance && t.typeChildren !== null) {
 		for (const child of t.typeChildren) {
 			injectConcreteTypeSyms(child, ctx, callerCtx, injected);
