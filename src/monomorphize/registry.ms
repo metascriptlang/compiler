@@ -4,6 +4,7 @@
 // sameInstantiation() + genericCacheGet() in reference instantiation.
 
 import { Type, TypeKind } from "../ast/node";
+import { hashToBase36 } from "std/hash";
 
 // ===== Data Structures =====
 
@@ -35,6 +36,19 @@ export function createMonoRegistry(): MonoRegistry {
 	return { entries };
 }
 
+// Field-name + field-type signature for a nameless struct. Named field types key
+// by name and stop, so a cycle (which always passes through a named type in
+// surface syntax) cannot recurse forever.
+function monoStructuralKey(t: Type): string {
+	let key = "";
+	for (let i = 0; i < t.typeNames.length; i += 1) {
+		if (i > 0) key = key + ",";
+		key = key + t.typeNames[i] + ":";
+		key = key + (i < t.typeChildren.length ? monoTypeKey(t.typeChildren[i]) : "void");
+	}
+	return key;
+}
+
 // C-safe type key for name mangling and dedup.
 export function monoTypeKey(t: Type | null): string {
 	if (t === null) return "null";
@@ -59,7 +73,7 @@ export function monoTypeKey(t: Type | null): string {
 		TypeKind.Array => "arr_" + monoTypeKey(t.typeReturn),
 		TypeKind.Ref => "ref_" + monoTypeKey(t.typeReturn),
 		TypeKind.Ptr => "ptr_" + monoTypeKey(t.typeReturn),
-		TypeKind.Struct | TypeKind.Enum => t.typeName,
+		TypeKind.Struct | TypeKind.Enum => t.typeName !== "" ? t.typeName : "anon" + hashToBase36(monoStructuralKey(t)),
 		TypeKind.GenericInstance => {
 			let key = t.typeName;
 			let i = 0;
@@ -96,7 +110,17 @@ export function monoTypeKey(t: Type | null): string {
 			}
 			return key;
 		},
-		_ => "unknown",
+		// This key IS the instantiation cache key (mangleMonoName → lookupSymbol in
+		// instantiate.ms), so two distinct types sharing a key make the second
+		// instantiation reuse the first one's body. Keep the catch-all total by
+		// keying on the kind ordinal plus name or structure.
+		_ => {
+			let key = "k" + (t.kind as number).toString();
+			if (t.typeName !== "") key = key + "_" + hashToBase36(t.typeName);
+			if (t.typeReturn !== null) key = key + "_" + monoTypeKey(t.typeReturn);
+			for (const child of t.typeChildren) key = key + "_" + monoTypeKey(child);
+			return key;
+		},
 	};
 }
 
@@ -235,6 +259,32 @@ test "registry different types" {
 	const types2: Type[] = [str];
 	monoRegister(reg, "identity", params, types1);
 	monoRegister(reg, "identity", params, types2);
+	assert reg.entries.length === 2;
+}
+
+test "monoTypeKey anonymous structs key apart" {
+	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
+	const named: Type = { kind: TypeKind.Struct, typeName: "", typeNames: ["name"], typeChildren: [str], typeReturn: null, typeExtra: null, typeFlags: 0 };
+	const tagged: Type = { kind: TypeKind.Struct, typeName: "", typeNames: ["tag"], typeChildren: [str], typeReturn: null, typeExtra: null, typeFlags: 0 };
+	assert monoTypeKey(named) !== monoTypeKey(tagged);
+	assert monoTypeKey(named) !== "";
+}
+
+test "monoTypeKey unhandled kinds key apart" {
+	const never: Type = { kind: TypeKind.Never, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
+	const unknown: Type = { kind: TypeKind.Unknown, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
+	assert monoTypeKey(never) !== monoTypeKey(unknown);
+	assert monoTypeKey(never) !== "unknown";
+}
+
+test "registry separates anonymous struct instantiations" {
+	const reg = createMonoRegistry();
+	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
+	const named: Type = { kind: TypeKind.Struct, typeName: "", typeNames: ["name"], typeChildren: [str], typeReturn: null, typeExtra: null, typeFlags: 0 };
+	const tagged: Type = { kind: TypeKind.Struct, typeName: "", typeNames: ["tag"], typeChildren: [str], typeReturn: null, typeExtra: null, typeFlags: 0 };
+	const params: string[] = ["T"];
+	monoRegister(reg, "wrap", params, [named]);
+	monoRegister(reg, "wrap", params, [tagged]);
 	assert reg.entries.length === 2;
 }
 

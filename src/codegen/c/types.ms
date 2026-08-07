@@ -80,11 +80,38 @@ function anonFieldKey(t: Type | null): string {
 			return k + "):" + anonFieldKey(t.typeReturn);
 		},
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
-		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0]) : "unknown",
+		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0]) : "varargs:empty",
+		TypeKind.Union => {
+			if (t.typeName.length > 0) return "union:" + t.typeName;
+			let k = "union(";
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (i > 0) k = k + "|";
+				k = k + anonFieldKey(t.typeChildren[i]);
+				i += 1;
+			}
+			return k + ")";
+		},
+		TypeKind.Tuple => {
+			let k = "tuple(";
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (i > 0) k = k + ",";
+				k = k + anonFieldKey(t.typeChildren[i]);
+				i += 1;
+			}
+			return k + ")";
+		},
+		// A key that collapses two distinct types onto one string makes the
+		// variant-typedef dedup in genUnionType reuse the wrong struct, so an
+		// unhandled kind must still key apart by ordinal and name.
 		_ => {
 			const simple = getSimpleTypeDesc(t);
 			if (simple !== "") return simple;
-			return "unknown";
+			let k = "k" + (t.kind as number).toString() + ":" + t.typeName;
+			if (t.typeReturn !== null) k = k + "<" + anonFieldKey(t.typeReturn) + ">";
+			for (const child of t.typeChildren) k = k + "," + anonFieldKey(child);
+			return k;
 		},
 	};
 }
@@ -265,7 +292,7 @@ export function typeKey(t: Type | null): string {
 			for (const arg of t.typeChildren) giKey = `${giKey}:${typeKey(arg)}`;
 			return giKey;
 		},
-		TypeKind.TypeReference => { return "unknown"; },
+		TypeKind.TypeReference => { return "typeref:" + t.typeName; },
 		TypeKind.Distinct => { return "distinct:" + t.typeName; },
 		TypeKind.Union => {
 			if (t.typeName.length > 0) {
@@ -291,8 +318,16 @@ export function typeKey(t: Type | null): string {
 			}
 			return key;
 		},
-		TypeKind.Varargs => t.typeChildren.length > 0 ? typeKey(t.typeChildren[0]) : "unknown",
-		_ => "unknown",
+		TypeKind.Varargs => t.typeChildren.length > 0 ? typeKey(t.typeChildren[0]) : "varargs:empty",
+		// Total catch-all: the key feeds typeCache, so collapsing two types onto one
+		// string hands out a typedef built for the other one. Named types key by name
+		// (recursing there would not terminate on `type Rec = { next: Rec | null }`).
+		_ => {
+			let key = "k" + (t.kind as number).toString() + ":" + t.typeName;
+			if (t.typeReturn !== null) key = key + "<" + typeKey(t.typeReturn) + ">";
+			for (const child of t.typeChildren) key = key + "," + typeKey(child);
+			return key;
+		},
 	};
 }
 
@@ -1493,6 +1528,19 @@ test "enum key" { assert typeKey(createEnum("Color", ["Red", "Green"], null as u
 test "object key" { assert typeKey(createStruct("Foo", [], [], true)) === "object:Foo"; }
 
 test "null type" { assert typeKey(null) === "null"; }
+
+test "anonymous structs with different fields key apart" {
+	const a = createStruct("", ["name"], [createPrimitive(TypeKind.String)], true);
+	const b = createStruct("", ["tag"], [createPrimitive(TypeKind.String)], true);
+	assert typeKey(a) !== typeKey(b);
+}
+
+test "unhandled kinds key apart instead of sharing one string" {
+	const a = createPrimitive(TypeKind.Never);
+	const b = createPrimitive(TypeKind.Unknown);
+	assert typeKey(a) !== typeKey(b);
+	assert typeKey(a) !== "unknown";
+}
 
 test "primitives" {
 	assert getSimpleTypeDesc(createPrimitive(TypeKind.Number)) === "double";
