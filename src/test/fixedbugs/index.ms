@@ -100,3 +100,4 @@ import "./bug084UnknownOperandOps";
 import "./bug092LoopNestedClosureSnapshotEnv";
 import "./bug093VoidGenericInstantiation";
 import "./bug094ObjectSpreadLiteral";
+import "./bug095ExprArrowNestedCaptureEnv";
