@@ -204,7 +204,15 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | 
 // its parent — jsxMacroArgDepth > 0 marks both, so reportUnconsumedJsx stays silent inside.
 function checkJsxConsumed(ctx: CheckerContext, nodes: Node[]): void {
 	ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth + 1;
-	for (const n of nodes) { checkExpr(ctx, n, null); }
+	// nodeTypeAst is only ever set from a node that was typed before a macro
+	// round-trip (bridge valueToNode); re-checking such an arg re-infers from
+	// scratch and types a collapsed null witness as bare `null`. Expansion
+	// reads nodeTypeAst directly, and arg-position nodes die with the call
+	// node once the macro expands — skipping loses nothing. Guard: bug092.
+	for (const n of nodes) {
+		if (n.nodeTypeAst !== null) continue;
+		checkExpr(ctx, n, null);
+	}
 	ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth - 1;
 }
 

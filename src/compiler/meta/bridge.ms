@@ -1089,6 +1089,11 @@ export function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: Rais
 	if (node.nodeType !== null) {
 		const typeAst = mapTypeToAst(node.nodeType, node.location);
 		setNode(objHeap, arrHeap, handle, "nodeType", typeAst);
+	} else if (node.nodeTypeAst !== null) {
+		// Mirror of nodeToASTLiteral's nodeTypeAst fallback (expand.ms) — the
+		// two serialization paths must stay in sync or a carrier node loses
+		// its type on whichever path lacks the fallback.
+		setNode(objHeap, arrHeap, handle, "nodeType", node.nodeTypeAst);
 	}
 
 	// Day 9: emit `resolvedSym` for nodes the checker bound to a Symbol.
@@ -1209,6 +1214,31 @@ function readLoc(objHeap: RaiserObjectHeap, h: number): SourceLocation {
 }
 
 // ===== valueToNode: RaiserValue → AST Node =====
+
+function readNodeArrays(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, fallbackLoc: SourceLocation): Node[][] {
+	const v = heapObjectGetField(objHeap, h, name);
+	const result: Node[][] = [];
+	if (v.kind !== RaiserValueKind.Array) return result;
+	const handle = v.intVal;
+	const len = heapArrayLen(arrHeap, handle);
+	let i = 0;
+	while (i < len) {
+		const elem = heapArrayGet(arrHeap, handle, i);
+		const inner: Node[] = [];
+		if (elem.kind === RaiserValueKind.Array) {
+			const ih = elem.intVal;
+			const ilen = heapArrayLen(arrHeap, ih);
+			let j = 0;
+			while (j < ilen) {
+				inner.push(valueToNode(heapArrayGet(arrHeap, ih, j), objHeap, arrHeap, fallbackLoc));
+				j = j + 1;
+			}
+		}
+		result.push(inner);
+		i = i + 1;
+	}
+	return result;
+}
 
 export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
 	return match (val.kind) {
@@ -1750,8 +1780,35 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		},
 
 		// === Type-AST kinds — V3: needed for nested-macro round-trip of type info ===
-		// Other Type-AST kinds (TypeArray/TypeObject/TypeGeneric/TypeFunction)
-		// retain default NullLiteral fallback — add cases as use cases surface.
+		// Symmetric with nodeToValue's type-AST cases + addKindFields in expand.ms.
+		NodeKind.TypeObject => {
+			const typExprFieldNames = readStrs(objHeap, arrHeap, h, "typExprFieldNames");
+			const typExprFieldTypes = readNodes(objHeap, arrHeap, h, "typExprFieldTypes", loc);
+			const typExprIndexKey = readNode(objHeap, arrHeap, h, "typExprIndexKey", loc);
+			const typExprIndexValue = readNode(objHeap, arrHeap, h, "typExprIndexValue", loc);
+			const typExprFieldDecorators = readNodeArrays(objHeap, arrHeap, h, "typExprFieldDecorators", loc);
+			const typExprTypeName = readStr(objHeap, h, "typExprTypeName");
+			return createNodeAt(NodeKind.TypeObject, {
+				typExprFieldNames, typExprFieldTypes, typExprIndexKey, typExprIndexValue,
+				typExprFieldDecorators, typExprTypeName,
+			}, loc);
+		},
+		NodeKind.TypeArray => {
+			const typExprElement = readNode(objHeap, arrHeap, h, "typExprElement", loc);
+			const typExprSize = readInt(objHeap, h, "typExprSize");
+			return createNodeAt(NodeKind.TypeArray, { typExprElement, typExprSize }, loc);
+		},
+		NodeKind.TypeGeneric => {
+			const typExprBase = readNode(objHeap, arrHeap, h, "typExprBase", loc);
+			const typExprArgs = readNodes(objHeap, arrHeap, h, "typExprArgs", loc);
+			return createNodeAt(NodeKind.TypeGeneric, { typExprBase, typExprArgs }, loc);
+		},
+		NodeKind.TypeFunction => {
+			const typExprParams = readNodes(objHeap, arrHeap, h, "typExprParams", loc);
+			const typExprReturn = readNode(objHeap, arrHeap, h, "typExprReturn", loc);
+			const typExprParamNames = readStrs(objHeap, arrHeap, h, "typExprParamNames");
+			return createNodeAt(NodeKind.TypeFunction, { typExprParams, typExprReturn, typExprParamNames }, loc);
+		},
 		NodeKind.TypeUnion => {
 			const typExprMembers = readNodes(objHeap, arrHeap, h, "typExprMembers", loc);
 			const discFieldName = readStr(objHeap, h, "discFieldName");
