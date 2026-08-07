@@ -40,7 +40,7 @@ function _jsonStringifyTyped<T>(value: T): string {
 // top level, missing fields, and kind mismatches ALL surface as Result.err —
 // never as fabricated defaults. Optional fields are spelled `T | null` in
 // the interface, not by tolerating absence.
-function _jsonParseTyped<T>(input: string, witness: T | null): Result<T, string> {
+function _jsonParseTyped<T>(input: string): Result<T, string> {
 	const pr = parseJson(input);
 	if (!pr.ok) return Result.err(pr.error);
 	const root: JsonValue = pr.value;
@@ -49,7 +49,7 @@ function _jsonParseTyped<T>(input: string, witness: T | null): Result<T, string>
 		return Result.err("expected object at top level, got " + got);
 	}
 	const errs: string[] = [];
-	const v: T = jsonValueToStructE(root, witness, errs, "");
+	const v: T = jsonValueToStructE(root, null as T | null, errs, "");
 	if (errs.length > 0) return Result.err(joinDecodeErrors(errs));
 	return Result.ok(v);
 }
@@ -164,7 +164,7 @@ export class JSON {
 	// Typed parse — `JSON.parse<Person>(s)` returns Result<Person, string>.
 	// Macro-driven decode via `_jsonParseTyped`. T must be specified.
 	static parse<T>(input: string): Result<T, string> {
-		return _jsonParseTyped<T>(input, null);
+		return _jsonParseTyped<T>(input);
 	}
 
 	// Untyped parse — `JSON.parseValue(s)` returns Result<JsonValue, string>.

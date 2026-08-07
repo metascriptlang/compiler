@@ -1,8 +1,4 @@
 // @ledger-slack(msRefArrayRefCell): 1
-// @xfail(san): parsed null/true/false literals leak 1 JsonValueData each —
-// parser.ms builds jsonBool(true)/jsonNull() as CALL-SITE args in match arms
-// (parseLiteral value param): the open DRC call-arg-object gap (siblings
-// 609/610). Builder-side construction is clean (probed). XPASS = fix landed.
 // Parity program — std json floor: parse → dynamic access → stringify roundtrip.
 // Facade lives at std/core/json (prelude, auto-loaded); codec is pure MS in
 // std/serialize/json/ — this program is the contract for the whole chain.
