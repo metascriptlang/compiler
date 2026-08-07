@@ -99,3 +99,4 @@ import "./bug083EnumMemberMissing";
 import "./bug084UnknownOperandOps";
 import "./bug092LoopNestedClosureSnapshotEnv";
 import "./bug093VoidGenericInstantiation";
+import "./bug094ObjectSpreadLiteral";
