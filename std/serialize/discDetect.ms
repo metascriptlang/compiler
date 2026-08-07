@@ -270,9 +270,9 @@ export function detectUnionDisc(tt: Node): DiscInfo {
 	}
 
 	// Step 3: infer discKind from first variant key shape.
-	// "true"/"false" → boolean. Enum-like ("EnumName.Member") was already set
-	// by bridge for match-type-with-enum-disc unions; TS-style enum DUs are
-	// rare and can be added later. Default = string.
+	// "true"/"false" → boolean. Enum-like ("EnumName.Member") comes from the
+	// bridge, which stamps discKind for every enum-discriminated union — the
+	// match-type form and (since the resolvePass auto-stamp) the TS-style form.
 	if (discKind === "" && variants.length > 0) {
 		const k0: string = variants[0].key;
 		if (k0 === "true" || k0 === "false") discKind = "boolean";

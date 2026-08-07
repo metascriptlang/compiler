@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { inferredType, errorType, noneType, isUnresolvedType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createArc, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, unknownType, createBrandDistinct } from "./types";
+import { inferredType, errorType, noneType, isUnresolvedType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createArc, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -1508,6 +1508,22 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		if (boolDisc !== "") {
 			resolved.typeNames = [boolDisc];
 			resolved.typeExtra = booleanType();
+		} else {
+			// `{ kind: K.A, ... } | { kind: K.B, ... }` declares the same enum
+			// discriminator the match-type form declares, so it gets the same
+			// contract: typeExtra = enum type, typeNames = [disc, key0, key1...]
+			// in typeChildren order (findVariantByDiscriminant reads keys there).
+			const enumDisc = findSharedEnumDiscriminant(resolved);
+			const enumType = enumDisc !== "" ? enumDiscriminantTypeOf(resolved, enumDisc) : null;
+			if (enumType !== null) {
+				const keys = collectEnumDiscriminantValues(resolved, enumDisc);
+				if (keys.length === resolved.typeChildren.length) {
+					const names: string[] = [enumDisc];
+					for (const k of keys) names.push(k);
+					resolved.typeNames = names;
+					resolved.typeExtra = enumType;
+				}
+			}
 		}
 	}
 	if (d.aliasIsDistinct) {

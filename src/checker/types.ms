@@ -931,6 +931,18 @@ export function peelToStructOrUnion(t: Type | null): Type | null {
 // `ok: true | false`). Variants are peeled through `Ref`/`Ptr` so interface-
 // typed variants (`Ref<Struct>` in the C backend) work the same as bare
 // anonymous structs.
+// The VALUE a literal type stands for. StringLiteral/BooleanLiteral keep it in
+// `typeName`; an EnumLiteral's `typeName` is the ENUM's name (shared by every
+// variant) with the member in `typeNames[0]`, so comparing `typeName` there
+// would read every variant as the same value.
+function literalDiscValue(t: Type | null): string {
+	if (t === null) return "";
+	if (t.kind === TypeKind.EnumLiteral) {
+		return t.typeNames !== null && t.typeNames.length > 0 ? t.typeName + "." + t.typeNames[0] : t.typeName;
+	}
+	return t.typeName;
+}
+
 function findSharedLiteralDiscriminant(unionType: Type | null, literalKind: TypeKind): string {
 	if (unionType === null || unionType.typeChildren === null || unionType.typeChildren.length < 2) return "";
 	const variants = unionType.typeChildren;
@@ -944,7 +956,7 @@ function findSharedLiteralDiscriminant(unionType: Type | null, literalKind: Type
 		// Check every other variant has this field as the same literal kind with a
 		// *different* value (so the discriminator can disambiguate variants).
 		let sharedOk = true;
-		const seen: string[] = [firstFt.typeName];
+		const seen: string[] = [literalDiscValue(firstFt)];
 		for (let vi = 1; vi < variants.length; vi += 1) {
 			const v = peelToStruct(variants[vi]);
 			if (v === null || v.typeNames === null) { sharedOk = false; break; }
@@ -954,10 +966,11 @@ function findSharedLiteralDiscriminant(unionType: Type | null, literalKind: Type
 				if (vfi >= v.typeChildren.length) break;
 				const vft = v.typeChildren[vfi];
 				if (vft === null || vft.kind !== literalKind) break;
+				const vftValue = literalDiscValue(vft);
 				let dup = false;
-				for (const s of seen) { if (s === vft.typeName) { dup = true; break; } }
+				for (const s of seen) { if (s === vftValue) { dup = true; break; } }
 				if (dup) { sharedOk = false; break; }
-				seen.push(vft.typeName);
+				seen.push(vftValue);
 				foundInV = true;
 				break;
 			}
@@ -980,6 +993,32 @@ export function findSharedBooleanDiscriminant(unionType: Type | null): string {
 	return findSharedLiteralDiscriminant(unionType, TypeKind.BooleanLiteral);
 }
 
+// Tier 2 (enum): a TS-style union whose variants each pin the same field to a
+// distinct enum member (`kind: EvKind.Click` | `kind: EvKind.Key`). This is the
+// same discriminator the match-type DU form declares — see the auto-stamp in
+// resolvePass, which promotes it to the enum DU contract (typeExtra + typeNames).
+export function findSharedEnumDiscriminant(unionType: Type | null): string {
+	return findSharedLiteralDiscriminant(unionType, TypeKind.EnumLiteral);
+}
+
+// The Enum Type behind an enum-literal discriminant field, read off the first
+// variant that carries it (EnumLiteral.typeReturn back-references the enum).
+export function enumDiscriminantTypeOf(unionType: Type | null, discFieldName: string): Type | null {
+	if (unionType === null || unionType.typeChildren === null) return null;
+	for (const rawVariant of unionType.typeChildren) {
+		const variant = peelToStruct(rawVariant);
+		if (variant === null || variant.typeNames === null) continue;
+		for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
+			if (variant.typeNames[fi] !== discFieldName) continue;
+			if (fi >= variant.typeChildren.length) break;
+			const ft = variant.typeChildren[fi];
+			if (ft !== null && ft.kind === TypeKind.EnumLiteral) return ft.typeReturn;
+			break;
+		}
+	}
+	return null;
+}
+
 // Find the variant index whose `discFieldName` field is a literal of the given
 // kind with `litValueName` as its `typeName`. Backs both the string and boolean
 // variant lookups — both encode the literal value in `Type.typeName`
@@ -994,7 +1033,7 @@ function findVariantByLiteralDiscriminant(unionType: Type | null, discFieldName:
 			if (variant.typeNames[fi] !== discFieldName) continue;
 			if (fi >= variant.typeChildren.length) continue;
 			const ft = variant.typeChildren[fi];
-			if (ft !== null && ft.kind === literalKind && ft.typeName === litValueName) {
+			if (ft !== null && ft.kind === literalKind && literalDiscValue(ft) === litValueName) {
 				return i;
 			}
 		}
@@ -1009,7 +1048,7 @@ export function findVariantByBooleanDiscriminant(unionType: Type | null, discFie
 
 // Tier 2: collect all string-literal discriminant values from a union's variants.
 // Returns ["circle", "square"] for type Shape = {kind:"circle",...} | {kind:"square",...}.
-export function collectStringDiscriminantValues(unionType: Type | null, discFieldName: string): string[] {
+function collectLiteralDiscriminantValues(unionType: Type | null, discFieldName: string, literalKind: TypeKind): string[] {
 	const values: string[] = [];
 	if (unionType === null || unionType.typeChildren === null) return values;
 	for (const rawVariant of unionType.typeChildren) {
@@ -1019,13 +1058,24 @@ export function collectStringDiscriminantValues(unionType: Type | null, discFiel
 			if (variant.typeNames[fi] !== discFieldName) continue;
 			if (fi >= variant.typeChildren.length) continue;
 			const ft = variant.typeChildren[fi];
-			if (ft !== null && ft.kind === TypeKind.StringLiteral) {
-				values.push(ft.typeName);
+			if (ft !== null && ft.kind === literalKind) {
+				values.push(literalDiscValue(ft));
 			}
 			break;
 		}
 	}
 	return values;
+}
+
+export function collectStringDiscriminantValues(unionType: Type | null, discFieldName: string): string[] {
+	return collectLiteralDiscriminantValues(unionType, discFieldName, TypeKind.StringLiteral);
+}
+
+// Variant keys in `typeChildren` order — the shape typeNames[1..] must carry for
+// `findVariantByDiscriminant` (dotted `Enum.Member`, same form the match-type DU
+// declaration stores).
+export function collectEnumDiscriminantValues(unionType: Type | null, discFieldName: string): string[] {
+	return collectLiteralDiscriminantValues(unionType, discFieldName, TypeKind.EnumLiteral);
 }
 
 // Tier 2: find variant index by scanning variant structs directly for a string-literal
