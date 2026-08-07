@@ -1780,16 +1780,16 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 
 // ===== Main Entry Point =====
 
-// Wrap every `ArrowFn(body=Arrow|FuncExpr)` into block-bodied form so
-// lifting always sees a BlockStmt. Without this, capturing curried arrows
-// hit a special case that bypassed env setup (fixedbugs/bug039).
+// Wrap every expression-bodied arrow into block-bodied form so lifting
+// always sees a BlockStmt. `walkLiftBody` can only prepend hoisted env
+// decls into a BlockStmt; a non-block body silently drops them — curried
+// arrows (fixedbugs/bug039) and nested arrows inside an expression body
+// (fixedbugs/bug095) both died on that.
 function normalizeArrowBodies(node: Node): Node {
 	if (node === null) return null as unknown as Node;
 	if (node.kind === NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
-		if (d.arrowBody !== null
-			&& (d.arrowBody.kind === NodeKind.ArrowFunction
-				|| d.arrowBody.kind === NodeKind.FunctionExpr)) {
+		if (d.arrowBody !== null && d.arrowBody.kind !== NodeKind.BlockStmt) {
 			const loc = d.arrowBody.location;
 			d.arrowBody = makeBlock([makeReturn(d.arrowBody, loc)], loc);
 		}
