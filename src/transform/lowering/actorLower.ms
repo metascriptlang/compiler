@@ -180,17 +180,17 @@ function packArgsIntoMsg(stmts: Node[], msgSym: Symbol, params: string[], paramT
 }
 
 function buildSendProxy(kind: number, params: string[], paramTypes: Type[], ctx: TransformContext, loc: SourceLocation): Node {
-	const msgSym = freshTempSym(ctx, "amsg", voidType());
+	const msgSym = freshTempSym(ctx, "amsg", VOID_PTR);
 	const slotCount = totalSlotCount(params, paramTypes);
 	const msgAlloc = makeCall(makeIdent("msMsgAllocSized", loc), [
 		makeNumber(kind, loc),
 		makeNull(loc),
 		makeNumber(slotCount, loc),
 	], loc);
-	msgAlloc.nodeType = voidType();
+	msgAlloc.nodeType = VOID_PTR;
 	const msgDecl = makeVarDecl(msgSym.name, msgAlloc, DeclKind.Const, loc);
 	msgDecl.resolvedSym = msgSym;
-	msgDecl.nodeType = voidType();
+	msgDecl.nodeType = VOID_PTR;
 	const stmts: Node[] = [msgDecl];
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
 	const thisPid = makeMember(makeIdent("this", loc), "pid", loc);
@@ -204,8 +204,8 @@ function buildSendProxy(kind: number, params: string[], paramTypes: Type[], ctx:
 // ===== Build proxy body for a T-returning method (call semantics) =====
 
 function buildCallProxy(kind: number, params: string[], paramTypes: Type[], retType: Type, ctx: TransformContext, loc: SourceLocation): Node {
-	const futSym = freshTempSym(ctx, "afut", voidType());
-	const msgSym = freshTempSym(ctx, "amsg", voidType());
+	const futSym = freshTempSym(ctx, "afut", VOID_PTR);
+	const msgSym = freshTempSym(ctx, "amsg", VOID_PTR);
 	// Only String needs typed-sized future (msMsgCompleteString writes the
 	// 16-byte payload inline). Struct/Tuple/value-GI returns are heap-boxed
 	// in the dispatch body, so they fit the generic 8-byte msFutureCreate.
@@ -222,17 +222,17 @@ function buildCallProxy(kind: number, params: string[], paramTypes: Type[], retT
 	}
 	const futDecl = makeVarDecl(futSym.name, futCreate, DeclKind.Const, loc);
 	futDecl.resolvedSym = futSym;
-	futDecl.nodeType = voidType();
+	futDecl.nodeType = VOID_PTR;
 	const slotCount = totalSlotCount(params, paramTypes);
 	const msgAlloc = makeCall(makeIdent("msMsgAllocSized", loc), [
 		makeNumber(kind, loc),
 		makeIdentResolved(futSym, loc),
 		makeNumber(slotCount, loc),
 	], loc);
-	msgAlloc.nodeType = voidType();
+	msgAlloc.nodeType = VOID_PTR;
 	const msgDecl = makeVarDecl(msgSym.name, msgAlloc, DeclKind.Const, loc);
 	msgDecl.resolvedSym = msgSym;
-	msgDecl.nodeType = voidType();
+	msgDecl.nodeType = VOID_PTR;
 	const stmts: Node[] = [futDecl, msgDecl];
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
 	const thisPid2 = makeMember(makeIdent("this", loc), "pid", loc);
