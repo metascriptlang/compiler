@@ -20,10 +20,11 @@ export class JSGenerator {
 	// Maps import source specifier → resolved module ID for __mod["id"] lookups
 	importSourceToModuleId: string[];
 	importSourceToModuleIdKeys: string[];
+	thisName: string;
 }
 
 export function createJSGenerator(): JSGenerator {
-	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [] };
+	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this" };
 }
 
 // ===== Callback Registration (breaks circular imports) =====

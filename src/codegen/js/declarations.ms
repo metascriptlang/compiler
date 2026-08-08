@@ -19,10 +19,17 @@ function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 	};
 	emit(gen, jsSymbolName(node.resolvedSym, d.fnName, gen.bundleMode));
 	emit(gen, "(");
-	emitJoinedSafeStrings(gen, d.params, ", ", safeJsName);
+	const savedThisName = gen.thisName;
+	if (d.params.length > 0 && d.params[0] === "this") { gen.thisName = "$this"; }
+	emitJoinedSafeStrings(gen, d.params, ", ", receiverSafeJsName);
 	emit(gen, ") ");
 	emitBodyOrEmpty(gen, d.fnBody);
+	gen.thisName = savedThisName;
 	emitNewline(gen);
+}
+
+function receiverSafeJsName(name: string): string {
+	return name === "this" ? "$this" : safeJsName(name);
 }
 
 // Check if fnFlags contains "extern" (may also have gen:/ext: segments)

@@ -131,6 +131,7 @@ export function jsSymbolName(sym: Symbol, name: string, bundleMode: boolean): st
 
 export function emitIdentifier(gen: JSGenerator, node: Node): void {
 	const d = node.data as IdentifierData;
+	if (d.name === "this") { emit(gen, gen.thisName); return; }
 	emit(gen, jsSymbolName(node.resolvedSym, d.name, gen.bundleMode));
 }
 
