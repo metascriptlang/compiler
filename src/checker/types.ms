@@ -2146,6 +2146,24 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		return;
 	}
 	if (formal.kind === TypeKind.Union || formal.kind === TypeKind.Struct) {
+		// Structs with field names on both sides unify BY NAME: an object literal's
+		// key order is the writer's choice (JSX attr order, etc.) and need not match
+		// the formal's declaration order — positional pairing would silently bind
+		// generic params against the wrong field's type.
+		if (formal.kind === TypeKind.Struct
+				&& formal.typeNames.length > 0 && concrete.typeNames.length > 0) {
+			const fLimit = formal.typeNames.length < formal.typeChildren.length ? formal.typeNames.length : formal.typeChildren.length;
+			const cLimit = concrete.typeNames.length < concrete.typeChildren.length ? concrete.typeNames.length : concrete.typeChildren.length;
+			for (let i = 0; i < fLimit; i += 1) {
+				for (let j = 0; j < cLimit; j += 1) {
+					if (concrete.typeNames[j] === formal.typeNames[i]) {
+						unifyType(formal.typeChildren[i], concrete.typeChildren[j], bindings);
+						break;
+					}
+				}
+			}
+			return;
+		}
 		const uoLimit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
 		for (let i = 0; i < uoLimit; i += 1) {
 			unifyType(formal.typeChildren[i], concrete.typeChildren[i], bindings);

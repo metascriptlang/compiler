@@ -1079,8 +1079,17 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// GenericInstance (e.g., MyResult<T, E> = Ref<MyData<T, E>> where MyData
 			// is itself generic) by recursing through GI/Ref wrappers.
 			objExpected = peelToStructOrUnion(objExpected);
+			// A generic-containing expected type (un-instantiated formal like
+			// `{ v: T }` at a call site whose T is still unbound) must NOT be
+			// adopted: stamping it makes the literal's type identical to the
+			// formal, so unifyType's identity check derives zero bindings and
+			// the generic is never instantiated (loud missing-symbol C error),
+			// while the literal's fields emit as void*. Fall through to the
+			// self-synthesized anonymous struct — unification against the formal
+			// then binds T from the literal's own concrete field types.
 			if (objExpected !== null && objExpected.kind === TypeKind.Struct
-				&& objExpected.typeChildren !== null) {
+				&& objExpected.typeChildren !== null
+				&& !hasGenericParams(objExpected)) {
 				// Reference parity: stamp literal with expected type, propagate field types
 				// For class types, keep Ref wrapper so codegen knows to heap-allocate.
 				// Skip ownership modifiers (Sink/Lent/Var) — transparent for codegen.
@@ -3567,7 +3576,22 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	const limit = argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
 	for (let i = 0; i < limit; i += 1) {
 		if (argTypes[i] !== null) {
-			unifyType(calleeType.typeChildren[i], argTypes[i], eb);
+			// Per-arg filter: a binding whose bound type still CONTAINS generic
+			// params is unusable (instantiateGenericFunction refuses it) but under
+			// first-wins merge it would shadow a clean binding from a later arg —
+			// e.g. `createComponent(For, props)`: arg0 (the unapplied generic fn)
+			// binds P to For's own T-containing param type, masking arg1's
+			// concrete object literal.
+			const ab = createUnifyBindings();
+			unifyType(calleeType.typeChildren[i], argTypes[i], ab);
+			const fb = createUnifyBindings();
+			for (let bi = 0; bi < ab.names.length; bi += 1) {
+				if (!hasGenericParams(ab.types[bi])) {
+					fb.names.push(ab.names[bi]);
+					fb.types.push(ab.types[bi]);
+				}
+			}
+			mergeUnifyBindings(eb, fb);
 		}
 	}
 	// Pass 2: merge explicit type args. Required when args don't bind T
@@ -3608,11 +3632,71 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	// never a generic-containing one — sigmatch.nim:2179).
 	const reconcileLimit = cd.arguments.length < calleeType.typeChildren.length
 		? cd.arguments.length : calleeType.typeChildren.length;
+
+	// A generic function passed as a VALUE argument (unapplied — the Neon flow
+	// tags: `createComponent(For, props)`): the outer call's bindings make the
+	// substituted formal `(p: Concrete) => R` a concrete signature. Unify the
+	// generic's own signature against it, instantiate, rebind the arg node so
+	// codegen references the emitted instance — and then IMPROVE the outer
+	// bindings from the instance's signature: a P first bound to a props
+	// literal's own anon type (2 fields) must widen to the instance's declared
+	// param struct (3 fields with the optional ones), or the literal emits a
+	// truncated struct and the instance reads past its end. Runs BEFORE the
+	// reconciliation loop below so the literal restamp sees the improved P.
+	for (let ai = 0; ai < reconcileLimit; ai += 1) {
+		const argN = cd.arguments[ai];
+		if (argN === null || argN.resolvedSym === null) continue;
+		const argSym = argN.resolvedSym;
+		if (argSym.declNode === null || argSym.declNode.kind !== NodeKind.FunctionDecl) continue;
+		const afd = argSym.declNode.data as FunctionDeclData;
+		if (!isGenericFn(afd.fnFlags)) continue;
+		if (argSym.symbolType === null) continue;
+		const substFormal = applySubstitutions(calleeType.typeChildren[ai], eb);
+		if (substFormal === null || substFormal.kind !== TypeKind.Function || hasGenericParams(substFormal)) continue;
+		const gb = createUnifyBindings();
+		const gLimit = argSym.symbolType.typeChildren.length < substFormal.typeChildren.length ? argSym.symbolType.typeChildren.length : substFormal.typeChildren.length;
+		for (let gi = 0; gi < gLimit; gi += 1) {
+			unifyType(argSym.symbolType.typeChildren[gi], substFormal.typeChildren[gi], gb);
+		}
+		unifyType(argSym.symbolType.typeReturn, substFormal.typeReturn, gb);
+		if (gb.names.length === 0) continue;
+		const argInst = callInstantiateGeneric(argSym, gb.names, gb.types, ctx, argN.location);
+		if (argInst === null) continue;
+		argN.resolvedSym = argInst;
+		argN.nodeType = argInst.symbolType;
+		if (argInst.symbolType === null) continue;
+		const ib = createUnifyBindings();
+		unifyType(calleeType.typeChildren[ai], argInst.symbolType, ib);
+		for (let ii = 0; ii < ib.names.length; ii += 1) {
+			if (hasGenericParams(ib.types[ii])) continue;
+			let found = false;
+			for (let ei = 0; ei < eb.names.length; ei += 1) {
+				if (eb.names[ei] === ib.names[ii]) {
+					eb.types[ei] = ib.types[ii];
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				eb.names.push(ib.names[ii]);
+				eb.types.push(ib.types[ii]);
+			}
+		}
+	}
 	for (let pi = 0; pi < reconcileLimit; pi += 1) {
 		const arg = cd.arguments[pi];
 		if (arg === null) continue;
 		const substituted = applySubstitutions(calleeType.typeChildren[pi], eb);
-		if (substituted === null || !isMaybeType(substituted) || substituted.typeReturn === null) continue;
+		if (substituted === null) continue;
+		// An object-literal arg that self-typed under the generic-adoption gate
+		// (checkExpr ObjectLiteral: a generic-containing formal is never stamped)
+		// now gets the instantiated formal: codegen must emit the same struct
+		// identity the instance's parameter uses, not the literal's own anon name.
+		if (arg.kind === NodeKind.ObjectLiteral && substituted.kind === TypeKind.Struct
+				&& !hasGenericParams(substituted)) {
+			arg.nodeType = substituted;
+		}
+		if (!isMaybeType(substituted) || substituted.typeReturn === null) continue;
 		if (arg.kind === NodeKind.NullLiteral) {
 			cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType);
 		} else if (arg.nodeType !== null && !isMaybeType(arg.nodeType)
