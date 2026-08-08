@@ -109,3 +109,4 @@ import "./bug093VoidGenericInstantiation";
 import "./bug094ObjectSpreadLiteral";
 import "./bug095ExprArrowNestedCaptureEnv";
 import "./bug096MacroWitnessNestedNull";
+import "./bug097UnionAliasHookTypedef";
