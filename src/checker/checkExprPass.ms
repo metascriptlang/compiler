@@ -2188,7 +2188,8 @@ function variantIndexInUnion(formal: Type, exprType: Type): int32 {
 // bare variant struct where the union is expected and clang only warns.
 // Reference: sigmatch.nim implicitConv(nkHiddenSubConv, ...).
 function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): Node {
-	const vi = variantIndexInUnion(formal, exprType);
+	if (unwrapRefNullUnion(formal) !== null) return null as unknown as Node;
+	const vi = variantIndexInUnion(formal, unwrapRef(exprType));
 	if (vi < 0) return null as unknown as Node;
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: formal }, convTok);
@@ -2259,6 +2260,15 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	// `return otherMaybeFn()`).
 	if (isMaybeType(formal) && formal.typeReturn !== null && !isMaybeType(exprType)) {
 		return synthMaybeWrap(expr, formal, exprType);
+	}
+	// A variant value meeting a union formal converts HERE so every fit
+	// position (var init, assign, return, ternary, call arg) shares the one
+	// wrap — no position can forget it. Nilable pointer unions collapse to a
+	// bare pointer and take no tag.
+	if (formal.kind === TypeKind.Union && exprType.kind !== TypeKind.Union
+		&& unwrapRefNullUnion(formal) === null) {
+		const widened = widenVariantToUnion(expr, formal, exprType);
+		if (widened !== null as unknown as Node) return widened;
 	}
 	if (formal.kind === exprType.kind && !isReinterpretUnsafe(exprType, formal)) return expr;
 	if ((exprType.kind === TypeKind.CString && formal.kind === TypeKind.String)
@@ -3041,7 +3051,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			const newCalleeType = tryInstantiateGenericCallee(ctx, node, calleeType, argTypes, methodFlags, expectedType);
 			if (newCalleeType !== null) {
 				calleeType = newCalleeType;
-				return inferGenericReturn(calleeType, argTypes, expectedType);
+				return inferGenericReturn(calleeType, argTypes, expectedType, node);
 			}
 		}
 		// Explicit type arg resolution for generic methods (e.g. JSON.parse<Person>)
@@ -3061,7 +3071,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				checkActorArgSendable(ctx, d.arguments[pi], pi);
 			}
 		}
-		return inferGenericReturn(calleeType, argTypes, expectedType);
+		return inferGenericReturn(calleeType, argTypes, expectedType, node);
 	}
 	// Multi-overload extension — needs argTypes for scoring
 	if (extMultiFiltered.length > 1) {
@@ -3238,6 +3248,10 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 					convNode.flags = convNode.flags | NodeFlag.Sem;
 					d.arguments[pi] = convNode;
 				}
+				if (paramType.kind === TypeKind.Union && pi < d.arguments.length && argTypes[pi] !== null) {
+					const uw = widenVariantToUnion(d.arguments[pi], paramType, argTypes[pi]);
+					if (uw !== null as unknown as Node) d.arguments[pi] = uw;
+				}
 				// Sendable check: actor method args must be safe to cross boundary
 				if (isActorMethodCall && pi < d.arguments.length) {
 					checkActorArgSendable(ctx, d.arguments[pi], pi);
@@ -3319,7 +3333,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				&& calleeType.typeExtra.typeName.slice(0, 8) === "asserts:") {
 			applyAssertionNarrowing(calleeType, d.arguments);
 		}
-		return inferGenericReturn(calleeType, argTypes, expectedType);
+		return inferGenericReturn(calleeType, argTypes, expectedType, node);
 	}
 	return getReturnType(calleeType);
 }
@@ -3330,7 +3344,7 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 	if (returnType === null) return inferredType();
 	// Resolve the explicit type arg to an actual type
 	const resolvedSym = lookupSymbol(ctx.table, explicitArg);
-	if (resolvedSym === null) return inferGenericReturn(fnType, argTypes, expectedType);
+	if (resolvedSym === null) return inferGenericReturn(fnType, argTypes, expectedType, node);
 	ensureShaped(resolvedSym, ctx);
 	const concreteType = resolvedSym.symbolType;
 	// Record the type arg as a symbol reference for LSP hover/goto-def
@@ -3425,7 +3439,7 @@ function applyAssertionNarrowing(calleeType: Type, args: Node[]): void {
 	argSym.symbolType = targetType;
 }
 
-export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType: Type | null): Type {
+export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType: Type | null, callNode: Node | null): Type {
 	let returnType = fnType.typeReturn;
 	if (returnType === null) return inferredType();
 
@@ -3483,6 +3497,21 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 	}
 
 	returnType = applySubstitutions(returnType, argBindings);
+	// With bindings final, a variant arg meeting a now-concrete union formal
+	// gets its conversion here — same wrap every other fit position takes.
+	if (callNode !== null && callNode.kind === NodeKind.CallExpr) {
+		const cd = callNode.data as CallExprData;
+		const lim = cd.arguments.length < fnType.typeChildren.length ? cd.arguments.length : fnType.typeChildren.length;
+		for (let ai = 0; ai < lim; ai += 1) {
+			const arg = cd.arguments[ai];
+			if (arg === null || arg.nodeType === null) continue;
+			const formal = applySubstitutions(fnType.typeChildren[ai], argBindings);
+			if (formal !== null && formal.kind === TypeKind.Union) {
+				const uw = widenVariantToUnion(arg, formal, arg.nodeType);
+				if (uw !== null as unknown as Node) cd.arguments[ai] = uw;
+			}
+		}
+	}
 	// Eagerly instantiate body for concrete GenericInstance — mirrors
 	// inferGenericReturnWithExplicit. Without this, downstream peelToStructOrUnion
 	// falls back to the un-substituted typeExtra and `r.value.field` access
@@ -3695,6 +3724,11 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		if (arg.kind === NodeKind.ObjectLiteral && substituted.kind === TypeKind.Struct
 				&& !hasGenericParams(substituted)) {
 			arg.nodeType = substituted;
+		}
+		if (substituted.kind === TypeKind.Union && arg.nodeType !== null) {
+			const uw = widenVariantToUnion(arg, substituted, arg.nodeType);
+			if (uw !== null as unknown as Node) cd.arguments[pi] = uw;
+			continue;
 		}
 		if (!isMaybeType(substituted) || substituted.typeReturn === null) continue;
 		if (arg.kind === NodeKind.NullLiteral) {
@@ -4080,7 +4114,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	if (winnerType.kind === TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
 		fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0);
 	}
-	return inferGenericReturn(winnerType, argTypes, null);
+	return inferGenericReturn(winnerType, argTypes, null, callNode);
 }
 
 // Resolve extension method overloads: multiple extensions match same receiver+method.
@@ -4199,7 +4233,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		const ovDefaultOffset = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
 	}
-	return inferGenericReturn(winnerType, argTypes, null);
+	return inferGenericReturn(winnerType, argTypes, null, callNode);
 }
 
 function formatCandidateSig(name: string, fnType: Type): string {
