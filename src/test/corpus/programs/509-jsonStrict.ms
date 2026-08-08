@@ -5,10 +5,10 @@
 // file is the regression pin against silent data invention.
 // The error TEXT is part of the contract (callers act on it), hence printed
 // rather than only the ok/err flag.
-// Array-field cases live in 510-jsonStrictArray: declaring an array-typed
-// interface alongside these makes generic instantiation drop the `string`
-// in Result<T, string> (compiler bug, reported separately — an UNUSED
-// declaration is enough to trigger it).
+// Array-field cases live in 510-jsonStrictArray. The split predates a
+// since-fixed instantiation bug (an unused array-typed interface declared
+// alongside these dropped the `string` in Result<T, string>); kept because
+// corpus programs are append-only.
 
 interface User {
 	id: int64;

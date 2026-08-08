@@ -1,8 +1,8 @@
 // @ledger-slack(msRefArrayRefCell): 1
 // Parity program — array fields through the typed JSON.parse<T> facade.
-// Deliberately its own program: an array-typed interface declared next to
-// 509's interfaces makes generic instantiation drop the `string` in
-// Result<T, string> (compiler bug, reported separately).
+// Its own program since birth: the split predates a since-fixed instantiation
+// bug (an array-typed interface declared next to 509's dropped the `string`
+// in Result<T, string>); kept because corpus programs are append-only.
 // Array fields never worked through the facade before the strict decode
 // landed — a `T[]` field arrives as Ref<Array<T>> and fell through to the
 // "unsupported field type" arm; nothing in the tree exercised that path.
