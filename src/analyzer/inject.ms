@@ -182,6 +182,20 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 
 function processHiddenWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const hd = node.data as HiddenDerefData;
+	// Reference parity: a deref names a LOCATION owned by someone else, exactly
+	// like field/element access — transferring ownership out of it copies.
+	// Sinking through it instead moves the POINTER while the consumer only
+	// takes the pointee's bytes, so the cell is left owned by nobody.
+	if (node.kind === NodeKind.HiddenDeref) {
+		hd.expr = processNode(hd.expr, dctx, DrcMode.Normal);
+		if ((mode === DrcMode.SinkArg || mode === DrcMode.Consumed) && node.nodeType !== null) {
+			const rcInfo = sinkClassify(node.nodeType, dctx.ctx);
+			if (rcInfo.needsCleanup) {
+				return passCopyToSink(node, dctx);
+			}
+		}
+		return node;
+	}
 	hd.expr = processNode(hd.expr, dctx, mode);
 	return node;
 }
