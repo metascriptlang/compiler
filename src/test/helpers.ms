@@ -26,7 +26,8 @@ import { createDefaultConfig, Backend } from "../module/resolver";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { Module, ModuleGraph, findModule } from "../module/graph";
-import { Node } from "../ast/node";
+import { Node, ProgramData } from "../ast/node";
+import { drainPendingInstances } from "../checker/instantiate";
 // Side-effect import — registers the Raiser-VM-backed macro evaluator so
 // macros encountered in compileToC sources actually expand. Without this,
 // any macro invocation fails check with "evaluator unavailable".
@@ -395,6 +396,25 @@ function emitJSTwoPhase(graph: ModuleGraph, registry: ExportRegistry, preludeCtx
 		unitPaths.push(modPath);
 		unitPrograms.push(expanded);
 		unitCtxs.push(ctx);
+	}
+
+	const pendingInsts = drainPendingInstances();
+	for (const instNode of pendingInsts) {
+		if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
+			instNode.nodeType = instNode.resolvedSym.symbolType;
+		}
+		let owner = "";
+		if (instNode.resolvedSym !== null && instNode.resolvedSym.modulePath !== "") {
+			owner = instNode.resolvedSym.modulePath;
+		}
+		let targetIdx: int32 = -1;
+		for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
+			if (unitPaths[pi] === owner) { targetIdx = pi; }
+		}
+		if (targetIdx < 0) { targetIdx = unitPaths.length - 1; }
+		if (targetIdx >= 0) {
+			(unitPrograms[targetIdx].data as ProgramData).programStmts.push(instNode);
+		}
 	}
 
 	let combined = "";
