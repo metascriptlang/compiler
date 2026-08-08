@@ -93,11 +93,17 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 
 	// Extract type name prefix: "TypeNameDestroy" → "TypeName"
 	const typeName = callee.slice(0, callee.length - suffix.length);
-	// Anon-struct hooks: the full typedef block only exists in TUs where
-	// getTypeDesc ran for the type — a consumer TU referencing just the hook
-	// needs an opaque forward so `msAnon_X*` in the proto is a known type
-	// (identical typedef redeclaration is legal C11).
-	if (isGeneratedMsAnonHook(callee)) {
+	// The full typedef block only exists in TUs where getTypeDesc ran for the
+	// type — a TU referencing just the hook (anon consumer, or the defining
+	// module whose TypeInfo cites the hook without otherwise using the type)
+	// needs an opaque forward so `X*` in the proto is a known type (identical
+	// typedef redeclaration is legal C11). By-value suffixes (Eq, Dup) are
+	// excluded: an opaque type cannot appear by value, so their TUs must have
+	// materialized the full type already.
+	const userNamed = !(callee.length > 2 && callee.byteAt(0) === "m".code && callee.byteAt(1) === "s".code);
+	const pointerSuffix = suffix === "Destroy" || suffix === "WasMoved"
+		|| suffix === "Copy" || suffix === "Sink" || suffix === "Trace";
+	if (isGeneratedMsAnonHook(callee) || (userNamed && pointerSuffix)) {
 		addLine(sec(g, CSection.ProcHeaders), `typedef struct ${typeName} ${typeName};`);
 	}
 	const isSeqHook = typeName.endsWith("Array");
