@@ -1824,7 +1824,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				}
 			}
 			if (vi < d.convType.typeChildren.length) {
-				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${inner}})`);
+				const payload = srcType !== null && isPointerType(srcType) ? `(*${inner})` : inner;
+				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${payload}})`);
 				return;
 			}
 			ctx.results.push(inner);
