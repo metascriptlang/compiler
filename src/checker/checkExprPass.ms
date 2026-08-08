@@ -2189,10 +2189,22 @@ function variantIndexInUnion(formal: Type, exprType: Type): int32 {
 // Reference: sigmatch.nim implicitConv(nkHiddenSubConv, ...).
 function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): Node {
 	if (unwrapRefNullUnion(formal) !== null) return null as unknown as Node;
-	const vi = variantIndexInUnion(formal, unwrapRef(exprType));
+	const valueType = unwrapRef(exprType);
+	const vi = variantIndexInUnion(formal, valueType);
 	if (vi < 0) return null as unknown as Node;
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
-	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: formal }, convTok);
+	// A union slot holds the variant BY VALUE, so a ref operand is READ and
+	// copied, never consumed: handing the pointer to the conversion makes the
+	// analyzer sink it (wasMoved) and the heap cell is then destroyed by
+	// nobody. Spelling the deref keeps the ref owned by its own scope and
+	// routes the payload through the ordinary value-copy path.
+	let operand = expr;
+	if (valueType !== exprType) {
+		const drefNode = createNode(NodeKind.HiddenDeref, { expr: expr }, convTok);
+		drefNode.nodeType = valueType;
+		operand = drefNode;
+	}
+	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: operand, convType: formal }, convTok);
 	convNode.nodeType = formal;
 	// Same stamp convention as the object-literal path: codegen reads the slot,
 	// it never re-derives one (+1 so 0 keeps meaning "not set").
