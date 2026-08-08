@@ -141,3 +141,27 @@ console.log(fromDupB().toString());
 	assert js.contains("fromDupA()");
 	assert js.contains("fromDupB()");
 }
+
+// Nim jsgen parity (mangleName reservedWords, jsgen.nim:229-243): "this" is a JS
+// reserved word — a lifted method's receiver binding must never emit bare. Class
+// methods keep implicit bare `this`; monomorphised lifts bind `$this`.
+test "E2E JS: generic class method lift renames the receiver binding" {
+	const src = `class GenBox<T> {
+	value: T;
+	constructor(v: T) { this.value = v; }
+	get(): T { return this.value; }
+}
+const gb = new GenBox<int32>(41);
+console.log(gb.get().toString());
+`;
+	const entries: MapEntry[] = [
+		{ entryPath: "test/genBox.ms", entrySource: src },
+	];
+	const js = compileProjectToJSWithStd(entries, "test/genBox.ms");
+	assert js.indexOf("ERROR", 0) < 0;
+	assert js.contains("function GenBox_get");
+	assert !js.contains("(this)");
+	assert !js.contains("(this,");
+	assert js.contains("return $this.value");
+	assert js.contains("return this.value");
+}
