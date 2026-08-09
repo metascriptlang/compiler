@@ -22,3 +22,30 @@ test "int64 literal at int64 max keeps its digits in JS" {
 	assert result.ok;
 	assert result.value.contains("9223372036854775807");
 }
+
+// Representation consistency: one switch selects BigInt or Number for EVERY
+// int64 site on this backend. Selecting BigInt for the default initializer
+// while literals and operators stayed Number made the first arithmetic op
+// throw "Cannot mix BigInt and other types". Runtime coverage on both
+// backends: corpus/programs/014-int64DefaultInit.ms.
+
+test "uninitialized int64 defaults to the same representation as int64 literals" {
+	const result = compileToJS("let a: int64;");
+	assert result.ok;
+	assert result.value.contains(" = 0;");
+	assert !result.value.contains(" = 0n");
+}
+
+test "uninitialized uint64 defaults to the same representation as int64 literals" {
+	const result = compileToJS("let u: uint64;");
+	assert result.ok;
+	assert result.value.contains(" = 0;");
+	assert !result.value.contains(" = 0n");
+}
+
+test "uninitialized int64 array defaults to element zeros, not a BigInt array" {
+	const result = compileToJS("let xs: int64[4];");
+	assert result.ok;
+	assert result.value.contains("[0, 0, 0, 0]");
+	assert !result.value.contains("BigInt64Array");
+}
