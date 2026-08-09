@@ -14,16 +14,16 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Typed Array Mapping (reference: arrayTypeForElemType) =====
 
-function jsTypedArrayName(elemKind: TypeKind): string {
+function jsTypedArrayName(elemKind: TypeKind, bigInt64: boolean): string {
 	return match (elemKind) {
 		TypeKind.Int8 => "Int8Array",
 		TypeKind.Int16 => "Int16Array",
 		TypeKind.Int32 => "Int32Array",
-		TypeKind.Int64 => "BigInt64Array",
+		TypeKind.Int64 => bigInt64 ? "BigInt64Array" : "",
 		TypeKind.Uint8 | TypeKind.Char | TypeKind.Boolean => "Uint8Array",
 		TypeKind.Uint16 => "Uint16Array",
 		TypeKind.Uint32 => "Uint32Array",
-		TypeKind.Uint64 => "BigUint64Array",
+		TypeKind.Uint64 => bigInt64 ? "BigUint64Array" : "",
 		TypeKind.Float32 => "Float32Array",
 		TypeKind.Float64 | TypeKind.Number => "Float64Array",
 		_ => "",
@@ -32,49 +32,40 @@ function jsTypedArrayName(elemKind: TypeKind): string {
 
 // Emit default initializer for uninitialized variable based on type.
 // Reference: createVar — typed arrays for numeric, inline literal for small, arrayConstr for large.
-function emitDefaultInit(gen: JSGenerator, t: Type): void {
-	if (t === null) return;
+function jsDefaultValue(t: Type, bigInt64: boolean): string {
+	if (t === null) return "";
 	if (t.kind === TypeKind.SizedArray) {
 		const size = t.typeFlags;
 		const elemType = t.typeReturn;
+		let fill = "null";
 		if (elemType !== null) {
-			const typedName = jsTypedArrayName(elemType.kind);
-			if (typedName !== "") {
-				emit(gen, ` = new ${typedName}(${size})`);
-				return;
-			}
+			const typedName = jsTypedArrayName(elemType.kind, bigInt64);
+			if (typedName !== "") return `new ${typedName}(${size})`;
+			const elemInit = jsDefaultValue(elemType, bigInt64);
+			if (elemInit !== "") fill = elemInit;
 		}
-		// Non-numeric element type: use Array(n).fill(null)
-		if (size <= 32) {
-			emit(gen, " = [");
-			for (let i = 0; i < size; i += 1) {
-				if (i > 0) emit(gen, ", ");
-				emit(gen, "null");
-			}
-			emit(gen, "]");
-		} else {
-			emit(gen, ` = new Array(${size}).fill(null)`);
+		if (size > 32) return `new Array(${size}).fill(${fill})`;
+		let out = "[";
+		for (let i = 0; i < size; i += 1) {
+			if (i > 0) out = out + ", ";
+			out = out + fill;
 		}
-		return;
+		return out + "]";
 	}
 	if (t.kind === TypeKind.Number || t.kind === TypeKind.Float32 || t.kind === TypeKind.Float64
 		|| t.kind === TypeKind.Int8 || t.kind === TypeKind.Int16 || t.kind === TypeKind.Int32
 		|| t.kind === TypeKind.Uint8 || t.kind === TypeKind.Uint16 || t.kind === TypeKind.Uint32) {
-		emit(gen, " = 0");
-		return;
+		return "0";
 	}
-	if (t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint64) {
-		emit(gen, " = 0n");
-		return;
-	}
-	if (t.kind === TypeKind.Boolean) {
-		emit(gen, " = false");
-		return;
-	}
-	if (t.kind === TypeKind.String) {
-		emit(gen, " = \"\"");
-		return;
-	}
+	if (t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint64) return bigInt64 ? "0n" : "0";
+	if (t.kind === TypeKind.Boolean) return "false";
+	if (t.kind === TypeKind.String) return "\"\"";
+	return "";
+}
+
+function emitDefaultInit(gen: JSGenerator, t: Type): void {
+	const v = jsDefaultValue(t, gen.jsBigInt64);
+	if (v !== "") emit(gen, " = " + v);
 }
 
 // ===== Variable Declaration =====

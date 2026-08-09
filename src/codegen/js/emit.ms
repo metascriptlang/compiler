@@ -21,10 +21,11 @@ export class JSGenerator {
 	importSourceToModuleId: string[];
 	importSourceToModuleIdKeys: string[];
 	thisName: string;
+	jsBigInt64: boolean;
 }
 
 export function createJSGenerator(): JSGenerator {
-	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this" };
+	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", jsBigInt64: false };
 }
 
 // ===== Callback Registration (breaks circular imports) =====
