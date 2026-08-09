@@ -1,9 +1,10 @@
 // Language tests: JSON stringify + untyped parse via JsonValue accessors.
 //
-// Runtime caveat: JSON.parse<T> (typed) is a C-backend-only feature — the
-// checker synthesizes per-type `__jsonParse_T` helpers. Typed-parse coverage
-// lives in `src/test/c/json.ms` (compile-check). Here we exercise the paths
-// that work uniformly across backends.
+// Typed `JSON.parse<T>` runs on BOTH backends — the corpus exercises it on C
+// and on node (505/506/509/510, byte-compared). This file stays on the untyped
+// JsonValue paths on purpose: they are what the accessor API guarantees, and
+// keeping them separate means a typed-decode regression shows up as a corpus
+// parity failure rather than as noise in the language tier.
 
 import { jsonValueToStruct, jsonValueToStructE, jsonValueOf } from "std/serialize/json";
 
