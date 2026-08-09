@@ -32,6 +32,7 @@ import "./lang/async";
 // lives in fixedbugs/bug028.ms.
 // import "./lang/comptime";
 import "./lang/syntax";
+import "./lang/whenStmt";
 import "./lang/multimod/main";
 
 // -- regression suite (one file per fixed bug) --
