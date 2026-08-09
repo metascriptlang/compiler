@@ -839,7 +839,12 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	}
 	output = output + bundle;
 
-	const outPath = `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
+	// `--output` wins here exactly as it does for the C binary. Deriving the
+	// name from the entry file alone collides for directory-style programs,
+	// which are all spelled `main.ms`.
+	const outPath = opts.outputPath !== ""
+		? opts.outputPath
+		: `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
 	writeOutput(outPath, output);
 	console.log(success(`${compiled} module(s) bundled → ${bold(outPath)}`));
 }
