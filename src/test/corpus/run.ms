@@ -491,8 +491,8 @@ function planJobs(specs: Spec[]): BuildJob[] {
 			const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
 			jobs.push({ spec, lane: "danger", cmd: MSC + " build " + spec.entry + " --gc=drc --danger --cc=clang --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
 			if (!spec.skipJs) {
-				const jsbin = "out/" + spec.name + ".js";
-				jobs.push({ spec, lane: "js", cmd: MSC + " build " + spec.entry + " --target=js", cell: makeCell(spec, "js", jsbin) });
+				const jsbin = OUT_DIR + "bin/" + spec.name + ".js";
+				jobs.push({ spec, lane: "js", cmd: MSC + " build " + spec.entry + " --target=js --output=" + jsbin, cell: makeCell(spec, "js", jsbin) });
 			}
 		}
 	}
