@@ -131,3 +131,24 @@ function main(): void { console.log("ok"); }
 	resetParserDefines();
 	assert !r.ok;
 }
+
+// `@target` / `@platform` are retired in favour of `when`. They must DIAGNOSE, not
+// silently drop: a directive block that vanishes without a word is exactly how
+// `@target` passed for a working feature while gating nothing.
+test "when: @target is retired with a migration message" {
+	const r = compileToC(`
+@target("c") { function f(): number { return 1; } }
+function main(): void { console.log("ok"); }
+`);
+	assert !r.ok;
+	if (!r.ok) { assert r.error.contains("retired"); }
+}
+
+test "when: @platform is retired with a migration message" {
+	const r = compileToC(`
+@platform("macos") { @passL("-framework Foundation"); }
+function main(): void { console.log("ok"); }
+`);
+	assert !r.ok;
+	if (!r.ok) { assert r.error.contains("retired"); }
+}
