@@ -1,4 +1,4 @@
-// @ledger-slack(msStringArrayRefCell): 5
+// @ledger-slack(msStringArrayRefCell): 6
 // @ledger-slack(msRefArrayRefCell): 6
 // @maxrss: 40
 // @stdout: jsx-parse-native acc=5000
