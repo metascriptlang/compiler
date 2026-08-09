@@ -2,8 +2,11 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseStatement()
 
 import { TokenKind } from "../../lexer/token";
-import { Node, NodeKind, FunctionDeclData, createNode } from "../../ast/node";
+import { Node, NodeKind, FunctionDeclData, BlockStmtData, createNode } from "../../ast/node";
 import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd } from "../context";
+import { getParserDefines } from "../context";
+import { isDefined, definedValue } from "../../compiler/defines";
+import { parseIntStr } from "../../utils/string";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseAssertStmt } from "./control";
 import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl, parseConverterDecl } from "./declaration";
@@ -14,6 +17,7 @@ import { attachComments } from "../util";
 
 // Type aliases
 type NodeResult = Result<Node, string>;
+type NodesResult = Result<Node[], string>;
 
 // ===== Statement Dispatch (match on TokenKind) =====
 // syntax: stmt = varDecl | ifStmt | whileStmt | forStmt | returnStmt | breakStmt
@@ -115,6 +119,167 @@ export function parseStatement(state: ParserState): NodeResult {
 	return Result.ok(attachComments(state, res.value));
 }
 
+
+// ===== Conditional Compilation =====
+// `when (flag) { … } else when (…) { … } else { … }`.
+//
+// Nim's semWhen (semexprs.nim:2705-2712) takes the first true branch and returns
+// immediately, so the other branches are never semantically checked. MetaScript
+// resolves the chain HERE, at parse, because collectTopLevel runs before any check
+// and would otherwise register declarations belonging to a dead branch — Haxe cuts
+// at the same place ("discarded while parsing … not type-checked").
+//
+// The winning branch's statements are returned for splicing into the enclosing
+// statement list: Nim splices an nkStmtList, never a scope-bearing block, so a
+// `when` must not introduce a scope of its own.
+
+function isNumericStr(s: string): boolean {
+	if (s.length === 0) return false;
+	for (let i = 0; i < s.length; i += 1) {
+		const c = s.charAt(i);
+		if (i === 0 && c === "-" && s.length > 1) continue;
+		if (c < "0" || c > "9") return false;
+	}
+	return true;
+}
+
+function cmpStr(a: string, b: string): number {
+	const n = a.length < b.length ? a.length : b.length;
+	for (let i = 0; i < n; i += 1) {
+		const ca = a.byteAt(i);
+		const cb = b.byteAt(i);
+		if (ca !== cb) return ca < cb ? -1 : 1;
+	}
+	if (a.length === b.length) return 0;
+	return a.length < b.length ? -1 : 1;
+}
+
+function applyCmp(lhs: string, rhs: string, op: TokenKind): boolean {
+	let c = 0;
+	if (isNumericStr(lhs) && isNumericStr(rhs)) {
+		const a = parseIntStr(lhs);
+		const b = parseIntStr(rhs);
+		c = a === b ? 0 : (a < b ? -1 : 1);
+	} else {
+		c = cmpStr(lhs, rhs);
+	}
+	if (op === TokenKind.EqEq || op === TokenKind.EqEqEq) return c === 0;
+	if (op === TokenKind.BangEq || op === TokenKind.BangEqEq) return c !== 0;
+	if (op === TokenKind.Lt) return c < 0;
+	if (op === TokenKind.LtEq) return c <= 0;
+	if (op === TokenKind.Gt) return c > 0;
+	return c >= 0;
+}
+
+function isCmpOp(k: TokenKind): boolean {
+	return k === TokenKind.EqEq || k === TokenKind.EqEqEq
+		|| k === TokenKind.BangEq || k === TokenKind.BangEqEq
+		|| k === TokenKind.Lt || k === TokenKind.LtEq
+		|| k === TokenKind.Gt || k === TokenKind.GtEq;
+}
+
+// The condition grammar is CLOSED — flag names, literals, !, &&, ||, comparisons and
+// parentheses, nothing else. Both references restrict it the same way; an open
+// expression grammar would need a symbol table that does not exist at parse time.
+function parseWhenPrimary(state: ParserState): Result<boolean, string> {
+	const tok = current(state);
+	if (tok.kind === TokenKind.LParen) {
+		advance(state);
+		const inner = try parseWhenOr(state);
+		if (current(state).kind !== TokenKind.RParen) {
+			return Result.err(`Expected ')' in 'when' condition at line ${current(state).line}`);
+		}
+		advance(state);
+		return Result.ok(inner);
+	}
+	if (tok.kind === TokenKind.Bang) {
+		advance(state);
+		const v = try parseWhenPrimary(state);
+		return Result.ok(!v);
+	}
+	if (tok.kind === TokenKind.Ident) {
+		const name = tok.value;
+		advance(state);
+		if (isCmpOp(current(state).kind)) {
+			const op = current(state).kind;
+			advance(state);
+			const rhsTok = current(state);
+			if (rhsTok.kind !== TokenKind.String && rhsTok.kind !== TokenKind.Number && rhsTok.kind !== TokenKind.Ident) {
+				return Result.err(`Expected a literal after the comparison in 'when' condition at line ${rhsTok.line}`);
+			}
+			advance(state);
+			return Result.ok(applyCmp(definedValue(getParserDefines(), name), rhsTok.value, op));
+		}
+		return Result.ok(isDefined(getParserDefines(), name));
+	}
+	return Result.err(`Unsupported expression in 'when' condition at line ${tok.line} — only flag names, literals, !, &&, || and comparisons are allowed`);
+}
+
+function parseWhenAnd(state: ParserState): Result<boolean, string> {
+	let left = try parseWhenPrimary(state);
+	while (current(state).kind === TokenKind.AmpAmp) {
+		advance(state);
+		const right = try parseWhenPrimary(state);
+		left = left && right;
+	}
+	return Result.ok(left);
+}
+
+function parseWhenOr(state: ParserState): Result<boolean, string> {
+	let left = try parseWhenAnd(state);
+	while (current(state).kind === TokenKind.PipePipe) {
+		advance(state);
+		const right = try parseWhenAnd(state);
+		left = left || right;
+	}
+	return Result.ok(left);
+}
+
+function parseWhenHead(state: ParserState): Result<boolean, string> {
+	if (current(state).kind !== TokenKind.LParen) {
+		return Result.err(`Expected '(' after 'when' at line ${current(state).line}`);
+	}
+	advance(state);
+	const v = try parseWhenOr(state);
+	if (current(state).kind !== TokenKind.RParen) {
+		return Result.err(`Expected ')' after 'when' condition at line ${current(state).line}`);
+	}
+	advance(state);
+	return Result.ok(v);
+}
+
+function blockStatements(node: Node): Node[] {
+	if (node.kind !== NodeKind.BlockStmt) return [];
+	return (node.data as BlockStmtData).statements;
+}
+
+// Every branch is PARSED (a dead branch must still be syntactically valid — Haxe says
+// the same) but only the first true one is selected; later conditions are parsed for
+// their tokens and not consulted, mirroring semWhen's early return.
+export function parseWhenChain(state: ParserState): NodesResult {
+	advance(state); // consume 'when'
+	const firstCond = try parseWhenHead(state);
+	const firstBlock = try parseBlockStmt(state);
+	let chosen: Node[] = [];
+	let picked = firstCond;
+	if (firstCond) { chosen = blockStatements(firstBlock); }
+
+	while (current(state).kind === TokenKind.Else) {
+		advance(state);
+		if (current(state).kind === TokenKind.When) {
+			advance(state);
+			const cond = try parseWhenHead(state);
+			const blk = try parseBlockStmt(state);
+			if (!picked && cond) { chosen = blockStatements(blk); picked = true; }
+		} else {
+			const blk = try parseBlockStmt(state);
+			if (!picked) { chosen = blockStatements(blk); picked = true; }
+			break;
+		}
+	}
+	return Result.ok(chosen);
+}
+
 // ===== Block Parser =====
 // syntax: block = '{' stmt* '}'
 
@@ -127,6 +292,11 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 
 	const stmts: Node[] = [];
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+		if (current(state).kind === TokenKind.When) {
+			const picked = try parseWhenChain(state);
+			for (const w of picked) { stmts.push(w); }
+			continue;
+		}
 		const s = try parseStatement(state);
 		stmts.push(s);
 	}
@@ -157,6 +327,16 @@ export function parseProgram(state: ParserState): NodeResult {
 	const token = current(state);
 	const stmts: Node[] = [];
 	while (!isAtEnd(state)) {
+		if (current(state).kind === TokenKind.When) {
+			const chain = parseWhenChain(state);
+			if (chain.ok) {
+				for (const w of chain.value) { stmts.push(w); }
+			} else {
+				addError(state, chain.error);
+				synchronize(state);
+			}
+			continue;
+		}
 		const result = parseStatement(state);
 		if (result.ok) {
 			stmts.push(result.value);

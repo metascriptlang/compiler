@@ -2,6 +2,7 @@
 
 import { exit, platform } from "std/process";
 import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
+import { setParserDefines } from "./parser/context";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
@@ -43,6 +44,10 @@ export function main(): number {
 
 	const opts = parseArgs();
 	const cmd = opts.command;
+
+	// Hand the define table to the parser before any source is read: `when` chains
+	// resolve at parse (see parseWhenChain), so the flags must be in place first.
+	setParserDefines(opts.defines);
 
 	// Find project root by walking up from the entry file (or CWD) looking for
 	// build.ms. Go/Rust convention: the manifest defines the project root.
