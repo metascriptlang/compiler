@@ -217,7 +217,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.ActorDecl => checkActorDecl(ctx, node),
 		NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.EnumDecl | NodeKind.TypeAliasDecl |
 		NodeKind.ExternDecl | NodeKind.ImportDecl => {},
-		NodeKind.MacroDecl => markMacroUsedSymbols(ctx, node),
+		NodeKind.MacroDecl => checkMacroDecl(ctx, node),
 		NodeKind.ExportDecl => checkExportDecl(ctx, node),
 		NodeKind.IfStmt => checkIfStmt(ctx, node),
 		NodeKind.WhileStmt => checkWhileStmt(ctx, node),
@@ -1475,6 +1475,22 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 }
 
 // Mark symbols referenced inside a macro body as used.
+// Converter targets match by RESOLVED type (Nim userConvMatch walks resolved
+// converter symbols; sigmatch.nim:2297). The annotation resolves HERE, in the
+// declaring module's scope, with line=0 so an unresolvable target stays a
+// silent name-only entry instead of a new diagnostic.
+function checkMacroDecl(ctx: CheckerContext, node: Node): void {
+	markMacroUsedSymbols(ctx, node);
+	if ((node.flags & NodeFlag.Converter) === 0) return;
+	const d = node.data as MacroDeclData;
+	if (d.macroDeclReturnType === "") return;
+	const t = resolveAnnotation(d.macroDeclReturnType, ctx, 0, 0);
+	if (t === null) return;
+	if (t.kind === TypeKind.Inferred || t.kind === TypeKind.Error || t.kind === TypeKind.None
+		|| t.kind === TypeKind.TypeReference || t.kind === TypeKind.Unknown) return;
+	ctx.converterTargetTypes.set(d.macroDeclName, t);
+}
+
 // Macro bodies are not type-checked (they run in the Raiser VM), but their
 // identifiers (e.g. NodeKind in `NodeKind.BinaryExpr`) come from imports that
 // would otherwise be reported as unused.
@@ -2067,6 +2083,8 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 					const ct = preludeCtx.converterTargetByName.get(sym.name);
 					if (ct !== null && ct !== "") {
 						registerConverter(ctx, ct, sym.name, 2, 0, 0);
+						const ctt = preludeCtx.converterTargetTypes.get(sym.name);
+						if (ctt !== null) { ctx.converterTargetTypes.set(sym.name, ctt); }
 					}
 				}
 			}

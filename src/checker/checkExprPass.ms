@@ -235,8 +235,22 @@ function tryConverterAtBoundary(ctx: CheckerContext, node: Node, expectedType: T
 	if (isUnresolvedType(expectedType) || expectedType.kind === TypeKind.GenericParam) return false;
 	if (ctx.jsxMacroArgDepth > 0) return false;
 	const targetName = typeDisplayName(expectedType);
-	if (!ctx.converterTargets.has(targetName)) return false;
-	const convName = ctx.converterTargets.get(targetName);
+	let convName: string | null = null;
+	if (ctx.converterTargets.has(targetName)) {
+		convName = ctx.converterTargets.get(targetName);
+	} else {
+		// Name fast-path missed (non-nominal target: alias of function/union/
+		// primitive). Nim's dest-side rule is resolved-type identity — typeRel
+		// in {isEqual} (userConvMatch, sigmatch.nim:2316) — so walk the
+		// registered targets in order and compare with sameType.
+		for (const key of ctx.converterTargetKeys) {
+			const cand = ctx.converterTargets.get(key);
+			if (cand === null) continue;
+			const targetType = ctx.converterTargetTypes.get(cand);
+			if (targetType === null) continue;
+			if (sameType(targetType, expectedType)) { convName = cand; break; }
+		}
+	}
 	if (convName === null) return false;
 	if (!ctx.macroBodyRegistry.has(convName)) return false;
 	const jsxArg = createNodeAt(node.kind, node.data, node.location);

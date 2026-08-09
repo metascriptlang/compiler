@@ -529,6 +529,7 @@ function collectMacro(ctx: CheckerContext, node: Node): void {
 // SAME tier is an error — the compiler never chooses between equals.
 export function registerConverter(ctx: CheckerContext, target: string, name: string, origin: int32, line: number, column: number): void {
 	ctx.converterTargetByName.set(name, target);
+	if (!ctx.converterTargets.has(target)) { ctx.converterTargetKeys.push(target); }
 	if (ctx.converterTargets.has(target)) {
 		const existing = ctx.converterTargets.get(target);
 		if (existing === name) { return; }
@@ -792,6 +793,9 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 					ctx.macroDeclModuleRegistry.set(localAlias, exportInfo.definingModule !== "" ? exportInfo.definingModule : sourcePath);
 					if (exportInfo.converterTarget !== "") {
 						registerConverter(ctx, exportInfo.converterTarget, localAlias, 1, nameLoc.line, nameLoc.column);
+						if (exportInfo.converterTargetType !== null) {
+							ctx.converterTargetTypes.set(localAlias, exportInfo.converterTargetType);
+						}
 					}
 				}
 				// Implementation parity: import enum members alongside enum type

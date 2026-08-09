@@ -54,6 +54,7 @@ export interface ExportedSymInfo {
 	// the export pipeline so importing modules can register in macroBodyRegistry.
 	macroBody: Node;
 	converterTarget: string; // converter target type name ("" = not a converter)
+	converterTargetType: Type; // resolved converter target (null when unresolved / not a converter)
 	macroParams: string[];
 	macroParamTypes: string[];
 	// Cross-module generic mono — generic FunctionDecl / MethodDecl AST so
@@ -255,12 +256,15 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	let mParams: string[] = [];
 	let mParamTypes: string[] = [];
 	let mConverterTarget = "";
+	let mConverterTargetType: Type = null as unknown as Type;
 	if (sym.symbolKind === SymbolKind.Macro && ctx !== null) {
 		if (ctx.macroBodyRegistry.has(sym.name)) {
 			mBody = ctx.macroBodyRegistry.get(sym.name);
 		}
 		const ct = ctx.converterTargetByName.get(sym.name);
 		if (ct !== null) { mConverterTarget = ct; }
+		const ctt = ctx.converterTargetTypes.get(sym.name);
+		if (ctt !== null) { mConverterTargetType = ctt; }
 		if (ctx.macroParamsRegistry.has(sym.name)) {
 			mParams = ctx.macroParamsRegistry.get(sym.name);
 		}
@@ -320,6 +324,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		memberLocations: memberLocs,
 		macroBody: mBody,
 		converterTarget: mConverterTarget,
+		converterTargetType: mConverterTargetType,
 		declNode: exportDeclNode,
 		overloadDeclNodes: ovDeclNodes,
 		macroParams: mParams,
@@ -914,6 +919,8 @@ export class CheckerContext {
 	converterTargets: HashMap<string, string>;      // converter: target type name → converter name (in-scope pair table)
 	converterTargetOrigin: HashMap<string, int32>;  // converter: target type name → 0 local decl | 1 import (shadowing + dup detection)
 	converterTargetByName: HashMap<string, string>; // converter: converter name → target type name (export pipeline)
+	converterTargetTypes: HashMap<string, Type>;    // converter: converter name → target type resolved in the DECLARING module
+	converterTargetKeys: string[];                  // registration-ordered target keys (Nim c.converters seq analog)
 	macroParamsRegistry: HashMap<string, string[]>; // Phase B: macroName → param names
 	macroParamTypesRegistry: HashMap<string, string[]>;
 	macroDeclModuleRegistry: HashMap<string, string>;
@@ -961,6 +968,8 @@ export function createContext(): CheckerContext {
 		converterTargets: new HashMap<string, string>(),
 		converterTargetOrigin: new HashMap<string, int32>(),
 		converterTargetByName: new HashMap<string, string>(),
+		converterTargetTypes: new HashMap<string, Type>(),
+		converterTargetKeys: [],
 		macroParamsRegistry: new HashMap<string, string[]>(),
 		macroParamTypesRegistry: new HashMap<string, string[]>(),
 		macroDeclModuleRegistry: new HashMap<string, string>(),
