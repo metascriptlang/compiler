@@ -3,6 +3,7 @@
 import { argv, exit, platform } from "std/process";
 import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
+import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, formatDefines } from "./defines";
 
 // -- Types --
 
@@ -47,6 +48,8 @@ export interface CliOptions {
 	gcMode: string;            // --gc=drc|none|manual: memory management mode
 	lto: string;               // --lto=off|thin|full: link-time optimization strategy (empty = mode default)
 	autoYes: boolean;          // --yes: auto-accept managed toolchain install (also MSC_AUTO_INSTALL_CC=1)
+	defines: DefineTable;      // -d:name[=value] conditional symbols (Nim condsyms.nim)
+	showDefines: boolean;      // --help-defines: list every define, then exit
 	projectRoot: string;       // set by CLI main from findProjectRoot() — dir containing build.ms
 	extraArgs: string[];       // remaining args passed through for package manager commands (add, remove, etc.)
 }
@@ -88,6 +91,8 @@ export function parseArgs(): CliOptions {
 		gcMode: "orc",
 		lto: "",
 		autoYes: false,
+		defines: createDefineTable(),
+		showDefines: false,
 		projectRoot: "",
 		extraArgs: [],
 	};
@@ -202,6 +207,10 @@ export function parseArgs(): CliOptions {
 			opts.autoYes = true;
 		} else if (arg === "--emit=c") {
 			opts.emitC = true;
+		} else if (arg.startsWith("-d:") || arg.startsWith("-d=") || arg.startsWith("--define:") || arg.startsWith("--define=")) {
+			applyDefineSwitch(opts.defines, arg);
+		} else if (arg === "--help-defines") {
+			opts.showDefines = true;
 		} else if (arg === "--colors=on") {
 			setColorEnabled(true);
 		} else if (arg === "--colors=off" || arg === "--no-color") {
@@ -229,6 +238,17 @@ export function parseArgs(): CliOptions {
 	// for a fast parallel link; debug/release stay off. --lto= overrides.
 	if (opts.lto === "") {
 		opts.lto = opts.mode === MODE_DANGER ? "thin" : "off";
+	}
+
+	// Seeded last because backend/os/gc/mode are only final once every switch has
+	// been read; `seed` skips names the user already set, so -d: still wins
+	// (Nim reaches the same precedence by seeding first — condsyms.nim:34 before
+	// commands.nim:703).
+	const backendName = opts.target === Target.JS ? "js" : (opts.target === Target.Raiser ? "raiser" : "c");
+	initDefines(opts.defines, backendName, opts.targetOs, opts.gcMode, opts.mode);
+	if (opts.showDefines) {
+		console.log(formatDefines(opts.defines));
+		exit(0);
 	}
 
 	return opts;
