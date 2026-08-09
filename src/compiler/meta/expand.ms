@@ -80,8 +80,6 @@ function isBuiltinDirective(name: string): boolean {
 		|| name === "passL"
 		|| name === "import"
 		|| name === "comptime"
-		|| name === "target"
-		|| name === "platform"
 		|| name === "runtime"
 		|| name === "builtin"
 		|| name === "cImport";
@@ -2144,7 +2142,7 @@ test "expand pass is no-op when only built-in directives present" {
 test "isBuiltinDirective recognizes well-known names" {
 	assert isBuiltinDirective("emit");
 	assert isBuiltinDirective("include");
-	assert isBuiltinDirective("target");
+	assert !isBuiltinDirective("target");
 	assert isBuiltinDirective("comptime");
 	assert !isBuiltinDirective("answer");
 	assert !isBuiltinDirective("derive");
