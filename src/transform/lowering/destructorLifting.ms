@@ -1021,7 +1021,11 @@ function buildVariantChain(hook: string, objType: Type, p1: string, p2: string, 
 	let chain = null as unknown as Node;
 	let vi = objType.typeChildren.length - 1;
 	while (vi >= 0) {
-		const variant = objType.typeChildren[vi];
+		// Peel Ref/Ptr for the same reason buildVariantDispatch does: interface
+		// variants are Ref<Struct>, whose typeNames is empty. Reading it raw
+		// skipped every arm, so the sink's field-assign chain came out empty and
+		// the hook stopped after the tag copy — the payload never moved.
+		const variant = peelToStruct(objType.typeChildren[vi]);
 		const armBuf = newBuf();
 		if (variant !== null && variant.typeNames !== null) {
 			const vName = "v" + vi.toString();
