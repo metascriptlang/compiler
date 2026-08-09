@@ -112,3 +112,4 @@ import "./bug096MacroWitnessNestedNull";
 import "./bug097UnionAliasHookTypedef";
 import "./bug098GenericAnonPropsInference";
 import "./bug099DuVariantUnionFit";
+import "./bug100DuSinkPayloadLost";
