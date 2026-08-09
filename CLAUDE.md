@@ -413,7 +413,7 @@ const left = d.left;
 - **out parameters** -- `function parse(input: string, out result: AST): boolean`
 - **distinct type** -- nominal typing: `distinct type UserId = number;`
 - **extern** -- C FFI: `extern function printf(fmt: string): void;`
-- **Decorators** -- `@derive(Eq, Hash)`, `@comptime`, `@target("c")`, `@emit("...")`
+- **Decorators** -- `@derive(Eq, Hash)`, `@comptime`, `@emit("...")` (backend-conditional code is `when (c) { … }`)
 - **Sized integers** -- `int8`, `int16`, `int32`, `int64`, `uint8`-`uint64`, `float32`, `float64`
 
 ### Loop Constraints
