@@ -9,11 +9,12 @@
 // and returns A's x (silent wrong value), and when the fields differ in repr it
 // reinterprets an integer as a pointer.
 //
-// SCOPE: call arguments and `return` are the only positions that consult
-// assignability at all. `const b: B = a`, `b = a`, `p.f = a` and `[a]` against
-// `B[]` reach codegen unchecked, so the same raw cast still happens there —
-// a separate hole (the checker never enforces initializer/assignment types),
-// tracked in docs/TSGAP.md. Tests for those belong with that fix, not here.
+// The rule is enforced wherever a value of one object type reaches a slot of
+// another: call arguments, `return`, initializers, assignment, field stores and
+// array-literal elements. Only the object-identity class is gated there —
+// numeric narrowing, `Ref`→`Ptr` non-owning links and the nullable idiom keep
+// their existing behaviour (a census of the tree put those at 223 sites, all
+// deliberate, versus 0 sites of object-shape mismatch).
 
 import { compileToC } from "../helpers";
 
@@ -110,4 +111,86 @@ function mk(): B {
 function main(): void { mk(); }
 `);
 	assert !c.ok;
+}
+
+// ===== Assignment positions =====
+//
+// These reach codegen through the same raw cast as a call argument, so they
+// carry the same soundness obligation. They are listed separately because the
+// checker consults assignability at each of them through a different path.
+
+const AB_PRELUDE = `
+interface B { y: int32; }
+interface A { x: int32; y: int32; }
+`;
+
+test "structural prefix: initializer rejects a shape mismatch" {
+	const c = compileToC(AB_PRELUDE + `
+function main(): void {
+	const a: A = { x: 11, y: 22 };
+	const b: B = a;
+	b.y;
+}
+`);
+	assert !c.ok;
+}
+
+test "structural prefix: assignment rejects a shape mismatch" {
+	const c = compileToC(AB_PRELUDE + `
+function main(): void {
+	const a: A = { x: 11, y: 22 };
+	let b: B = { y: 0 };
+	b = a;
+	b.y;
+}
+`);
+	assert !c.ok;
+}
+
+test "structural prefix: field store rejects a shape mismatch" {
+	const c = compileToC(AB_PRELUDE + `
+interface P { f: B; }
+function main(): void {
+	const a: A = { x: 11, y: 22 };
+	const p: P = { f: { y: 0 } };
+	p.f = a;
+}
+`);
+	assert !c.ok;
+}
+
+test "structural prefix: array literal element rejects a shape mismatch" {
+	const c = compileToC(AB_PRELUDE + `
+function main(): void {
+	const a: A = { x: 11, y: 22 };
+	const arr: B[] = [a];
+	arr[0].y;
+}
+`);
+	assert !c.ok;
+}
+
+test "structural prefix: a prefix-compatible initializer still passes" {
+	const c = compileToC(`
+interface B { x: int32; }
+interface A { x: int32; y: int32; }
+function main(): void {
+	const a: A = { x: 11, y: 22 };
+	const b: B = a;
+	b.x;
+}
+`);
+	assert c.ok;
+}
+
+test "structural prefix: assigning a value to its own type still passes" {
+	const c = compileToC(AB_PRELUDE + `
+function main(): void {
+	const a: A = { x: 11, y: 22 };
+	let a2: A = { x: 0, y: 0 };
+	a2 = a;
+	a2.y;
+}
+`);
+	assert c.ok;
 }
