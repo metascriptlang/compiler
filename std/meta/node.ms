@@ -192,6 +192,7 @@ export enum NodeFlag {
 	ExternC = 8192,       // parser: extern interface — type defined in C header, skip codegen emission
 	BoundSym = 16384,     // macro bindSym: resolvedSym pre-bound in the macro's module — checker must not re-lookup
 	Converter = 32768,    // parser: MacroDecl is a converter — compiler-invoked at settled type boundaries
+	StaticStorage = 65536, // parser: VariableDecl declared `static` inside a body — storage at module scope (reference: global storage flag)
 }
 
 // ===== Node Kind Enum =====
