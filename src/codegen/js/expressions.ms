@@ -240,6 +240,15 @@ function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symN
 export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as CallExprData;
 
+	if (d.callee.kind === NodeKind.Identifier
+			&& (d.callee.data as IdentifierData).name === "super"
+			&& d.callee.resolvedSym !== null) {
+		emit(gen, "super(");
+		emitJoinedNodes(gen, d.arguments, ", ");
+		emit(gen, ")");
+		return;
+	}
+
 	// Native pattern dispatch — runs before name-based emit so the callee's
 	// mangled / Identifier name is replaced by the JS template. For MemberExpr
 	// callees (extern class methods where extensionMethodLower skipped), the
