@@ -9,7 +9,7 @@ import { isDefined, definedValue } from "../../compiler/defines";
 import { parseIntStr } from "../../utils/string";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseAssertStmt } from "./control";
-import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl, parseConverterDecl } from "./declaration";
+import { parseVariableDecl, parseStaticVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl, parseConverterDecl } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
 import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStateProgramParser } from "./callbacks";
 import { attachComments } from "../util";
@@ -82,6 +82,7 @@ export function parseStatement(state: ParserState): NodeResult {
 
 	const res = match (token.kind) {
 		TokenKind.Const | TokenKind.Let | TokenKind.Var => parseVariableDecl(state),
+		TokenKind.Static => parseStaticVariableDecl(state),
 		TokenKind.If => parseIfStmt(state),
 		TokenKind.While => parseWhileStmt(state),
 		TokenKind.For => parseForStmt(state),

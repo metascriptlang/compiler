@@ -51,6 +51,20 @@ function parseSpecifierList(state: ParserState): SpecifierList {
 // ===== Variable Declaration =====
 // syntax: ('const' | 'let') (ID | pattern) (':' type)? '=' expr ';'
 
+// `static const/let/var x = …` inside a function or method body. The binding
+// stays where it is written; only its storage moves to module scope, so a macro
+// expanding at an expression position never has to reach the Program node.
+export function parseStaticVariableDecl(state: ParserState): NodeResult {
+	advance(state);
+	const k = current(state).kind;
+	if (k !== TokenKind.Const && k !== TokenKind.Let && k !== TokenKind.Var) {
+		return Result.err(`Expected 'const', 'let' or 'var' after 'static' at line ${current(state).line}`);
+	}
+	const decl = try parseVariableDecl(state);
+	decl.flags = decl.flags | NodeFlag.StaticStorage;
+	return Result.ok(decl);
+}
+
 export function parseVariableDecl(state: ParserState): NodeResult {
 	const keyword = current(state);
 	advance(state);
