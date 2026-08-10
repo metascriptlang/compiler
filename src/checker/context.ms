@@ -1,7 +1,7 @@
 import { platform } from "std/process";
 import { noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
-import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag } from "./symbol";
+import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, lookupSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData } from "../ast/node";
@@ -497,14 +497,33 @@ export function getExtFnType(ext: ExtensionMethod): Type {
 	return ext.fnType;
 }
 
-export function resolveOperatorExt(registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
-	const exts = findAllExtensionsByName(registry, methodName);
+// Reference parity: an infix/prefix operator is resolved exactly like a normal
+// call (semexprs.nim nkInfix → semDirectOp → semOverloadedCall), over EVERY
+// symbol bearing that name. A receiver-form (`this`) declaration and a plain
+// `function \`op\`(a, b)` declaration are one candidate set, scored by one relation.
+function isSelectableAfterMonomorphization(sym: Symbol): boolean {
+	if (sym === null) return false;
+	if (sym.symbolType === null || sym.symbolType.kind !== TypeKind.Function) return false;
+	return !hasGenericParams(sym.symbolType);
+}
+
+function addPlainOperatorCandidate(cands: ExtensionMethod[], sym: Symbol): void {
+	if (!isSelectableAfterMonomorphization(sym)) return;
+	let i = 0;
+	while (i < cands.length) {
+		if (cands[i].sym === sym) return;
+		i = i + 1;
+	}
+	cands.push(createExtMethod(sym.name, "", "", noneType(), false, sym, 1));
+}
+
+function pickBestOperatorCandidate(cands: ExtensionMethod[], argTypes: Type[]): ExtensionMethod {
 	let best: ExtensionMethod = null as unknown as ExtensionMethod;
 	let bestFt: Type = null as unknown as Type;
 	let bestScore = emptyCandidateScore();
 	let i = 0;
-	while (i < exts.length) {
-		const m = exts[i];
+	while (i < cands.length) {
+		const m = cands[i];
 		i = i + 1;
 		const ft = getExtFnType(m);
 		if (ft === null || ft.kind !== TypeKind.Function) continue;
@@ -516,6 +535,30 @@ export function resolveOperatorExt(registry: ExtensionRegistry, methodName: stri
 		}
 	}
 	return best;
+}
+
+export function resolveOperatorCall(table: SymbolTable, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
+	const cands: ExtensionMethod[] = [];
+	if (registry !== null) {
+		const exts = findAllExtensionsByName(registry, methodName);
+		let i = 0;
+		while (i < exts.length) {
+			cands.push(exts[i]);
+			i = i + 1;
+		}
+	}
+	if (table !== null) {
+		const sym = lookupSymbol(table, methodName);
+		if (sym !== null) {
+			addPlainOperatorCandidate(cands, sym);
+			let j = 0;
+			while (j < sym.overloads.length) {
+				addPlainOperatorCandidate(cands, sym.overloads[j]);
+				j = j + 1;
+			}
+		}
+	}
+	return pickBestOperatorCandidate(cands, argTypes);
 }
 
 // Strip receiver (param[0]) from an extension's function type for overload scoring.

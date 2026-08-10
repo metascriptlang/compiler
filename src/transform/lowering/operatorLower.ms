@@ -22,7 +22,7 @@ import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
-import { findExtension, resolveOperatorExt, getExtFnType, ExtensionMethod } from "../../checker/context";
+import { findExtension, resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
 
 // ===== Type Resolution =====
 
@@ -216,7 +216,7 @@ function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
 	if (isStringLike(t)) return node;
 	const typeName = typeNameOf(t);
 	if (typeName === "" || isBuiltinType(typeName)) return node;
-	const ext = resolveOperatorExt(ctx.checkerCtx.extensionRegistry, op, [t]);
+	const ext = resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, op, [t]);
 	if (ext === null) return node;
 	let callName = op;
 	if (ext.sym !== null) {
@@ -257,7 +257,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		const ltName = isStringLike(leftType) ? "string" : typeNameOf(leftType);
 		if (ltName !== "" && !isBuiltinType(ltName)) {
 			const crt = resolveType(ctx, d.right);
-			const cext = crt !== null ? resolveOperatorExt(ctx.checkerCtx.extensionRegistry, compoundBase, [leftType, crt]) : null as unknown as ExtensionMethod;
+			const cext = crt !== null ? resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, compoundBase, [leftType, crt]) : null as unknown as ExtensionMethod;
 			if (cext !== null) {
 				const rhsCall = makeExtOpCall(cext, compoundBase, cloneLvalue(d.left), d.right, loc);
 				return makeBinary(d.left, "=", rhsCall, loc);
@@ -360,7 +360,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	//    so that e.g. `==`(a: int32, b: int32) overrides native ==.
 	if (ctx.checkerCtx.extensionRegistry !== null) {
 		const rt = resolveType(ctx, d.right);
-		const ext = rt !== null ? resolveOperatorExt(ctx.checkerCtx.extensionRegistry, opName, [leftType, rt]) : null as unknown as ExtensionMethod;
+		const ext = rt !== null ? resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, opName, [leftType, rt]) : null as unknown as ExtensionMethod;
 		if (ext !== null) {
 			return makeExtOpCall(ext, opName, d.left, d.right, loc);
 		}
