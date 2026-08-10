@@ -10,6 +10,7 @@
 
 import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Symbol } from "../ast/node";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
+import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { CursorSet, createCursorSet } from "./cursors";
 import { CfgCache, createCfgCache } from "./cfg";
 import { TransformContext, NameSet, createTransformContext, createNameSet } from "../transform/context";
@@ -145,6 +146,13 @@ export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, i
 		return;
 	}
 	if (!rcInfo.needsCleanup) return;
+	// Module-scope storage outlives every frame that touches it, so it must not
+	// join this scope's cleanup list — destroying it at scope exit frees the value
+	// for all later callers. Reference parity: the decision is made at the
+	// declaration, which routes a global's destroy to a program-exit list instead
+	// of the scope's final section; module globals are never destroyed here, so
+	// declining to register is that same routing.
+	if (sym !== null && hasFlag(sym, SymbolFlag.Global)) return;
 	const scope = currentScope(dctx);
 	const info: VarInfo = { varName, sym, rcInfo, isCursor: false, isInitialized: true };
 	scope.varsToCleanup.push(info);
