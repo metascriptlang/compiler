@@ -260,10 +260,17 @@ export function mangledGlobalName(sym: Symbol, name: string): string {
 	const early = symExternOrImportName(sym, name);
 	if (early !== "") return early;
 	const baseName = (sym !== null && sym.originalName !== "") ? sym.originalName : name;
+	// A `static` decl inside a body shares the module namespace with every other
+	// body in the module, so the module qualifier alone does not separate two
+	// sites spelling the same name. Both the declaration and every read recompute
+	// the name through here, so the site suffix must live here to stay one source.
+	const site = (sym !== null && hasFlag(sym, SymbolFlag.StaticLocal))
+		? `__static${sym.location.line.toString()}_${sym.location.column.toString()}`
+		: "";
 	if (sym !== null && sym.modulePath !== "") {
-		return mangleQualified(baseName, mangleModuleName(sym.modulePath));
+		return mangleQualified(baseName, mangleModuleName(sym.modulePath)) + site;
 	}
-	return safeName(baseName);
+	return safeName(baseName) + site;
 }
 
 // ===== Field Name — minimal mangling (no module prefix) =====

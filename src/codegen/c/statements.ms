@@ -3,18 +3,19 @@
 // Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
-import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	CGen, CProc,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
 	readProcStmts, emitLineDir, getTemp, fillLocalName, pushBlock, popBlock,
+	CSection, addLine, sec, nameSetAdd,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
 import { formatCNumber, formatCNumberLit } from "./literals";
 import { ensureCrossModuleProto } from "./forward";
-import { safeName } from "./names";
+import { safeName, mangledGlobalName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
 
 // ===== blockLeaveActions — emit finally cleanup on break/continue/return =====
@@ -274,9 +275,50 @@ function isUnionNarrowing(node: Node): boolean {
 	return true;
 }
 
+// Storage at module scope, initializer left in the frame — the split the
+// reference makes for a global declared inside a proc. The run-once guard is
+// composed on top for `const` only.
+//
+// genExpr can emit preparatory statements into the proc, so the guarded block is
+// opened BEFORE the initializer is generated: otherwise that preparation would
+// run on every call while only the store was guarded.
+function genStaticStorageVar(g: CGen, p: CProc, node: Node, d: VariableDeclData): void {
+	const slot = mangledGlobalName(node.resolvedSym, d.declName);
+	let cType = "";
+	if (node.nodeType !== null) {
+		cType = getTypeDesc(g, node.nodeType);
+	} else if (d.initializer !== null && d.initializer.nodeType !== null) {
+		cType = getTypeDesc(g, d.initializer.nodeType);
+	}
+	if (cType === "") cType = "double";
+	if (cType === "void") cType = "void*";
+	addLine(sec(g, CSection.GlobalVars), `static ${cType} ${slot};`);
+	nameSetAdd(g.declaredGlobals, slot);
+	if (d.initializer === null) return;
+	if (d.declKind !== DeclKind.Const) {
+		const plain = genExpr(g, p, d.initializer);
+		emitStmtsLine(p, `${slot} = ${plain};`);
+		return;
+	}
+	const guard = slot + "__once";
+	addLine(sec(g, CSection.GlobalVars), `static MS_BOOL ${guard} = MS_FALSE;`);
+	emitStmtsLine(p, `if (!${guard}) {`);
+	const indent = getStmtsIndent(p);
+	setStmtsIndent(p, indent + 1);
+	const init = genExpr(g, p, d.initializer);
+	emitStmtsLine(p, `${guard} = MS_TRUE;`);
+	emitStmtsLine(p, `${slot} = ${init};`);
+	setStmtsIndent(p, indent);
+	emitStmtsLine(p, `}`);
+}
+
 function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	if (node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.ComptimeNodeAlias)) return;
 	const d = node.data as VariableDeclData;
+	if (p !== null && node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.StaticLocal)) {
+		genStaticStorageVar(g, p, node, d);
+		return;
+	}
 	// Reference parity (fillLocalName + cpsLocals): all locals get unique C names and
 	// hoist to function top. Prevents name collisions from same-named VarDecls in sibling scopes.
 	const isTemp = d.declName.length > 0 && d.declName.byteAt(0) === "$".code;
