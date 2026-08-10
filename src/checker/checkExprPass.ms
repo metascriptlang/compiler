@@ -801,6 +801,21 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					effRight = stringType();
 				}
 			}
+			if ((d.operator === "+" || d.operator === "+=") && effLeft !== null && effRight !== null) {
+				if (isStringLike(effLeft) && !isStringLike(effRight)) {
+					const convRight = synthStringify(ctx, d.right);
+					if (convRight !== null) {
+						d.right = convRight;
+						effRight = stringType();
+					}
+				} else if (d.operator === "+" && isStringLike(effRight) && !isStringLike(effLeft)) {
+					const convLeft = synthStringify(ctx, d.left);
+					if (convLeft !== null) {
+						d.left = convLeft;
+						effLeft = stringType();
+					}
+				}
+			}
 			const isArithmeticOp = d.operator === "+" || d.operator === "-" || d.operator === "*"
 				|| d.operator === "/" || d.operator === "%" || d.operator === "**";
 			if (isArithmeticOp && effLeft !== null && effRight !== null
@@ -1765,6 +1780,37 @@ function promoteNumeric(a: Type, b: Type): Type {
 	if (a.kind === TypeKind.Number || b.kind === TypeKind.Number) return numberType();
 	if (a.kind === TypeKind.Float32 && b.kind === TypeKind.Float32) return createPrimitive(TypeKind.Float32);
 	return float64Type();
+}
+
+// Reference parity (sigmatch.nim:2596 `localConvMatch`, :2179 `implicitConv`): a
+// stringification the call site needs is planted DURING checking, so it is bound
+// by the same overload resolution a hand-written `x.toString()` gets and reaches
+// codegen carrying its symbol. Returns null when nothing real binds — primitives
+// and enums have no declaration and stay on the builtin-lowering path.
+function synthStringify(ctx: CheckerContext, expr: Node): Node | null {
+	const t = expr.nodeType;
+	if (t === null) return null;
+	const peeled = peelToStructOrUnion(t);
+	if (peeled === null || peeled.kind !== TypeKind.Struct) return null;
+	const loc = expr.location;
+	const memberNode = createNodeAt(NodeKind.MemberExpr,
+		{ object: expr, property: "toString", isOptional: false }, loc);
+	const synthCall = createNodeAt(NodeKind.CallExpr,
+		{ callee: memberNode, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	// The trial is silent: a `toString` that cannot serve a zero-argument
+	// string-returning call is not a user error, it just leaves this operand on
+	// the builtin path. The receiver's own diagnostics were already recorded when
+	// the caller checked it, so the trial's output is dropped either way.
+	const errMark = ctx.errors.length;
+	checkExpr(ctx, synthCall, null);
+	const fits = ctx.errors.length === errMark;
+	while (ctx.errors.length > errMark) { ctx.errors.pop(); }
+	if (!fits) return null;
+	if (synthCall.nodeType === null || !isStringLike(synthCall.nodeType)) return null;
+	// The universal `.toString()` fallback mints a symbol with no declaration; it
+	// is the shape that used to reach C codegen as a struct member call.
+	if (synthCall.resolvedSym === null || synthCall.resolvedSym.declNode === null) return null;
+	return synthCall;
 }
 
 function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
