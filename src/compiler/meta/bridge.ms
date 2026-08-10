@@ -1274,6 +1274,13 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 					if (ntField.kind === RaiserValueKind.Object) {
 						out.nodeTypeAst = valueToNode(ntField, objHeap, arrHeap, fallbackLoc);
 					}
+					// One flag, by name, not the whole word: a macro that could set
+					// Sem/Transf/LL would forge pipeline state on a node the passes
+					// have never processed. Widen this list only per-flag.
+					const rawFlags = readInt(objHeap, handle, "flags") as int32;
+					if ((rawFlags & NodeFlag.StaticStorage) !== 0) {
+						out.flags = out.flags | NodeFlag.StaticStorage;
+					}
 				}
 				return out;
 			}
