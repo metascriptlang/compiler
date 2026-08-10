@@ -1089,22 +1089,30 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 
 // Splices whatever an expression-position macro hoisted in ahead of the statement
 // at `at`, and reports how many landed so the caller can step over them.
-function drainHoisted(ctx: CheckerContext, stmts: Node[], at: int32): int32 {
-	const n = ctx.pendingHoisted.length;
-	if (n === 0) return 0;
+//
+// `from` is this statement list's own high-water mark, taken before it walked
+// anything. Entries below it belong to an enclosing list whose statement is
+// still mid-check: checking a macro's VALUE descends into any block nested in
+// it (an arrow argument's body) before control returns to the list holding the
+// call site, so a drain that took the whole queue would move the prefix inside
+// the very expression it must precede — the slot then initialises too late to
+// be read. Ownership is fixed when the entry is queued, not when it is taken.
+function drainHoisted(ctx: CheckerContext, stmts: Node[], at: int32, from: int32): int32 {
+	const n = ctx.pendingHoisted.length - from;
+	if (n <= 0) return 0;
 	const rebuilt: Node[] = [];
 	let inserted = false;
 	let i = 0;
 	while (i < stmts.length) {
 		if (i === at) {
-			for (const h of ctx.pendingHoisted) rebuilt.push(h);
+			for (let h = from; h < ctx.pendingHoisted.length; h = h + 1) rebuilt.push(ctx.pendingHoisted[h]);
 			inserted = true;
 		}
 		rebuilt.push(stmts[i]);
 		i = i + 1;
 	}
-	if (!inserted) { for (const h of ctx.pendingHoisted) rebuilt.push(h); }
-	ctx.pendingHoisted.length = 0;
+	if (!inserted) { for (let h = from; h < ctx.pendingHoisted.length; h = h + 1) rebuilt.push(ctx.pendingHoisted[h]); }
+	ctx.pendingHoisted.length = from;
 	stmts.length = 0;
 	for (const s of rebuilt) stmts.push(s);
 	return n;
@@ -1117,11 +1125,12 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 	// automatically through the binder's post-if BranchLabel. The flow graph
 	// sees the FalseCondition edge for the fall-through path and narrows
 	// subsequent references via getFlowTypeOfReference.
+	const hoistMark = ctx.pendingHoisted.length;
 	let i = 0;
 	while (i < d.statements.length) {
 		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { break; }
 		checkStmt(ctx, d.statements[i]);
-		i = i + drainHoisted(ctx, d.statements, i) + 1;
+		i = i + drainHoisted(ctx, d.statements, i, hoistMark) + 1;
 	}
 	// PARALOCK Phase 1: verify every affine Promise declared in this block was consumed
 	checkAffineConsumption(ctx, ctx.table.current, ctx.affineTracker);
@@ -1520,11 +1529,12 @@ function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 
 export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
+	const hoistMark = ctx.pendingHoisted.length;
 	let i = 0;
 	while (i < stmts.programStmts.length) {
 		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) return;
 		checkStmt(ctx, stmts.programStmts[i]);
-		i = i + drainHoisted(ctx, stmts.programStmts, i) + 1;
+		i = i + drainHoisted(ctx, stmts.programStmts, i, hoistMark) + 1;
 	}
 }
 
