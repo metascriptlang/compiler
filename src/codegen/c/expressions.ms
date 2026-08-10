@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType } from "../../checker/types";
+import { isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -269,10 +269,11 @@ function isRefArrayAccessCall(node: Node): boolean {
 // Single point for struct-aware pointer promotion, pointer/value conversion, and untyped literal handling.
 // mutBits/paramIdx: callee's sym.mutatedParams bitfield + param index for struct-aware promotion.
 export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, argNode: Node, mutBits: int32, paramIdx: number): string {
-	if (paramType !== null && argNode.kind !== NodeKind.HiddenAddr) {
-		const paramIsPtr = isPointerType(paramType);
+	const formal = unwrapVarargs(paramType);
+	if (formal !== null && argNode.kind !== NodeKind.HiddenAddr) {
+		const paramIsPtr = isPointerType(formal);
 		const isMutated = (mutBits & (1 << (paramIdx as int32))) !== 0;
-		const paramCcgPtr = shouldIndirectParam(paramType, isMutated);
+		const paramCcgPtr = shouldIndirectParam(formal, isMutated);
 		if (argNode.nodeType !== null) {
 			// Full type info: check pointer/value mismatch + ccgIntroducedPtr
 			let argIsPtr = isPointerType(argNode.nodeType);
@@ -280,20 +281,20 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, arg
 				argIsPtr = isPointerType(argNode.resolvedSym.symbolType);
 			}
 			if (paramIsPtr && !argIsPtr && !isNullExpr(argNode)) {
-				return safeAddrOf(g, p, arg, argNode, paramType);
+				return safeAddrOf(g, p, arg, argNode, formal);
 			} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
 				return `*(${arg})`;
 			}
 			if (!paramIsPtr && !argIsPtr && paramCcgPtr) {
-				return genArgCcgPtr(g, arg, argNode, p, paramType);
+				return genArgCcgPtr(g, arg, argNode, p, formal);
 			}
 		} else {
 			// No arg type — genArg pattern: decide promotion from param type alone
 			if (!paramIsPtr && paramCcgPtr) {
-				return genArgCcgPtr(g, arg, argNode, p, paramType);
+				return genArgCcgPtr(g, arg, argNode, p, formal);
 			}
 			if (arg.byteLength > 0 && arg.byteAt(0) === "{".code) {
-				return safeAddrOf(g, p, arg, argNode, paramType);
+				return safeAddrOf(g, p, arg, argNode, formal);
 			}
 		}
 	}
