@@ -1,7 +1,7 @@
 // JavaScript Codegen — Declaration Emitters
 
 import {
-	Node, NodeKind, NodeFlag, DeclKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
+	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitBodyOrEmpty } from "./emit";
@@ -77,13 +77,23 @@ export function emitEnumDecl(gen: JSGenerator, node: Node): void {
 
 // ===== Class Declaration =====
 
+function jsBaseClassName(node: Node, declaredName: string, bundleMode: boolean): string {
+	const sym = node.resolvedSym;
+	if (sym === null || sym.symbolType === null) return safeJsName(declaredName);
+	let inner = sym.symbolType;
+	if (inner.kind === TypeKind.Ref && inner.typeReturn !== null) inner = inner.typeReturn;
+	if (inner.typeExtra === null || inner.typeExtra.sym === null) return safeJsName(declaredName);
+	const parent = inner.typeExtra.sym;
+	return jsSymbolName(parent, parent.name, bundleMode);
+}
+
 function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as ClassDeclData;
 	emit(gen, "class ");
 	emit(gen, jsSymbolName(node.resolvedSym, d.className, gen.bundleMode));
 	if (d.classExtends !== "") {
 		emit(gen, " extends ");
-		emit(gen, d.classExtends);
+		emit(gen, jsBaseClassName(node, d.classExtends, gen.bundleMode));
 	}
 	emit(gen, " {\n");
 	gen.indentLevel = gen.indentLevel + 1;
