@@ -3,13 +3,13 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { inferredType, noneType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct } from "./types";
+import { inferredType, noneType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
-	CandidateScore, sameType, explainStructuralPrefix,
+	CandidateScore, sameType, explainStructuralPrefix, isObjectShapeMismatch,
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
@@ -630,6 +630,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			checkExpr(ctx, d.right, rightExpected);
 			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth - 1;
 			let rightType = d.right.nodeType;
+			if (d.operator === "=" && isObjectShapeMismatch(rightType, leftType)) {
+				addError(ctx,
+					"Type '" + typeDisplayName(rightType) + "' is not assignable to type '" + typeDisplayName(leftType) + "'"
+						+ explainStructuralPrefix(rightType, leftType),
+					d.right.location.line, d.right.location.column);
+			}
 			// Parity: standard reference node fitting — insert HiddenStdConv for narrowing assignment
 			if (d.operator === "=" && leftType !== null) {
 				d.right = fitNode(ctx, d.right, leftType, rightType);
@@ -1492,6 +1498,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				for (let i = 0; i < d.elements.length; i += 1) {
 					checkExpr(ctx, d.elements[i], elemExpected);
 					if (elemExpected !== null) {
+						if (isObjectShapeMismatch(d.elements[i].nodeType, elemExpected)) {
+							addError(ctx,
+								"Type '" + typeDisplayName(d.elements[i].nodeType) + "' is not assignable to element type '" + typeDisplayName(elemExpected) + "'"
+									+ explainStructuralPrefix(d.elements[i].nodeType, elemExpected),
+								d.elements[i].location.line, d.elements[i].location.column);
+						}
 						d.elements[i] = fitNode(ctx, d.elements[i], elemExpected, d.elements[i].nodeType);
 					}
 				}
@@ -3162,7 +3174,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		const extLastCT = calleeType.typeChildren.length > 0
 			? calleeType.typeChildren[calleeType.typeChildren.length - 1] : null;
 		const extHasRest = extLastCT !== null && extLastCT.kind === TypeKind.Varargs;
-		const extMinAr = getMinArity(calleeType);
+		const extMinArDeclared = getMinArity(calleeType);
+		const extMinAr = extHasRest && extMinArDeclared >= calleeType.typeChildren.length
+			? calleeType.typeChildren.length - 1 : extMinArDeclared;
 		if (d.arguments.length < extMinAr) {
 			const me = d.callee.data as MemberExprData;
 			addError(ctx, `Too few arguments to '${me.property}': expected at least ${extMinAr}, got ${d.arguments.length}`, node.location.line, node.location.column);
@@ -3280,11 +3294,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		for (let pi = 0; pi < argTypes.length; pi += 1) {
 			let paramType: Type = null as unknown as Type;
 			if (hasRest && pi >= restParamIdx) {
-				// Peel Varargs → array → element. Varargs wraps the user-written
-				// array type (e.g. Varargs(Array(string))), so the element comes
-				// from the array's typeReturn slot.
-				const arrType = lastCT.typeChildren.length > 0 ? lastCT.typeChildren[0] : lastCT;
-				paramType = arrType.typeReturn !== null ? arrType.typeReturn : arrType;
+				const restArr = unwrapRef(unwrapVarargs(lastCT));
+				const restElem = getElementType(restArr);
+				paramType = restElem.kind === TypeKind.Inferred ? restArr : restElem;
 			} else if (pi < calleeType.typeChildren.length) {
 				paramType = calleeType.typeChildren[pi];
 			} else {
@@ -3424,8 +3436,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 					const bLastIdx = boundFnType.typeChildren.length - 1;
 					const bLast = bLastIdx >= 0 ? boundFnType.typeChildren[bLastIdx] : null;
 					const bHasRest = bLast !== null && bLast.kind === TypeKind.Varargs;
-					const bRestElem = bHasRest && bLast.typeChildren.length > 0 && bLast.typeChildren[0].typeReturn !== null
-						? bLast.typeChildren[0].typeReturn : null;
+					const bRestArr = bHasRest ? unwrapRef(unwrapVarargs(bLast)) : null;
+					const bRestElemT = bRestArr !== null ? getElementType(bRestArr) : null;
+					const bRestElem = bRestElemT !== null && bRestElemT.kind !== TypeKind.Inferred ? bRestElemT : null;
 					for (let pi = 0; pi < argTypes.length; pi += 1) {
 						const argT = argTypes[pi];
 						let paramT: Type = null as unknown as Type;
