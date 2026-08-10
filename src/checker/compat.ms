@@ -785,6 +785,10 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			return TypeRelation.Subtype;
 		}
 	}
+	// StringLiteral → String (mirrors isAssignable :362).
+	if (formal.kind === TypeKind.String && actual.kind === TypeKind.StringLiteral) {
+		return TypeRelation.Subtype;
+	}
 	// EnumLiteral cross-kind rules:
 	// formal=Enum(K), actual=EnumLiteral(K,A) → Subtype (literal narrows general enum)
 	if (formal.kind === TypeKind.Enum && actual.kind === TypeKind.EnumLiteral) {
@@ -807,6 +811,18 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			if ((rel as number) > (best as number)) { best = rel; }
 		}
 		return best;
+	}
+	// Union actual: every member must relate — the weakest member relation wins.
+	// Dual of isAssignable's union-source arm (:406); without it overload
+	// resolution and assignment disagree on the same pair.
+	if (actual.kind === TypeKind.Union) {
+		let weakest = TypeRelation.Exact;
+		for (const member of actual.typeChildren) {
+			const rel = typeRelation(formal, member);
+			if (rel === TypeRelation.None) return TypeRelation.None;
+			if ((rel as number) < (weakest as number)) { weakest = rel; }
+		}
+		return weakest;
 	}
 	return TypeRelation.None;
 }
