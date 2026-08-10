@@ -114,3 +114,4 @@ import "./bug098GenericAnonPropsInference";
 import "./bug099DuVariantUnionFit";
 import "./bug100DuSinkPayloadLost";
 import "./bug101ConverterAliasTarget";
+import "./bug102StaticStorageClass";
