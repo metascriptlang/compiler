@@ -165,3 +165,25 @@ console.log(gb.get().toString());
 	assert js.contains("return $this.value");
 	assert js.contains("return this.value");
 }
+
+test "E2E JS: extends clause and super call keep their bindings" {
+	const src = `class ExBase {
+	w: number;
+	constructor(w: number) { this.w = w; }
+}
+class ExKid extends ExBase {
+	constructor(w: number) { super(w); }
+}
+const k = new ExKid(3);
+console.log(k.w.toString());
+`;
+	const entries: MapEntry[] = [
+		{ entryPath: "test/exKid.ms", entrySource: src },
+	];
+	const js = compileProjectToJSWithStd(entries, "test/exKid.ms");
+	assert js.indexOf("ERROR", 0) < 0;
+	assert js.contains("extends ExBase__");
+	assert !js.contains("extends ExBase ");
+	assert js.contains("super(");
+	assert !js.contains("super__");
+}
