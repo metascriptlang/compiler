@@ -230,7 +230,10 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.ContinueStmt => { if (!ctx.inLoop) { addError(ctx, "continue outside of loop", node.location.line, node.location.column); } },
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
+			const prevStmtPos = ctx.stmtPosExpr;
+			ctx.stmtPosExpr = d.expr;
 			checkExpr(ctx, d.expr, null);
+			ctx.stmtPosExpr = prevStmtPos;
 			// PARALOCK Phase 1 R1/E1: a discarded affine Promise (bare spawn(...) expression
 			// with no binding and no await) is a compile error. Borrowed captures would
 			// dangle and the result would be silently dropped. For fire-and-forget,
@@ -893,7 +896,9 @@ function checkIfStmt(ctx: CheckerContext, node: Node): void {
 
 function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as WhileStmtData;
+	ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	checkExpr(ctx, d.whileCondition, null);
+	ctx.condEvalDepth = ctx.condEvalDepth - 1;
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
 	// PARALOCK Phase 1: snapshot affine state + outer affine Promise keys before the body
 	const affineSnap = saveConsumeState(ctx.affineTracker);
@@ -925,10 +930,12 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
 	const saved = enterLoopScope(ctx);
 	checkStmt(ctx, d.forInit);
+	ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	checkExpr(ctx, d.forCondition, null);
 	// Ref parity: for loops — conservative, loop may not execute
 	const oldState = saveInitState(ctx.initTracker);
 	checkExpr(ctx, d.forUpdate, null);
+	ctx.condEvalDepth = ctx.condEvalDepth - 1;
 	checkStmt(ctx, d.forBody);
 	exitLoopScope(ctx, saved);
 	restoreInitState(ctx.initTracker, oldState);
@@ -1075,7 +1082,32 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 	detectSequentialAwaitSpawn(ctx, d.doBody);
 	restoreConsumeState(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
+	ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	checkExpr(ctx, d.doCondition, null);
+	ctx.condEvalDepth = ctx.condEvalDepth - 1;
+}
+
+// Splices whatever an expression-position macro hoisted in ahead of the statement
+// at `at`, and reports how many landed so the caller can step over them.
+function drainHoisted(ctx: CheckerContext, stmts: Node[], at: int32): int32 {
+	const n = ctx.pendingHoisted.length;
+	if (n === 0) return 0;
+	const rebuilt: Node[] = [];
+	let inserted = false;
+	let i = 0;
+	while (i < stmts.length) {
+		if (i === at) {
+			for (const h of ctx.pendingHoisted) rebuilt.push(h);
+			inserted = true;
+		}
+		rebuilt.push(stmts[i]);
+		i = i + 1;
+	}
+	if (!inserted) { for (const h of ctx.pendingHoisted) rebuilt.push(h); }
+	ctx.pendingHoisted.length = 0;
+	stmts.length = 0;
+	for (const s of rebuilt) stmts.push(s);
+	return n;
 }
 
 function checkBlock(ctx: CheckerContext, node: Node): void {
@@ -1089,7 +1121,7 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 	while (i < d.statements.length) {
 		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { break; }
 		checkStmt(ctx, d.statements[i]);
-		i = i + 1;
+		i = i + drainHoisted(ctx, d.statements, i) + 1;
 	}
 	// PARALOCK Phase 1: verify every affine Promise declared in this block was consumed
 	checkAffineConsumption(ctx, ctx.table.current, ctx.affineTracker);
@@ -1488,9 +1520,11 @@ function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 
 export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
-	for (const stmt of stmts.programStmts) {
+	let i = 0;
+	while (i < stmts.programStmts.length) {
 		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) return;
-		checkStmt(ctx, stmt);
+		checkStmt(ctx, stmts.programStmts[i]);
+		i = i + drainHoisted(ctx, stmts.programStmts, i) + 1;
 	}
 }
 

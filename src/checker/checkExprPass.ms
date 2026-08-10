@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
+import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { inferredType, noneType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed } from "./symbol";
@@ -189,6 +189,34 @@ function retypeEmptyArrayBranch(branch: Node, otherType: Type | null): void {
 	if (other.kind === TypeKind.Ref && other.typeReturn !== null) other = other.typeReturn;
 	if (other.kind !== TypeKind.Array || other.typeReturn === null || isUnresolvedType(other.typeReturn)) return;
 	branch.nodeType = otherType;
+}
+
+// Last element is the value that replaces the call site; the ones before it are
+// checked here (so the value can see what they declare) and hoisted into the
+// enclosing statement list. Refusing a conditionally evaluated position is
+// load-bearing: hoisting moves the prefix out of the guard that decides whether
+// it runs at all. Returns null once an error has been reported.
+function unwrapSpliceManyAtExpr(ctx: CheckerContext, node: Node, expanded: Node): Node {
+	const d = expanded.data as SpliceManyData;
+	if (d.spliceNodes.length === 0) {
+		addError(ctx, "macro expanded to no value here: at an expression position the last element of SpliceMany is the value, and none was emitted",
+			node.location.line, node.location.column);
+		return null as unknown as Node;
+	}
+	if (ctx.condEvalDepth > 0) {
+		addError(ctx, "macro emits statements at a conditionally evaluated position: they would run even when this branch does not — give the call its own statement",
+			node.location.line, node.location.column);
+		return null as unknown as Node;
+	}
+	const lastIdx = d.spliceNodes.length - 1;
+	let i = 0;
+	while (i < lastIdx) {
+		const stmt = d.spliceNodes[i];
+		callCheckStmt(ctx, stmt);
+		ctx.pendingHoisted.push(stmt);
+		i = i + 1;
+	}
+	return d.spliceNodes[lastIdx];
 }
 
 export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
@@ -434,9 +462,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// codegen, because the post-check evaluateComptimeBlocks pass
 			// replaces the AST node AFTER the variable's symbol type is set.
 			const expanded = callEvalComptimeBlock(node, ctx);
-			node.kind = expanded.kind;
-			node.data = expanded.data;
-			if (expanded.location !== null) node.location = expanded.location;
+			let expandedValue = expanded;
+			if (expanded.kind === NodeKind.SpliceMany && node !== ctx.stmtPosExpr) {
+				expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
+				if (expandedValue === null) { node.nodeType = errorType(); return; }
+			}
+			node.kind = expandedValue.kind;
+			node.data = expandedValue.data;
+			if (expandedValue.location !== null) node.location = expandedValue.location;
 			node.nodeType = null as unknown as Type;
 			node.resolvedSym = null as unknown as Symbol;
 			node.flags = 0;
@@ -576,7 +609,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			// For assignment, pass LHS type as expectedType to RHS
 			const rightExpected = (d.operator === "=") ? leftType : null;
+			const rhsGuarded = d.operator === "&&" || d.operator === "||" || d.operator === "??";
+			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth + 1;
 			checkExpr(ctx, d.right, rightExpected);
+			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth - 1;
 			let rightType = d.right.nodeType;
 			// Parity: standard reference node fitting — insert HiddenStdConv for narrowing assignment
 			if (d.operator === "=" && leftType !== null) {
@@ -1512,8 +1548,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
 			checkExpr(ctx, d.ternaryCondition, null);
+			ctx.condEvalDepth = ctx.condEvalDepth + 1;
 			checkExpr(ctx, d.ternaryConsequent, expectedType);
 			checkExpr(ctx, d.ternaryAlternate, expectedType);
+			ctx.condEvalDepth = ctx.condEvalDepth - 1;
 			if (expectedType !== null) {
 				d.ternaryConsequent = fitNode(ctx, d.ternaryConsequent, expectedType, d.ternaryConsequent.nodeType);
 				d.ternaryAlternate = fitNode(ctx, d.ternaryAlternate, expectedType, d.ternaryAlternate.nodeType);
@@ -1738,9 +1776,17 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 					node.nodeType = errorType(); return;
 				}
-				node.kind = expanded.kind;
-				node.data = expanded.data;
-				if (expanded.location !== null) node.location = expanded.location;
+				let expandedValue = expanded;
+				if (expanded.kind === NodeKind.SpliceMany && node !== ctx.stmtPosExpr) {
+					expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
+					if (expandedValue === null) {
+						ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
+						node.nodeType = errorType(); return;
+					}
+				}
+				node.kind = expandedValue.kind;
+				node.data = expandedValue.data;
+				if (expandedValue.location !== null) node.location = expandedValue.location;
 				node.nodeType = null as unknown as Type;
 				node.resolvedSym = null as unknown as Symbol;
 				node.flags = 0;
@@ -2837,11 +2883,20 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				node.nodeType = errorType();
 				return errorType();
 			}
+			let expandedValue = expanded;
+			if (expanded.kind === NodeKind.SpliceMany && node !== ctx.stmtPosExpr) {
+				expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
+				if (expandedValue === null) {
+					ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
+					node.nodeType = errorType();
+					return errorType();
+				}
+			}
 			// Replace current node contents with the expanded result.
 			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
-			node.kind = expanded.kind;
-			node.data = expanded.data;
-			if (expanded.location !== null) node.location = expanded.location;
+			node.kind = expandedValue.kind;
+			node.data = expandedValue.data;
+			if (expandedValue.location !== null) node.location = expandedValue.location;
 			node.nodeType = null as unknown as Type;
 			node.resolvedSym = null as unknown as Symbol;
 			node.flags = 0;

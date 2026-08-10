@@ -944,6 +944,9 @@ export class CheckerContext {
 	genericInstDepth: int32;     // recursion depth for on-demand instantiation (limit 50)
 	generatedInstances: Node[];  // on-demand instantiated function ASTs to inject into program
 	pendingEnumToStrings: Type[]; // enum types whose _toString def must be injected in this module (recorded at lowering sites; enums reachable only via imported field types are not in module scope)
+	pendingHoisted: Node[];      // statements an expression-position macro emitted ahead of its value; drained by the nearest enclosing statement-list walk
+	condEvalDepth: int32;        // >0 while checking a conditionally-evaluated position (&&/|| rhs, ternary arm, loop condition) — hoisting out of one would run it unconditionally
+	stmtPosExpr: Node;           // the expression that IS a statement: a macro there emits statements outright, so the expression-position rules (last element is the value, empty is an error) must not apply
 	preludeCtx: CheckerContext;  // access private prelude symbols during instantiation
 }
 
@@ -993,6 +996,9 @@ export function createContext(): CheckerContext {
 		genericInstDepth: 0,
 		generatedInstances: [],
 		pendingEnumToStrings: [],
+		pendingHoisted: [],
+		condEvalDepth: 0,
+		stmtPosExpr: null as unknown as Node,
 		preludeCtx: null as unknown as CheckerContext,
 	};
 }
