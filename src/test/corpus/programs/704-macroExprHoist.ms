@@ -43,6 +43,16 @@ function render(): string {
 	return v;
 }
 
+// A SECOND expansion of the same macro, and inside an arrow body — the shape a
+// component tree produces. Both hoisted decls are spelled `tpl` and neither
+// carries a source position of its own, so a slot name mangled from the
+// declaration alone collides and the C fails to compile with a redefinition.
+// Each site must get its own module-scope slot, hence its own initializer run.
+const renderArrow: () => string = (): string => {
+	const v = memo();
+	return v;
+};
+
 function main(): void {
 	let ok = true;
 
@@ -50,7 +60,10 @@ function main(): void {
 	if (render() !== "T1") ok = false;
 	if (render() !== "T1") ok = false;
 
-	if (builds !== 1) ok = false;
+	if (renderArrow() !== "T2") ok = false;
+	if (renderArrow() !== "T2") ok = false;
+
+	if (builds !== 2) ok = false;
 
 	if (ok) {
 		console.log("macro-expr-hoist PASS");
