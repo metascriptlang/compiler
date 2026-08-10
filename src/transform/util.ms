@@ -153,7 +153,7 @@ export function makeNull(loc: SourceLocation): Node {
 }
 
 export function makeNumber(val: number, loc: SourceLocation): Node {
-	const isFloat = val % 1 !== 0;
+	const isFloat = val % 1 !== 0 || val > 9007199254740992 || val < -9007199254740992;
 	const n = createNode(NodeKind.NumberLiteral, { value: val, isFloat, intVal: isFloat ? 0 as int64 : val as int64 }, syntheticToken(loc));
 	if (!isFloat) { n.nodeType = int32Type(); } else { n.nodeType = float64Type(); }
 	return n;
