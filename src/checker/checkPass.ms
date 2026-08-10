@@ -18,7 +18,7 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { globalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
-import { isAssignable, explainStructuralPrefix } from "./compat";
+import { isAssignable, explainStructuralPrefix, isObjectShapeMismatch } from "./compat";
 import { setConditionalAssignFn } from "./types";
 setConditionalAssignFn(isAssignable);
 import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
@@ -382,6 +382,13 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		addError(ctx,
 			"Type 'null' is not assignable to type '" + typeDisplayName(dt) + "'",
 			initLoc.line, initLoc.column);
+	}
+	if (isObjectShapeMismatch(initType, dt)) {
+		const shapeLoc = d.initializer !== null ? d.initializer.location : d.nameLocation;
+		addError(ctx,
+			"Type '" + typeDisplayName(initType) + "' is not assignable to type '" + typeDisplayName(dt) + "'"
+				+ explainStructuralPrefix(initType, dt),
+			shapeLoc.line, shapeLoc.column);
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
 	if (declType !== null && d.initializer !== null) {

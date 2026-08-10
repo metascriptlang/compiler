@@ -535,6 +535,28 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	return true;
 }
 
+// A value of one object type reaching a slot of a DIFFERENT object type. This
+// is the only class the assignment positions gate on: they historically fit
+// their operand without consulting assignability at all, and widening them to
+// the full relation would reject 223 deliberate sites in this tree (numeric
+// narrowing that fitNode converts, `Ref`→`Ptr` non-owning links, the nullable
+// idiom) against 0 sites of this class. Everything here is a raw pointer cast
+// whose offsets do not line up — a silent wrong-field read, or a reinterpreted
+// pointer when the reprs differ.
+export function isObjectShapeMismatch(source: Type | null, target: Type | null): boolean {
+	const s0 = skipModifier(source);
+	const t0 = skipModifier(target);
+	if (s0 === null || t0 === null) return false;
+	const s = unwrapRefBase(s0);
+	const t = unwrapRefBase(t0);
+	if (s.kind !== TypeKind.Struct || t.kind !== TypeKind.Struct) return false;
+	if (s === t) return false;
+	if (s.typeName === "" || t.typeName === "") return false;
+	if (s.typeName === t.typeName) return false;
+	if (s.sym !== null && s.sym === t.sym) return false;
+	return !isAssignable(source, target);
+}
+
 // Error-path only: when a rejected object pair HAS every required field but in
 // the wrong slots, "got A, expected B" reads like a compiler bug. Name the field
 // that moved. Empty string when the plain message already explains the rejection.
@@ -833,6 +855,13 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			if ((rel as number) < (weakest as number)) { weakest = rel; }
 		}
 		return weakest;
+	}
+	if (formal.kind === TypeKind.CString
+			&& (actual.kind === TypeKind.String || actual.kind === TypeKind.StringLiteral)) {
+		return TypeRelation.Convertible;
+	}
+	if (formal.kind === TypeKind.String && actual.kind === TypeKind.CString) {
+		return TypeRelation.Convertible;
 	}
 	return TypeRelation.None;
 }
