@@ -698,6 +698,12 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
 				return TypeRelation.None;
 			},
+			// Literal types carry their value in typeName — two different literals
+			// are different types (isAssignable :368/:384, sameType :651).
+			TypeKind.StringLiteral | TypeKind.BooleanLiteral => {
+				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
+				return TypeRelation.None;
+			},
 			TypeKind.EnumLiteral => {
 				if (formal.typeName !== actual.typeName) return TypeRelation.None;
 				if (formal.typeNames.length === 0 || actual.typeNames.length === 0) return TypeRelation.None;
@@ -787,6 +793,10 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	}
 	// StringLiteral → String (mirrors isAssignable :362).
 	if (formal.kind === TypeKind.String && actual.kind === TypeKind.StringLiteral) {
+		return TypeRelation.Subtype;
+	}
+	// BooleanLiteral → Boolean (mirrors isAssignable :381; the reverse stays None).
+	if (formal.kind === TypeKind.Boolean && actual.kind === TypeKind.BooleanLiteral) {
 		return TypeRelation.Subtype;
 	}
 	// EnumLiteral cross-kind rules:
