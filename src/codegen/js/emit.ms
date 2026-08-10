@@ -22,10 +22,11 @@ export class JSGenerator {
 	importSourceToModuleIdKeys: string[];
 	thisName: string;
 	jsBigInt64: boolean;
+	staticSlots: string[]; // module-scope storage for `static` decls written inside bodies
 }
 
 export function createJSGenerator(): JSGenerator {
-	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", jsBigInt64: false };
+	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", jsBigInt64: false, staticSlots: [] };
 }
 
 // ===== Callback Registration (breaks circular imports) =====
@@ -135,6 +136,9 @@ export function emitBodyOrEmpty(gen: JSGenerator, body: Node): void {
 
 export function finalize(gen: JSGenerator): string {
 	let result = "";
+	for (const slot of gen.staticSlots) {
+		result = result + slot;
+	}
 	for (const chunk of gen.buf) {
 		result = result + chunk;
 	}

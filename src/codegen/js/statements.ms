@@ -88,8 +88,36 @@ function emitVariableDeclCore(gen: JSGenerator, node: Node): void {
 	}
 }
 
+// Storage hoisted to the module, initializer left where it was written — the
+// same split the C backend makes. Reads already resolve to the module-scope name
+// (jsSymbolName routes a global through mangledGlobalName), so only the
+// placement and the run-once guard are emitted here.
+function emitStaticStorageDecl(gen: JSGenerator, node: Node): void {
+	const d = node.data as VariableDeclData;
+	const slot = jsSymbolName(node.resolvedSym, d.declName, gen.bundleMode);
+	gen.staticSlots.push("let " + slot + ";\n");
+	if (d.initializer === null) return;
+	if (d.declKind !== DeclKind.Const) {
+		emitIndent(gen);
+		emit(gen, slot + " = ");
+		emitNode(gen, d.initializer);
+		emit(gen, ";\n");
+		return;
+	}
+	const guard = slot + "__once";
+	gen.staticSlots.push("let " + guard + " = false;\n");
+	emitIndent(gen);
+	emit(gen, "if (!" + guard + ") { " + guard + " = true; " + slot + " = ");
+	emitNode(gen, d.initializer);
+	emit(gen, "; }\n");
+}
+
 export function emitVariableDecl(gen: JSGenerator, node: Node): void {
 	if (node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.ComptimeNodeAlias)) return;
+	if (node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.StaticLocal)) {
+		emitStaticStorageDecl(gen, node);
+		return;
+	}
 	emitIndent(gen);
 	emitVariableDeclCore(gen, node);
 	emit(gen, ";\n");
