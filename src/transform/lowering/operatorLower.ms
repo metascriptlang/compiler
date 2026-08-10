@@ -22,7 +22,7 @@ import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
-import { findExtension, resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
+import { resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
 
 // ===== Type Resolution =====
 
@@ -137,9 +137,12 @@ function makeExtOpCall(ext: ExtensionMethod, opName: string, left: Node, right: 
 
 // Resolve a base operator to a CallExpr.
 function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, leftType: Type, left: Node, right: Node, loc: SourceLocation): Node {
-	// Explicit extension takes priority
-	if (ctx.checkerCtx.extensionRegistry !== null) {
-		const ext = findExtension(ctx.checkerCtx.extensionRegistry, typeName, opName);
+	// Explicit user declaration takes priority. Same candidate set as the entry
+	// resolution — a derived operator must reach a flat `function `==`(a, b)`
+	// exactly as the direct form does, or `a == b` and `a != b` disagree.
+	{
+		const rt = resolveType(ctx, right);
+		const ext = resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, opName, [leftType, rt !== null ? rt : leftType]);
 		if (ext !== null) {
 			return makeExtOpCall(ext, opName, left, right, loc);
 		}
@@ -385,9 +388,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	};
 	if (baseOp !== "") {
 		let hasBase = false;
-		if (ctx.checkerCtx.extensionRegistry !== null) {
-			if (findExtension(ctx.checkerCtx.extensionRegistry, typeName, baseOp) !== null) hasBase = true;
-		}
+		if (resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, baseOp, [leftType, leftType]) !== null) hasBase = true;
 		if (!hasBase && baseOp === "==" && isValueObject(leftType)) hasBase = true;
 		if (!hasBase && leftType.kind === TypeKind.Tuple && (baseOp === "==" || baseOp === "<" || baseOp === "<=")) hasBase = true;
 
