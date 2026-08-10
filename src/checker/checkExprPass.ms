@@ -4197,6 +4197,26 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	// the winner sym to the body-bearing impl before mangling. Keeping
 	// the redirect localized to codegen avoids conflating "which overload
 	// matched" with "which symbol gets emitted".
+	if (winnerType.kind === TypeKind.Function && winnerType.typeChildren !== null
+			&& d.arguments.length === winnerType.typeChildren.length) {
+		for (let wi = 0; wi < d.arguments.length; wi += 1) {
+			const wpt = winnerType.typeChildren[wi];
+			const wat = d.arguments[wi].nodeType;
+			if (wpt === null || wat === null) continue;
+			if (wpt.kind === TypeKind.CString
+					&& (wat.kind === TypeKind.String || wat.kind === TypeKind.StringLiteral)) {
+				d.arguments[wi] = synthCStringConv(d.arguments[wi], wpt);
+				argTypes[wi] = wpt;
+			} else if (needsStdConv(wat, wpt)) {
+				const wTok = createToken(TokenKind.Ident, "", d.arguments[wi].location.line);
+				const wConv = createNode(NodeKind.HiddenStdConv, { convExpr: d.arguments[wi], convType: wpt }, wTok);
+				wConv.nodeType = wpt;
+				wConv.flags = wConv.flags | NodeFlag.Sem;
+				d.arguments[wi] = wConv;
+				argTypes[wi] = wpt;
+			}
+		}
+	}
 	d.resolvedOverloadIdx = bestIdx;
 	callNode.resolvedSym = sym;
 	// Signature → implementation reconciliation. Codegen mangles the call to
