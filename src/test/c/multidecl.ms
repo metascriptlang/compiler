@@ -4,7 +4,11 @@
 // its spliceNodes into the module's programStmts array, producing multiple
 // declarations from a single macro invocation.
 
-import { compileToC } from "../helpers";
+// compileToCWithStd, not compileToC: every source here imports "std/meta" to build
+// the macro's return value, and the plain helper keeps stdPath empty so those
+// imports do not resolve. These tests were red for that reason alone, invisible
+// because this file sits outside the standing src/index.ms gate.
+import { compileToCWithStd } from "../helpers";
 
 test "E2E: macro returning SpliceMany at module-top splices into programStmts" {
 	// Macro `pair()` returns SpliceMany containing two const decls.
@@ -46,7 +50,7 @@ pair();
 
 function main(): void {}
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -70,7 +74,7 @@ emptyPair();
 
 function main(): void {}
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -105,7 +109,7 @@ mkConst("beta", 20);
 
 function main(): void {}
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -165,7 +169,7 @@ emitDoubler();
 
 function main(): void {}
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -202,7 +206,7 @@ function main(): void {
 	spliced();  // V1: undefined — spliced symbol bypassed collectPass
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert !c.ok;  // Expected to fail in V1
 }
 
@@ -242,6 +246,6 @@ function main(): void {
 	twoLocals();
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
