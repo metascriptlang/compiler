@@ -148,15 +148,27 @@ function wrapFieldAsJson(fieldAccess: Node, ftype: Type, loc: SourceLocation, ct
 	return makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc);
 }
 
+// The values array must carry the element type `jsonObject` declares. A raw
+// pointer element drops JsonValue's reference semantics, so the array reaches
+// stringify holding addresses that were never JsonValues.
+function jsonObjectParamType(ctx: TransformContext, loc: SourceLocation, index: int32): Type | null {
+	const ident = resolveDbgIdent("jsonObject", ctx, loc);
+	const ft = ident.nodeType;
+	if (ft === null || ft.typeChildren === null || ft.typeChildren.length < 2) return null;
+	return ft.typeChildren[index];
+}
+
 // Build jsonObject(keys, vals) for a nested struct field
 function buildNestedJsonObject(obj: Node, structType: Type | null, loc: SourceLocation, ctx: TransformContext): Node {
 	const keyNodes: Node[] = [];
 	const valNodes: Node[] = [];
 	if (structType === null) {
 		const keysArrEmpty = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticToken(loc));
-		keysArrEmpty.nodeType = createArray(stringType());
+		const keysTypeEmpty = jsonObjectParamType(ctx, loc, 0);
+		keysArrEmpty.nodeType = keysTypeEmpty !== null ? keysTypeEmpty : createArray(stringType());
 		const valsArrEmpty = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, syntheticToken(loc));
-		valsArrEmpty.nodeType = createArray(createPtr(voidType()));
+		const valsTypeEmpty = jsonObjectParamType(ctx, loc, 1);
+		valsArrEmpty.nodeType = valsTypeEmpty !== null ? valsTypeEmpty : createArray(createPtr(voidType()));
 		return makeCall(resolveDbgIdent("jsonObject", ctx, loc), [keysArrEmpty, valsArrEmpty], loc);
 	}
 	let fi = 0;
@@ -165,13 +177,18 @@ function buildNestedJsonObject(obj: Node, structType: Type | null, loc: SourceLo
 		const ftype = structType.typeChildren[fi];
 		keyNodes.push(makeString(fname, loc));
 		const fa = makeMember(obj, fname, loc);
+		// Codegen reads the node's type to pick `.` vs `->`; a synthesized access
+		// with no type reads a Ref field as a value.
+		fa.nodeType = ftype;
 		valNodes.push(wrapFieldAsJson(fa, ftype, loc, ctx));
 		fi = fi + 1;
 	}
 	const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticToken(loc));
-	keysArr.nodeType = createArray(stringType());
+	const keysType = jsonObjectParamType(ctx, loc, 0);
+	keysArr.nodeType = keysType !== null ? keysType : createArray(stringType());
 	const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, syntheticToken(loc));
-	valsArr.nodeType = createArray(createPtr(voidType()));
+	const valsType = jsonObjectParamType(ctx, loc, 1);
+	valsArr.nodeType = valsType !== null ? valsType : createArray(createPtr(voidType()));
 	return makeCall(resolveDbgIdent("jsonObject", ctx, loc), [keysArr, valsArr], loc);
 }
 
