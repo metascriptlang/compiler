@@ -414,7 +414,49 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		node.flags = node.flags | NodeFlag.FirstWrite;
 		markInitialized(ctx.initTracker, d.declName);
 	}
+	if ((node.flags & NodeFlag.StaticStorage) !== 0) {
+		checkStaticStorageDecl(ctx, node, d);
+	}
 	// `let x;` with no initializer → NOT marked → will warn on use
+}
+
+function checkStaticStorageDecl(ctx: CheckerContext, node: Node, d: VariableDeclData): void {
+	if (d.declKind === DeclKind.Var) {
+		addError(ctx, "'static var' is not supported — use 'static let'; hoisting rebuilds a var declaration without its symbol, so the slot would be emitted as an untyped frame local while every read resolved to module scope", d.nameLocation.line, d.nameLocation.column);
+		return;
+	}
+	if (node.resolvedSym !== null) {
+		setFlag(node.resolvedSym, SymbolFlag.Global);
+		setFlag(node.resolvedSym, SymbolFlag.StaticLocal);
+	}
+	if (d.declKind !== DeclKind.Const || d.initializer === null) return;
+	const offender = findFrameValueRead(d.initializer);
+	if (offender === null) return;
+	const what = offender.symbolKind === SymbolKind.Parameter ? "parameter" : "enclosing local";
+	addError(ctx, "a 'static const' initializer cannot read the " + what + " '" + offender.name + "' — the value is computed once, so it would bind to whichever call reached it first", d.nameLocation.line, d.nameLocation.column);
+}
+
+// Nested function bodies are deliberately not descended into: their own params
+// are frame values of a DIFFERENT frame, and separating those from a capture of
+// the enclosing frame needs an owner link that Symbol does not carry.
+function findFrameValueRead(node: Node): Symbol {
+	const none = null as unknown as Symbol;
+	if (node === null) return none;
+	if (node.kind === NodeKind.ArrowFunction || node.kind === NodeKind.FunctionExpr) return none;
+	if (node.kind === NodeKind.Identifier) {
+		const sym = node.resolvedSym;
+		if (sym === null) return none;
+		if (sym.symbolKind === SymbolKind.Parameter) return sym;
+		if (sym.symbolKind === SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Global)) return sym;
+		return none;
+	}
+	const kids: Node[] = [];
+	forEachChild(node, (child: Node): void => { kids.push(child); });
+	for (const c of kids) {
+		const r = findFrameValueRead(c);
+		if (r !== null) return r;
+	}
+	return none;
 }
 
 // Lightweight walk of a generic function/method body that calls markUsed for
