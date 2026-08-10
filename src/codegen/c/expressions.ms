@@ -21,7 +21,7 @@ import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto, isDrcLifecycleName } from "./forward";
 import { useHeader } from "./context";
-import { GcMode } from "../../checker/context";
+import { GcMode, addError } from "../../checker/context";
 import { lookupCtorDefaults } from "../../checker/instantiate";
 
 // Constructor parameter types for a class symbol, reachable cross-module.
@@ -1306,7 +1306,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				return;
 			}
 		}
-		const cOp = mapBinaryOp(d.operator);
+		const cOp = mapBinaryOp(g, d.operator);
 		ctx.results.push(`(${left} ${cOp} ${finalRight})`);
 		return;
 	}
@@ -2696,14 +2696,34 @@ export function genExprAssign(g: CGen, p: CProc, node: Node, destSnippet: string
 
 // ===== Binary helpers =====
 
-function mapBinaryOp(op: string): string {
-	return match (op) {
+// Reference parity — ccgexprs.nim:3068: genMagicExpr's default arm is
+// internalError("genMagicExpr: " & $op). An operator that reaches codegen without
+// having resolved to a C operator or to a call is a checker bug, never codegen
+// leniency — emitting the token verbatim hands clang a mis-parse (`a ** b` becomes
+// `a * (*b)`). Population measured 0 (self-build + battery 3446 + Neon sweep)
+// before this was armed.
+function mapBinaryOp(g: CGen, op: string): string {
+	const mapped = match (op) {
 		"===" | "==" => "==",
 		"!==" | "!=" => "!=",
 		"&&" => "&&",
 		"||" => "||",
 		_ => op,
 	};
+	const isValidCOp = match (mapped) {
+		"+" | "-" | "*" | "/" | "%" => true,
+		"==" | "!=" | "<" | ">" | "<=" | ">=" => true,
+		"&&" | "||" => true,
+		"&" | "|" | "^" | "<<" | ">>" => true,
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"&=" | "|=" | "^=" | "<<=" | ">>=" | "," => true,
+		_ => false,
+	};
+	if (!isValidCOp) {
+		const pn = g.currentProc !== null ? g.currentProc.name : "<toplevel>";
+		addError(g.checkerCtx, "internal: operator '" + op + "' reached codegen unresolved in " + g.modulePath + " proc " + pn, 0, 0);
+	}
+	return mapped;
 }
 
 // (genUnaryExpr, genHiddenDeref, genMemberExpr, genArrayAccess, genConditionalExpr, genTypeAssertion
