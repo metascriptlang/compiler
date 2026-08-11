@@ -342,7 +342,7 @@ export function createIteratorResult(yieldType: Type): Type {
 }
 
 export function createIterator(yieldType: Type): Type {
-	const nextFnType = createFunction([], [], createIteratorResult(yieldType));
+	const nextFnType = createClosureType([], [], createIteratorResult(yieldType));
 	const iter = createStruct("Iterator", ["next"], [nextFnType], false);
 	return iter;
 }
