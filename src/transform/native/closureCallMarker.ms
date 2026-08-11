@@ -1,20 +1,20 @@
-// Closure Call Marker — identifies CallExpr nodes where callee is a closure
-// Uses resolvedSym metadata from the checker to decisively distinguish
-// direct function calls from closure calls (variable/parameter with function type).
+// Closure Call Marker — selects the calling convention for every CallExpr.
 //
-// In C, closure calls use a different calling convention (ms_closure.fn + env pointer)
-// vs direct function calls. This pass sets isDirectCall = false on closure CallExprs.
+// In C, closure calls use a different calling convention (ms_closure.fn + env
+// pointer) vs direct function calls. This pass sets isDirectCall = false on
+// closure CallExprs.
 //
-// Decision logic:
-//   MemberExpr callee       → always direct (method/extension)
-//   Identifier, no symbol   → direct (conservative — handles runtime/synthetic calls)
-//   Identifier, Function    → direct
-//   Identifier, Method      → direct
-//   Identifier, Class       → direct (constructor)
-//   Identifier, Variable    → closure
-//   Identifier, Parameter   → closure
+// Reference parity (genAsgnCall): the callee's callConv decides, and nothing
+// else does. Gating on node kind instead leaves the callees that lowering
+// introduces — `f(x)(y)` becomes a `$tmp`, `(c ? f : g)(y)` a `$tern` — emitting
+// a raw `expr(args)` on an msClosure struct, which C rejects.
+//
+// The reference skips {tyGenericInst, tyAlias, tySink, tyOwned} before reading
+// callConv. Here that set is empty by construction: aliases and generic
+// instances are resolved before this pass (and substitution copies callConv),
+// and Sink/Lent are never built for a callee — probed, not assumed.
 
-import { Node, NodeKind, SymbolKind, Symbol, CallExprData, MemberExprData, makeLoc, NodeFlag, Type, TypeKind, CallingConvention } from "../../ast/node";
+import { Node, NodeKind, SymbolKind, Symbol, CallExprData, makeLoc, NodeFlag, Type, TypeKind, CallingConvention } from "../../ast/node";
 import { createFunction, voidType } from "../../checker/types";
 import { Token } from "../../lexer/token";
 import { TransformContext } from "../context";
@@ -32,31 +32,16 @@ function markCall(node: Node): Node {
 	if (node.kind !== NodeKind.CallExpr) return node;
 	const cd = node.data as CallExprData;
 
-	// Post-lambda-lifting MemberExpr callees: _envP.f with Function type is a closure call.
-	// These are created by lambda lifting (runs after checker), so the checker can't see them.
-	// Reference parity: lambda-lifted calls get closure calling convention from the lifted function's proc type.
-	// Exception: Module namespace access (ns.func) is always a direct call.
-	if (cd.callee.kind === NodeKind.MemberExpr && cd.callee.nodeType !== null
-		&& cd.callee.nodeType.kind === TypeKind.Function) {
-		const calleeObj = (cd.callee.data as MemberExprData).object;
-		const isModuleAccess = calleeObj.resolvedSym !== null && calleeObj.resolvedSym.symbolKind === SymbolKind.Module;
-		if (!isModuleAccess) {
-			cd.isDirectCall = false;
+	// Reference parity (genAsgnCall): dispatch on the callee's callConv, never on
+	// its node kind. Gating on kind leaves callees that later lowering introduced
+	// (`f(x)(y)`, `(c ? f : g)(y)` both become a temp) emitting a raw `expr(args)`
+	// on an msClosure struct, which C rejects with "called object type 'msClosure'
+	// is not a function or function pointer".
+	if (isClosureTypedCallee(cd.callee)) {
+		cd.isDirectCall = false;
+		if (cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
 			cd.callee.nodeType.callConv = CallingConvention.CcClosure;
 		}
-	}
-
-	// ArrayAccess callee with Function nodeType: `arr[i](args)` where the
-	// element type is a function/closure. Same closure-call dispatch as the
-	// MemberExpr branch above — Nim parity is "dispatch by callee TYPE, not
-	// syntactic shape". Without this, codegen emits the raw `expr(args)`
-	// form which lowers to `msArrayAccess(arr, i)(args)` — calling an
-	// `msClosure` struct directly, which C rejects with "called object type
-	// 'msClosure' is not a function or function pointer".
-	if (cd.callee.kind === NodeKind.ArrayAccess && cd.callee.nodeType !== null
-		&& cd.callee.nodeType.kind === TypeKind.Function) {
-		cd.isDirectCall = false;
-		cd.callee.nodeType.callConv = CallingConvention.CcClosure;
 	}
 
 	// Reference parity: thunk generation — wrap named functions passed as
@@ -98,6 +83,23 @@ function wrapFuncArgsAsThunks(cd: CallExprData): void {
 	}
 }
 
+function isClosureTypedCallee(callee: Node): boolean {
+	const t = calleeFunctionType(callee);
+	if (t === null) return false;
+	return t.callConv === CallingConvention.CcClosure;
+}
+
+function calleeFunctionType(callee: Node): Type | null {
+	if (callee.nodeType !== null && callee.nodeType.kind === TypeKind.Function) {
+		return callee.nodeType;
+	}
+	if (callee.resolvedSym !== null && callee.resolvedSym.symbolType !== null
+		&& callee.resolvedSym.symbolType.kind === TypeKind.Function) {
+		return callee.resolvedSym.symbolType;
+	}
+	return null;
+}
+
 function getCalleeType(cd: CallExprData): Type | null {
 	if (cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
 		return cd.callee.nodeType;
@@ -109,7 +111,7 @@ function getCalleeType(cd: CallExprData): Type | null {
 }
 
 // ===== Tests =====
-import { createFunction, numberType, voidType } from "../../checker/types";
+import { createFunction, createClosureType, numberType, voidType } from "../../checker/types";
 import { makeSymbol } from "../../checker/symbol";
 import { createNode } from "../../ast/node";
 import { makeIdent, makeCall, makeMember } from "../util";
@@ -121,7 +123,10 @@ function wrapProgram(stmts: Node[]): Node {
 }
 
 // Helper: create an ExprStmt wrapping a CallExpr, return the CallExpr's data
-function makeTestCall(calleeName: string, sym: Symbol, calleeType: Type): { prog: Node, cd: CallExprData } {
+// Returns the call NODE, never its `data`: a CallExprData carried out through a
+// struct field is a copy, so a test reading it would observe the pre-walk value
+// and pass no matter what the pass does.
+function makeTestCall(calleeName: string, sym: Symbol, calleeType: Type): { prog: Node, call: Node } {
 	const loc = makeLoc(0, 0);
 	const callee = makeIdent(calleeName, loc);
 	if (sym !== null) {
@@ -131,56 +136,86 @@ function makeTestCall(calleeName: string, sym: Symbol, calleeType: Type): { prog
 		callee.nodeType = calleeType;
 	}
 	const callNode = makeCall(callee, [], loc);
-	const cd = callNode.data as CallExprData;
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
 	const prog = wrapProgram([exprStmt]);
-	return { prog, cd };
+	return { prog, call: callNode };
+}
+
+function isDirect(call: Node): boolean {
+	return (call.data as CallExprData).isDirectCall;
 }
 
 // Helper: create a MemberExpr-based call (obj.method())
-function makeMemberTestCall(): { prog: Node, cd: CallExprData } {
+function makeMemberTestCall(): { prog: Node, call: Node } {
 	const loc = makeLoc(0, 0);
 	const obj = makeIdent("obj", loc);
 	const mem = makeMember(obj, "method", loc);
 	const callNode = makeCall(mem, [], loc);
-	const cd = callNode.data as CallExprData;
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
 	const prog = wrapProgram([exprStmt]);
-	return { prog, cd };
+	return { prog, call: callNode };
 }
 
-// Reference parity: Identifier-based closure detection moved to checker (checkCallExpr).
-// closureCallMarker now only handles post-lambda-lifting MemberExpr callees
-// and thunk wrapping (generateThunk equivalent).
+// The marker is the single site that fixes the calling convention: it runs last,
+// on the fully lowered tree, so it also sees the callees that earlier lowering
+// introduced (temps standing in for a call/ternary result).
 
-test "MemberExpr with Function type is closure call" {
-	// Simulates _envP.f from lambda lifting — MemberExpr callee with Function type
+test "MemberExpr holding a closure is a closure call" {
+	// Simulates _envP.f from lambda lifting — a captured closure read back out
+	// of the environment struct.
 	const loc = makeLoc(0, 0);
 	const obj = makeIdent("_envP", loc);
 	const mem = makeMember(obj, "handler", loc);
-	const fnType = createFunction([numberType()], [], voidType());
-	mem.nodeType = fnType;
+	mem.nodeType = createClosureType([numberType()], [], voidType());
 	const callNode = makeCall(mem, [], loc);
-	const cd = callNode.data as CallExprData;
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
 	const prog = wrapProgram([exprStmt]);
 	markClosureCalls(prog, makeCtx());
-	assert cd.isDirectCall === false;
-	assert cd.callee.nodeType.callConv === CallingConvention.CcClosure;
+	assert isDirect(callNode) === false;
 }
 
 test "MemberExpr without Function type stays direct" {
 	const t = makeMemberTestCall();
 	markClosureCalls(t.prog, makeCtx());
-	assert t.cd.isDirectCall === true;
+	assert isDirect(t.call) === true;
 }
 
-test "Identifier callee not touched by marker" {
-	// Identifier-based closure detection is now in the checker, not the marker
-	const fnType = createFunction([numberType()], [], voidType());
+test "Closure-typed variable callee is a closure call" {
+	const fnType = createClosureType([numberType()], [], voidType());
 	const sym = makeSymbol("cb", SymbolKind.Variable, fnType, false);
 	const t = makeTestCall("cb", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
-	// Marker does NOT set isDirectCall — checker does that based on callConv
-	assert t.cd.isDirectCall === true;
+	assert isDirect(t.call) === false;
+}
+
+test "Named function callee stays direct" {
+	const fnType = createFunction([numberType()], [], voidType());
+	const sym = makeSymbol("helper", SymbolKind.Function, fnType, false);
+	const t = makeTestCall("helper", sym, fnType);
+	markClosureCalls(t.prog, makeCtx());
+	assert isDirect(t.call) === true;
+}
+
+test "Synthesized callee without a symbol stays direct" {
+	// Per-type DRC hooks are emitted as plain calls with no symbol attached;
+	// treating "no symbol" as a closure emits `hook.env` on a function pointer.
+	const loc = makeLoc(0, 0);
+	const callee = makeIdent("HashMapEntry_copy", loc);
+	callee.nodeType = createFunction([numberType()], [], voidType());
+	const callNode = makeCall(callee, [], loc);
+	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
+	markClosureCalls(wrapProgram([exprStmt]), makeCtx());
+	assert isDirect(callNode) === true;
+}
+
+test "Callee produced by another call is a closure call" {
+	// `make(1)(2)` — the callee names nothing and carries no symbol, so only its
+	// type can classify it.
+	const loc = makeLoc(0, 0);
+	const inner = makeCall(makeIdent("make", loc), [], loc);
+	inner.nodeType = createClosureType([numberType()], [], voidType());
+	const outer = makeCall(inner, [], loc);
+	const exprStmt = createNode(NodeKind.ExprStmt, { expr: outer }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
+	markClosureCalls(wrapProgram([exprStmt]), makeCtx());
+	assert isDirect(outer) === false;
 }
