@@ -116,3 +116,4 @@ import "./bug100DuSinkPayloadLost";
 import "./bug101ConverterAliasTarget";
 import "./bug102StaticStorageClass";
 import "./bug103MacroExprHoist";
+import "./bug104ClosureCallChain";
