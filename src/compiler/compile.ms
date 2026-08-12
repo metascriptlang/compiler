@@ -696,7 +696,6 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs);
 	const outDir = outputDir !== "" ? outputDir : "out";
-	ensureDir(outDir);
 	// Project root for deriving module IDs
 	const projectRoot = config.stdPath.length > 4 ? config.stdPath.slice(0, config.stdPath.length - 4) : dirname(entryPath);
 
@@ -845,6 +844,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const outPath = opts.outputPath !== ""
 		? opts.outputPath
 		: `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
+	ensureDir(dirname(outPath));
 	writeOutput(outPath, output);
 	console.log(success(`${compiled} module(s) bundled → ${bold(outPath)}`));
 }
