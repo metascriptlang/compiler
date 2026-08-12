@@ -12,13 +12,13 @@
 
 import {
 	Node, NodeKind, NodeData, Type, TypeKind,
-	CallExprData, IdentifierData, MemberExprData,
+	CallExprData, IdentifierData, MemberExprData, NewExprData,
 	createNode,
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
-import { lookupSymbol } from "../../checker/symbol";
+import { lookupSymbol, getCtorParamTypes } from "../../checker/symbol";
 
 // Holds the active ctx for the current walk. Closure over `ctx` would be
 // cleaner but walkNode's visitor signature is fixed to (node) => node.
@@ -47,7 +47,45 @@ function makeArrayLit(elements: Node[], restType: Type, line: number): Node {
 	return arr;
 }
 
+function lowerRestNew(node: Node): Node {
+	const d = node.data as NewExprData;
+	if (d.newCallee === null || d.newCallee.resolvedSym === null) return node;
+
+	const ctorTypes = getCtorParamTypes(d.newCallee.resolvedSym);
+	if (ctorTypes === null || ctorTypes.length === 0) return node;
+	const lastType = ctorTypes[ctorTypes.length - 1];
+	if (lastType === null || lastType.kind !== TypeKind.Varargs) return node;
+
+	const restIdx = ctorTypes.length - 1;
+	const restType = lastType.typeChildren.length > 0
+		? lastType.typeChildren[0]
+		: null as unknown as Type;
+
+	if (d.newArguments.length <= restIdx) {
+		d.newArguments.push(makeArrayLit([], restType, node.location.line));
+		return node;
+	}
+
+	const regularArgs: Node[] = [];
+	const restArgs: Node[] = [];
+	let j = 0;
+	while (j < d.newArguments.length) {
+		if (j < restIdx) {
+			regularArgs.push(d.newArguments[j]);
+		} else {
+			restArgs.push(d.newArguments[j]);
+		}
+		j = j + 1;
+	}
+
+	regularArgs.push(makeArrayLit(restArgs, restType, node.location.line));
+	d.newArguments = regularArgs;
+
+	return node;
+}
+
 function lowerRest(node: Node): Node {
+	if (node.kind === NodeKind.NewExpr) return lowerRestNew(node);
 	if (node.kind !== NodeKind.CallExpr) return node;
 
 	const d = node.data as CallExprData;
