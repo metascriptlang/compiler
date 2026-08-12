@@ -8,27 +8,9 @@ import {
 	ForStmtData, ForOfStmtData, MacroInvocationData, StringLiteralData,
 	isEmptyBlock, Type,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt, jsTypedArrayName } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-
-// ===== Typed Array Mapping (reference: arrayTypeForElemType) =====
-
-function jsTypedArrayName(elemKind: TypeKind, bigInt64: boolean): string {
-	return match (elemKind) {
-		TypeKind.Int8 => "Int8Array",
-		TypeKind.Int16 => "Int16Array",
-		TypeKind.Int32 => "Int32Array",
-		TypeKind.Int64 => bigInt64 ? "BigInt64Array" : "",
-		TypeKind.Uint8 | TypeKind.Char | TypeKind.Boolean => "Uint8Array",
-		TypeKind.Uint16 => "Uint16Array",
-		TypeKind.Uint32 => "Uint32Array",
-		TypeKind.Uint64 => bigInt64 ? "BigUint64Array" : "",
-		TypeKind.Float32 => "Float32Array",
-		TypeKind.Float64 | TypeKind.Number => "Float64Array",
-		_ => "",
-	};
-}
 
 // Emit default initializer for uninitialized variable based on type.
 // Reference: createVar — typed arrays for numeric, inline literal for small, arrayConstr for large.

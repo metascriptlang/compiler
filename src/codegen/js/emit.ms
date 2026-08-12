@@ -3,7 +3,7 @@
 // JSGenerator context, low-level emit functions.
 // emitNode delegates to registered callback (set by jsgen.ms) to break circular imports.
 
-import { Node, NodeKind, BlockStmtData } from "../../ast/node";
+import { Node, NodeKind, TypeKind, BlockStmtData } from "../../ast/node";
 import { JsImportEntry } from "../../checker/context";
 
 
@@ -27,6 +27,24 @@ export class JSGenerator {
 
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", jsBigInt64: false, staticSlots: [] };
+}
+
+// ===== Typed Array Mapping (reference: arrayTypeForElemType) =====
+
+export function jsTypedArrayName(elemKind: TypeKind, bigInt64: boolean): string {
+	return match (elemKind) {
+		TypeKind.Int8 => "Int8Array",
+		TypeKind.Int16 => "Int16Array",
+		TypeKind.Int32 => "Int32Array",
+		TypeKind.Int64 => bigInt64 ? "BigInt64Array" : "",
+		TypeKind.Uint8 | TypeKind.Char | TypeKind.Boolean => "Uint8Array",
+		TypeKind.Uint16 => "Uint16Array",
+		TypeKind.Uint32 => "Uint32Array",
+		TypeKind.Uint64 => bigInt64 ? "BigUint64Array" : "",
+		TypeKind.Float32 => "Float32Array",
+		TypeKind.Float64 | TypeKind.Number => "Float64Array",
+		_ => "",
+	};
 }
 
 // ===== Callback Registration (breaks circular imports) =====
