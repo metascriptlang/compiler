@@ -1,6 +1,61 @@
-import { Node, Symbol, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, ClassDeclData, ActorDeclData, Symbol, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
 import { noneType } from "./types";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
+
+function classStructTypeOf(classSym: Symbol): Type {
+	let t = classSym.symbolType;
+	if (t === null) return null as unknown as Type;
+	if (t.kind === TypeKind.Ref && t.typeReturn !== null) t = t.typeReturn;
+	return t;
+}
+
+function isClassBodyDecl(n: Node): boolean {
+	if (n === null) return false;
+	return n.kind === NodeKind.ClassDecl || n.kind === NodeKind.ActorDecl;
+}
+
+export function classDeclNodeOf(classSym: Symbol): Node {
+	if (isClassBodyDecl(classSym.declNode)) return classSym.declNode;
+	const t = classStructTypeOf(classSym);
+	if (t === null || t.sym === null) return null as unknown as Node;
+	if (isClassBodyDecl(t.sym.declNode)) return t.sym.declNode;
+	return null as unknown as Node;
+}
+
+export function parentClassSymOf(classSym: Symbol): Symbol {
+	const t = classStructTypeOf(classSym);
+	if (t === null || t.typeExtra === null) return null as unknown as Symbol;
+	let p = t.typeExtra;
+	if (p.kind === TypeKind.Ref && p.typeReturn !== null) p = p.typeReturn;
+	if (p.sym === null) return null as unknown as Symbol;
+	return p.sym;
+}
+
+export function getCtorParamTypes(classSym: Symbol): Type[] {
+	let sym = classSym;
+	let depth = 0;
+	while (sym !== null && depth < 64) {
+		const decl = classDeclNodeOf(sym);
+		if (decl === null) return null as unknown as Type[];
+		let body: Node[] = null as unknown as Node[];
+		if (decl.kind === NodeKind.ClassDecl) {
+			body = (decl.data as ClassDeclData).classBody;
+		} else if (decl.kind === NodeKind.ActorDecl) {
+			body = (decl.data as ActorDeclData).actorBody;
+		}
+		if (body !== null) {
+			for (const member of body) {
+				if (member.kind === NodeKind.ConstructorDecl && member.nodeType !== null
+						&& member.nodeType.kind === TypeKind.Function) {
+					return member.nodeType.typeChildren;
+				}
+			}
+		}
+		sym = parentClassSymOf(sym);
+		depth += 1;
+	}
+	return null as unknown as Type[];
+}
 
 
 // Result<T, E> is now available globally via prelude.
