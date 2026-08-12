@@ -1,7 +1,7 @@
 // JavaScript Codegen — Expression Emitters
 
 import {
-	Node, NodeKind, Symbol, SymbolKind,
+	Node, NodeKind, TypeKind, Symbol, SymbolKind,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BigIntLiteralData, RegexLiteralData,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData,
@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData,
 } from "../../ast/node";
-import { emit, emitNode, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes } from "./emit";
+import { emit, emitNode, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar } from "../c/names";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { int64ToDecimal } from "../../utils/string";
@@ -339,9 +339,16 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 
 export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as ArrayLiteralData;
+	const t = node.nodeType;
+	let typedName = "";
+	if (t !== null && t.kind === TypeKind.SizedArray && t.typeReturn !== null) {
+		typedName = jsTypedArrayName(t.typeReturn.kind, gen.jsBigInt64);
+	}
+	if (typedName !== "") emit(gen, "new " + typedName + "(");
 	emit(gen, "[");
 	emitJoinedNodes(gen, d.elements, ", ");
 	emit(gen, "]");
+	if (typedName !== "") emit(gen, ")");
 }
 
 // ===== Arrow Function =====
