@@ -187,3 +187,21 @@ console.log(k.w.toString());
 	assert js.contains("super(");
 	assert !js.contains("super__");
 }
+
+// The reference maps an array of the small numeric kinds onto a JS typed array
+// and leaves a sequence a plain array (jsgen.nim:2541 genArrayConstr, guarded on
+// `!= tySequence`), because a typed array has no push and growing one copies.
+// The element-kind table was ported; the constructor call site was not, so a
+// sized array kept its typed representation only when it had no initializer.
+
+test "E2E JS: sized array literal is a typed array" {
+	const js = compileToJS("function main(): void { const fixed: uint8[4] = [10, 20, 30, 40]; console.log(fixed[0]); }");
+	assert js.ok;
+	assert js.value.contains("new Uint8Array([10, 20, 30, 40])");
+}
+
+test "E2E JS: sequence literal stays a plain array" {
+	const js = compileToJS("function main(): void { const seq: uint8[] = [10, 20, 30, 40]; console.log(seq[0]); }");
+	assert js.ok;
+	assert !js.value.contains("new Uint8Array([");
+}
