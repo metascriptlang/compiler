@@ -7,6 +7,8 @@
 // formal is not pointer-shaped, so the packed array gets dereferenced and
 // passed by value into a pointer parameter.
 
+import { exit } from "std/process";
+
 function joinStrings(head: string, ...rest: string[]): string {
 	let s = head;
 	for (const r of rest) { s = s + r; }
@@ -43,6 +45,15 @@ function takesArray(head: string, xs: string[]): string {
 	let s = head;
 	for (const x of xs) { s = s + x; }
 	return s;
+}
+
+class Summed {
+	total: number;
+	constructor(base: number, ...rest: number[]) {
+		let t = base;
+		for (const n of rest) { t = t + n; }
+		this.total = t;
+	}
 }
 
 class Joiner {
@@ -104,6 +115,18 @@ function main(): void {
 	// Non-primitive element type: the packed array holds references.
 	const weight = totalWeight(1, new Weighted(2), new Weighted(3));
 	if (weight !== 6) { throw "GUARD RED: struct element rest = " + weight.toString(); }
+
+	const packed = new Summed(1, 2, 3);
+	if (packed.total !== 6) {
+		console.log("FAIL: constructor rest, total=" + packed.total.toString());
+		exit(1);
+	}
+
+	const packedNone = new Summed(41);
+	if (packedNone.total !== 41) {
+		console.log("FAIL: constructor rest with no trailing args, total=" + packedNone.total.toString());
+		exit(1);
+	}
 
 	console.log("restParamVarargs ok");
 }
