@@ -2871,12 +2871,17 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 
 	// Non-primitive: temp + push pattern
 	// (number/string arrays already lowered to msNumberArrayFrom/msStringArrayFromArr CallExpr by nativeLower)
+	const isSizedArray = node.nodeType !== null && node.nodeType.kind === TypeKind.SizedArray;
 	const tmp = getTemp(p, arrayTypeName);
 	const tmpName = tmp.snippet;
 	emitStmtsLine(p, `${tmpName} = (${arrayTypeName}){0};`);
 	let i = 0;
 	while (i < d.elements.length) {
-		emitStmtsLine(p, `msGenericArrayPush(&${tmpName}, ${genExpr(g, p, d.elements[i])});`);
+		if (isSizedArray) {
+			emitStmtsLine(p, `${tmpName}.data[${i}] = ${genExpr(g, p, d.elements[i])};`);
+		} else {
+			emitStmtsLine(p, `msGenericArrayPush(&${tmpName}, ${genExpr(g, p, d.elements[i])});`);
+		}
 		i += 1;
 	}
 	return tmpName;
