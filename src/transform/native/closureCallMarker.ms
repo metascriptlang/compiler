@@ -39,9 +39,6 @@ function markCall(node: Node): Node {
 	// is not a function or function pointer".
 	if (isClosureTypedCallee(cd.callee)) {
 		cd.isDirectCall = false;
-		if (cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
-			cd.callee.nodeType.callConv = CallingConvention.CcClosure;
-		}
 	}
 
 	// Reference parity: thunk generation — wrap named functions passed as
@@ -84,20 +81,9 @@ function wrapFuncArgsAsThunks(cd: CallExprData): void {
 }
 
 function isClosureTypedCallee(callee: Node): boolean {
-	const t = calleeFunctionType(callee);
-	if (t === null) return false;
-	return t.callConv === CallingConvention.CcClosure;
-}
-
-function calleeFunctionType(callee: Node): Type | null {
-	if (callee.nodeType !== null && callee.nodeType.kind === TypeKind.Function) {
-		return callee.nodeType;
-	}
-	if (callee.resolvedSym !== null && callee.resolvedSym.symbolType !== null
-		&& callee.resolvedSym.symbolType.kind === TypeKind.Function) {
-		return callee.resolvedSym.symbolType;
-	}
-	return null;
+	if (callee.nodeType === null) return false;
+	if (callee.nodeType.kind !== TypeKind.Function) return false;
+	return callee.nodeType.callConv === CallingConvention.CcClosure;
 }
 
 function getCalleeType(cd: CallExprData): Type | null {
@@ -206,6 +192,17 @@ test "Synthesized callee without a symbol stays direct" {
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
 	markClosureCalls(wrapProgram([exprStmt]), makeCtx());
 	assert isDirect(callNode) === true;
+}
+
+test "Closure symbol without a node type stays direct" {
+	// The node's own type is the single source of truth (reference reads only
+	// ri[0].typ); a checker that stops stamping nodeType must surface as a C
+	// compile error at the call, not be silently repaired from the symbol.
+	const fnType = createClosureType([numberType()], [], voidType());
+	const sym = makeSymbol("cb", SymbolKind.Variable, fnType, false);
+	const t = makeTestCall("cb", sym, null as unknown as Type);
+	markClosureCalls(t.prog, makeCtx());
+	assert isDirect(t.call) === true;
 }
 
 test "Callee produced by another call is a closure call" {
