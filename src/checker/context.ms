@@ -530,6 +530,7 @@ function pickBestOperatorCandidate(cands: ExtensionMethod[], argTypes: Type[]): 
 		if (ft.typeChildren.length !== argTypes.length) continue;
 		const score = scoreCandidatePriority(ft.typeChildren, argTypes, getMinArity(ft));
 		if (isNoMatch(score)) continue;
+		score.calleeScope = m.scopeDepth;
 		if (best === null || cmpCandidates(score, bestScore, ft, bestFt) > 0) {
 			best = m; bestScore = score; bestFt = ft;
 		}
