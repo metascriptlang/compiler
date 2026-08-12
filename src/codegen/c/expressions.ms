@@ -1170,6 +1170,23 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void
 			parentName = getTypeDesc(g, parentSym.symbolType);
 		}
 		if (parentName !== "") {
+			const parentInitName = parentName + "_init";
+			const parentEntry = lookupCtorDefaults(parentName + "_new");
+			let parentChildren: Type[] = null as unknown as Type[];
+			if (parentEntry !== null && parentEntry.fnType !== null) {
+				parentChildren = parentEntry.fnType.typeChildren;
+			} else {
+				parentChildren = crossModuleCtorParamTypes(parentSym);
+			}
+			const parentProtoKey = "proto:" + parentInitName;
+			if (parentChildren !== null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
+				nameSetAdd(g.declaredProcs, parentProtoKey);
+				let parentProtoParams = `${parentName}* this`;
+				for (let ppi = 0; ppi < parentChildren.length; ppi += 1) {
+					parentProtoParams = parentProtoParams + ", " + getTypeDesc(g, parentChildren[ppi]);
+				}
+				addLine(sec(g, CSection.ProcHeaders), `void ${parentInitName}(${parentProtoParams});`);
+			}
 			let argList = `(${parentName}*)this`;
 			let ai = 0;
 			while (ai < cd.arguments.length) {
