@@ -5874,7 +5874,20 @@ function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 	const d = node.data as ArrowFunctionData;
 	resolveTypeExpr(node.typeExpr, ctx);
 	resolveTypeExprs(node.typeExprs, ctx);
-	return checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody, node.paramLocations, d.arrowReturnType, expectedType);
+	const fnType = checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody, node.paramLocations, d.arrowReturnType, expectedType);
+	// The implicit return of an expression body is a fit position like any
+	// ReturnStmt (checkReturnStmt:1229) — reseat the body through fitNode so
+	// no coercion (Maybe wrap, closure wrap) is forgotten.
+	if (d.arrowBody !== null && d.arrowBody.kind !== NodeKind.BlockStmt
+		&& fnType.typeReturn !== null && !isUnresolvedType(fnType.typeReturn)) {
+		let returnExpected = fnType.typeReturn;
+		if (d.arrowFlags === "async" || d.arrowFlags === "async_generator") {
+			const unwrapped = awaitedType(returnExpected);
+			if (unwrapped !== null) returnExpected = unwrapped;
+		}
+		d.arrowBody = fitNode(ctx, d.arrowBody, returnExpected, d.arrowBody.nodeType);
+	}
+	return fnType;
 }
 
 function checkFuncExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
