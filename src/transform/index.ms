@@ -142,7 +142,12 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerSubscript(result, ctx);
 	if (!jsBackend) { result = spanLower(result, ctx); }
 	if (!jsBackend) { result = spanParamExpand(result, ctx); }
-	if (!jsBackend) { result = lowerConditionalExpr(result, ctx); }
+	result = lowerConditionalExpr(result, ctx);
+	// Conditionally-evaluated positions (ternary arm, `&&`/`||` RHS, while-cond)
+	// are statements now, so the positional-new hoist that skipped them above can
+	// reach them. The pass empties `newArguments` when it lowers, so this second
+	// run only sees what the first one refused.
+	result = lowerNewExpr(result, ctx);
 	if (!jsBackend) { result = lowerUpdateExpr(result, ctx); }
 	if (!jsBackend) { result = lowerNullable(result, ctx); }
 	// C materializes the Maybe struct (above); JS de-materializes it — the two

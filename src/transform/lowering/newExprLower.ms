@@ -19,21 +19,27 @@
 // Classes WITH a user constructor (SymbolFlag.HasConstructor) are untouched:
 // their `new` routes to <Class>_new / the JS constructor with real parameters.
 //
-// Skipped positions (same reasoning as callHoist): a statement whose
-// expression contains a conditionally-evaluated spot (`&&`/`||` RHS, ternary
-// branch) — an eager hoist would evaluate the args unconditionally — and
-// while-loop conditions, which re-evaluate every iteration. Those keep the
-// old per-backend behavior.
+// A statement whose expression still holds a conditionally-evaluated spot
+// (`&&`/`||` RHS, ternary arm) is skipped here — an eager hoist would evaluate
+// the args unconditionally. The pass runs a SECOND time after
+// conditionalExprLower, by which point those spots are real branches and the
+// news inside them sit at ordinary statement positions; lowering empties
+// `newArguments`, so the second run only sees what the first refused.
+//
+// A while-condition re-evaluates per iteration, so it is not hoisted before the
+// loop but rewritten to `while (true) { <hoist>; if (!cond) break; body }` —
+// the same shape conditionalExprLower uses for a ternary in that position.
 
 import {
 	Node, NodeKind, NewExprData, VariableDeclData, ExprStmtData, IfStmtData,
-	ReturnStmtData, DeclKind, Type, TypeKind,
+	ReturnStmtData, WhileStmtData, DeclKind, Type, TypeKind,
 } from "../../ast/node";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { TransformContext, createTransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, replaceInExpr } from "../walker";
+import { forEachChild } from "../../ast/visitor";
 import { containsConditionalEval } from "./callHoist";
-import { makeVarDecl, makeIdentResolved, makeMember, makeAssign, makeExprStmt, makeBlock } from "../util";
+import { makeVarDecl, makeIdentResolved, makeMember, makeAssign, makeExprStmt, makeBlock, makeIf, makeUnary, makeBreak, makeBool, extractBodyStmts } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Gate =====
@@ -61,6 +67,20 @@ function hasPositionalNew(expr: Node): boolean {
 		if (positionalStruct(node) !== null) { found = true; }
 		return node;
 	});
+	return found;
+}
+
+// Statement-subtree variant — used by conditionalExprLower to skip JS statements
+// whose conditional constructs hold no positional new (those keep native ternary
+// / short-circuit on JS). Walks expr AND stmt nodes via the child visitor.
+export function nodeHasPositionalNew(node: Node): boolean {
+	let found = false;
+	function visit(n: Node): void {
+		if (found || n === null) return;
+		if (positionalStruct(n) !== null) { found = true; return; }
+		forEachChild(n, visit);
+	}
+	visit(node);
 	return found;
 }
 
@@ -156,12 +176,30 @@ function expandIf(stmt: Node, ctx: TransformContext): Node[] {
 	return hoisted;
 }
 
+// `while (COND)` re-evaluates COND per iteration, so hoisting before the loop
+// would construct once and reuse the same object. Same shape conditionalExprLower
+// uses: run on `true` and re-test at the top of the body, where the hoist belongs.
+function expandWhile(stmt: Node, ctx: TransformContext): Node[] {
+	const wd = stmt.data as WhileStmtData;
+	if (containsConditionalEval(wd.whileCondition)) return [stmt];
+	const pre: Node[] = [];
+	const cond = hoistPositionalNews(wd.whileCondition, pre, ctx);
+	if (pre.length === 0) return [stmt];
+	const loc = stmt.location;
+	pre.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
+	for (const s of extractBodyStmts(wd.whileBody)) { pre.push(s); }
+	wd.whileCondition = makeBool(true, loc);
+	wd.whileBody = makeBlock(pre, loc);
+	return [stmt];
+}
+
 function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	return match (stmt.kind) {
 		NodeKind.VariableDecl => expandVarDecl(stmt, ctx),
 		NodeKind.ExprStmt => expandExprStmt(stmt, ctx),
 		NodeKind.ReturnStmt => expandReturn(stmt, ctx),
 		NodeKind.IfStmt => expandIf(stmt, ctx),
+		NodeKind.WhileStmt => expandWhile(stmt, ctx),
 		_ => [stmt],
 	};
 }

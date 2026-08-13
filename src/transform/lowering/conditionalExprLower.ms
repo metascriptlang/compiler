@@ -33,6 +33,7 @@ import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocks, mapExprChildren, mapChildren } from "../walker";
 import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter } from "../testUtil";
+import { nodeHasPositionalNew } from "./newExprLower";
 
 // ===== Hoist (top-down) =====
 
@@ -109,6 +110,11 @@ function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContex
 // BLOCKS — so the direct shapes must hoist from their ternary's CONDITION
 // themselves (the generated IfStmt is never re-expanded).
 function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
+	// On JS, ternaries and short-circuits are native and need no statement
+	// rewrite — UNLESS one holds a positional `new`, which cannot stay in a JS
+	// expression after newExprLower refused it. Gate the whole statement on
+	// that, so `const x = true ? 1 : 2` stays `(true ? 1 : 2)` on JS.
+	if (ctx.jsBackend && !nodeHasPositionalNew(stmt)) return [stmt];
 	const loc = stmt.location;
 	match (stmt.kind) {
 		NodeKind.VariableDecl => {
