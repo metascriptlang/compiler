@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType } from "../../checker/types";
+import { isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -1822,6 +1822,35 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				return;
 			}
 			ctx.results.push(inner);
+			return;
+		}
+		// Union → member projection (narrowUnionToVariant): stamped slot + non-union
+		// target selects the active slot from the union lvalue the inner expression
+		// still renders as. A pointer-surface member is re-materialized as a heap
+		// cell: the by-value slot has no out-of-band RC header, so `&slot` would
+		// let refcounting stomp neighbouring union bytes.
+		const projSlot = ((node.flags >> 16) & 65535) as int32;
+		if (kind === NodeKind.HiddenSubConv && projSlot > 0 && d.convType.kind !== TypeKind.Union) {
+			const pvi = projSlot - 1;
+			const memberValue = unwrapPointerLikeForVariant(d.convType);
+			if (memberValue !== null && memberValue !== d.convType && memberValue.kind === TypeKind.Struct) {
+				const cName = getTypeDesc(g, memberValue);
+				ensureTypeInfoDef(g, cName, memberValue);
+				g.labels += 1;
+				const tmp = `_proj${g.labels}_`;
+				emitProcLocalsLine(p, `${cName}* ${tmp};`);
+				emitStmtsLine(p, `${tmp} = ${genAllocTyped(g, cName)};`);
+				if (memberValue.typeName !== "" && hasAsgnFlag(memberValue)) {
+					const hookName = cName + "Copy";
+					ensureDrcProto(g, hookName);
+					emitStmtsLine(p, `${hookName}(${tmp}, &((${inner}).v${pvi}));`);
+				} else {
+					emitStmtsLine(p, `*${tmp} = (${inner}).v${pvi};`);
+				}
+				ctx.results.push(tmp);
+				return;
+			}
+			ctx.results.push(`(${inner}).v${pvi}`);
 			return;
 		}
 		ctx.results.push(`((${targetC})(${inner}))`);
