@@ -692,6 +692,27 @@ function writeDepsFile(graph: ModuleGraph, entryPath: string, outDir: string): v
 // ===== JS Build =====
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
+	// Split mode is what a bundler plugin consumes: one ES module per source
+	// module, imports already relative inside the tree, nothing executed.
+	if (opts.splitModules) {
+		const splitRoot = opts.outputPath !== "" ? opts.outputPath : (outputDir !== "" ? outputDir : "out/esm");
+		const t0 = performance.now();
+		const entryCanon = canonicalModulePath(entryPath);
+		const tree = emitJSModuleTree(entryCanon, opts, false, splitRoot);
+		// The source→output mapping is the compiler's to state: a bundler
+		// plugin that re-derives it has to replicate project-root discovery
+		// exactly, and silently resolves nothing when the two disagree.
+		let manifest = "{\n  \"entry\": \"" + escapeJSString(entryCanon) + "\",\n  \"modules\": [\n";
+		for (let i = 0; i < tree.modulePaths.length; i += 1) {
+			const sep = i + 1 < tree.modulePaths.length ? "," : "";
+			manifest = `${manifest}    { "source": "${escapeJSString(tree.modulePaths[i])}", "out": "${escapeJSString(tree.moduleOutRels[i])}" }${sep}\n`;
+		}
+		manifest = `${manifest}  ]\n}\n`;
+		writeOutput(`${splitRoot}/_manifest.json`, manifest);
+		if (opts.showTime) printTiming("emitted", t0);
+		console.log(success(`${tree.modulePaths.length} module(s) → ${bold(splitRoot)}`));
+		return;
+	}
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
@@ -1679,8 +1700,9 @@ export interface JsTreeResult {
 	testFuncs: string[][];
 }
 
-function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boolean): JsTreeResult {
+function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boolean, outRootOverride: string): JsTreeResult {
 	setTargetSizes(8, 8);
+	registerCoreParsers();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
 
@@ -1688,8 +1710,15 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	// mirror the source tree, std/runtime modules land under _std/, anything
 	// outside both roots under _ext/. Every emitted import is relative inside
 	// the tree, so plain node can execute the directory from anywhere.
-	const projectRoot = opts.projectRoot !== "" ? opts.projectRoot : dirname(filePath);
-	const outRoot = `${projectRoot}/${outDirForMode(opts.mode)}`;
+	// findProjectRoot resolves through symlinks (/tmp → /private/tmp on macOS)
+	// while graph module paths keep the spelling the entry was given, so the
+	// configured root can fail to prefix its own entry. Anchor on the entry
+	// when that happens, otherwise every module lands in the _ext fallback.
+	let projectRoot = opts.projectRoot !== "" ? opts.projectRoot : dirname(filePath);
+	if (!filePath.startsWith(projectRoot.endsWith("/") ? projectRoot : `${projectRoot}/`)) {
+		projectRoot = dirname(filePath);
+	}
+	const outRoot = outRootOverride !== "" ? outRootOverride : `${projectRoot}/${outDirForMode(opts.mode)}`;
 	const stdRoot = config.stdPath;
 
 	const outRelKeys: string[] = [];
@@ -1829,7 +1858,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	filePath = canonicalModulePath(filePath);
 	const t0 = performance.now();
-	const tree = emitJSModuleTree(filePath, opts, false);
+	const tree = emitJSModuleTree(filePath, opts, false, "");
 
 	if (opts.showTime) printTiming("compiled", t0);
 
@@ -1923,7 +1952,7 @@ function jsTestHarnessSource(): string {
 export function cmdTestJS(filePath: string, opts: CliOptions): void {
 	filePath = canonicalModulePath(filePath);
 	const t0 = performance.now();
-	const tree = emitJSModuleTree(filePath, opts, true);
+	const tree = emitJSModuleTree(filePath, opts, true, "");
 
 	const harnessRel = "_test/harness.js";
 	ensureDir(`${tree.outRoot}/_test`);
