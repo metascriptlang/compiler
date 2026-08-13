@@ -1746,25 +1746,37 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 
 		const macroExpanded = expandMacros(program, ctx);
 		exitOnCheckerErrors(ctx, modPath, mod.source);
-		const unitProgram = evaluateComptimeBlocks(macroExpanded);
-
-		// Caller-side generic instantiation (P0 emit contract): everything
-		// pending after this module's check was requested by it — define it
-		// here. Restamping modulePath makes the definition local (both the
-		// mangled name and import derivation key off it); later modules
-		// reusing the instance import it from the first requester through
-		// the forced-export pass.
-		for (const instNode of drainPendingInstances()) {
-			if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
-				instNode.nodeType = instNode.resolvedSym.symbolType;
-			}
-			if (instNode.resolvedSym !== null) { instNode.resolvedSym.modulePath = modPath; }
-			(unitProgram.data as ProgramData).programStmts.push(instNode);
-		}
 
 		unitPaths.push(modPath);
-		unitPrograms.push(unitProgram);
+		unitPrograms.push(evaluateComptimeBlocks(macroExpanded));
 		unitCtxs.push(ctx);
+	}
+
+	// A generic instance belongs to the module that DECLARED the generic, and
+	// its emitted name says so. Placing the body anywhere else — e.g. in the
+	// module that first asked for it — leaves the name pointing at one module
+	// and the definition sitting in another, which on this backend becomes a
+	// module importing a symbol from itself. Same routing as the bundle path.
+	for (const instNode of drainPendingInstances()) {
+		if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
+			instNode.nodeType = instNode.resolvedSym.symbolType;
+		}
+		let owner = "";
+		if (instNode.resolvedSym !== null && instNode.resolvedSym.modulePath !== "") {
+			owner = instNode.resolvedSym.modulePath;
+		}
+		let targetIdx: int32 = -1;
+		for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
+			if (unitPaths[pi] === owner) { targetIdx = pi; }
+		}
+		if (targetIdx < 0) {
+			for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
+				if (unitPaths[pi] === filePath) { targetIdx = pi; }
+			}
+		}
+		if (targetIdx >= 0) {
+			(unitPrograms[targetIdx].data as ProgramData).programStmts.push(instNode);
+		}
 	}
 
 	// Export-name surface per module — jsMultiFileName keys public naming off
