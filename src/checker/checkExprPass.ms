@@ -2496,6 +2496,57 @@ function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): Node {
 	return convNode;
 }
 
+// Declared (pre-narrowing) tagged union of a reference — the checker-side twin
+// of codegen's duDeclaredUnionOfObject. Null-member and all-strlit unions are
+// excluded for the same repr reasons as primitiveMemberIndexInUnion.
+function declaredTagUnionOf(expr: Node): Type | null {
+	let walk: Node = expr;
+	while (walk !== null && walk.kind === NodeKind.TypeAssertion) {
+		walk = (walk.data as TypeAssertionData).asExpr;
+	}
+	if (walk === null || walk.kind !== NodeKind.Identifier || walk.resolvedSym === null) return null;
+	const t = walk.resolvedSym.symbolType;
+	if (t === null || t.kind !== TypeKind.Union || t.typeChildren === null) return null;
+	if (unwrapRefNullUnion(t) !== null) return null;
+	let allStrLit = true;
+	for (const child of t.typeChildren) {
+		if (child === null || child.kind === TypeKind.Null) return null;
+		if (child.kind !== TypeKind.StringLiteral) allStrLit = false;
+	}
+	if (allStrLit) return null;
+	return t;
+}
+
+// The projection twin of widenVariantToUnion: a flow-narrowed reference whose
+// DECLARED type is a tagged union types as the member, but its C storage is
+// still the union struct — codegen needs a node selecting the active slot.
+// Same stamp convention (+1 so 0 means "not set"); the emitter tells the two
+// directions apart by convType: union = inject, member = project.
+function narrowUnionToVariant(expr: Node, exprType: Type): Node {
+	if (exprType.kind === TypeKind.Union) return null as unknown as Node;
+	const declared = declaredTagUnionOf(expr);
+	if (declared === null) return null as unknown as Node;
+	let vi: int32 = -1;
+	let ci: int32 = 0;
+	for (const child of declared.typeChildren) {
+		if (child === exprType) { vi = ci; break; }
+		ci += 1;
+	}
+	if (vi < 0) {
+		const value = unwrapRef(exprType);
+		vi = value !== null && value.kind === TypeKind.Struct
+			? variantIndexInUnion(declared, value)
+			: primitiveMemberIndexInUnion(declared, exprType);
+	}
+	if (vi < 0) return null as unknown as Node;
+	const member = declared.typeChildren[vi];
+	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
+	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: member }, convTok);
+	convNode.nodeType = member;
+	convNode.flags = convNode.flags | NodeFlag.Sem | (((vi + 1) as int32) << 16);
+	return convNode;
+}
+
 export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
 	if (formal === null || exprType === null) return expr;
 	if (formal.kind === TypeKind.Unknown || isUnresolvedType(formal)) {
@@ -2566,6 +2617,10 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		&& unwrapRefNullUnion(formal) === null) {
 		const widened = widenVariantToUnion(expr, formal, exprType);
 		if (widened !== null as unknown as Node) return widened;
+	}
+	if (formal.kind !== TypeKind.Union && exprType.kind !== TypeKind.Union) {
+		const projected = narrowUnionToVariant(expr, exprType);
+		if (projected !== null as unknown as Node) return projected;
 	}
 	if (formal.kind === exprType.kind && !isReinterpretUnsafe(exprType, formal)) return expr;
 	if ((exprType.kind === TypeKind.CString && formal.kind === TypeKind.String)
@@ -3538,6 +3593,10 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				if (paramType.kind === TypeKind.Union && pi < d.arguments.length && argTypes[pi] !== null) {
 					const uw = widenVariantToUnion(d.arguments[pi], paramType, argTypes[pi]);
 					if (uw !== null as unknown as Node) d.arguments[pi] = uw;
+				}
+				if (paramType.kind !== TypeKind.Union && pi < d.arguments.length && argTypes[pi] !== null) {
+					const pj = narrowUnionToVariant(d.arguments[pi], argTypes[pi]);
+					if (pj !== null as unknown as Node) d.arguments[pi] = pj;
 				}
 				// Sendable check: actor method args must be safe to cross boundary
 				if (isActorMethodCall && pi < d.arguments.length) {
