@@ -36,11 +36,15 @@ export class JSGenerator {
 	modExportVals: string[][];
 	neededModules: string[];    // cross-module references collected during emission
 	neededNames: string[][];
+	isTestBuild: boolean;
+	testNames: string[];        // parallel with testFuncs: declared name → wrapper fn
+	testFuncs: string[];
 }
 
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", jsBigInt64: false, staticSlots: [],
-		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], neededModules: [], neededNames: [] };
+		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], neededModules: [], neededNames: [],
+		isTestBuild: false, testNames: [], testFuncs: [] };
 }
 
 export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): void {
