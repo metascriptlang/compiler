@@ -120,8 +120,12 @@ function lowerGuardedTernary(expr: Node, hoisted: Node[], ctx: TransformContext)
 	letDecl.resolvedSym = t;
 	if (expr.nodeType !== null) { letDecl.nodeType = expr.nodeType; }
 	hoisted.push(letDecl);
-	const thenStmt = makeExprStmt(makeAssign(makeIdentResolved(t, loc), cd.ternaryConsequent, loc), loc);
-	const elseStmt = makeExprStmt(makeAssign(makeIdentResolved(t, loc), cd.ternaryAlternate, loc), loc);
+	const thenStmt = (cd.ternaryConsequent.nodeType !== null && cd.ternaryConsequent.nodeType.kind === TypeKind.Never)
+		? makeExprStmt(cd.ternaryConsequent, loc)
+		: makeExprStmt(makeAssign(makeIdentResolved(t, loc), cd.ternaryConsequent, loc), loc);
+	const elseStmt = (cd.ternaryAlternate.nodeType !== null && cd.ternaryAlternate.nodeType.kind === TypeKind.Never)
+		? makeExprStmt(cd.ternaryAlternate, loc)
+		: makeExprStmt(makeAssign(makeIdentResolved(t, loc), cd.ternaryAlternate, loc), loc);
 	hoisted.push(makeIf(cd.ternaryCondition, makeBlock([thenStmt], loc), makeBlock([elseStmt], loc), loc));
 	return makeIdentResolved(t, loc);
 }
@@ -594,8 +598,12 @@ function moveInto(node: Node, mode: string, varName: string, assignSym: Symbol |
 	return emitResult(node, mode, varName, assignSym, loc);
 }
 
-// Emit the final result: either return expr or varName = expr
+// Emit the final result: either return expr or varName = expr.
+// A noreturn arm yields no value (Nim endsInNoReturn) — emit the bare call.
 function emitResult(expr: Node, mode: string, varName: string, assignSym: Symbol | null, loc: SourceLocation): Node {
+	if (expr.nodeType !== null && expr.nodeType.kind === TypeKind.Never) {
+		return makeExprStmt(expr, loc);
+	}
 	if (mode === "return") {
 		return makeReturn(expr, loc);
 	}

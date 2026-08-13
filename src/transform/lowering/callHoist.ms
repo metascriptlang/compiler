@@ -156,6 +156,10 @@ function altChainHasFreshCond(node: Node): boolean {
 function assignBlock(sym: Symbol, ty: Type, lowered: CondLower, loc: SourceLocation): Node {
 	const stmts: Node[] = [];
 	for (const s of lowered.pre) { stmts.push(s); }
+	if (lowered.expr.nodeType !== null && lowered.expr.nodeType.kind === TypeKind.Never) {
+		stmts.push(makeExprStmt(lowered.expr, loc));
+		return makeBlock(stmts, loc);
+	}
 	const lhs = makeIdentResolved(sym, loc);
 	lhs.nodeType = ty;
 	stmts.push(makeExprStmt(makeAssign(lhs, lowered.expr, loc), loc));

@@ -42,7 +42,9 @@ function lowerNullishNode(node: Node): Node {
 		c.nodeType = val.nodeType;
 		return c;
 	}
-	return makeConditional(cond, d.left, d.right, loc);
+	const lowered = makeConditional(cond, d.left, d.right, loc);
+	if (node.nodeType !== null) lowered.nodeType = node.nodeType;
+	return lowered;
 }
 
 // ===== Tests =====

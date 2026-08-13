@@ -659,12 +659,15 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 // move's zero — safe as-is, must NOT be retro-hoisted (a rewrite is use-before-assign).
 // The enclosing statement's stmtBorrowReads must survive the nested clear: save/restore.
 function processBranchAssign(tmpName: string, tmpSym: Symbol, resultType: Type, branchExpr: Node, dctx: DrcContext, loc: SourceLocation): Node[] {
-	const lhs = makeIdentResolved(tmpSym, loc);
-	lhs.nodeType = resultType;
-	const assign = makeExprStmt(makeAssign(lhs, branchExpr, loc), loc);
+	let stmt = makeExprStmt(branchExpr, loc);
+	if (branchExpr.nodeType === null || branchExpr.nodeType.kind !== TypeKind.Never) {
+		const lhs = makeIdentResolved(tmpSym, loc);
+		lhs.nodeType = resultType;
+		stmt = makeExprStmt(makeAssign(lhs, branchExpr, loc), loc);
+	}
 	const savedReads = dctx.stmtBorrowReads;
 	dctx.stmtBorrowReads = [];
-	const processed = processStmtList([assign], dctx, loc);
+	const processed = processStmtList([stmt], dctx, loc);
 	dctx.stmtBorrowReads = savedReads;
 	return processed;
 }
@@ -1142,8 +1145,12 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 				thenLhs.nodeType = dest.nodeType;
 				const elseLhs = makeVarRef(destName, destSym, loc);
 				elseLhs.nodeType = dest.nodeType;
-				const thenAssign = makeExprStmt(makeAssign(thenLhs, cd.ternaryConsequent, loc), loc);
-				const elseAssign = makeExprStmt(makeAssign(elseLhs, cd.ternaryAlternate, loc), loc);
+				const thenAssign = (cd.ternaryConsequent.nodeType !== null && cd.ternaryConsequent.nodeType.kind === TypeKind.Never)
+					? makeExprStmt(cd.ternaryConsequent, loc)
+					: makeExprStmt(makeAssign(thenLhs, cd.ternaryConsequent, loc), loc);
+				const elseAssign = (cd.ternaryAlternate.nodeType !== null && cd.ternaryAlternate.nodeType.kind === TypeKind.Never)
+					? makeExprStmt(cd.ternaryAlternate, loc)
+					: makeExprStmt(makeAssign(elseLhs, cd.ternaryAlternate, loc), loc);
 				const savedReads = dctx.stmtBorrowReads;
 				dctx.stmtBorrowReads = [];
 				const thenProcessed = processStmtList([thenAssign], dctx, loc);

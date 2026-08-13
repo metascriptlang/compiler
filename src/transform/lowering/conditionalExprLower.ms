@@ -27,7 +27,7 @@
 // Runs AFTER optionalChain/nullishCoalesce (which produce ternaries) and
 // lowerOperators (so overloaded struct-returning operators are CallExprs here).
 
-import { Node, NodeKind, DeclKind, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, MemberExprData, HiddenDerefData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, MemberExprData, HiddenDerefData } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocks, mapExprChildren, mapChildren } from "../walker";
@@ -35,6 +35,15 @@ import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, ma
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter } from "../testUtil";
 
 // ===== Hoist (top-down) =====
+
+// A noreturn arm never yields a value (Nim endsInNoReturn): emit the bare call,
+// not an assignment — its result type has no C carrier to assign from.
+function branchValueStmt(target: Node, branch: Node, loc: SourceLocation): Node {
+	if (branch.nodeType !== null && branch.nodeType.kind === TypeKind.Never) {
+		return makeExprStmt(branch, loc);
+	}
+	return makeExprStmt(makeAssign(target, branch, loc), loc);
+}
 
 // Replace every ternary at an unconditionally-evaluated position within `expr`
 // by a temp, pushing `let $tern; if (cond) $tern = a; else $tern = b;` onto
@@ -60,8 +69,8 @@ function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Nod
 		letDecl.resolvedSym = t;
 		if (expr.nodeType !== null) { letDecl.nodeType = expr.nodeType; }
 		hoisted.push(letDecl);
-		const thenStmt = makeExprStmt(makeAssign(makeIdentResolved(t, loc), cd.ternaryConsequent, loc), loc);
-		const elseStmt = makeExprStmt(makeAssign(makeIdentResolved(t, loc), cd.ternaryAlternate, loc), loc);
+		const thenStmt = branchValueStmt(makeIdentResolved(t, loc), cd.ternaryConsequent, loc);
+		const elseStmt = branchValueStmt(makeIdentResolved(t, loc), cd.ternaryAlternate, loc);
 		hoisted.push(makeIf(cd.ternaryCondition, makeBlock([thenStmt], loc), makeBlock([elseStmt], loc), loc));
 		return makeIdentResolved(t, loc);
 	}
@@ -158,8 +167,8 @@ function lowerTernaryInVar(stmt: Node, ctx: TransformContext): Node[] {
 	thenTarget.resolvedSym = stmt.resolvedSym;
 	const elseTarget = makeIdent(vd.declName, loc);
 	elseTarget.resolvedSym = stmt.resolvedSym;
-	const thenStmt = makeExprStmt(makeAssign(thenTarget, cd.ternaryConsequent, loc), loc);
-	const elseStmt = makeExprStmt(makeAssign(elseTarget, cd.ternaryAlternate, loc), loc);
+	const thenStmt = branchValueStmt(thenTarget, cd.ternaryConsequent, loc);
+	const elseStmt = branchValueStmt(elseTarget, cd.ternaryAlternate, loc);
 	result.push(makeIf(cd.ternaryCondition, makeBlock([thenStmt], loc), makeBlock([elseStmt], loc), loc));
 	return result;
 }
@@ -171,8 +180,12 @@ function lowerTernaryInReturn(stmt: Node, ctx: TransformContext): Node[] {
 	const loc = stmt.location;
 	const result: Node[] = [];
 	cd.ternaryCondition = hoistTernaries(cd.ternaryCondition, result, ctx);
-	const thenStmt = makeReturn(cd.ternaryConsequent, loc);
-	const elseStmt = makeReturn(cd.ternaryAlternate, loc);
+	const thenStmt = (cd.ternaryConsequent.nodeType !== null && cd.ternaryConsequent.nodeType.kind === TypeKind.Never)
+		? makeExprStmt(cd.ternaryConsequent, loc)
+		: makeReturn(cd.ternaryConsequent, loc);
+	const elseStmt = (cd.ternaryAlternate.nodeType !== null && cd.ternaryAlternate.nodeType.kind === TypeKind.Never)
+		? makeExprStmt(cd.ternaryAlternate, loc)
+		: makeReturn(cd.ternaryAlternate, loc);
 	result.push(makeIf(cd.ternaryCondition, makeBlock([thenStmt], loc), makeBlock([elseStmt], loc), loc));
 	return result;
 }
