@@ -728,7 +728,7 @@ function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
 	return createUnion(members);
 }
 
-function unionOfTypes(types: Type[], parent: Type | null): Type {
+export function unionOfTypes(types: Type[], parent: Type | null): Type {
 	if (types.length === 0) return inferredType();
 	if (types.length === 1) return types[0];
 	const uniq: Type[] = [];

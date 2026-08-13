@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { inferredType, noneType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, isMaybeWrappable, createMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct } from "./types";
+import { inferredType, noneType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed, getCtorParamTypes } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
@@ -25,7 +25,7 @@ import {
 	saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState,
 } from "./initTracker";
 import { callInstantiateGeneric } from "./checkerCallbacks";
-import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
+import { getFlowTypeOfReference, isDefinitelyNonNullAt, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
 
@@ -898,7 +898,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.nodeType = isRelational ? booleanType() : ((maybeSide.typeReturn !== null) ? maybeSide.typeReturn : inferredType());
 				return;
 			}
-			node.nodeType = inferBinaryOp(d.operator, effLeft, effRight); return;
+			node.nodeType = inferBinaryOp(d.operator, effLeft, effRight);
+			if (d.operator === "??" && node.nodeType !== null && isMaybeType(node.nodeType)) {
+				d.right = fitJoinedBranch(ctx, d.right, node.nodeType);
+			}
+			return;
 		},
 		NodeKind.UnaryExpr => {
 			const d = node.data as UnaryExprData;
@@ -1554,6 +1558,20 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 							node.location.line, node.location.column);
 					}
 				}
+				if (elemExpected === null && d.elements.length > 1
+					&& !(elemType !== null && isAwaitable(elemType))) {
+					const elemJoinTypes: Type[] = [];
+					for (const el of d.elements) elemJoinTypes.push(el.nodeType);
+					const joinedElem = joinBranchTypes(elemJoinTypes);
+					if (!isUnresolvedType(joinedElem)) {
+						let fi = 0;
+						while (fi < d.elements.length) {
+							d.elements[fi] = fitJoinedBranch(ctx, d.elements[fi], joinedElem);
+							fi = fi + 1;
+						}
+						elemType = joinedElem;
+					}
+				}
 				// Reference parity (semArrayConstr): error only on too-many elements.
 				// Too-few is allowed at literal level; type compatibility catches mismatches.
 				if (arrExpected !== null && arrExpected.kind === TypeKind.SizedArray) {
@@ -1586,10 +1604,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			} else {
 				retypeEmptyArrayBranch(d.ternaryConsequent, d.ternaryAlternate.nodeType);
 				retypeEmptyArrayBranch(d.ternaryAlternate, d.ternaryConsequent.nodeType);
-				const joined = joinNullTernary(d.ternaryConsequent.nodeType, d.ternaryAlternate.nodeType);
-				if (joined !== null) {
-					d.ternaryConsequent = fitNode(ctx, d.ternaryConsequent, joined, d.ternaryConsequent.nodeType);
-					d.ternaryAlternate = fitNode(ctx, d.ternaryAlternate, joined, d.ternaryAlternate.nodeType);
+				const joined = joinBranchTypes([d.ternaryConsequent.nodeType, d.ternaryAlternate.nodeType]);
+				if (!isUnresolvedType(joined)) {
+					d.ternaryConsequent = fitJoinedBranch(ctx, d.ternaryConsequent, joined);
+					d.ternaryAlternate = fitJoinedBranch(ctx, d.ternaryAlternate, joined);
 					node.nodeType = joined; return;
 				}
 			}
@@ -1862,6 +1880,92 @@ function promoteNumeric(a: Type, b: Type): Type {
 	return float64Type();
 }
 
+function widenBranchLiteral(t: Type): Type {
+	if (t.kind === TypeKind.StringLiteral) return stringType();
+	if (t.kind === TypeKind.BooleanLiteral) return booleanType();
+	return t;
+}
+
+function branchContributesToJoin(t: Type | null): boolean {
+	return t !== null && !isUnresolvedType(t)
+		&& t.kind !== TypeKind.Never && t.kind !== TypeKind.Void
+		&& t.kind !== TypeKind.Error;
+}
+
+export function joinBranchTypes(types: Type[]): Type {
+	const prepared: Type[] = [];
+	for (const t of types) {
+		if (!branchContributesToJoin(t)) continue;
+		const w = widenBranchLiteral(t);
+		let dup = false;
+		for (const p of prepared) {
+			if (p === w || sameType(p, w)) { dup = true; break; }
+		}
+		if (!dup) prepared.push(w);
+	}
+	if (prepared.length === 0) return inferredType();
+	if (prepared.length === 1) return prepared[0];
+	let allNumeric = true;
+	for (const p of prepared) {
+		if (!isNumeric(p) && p.kind !== TypeKind.Enum) { allNumeric = false; break; }
+	}
+	if (allNumeric) {
+		let acc = prepared[0].kind === TypeKind.Enum ? int32Type() : prepared[0];
+		let ni = 1;
+		while (ni < prepared.length) {
+			let b = prepared[ni];
+			if (b.kind === TypeKind.Enum) b = int32Type();
+			acc = (isIntegerType(acc) && isIntegerType(b)) ? widenIntegers(acc, b) : promoteNumeric(acc, b);
+			ni = ni + 1;
+		}
+		return acc;
+	}
+	return canonicalizeBranchJoin(unionOfTypes(prepared, null));
+}
+
+function canonicalizeBranchJoin(t: Type): Type {
+	if (t === null || t.kind !== TypeKind.Union) return t;
+	let sawNull = false;
+	const nonNull: Type[] = [];
+	for (const m of t.typeChildren) {
+		if (m === null) continue;
+		if (m.kind === TypeKind.Null) { sawNull = true; continue; }
+		let member = m;
+		if (isMaybeType(m) && m.typeReturn !== null) {
+			sawNull = true;
+			member = m.typeReturn;
+		}
+		let dup = false;
+		for (const p of nonNull) {
+			if (p === member || sameType(p, member)) { dup = true; break; }
+		}
+		if (!dup) nonNull.push(member);
+	}
+	if (!sawNull) return t;
+	if (nonNull.length === 0) return nullType();
+	if (nonNull.length === 1) {
+		if (isMaybeWrappable(nonNull[0])) return createMaybeType(nonNull[0]);
+		return createUnion([nonNull[0], nullType()]);
+	}
+	let allPrim = true;
+	for (const m of nonNull) {
+		if (!isPrimitiveUnionMember(m)) { allPrim = false; break; }
+	}
+	if (allPrim) return createMaybeType(createUnion(nonNull));
+	const rebuilt: Type[] = [];
+	for (const m of nonNull) rebuilt.push(m);
+	rebuilt.push(nullType());
+	return createUnion(rebuilt);
+}
+
+export function fitJoinedBranch(ctx: CheckerContext, expr: Node, joined: Type | null): Node {
+	if (expr === null || joined === null || isUnresolvedType(joined)) return expr;
+	const bt = expr.nodeType;
+	if (bt === null || bt.kind === TypeKind.Never || bt.kind === TypeKind.Void || isUnresolvedType(bt)) return expr;
+	if (bt === joined || sameType(bt, joined)) return expr;
+	return fitNode(ctx, expr, joined, bt);
+}
+
 // Reference parity (sigmatch.nim:2596 `localConvMatch`, :2179 `implicitConv`): a
 // stringification the call site needs is planted DURING checking, so it is bound
 // by the same overload resolution a hand-written `x.toString()` gets and reaches
@@ -1924,7 +2028,17 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			return int32Type();
 		},
 		"??" => {
-			if (isMaybeType(leftType) && leftType.typeReturn !== null) return leftType.typeReturn;
+			if (isMaybeType(leftType) && leftType.typeReturn !== null) {
+				const joined = joinBranchTypes([leftType.typeReturn, rightType]);
+				return isUnresolvedType(joined) ? leftType.typeReturn : joined;
+			}
+			if (leftType !== null && leftType.kind === TypeKind.Union) {
+				const ptrMember = unwrapRefNullUnion(leftType);
+				if (ptrMember !== null) {
+					const joined = joinBranchTypes([ptrMember, rightType]);
+					return isUnresolvedType(joined) ? leftType : joined;
+				}
+			}
 			return leftType;
 		},
 		_ => inferredType(),
@@ -2017,19 +2131,6 @@ function synthCStringConv(expr: Node, cstr: Type): Node {
 	conv.nodeType = cstr;
 	conv.flags = conv.flags | NodeFlag.Sem;
 	return conv;
-}
-
-function joinNullTernary(a: Type | null, b: Type | null): Type | null {
-	if (a === null || b === null) return null;
-	const aNull = a.kind === TypeKind.Null;
-	const bNull = b.kind === TypeKind.Null;
-	if (aNull === bNull) return null;
-	let t = aNull ? b : a;
-	if (t.kind === TypeKind.StringLiteral) t = stringType();
-	if (isMaybeType(t)) return t;
-	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr || t.kind === TypeKind.Unknown) return t;
-	if (isMaybeWrappable(t)) return createMaybeType(t);
-	return null;
 }
 
 function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
@@ -2394,6 +2495,7 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		}
 		return expr;
 	}
+	if (exprType.kind === TypeKind.Never) return expr;
 	// Direct function → closure auto-wrap (Reference parity: nkHiddenSubConv → nkClosure).
 	// When a named function (CcDefault) flows into a closure-typed slot (CcClosure),
 	// wrap as `{fn: expr, env: null}` ObjectLiteral with NodeFlag.Closure.
@@ -5539,6 +5641,7 @@ function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 	const oldState = saveInitState(ctx.initTracker);
 	const branchInits: string[][] = [];
 	const branchBreaks: BreakState[] = [];
+	const branchBodyTypes: Type[] = [];
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;
 		restoreInitState(ctx.initTracker, oldState);
@@ -5599,9 +5702,15 @@ function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchBreaks.push(breaksBlock(cd.caseBody));
+		branchBodyTypes.push(bodyType);
 		if (isUnresolvedType(returnType) && !isUnresolvedType(bodyType)) {
 			returnType = bodyType;
 		}
+	}
+	let matchJoined: Type | null = null;
+	if (expectedType === null || isUnresolvedType(expectedType)) {
+		const j = joinBranchTypes(branchBodyTypes);
+		if (!isUnresolvedType(j)) { matchJoined = j; returnType = j; }
 	}
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;
@@ -5611,11 +5720,15 @@ function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				const last = bd.statements[bd.statements.length - 1];
 				if (last.kind === NodeKind.ReturnStmt) {
 					const rd = last.data as ReturnStmtData;
-					if (rd.argument !== null) retypeEmptyArrayBranch(rd.argument, returnType);
+					if (rd.argument !== null) {
+						retypeEmptyArrayBranch(rd.argument, returnType);
+						if (matchJoined !== null) rd.argument = fitJoinedBranch(ctx, rd.argument, matchJoined);
+					}
 				}
 			}
 		} else {
 			retypeEmptyArrayBranch(cd.caseBody, returnType);
+			if (matchJoined !== null) cd.caseBody = fitJoinedBranch(ctx, cd.caseBody, matchJoined);
 		}
 	}
 	checkDuplicatePatterns(ctx, d.matchCases);
@@ -5744,6 +5857,8 @@ export function checkDuplicatePatterns(ctx: CheckerContext, cases: Node[]): void
 export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[], returnTypeAnnotation: string, expectedType: Type | null): Type {
 	const savedReturn = ctx.inferredReturn;
 	ctx.inferredReturn = inferredType();
+	const savedReturnStmts = ctx.inferredReturnStmts;
+	ctx.inferredReturnStmts = [];
 	const savedMatchDepth = ctx.matchExprDepth;
 	ctx.matchExprDepth = 0;
 
@@ -5848,7 +5963,12 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	ctx.matchExprDepth = savedMatchDepth;
 
 	const inferredRet = ctx.inferredReturn;
+	for (const rs of ctx.inferredReturnStmts) {
+		const rsd = rs.data as ReturnStmtData;
+		if (rsd.argument !== null) rsd.argument = fitJoinedBranch(ctx, rsd.argument, inferredRet);
+	}
 	ctx.inferredReturn = savedReturn;
+	ctx.inferredReturnStmts = savedReturnStmts;
 
 	const types: Type[] = [];
 	let ti = 0;

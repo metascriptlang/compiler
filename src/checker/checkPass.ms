@@ -1,7 +1,7 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { inferredType, noneType, isUnresolvedType, charType, float64Type, voidType, nullType, createFunction, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
@@ -29,7 +29,7 @@ import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference } from "./flow";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
-import { checkExpr, checkEnumExhaustiveness, checkDuplicatePatterns, fitNode, estimateExprEndCol } from "./checkExprPass";
+import { checkExpr, checkEnumExhaustiveness, checkDuplicatePatterns, fitNode, estimateExprEndCol, joinBranchTypes, fitJoinedBranch } from "./checkExprPass";
 import { registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { forEachChild } from "../ast/visitor";
@@ -544,6 +544,8 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	// Save/restore inferredReturn for nested functions
 	const savedReturn = ctx.inferredReturn;
 	ctx.inferredReturn = fnType.typeReturn;
+	const savedReturnStmts = ctx.inferredReturnStmts;
+	ctx.inferredReturnStmts = [];
 
 	checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations);
 
@@ -553,6 +555,10 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 		&& isUnresolvedType(sym.symbolType.typeReturn)
 		&& ctx.inferredReturn.kind !== TypeKind.Inferred) {
 		sym.symbolType.typeReturn = ctx.inferredReturn;
+		for (const rs of ctx.inferredReturnStmts) {
+			const rsd = rs.data as ReturnStmtData;
+			if (rsd.argument !== null) rsd.argument = fitJoinedBranch(ctx, rsd.argument, ctx.inferredReturn);
+		}
 	}
 
 	// Async functions: ensure the effective return type is Promise<T>.
@@ -577,6 +583,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	}
 
 	ctx.inferredReturn = savedReturn;
+	ctx.inferredReturnStmts = savedReturnStmts;
 	sym.state = SymbolState.Checked;
 }
 
@@ -1178,7 +1185,19 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 			&& ctx.currentFunction.symbolType.typeReturn !== null) {
 			const declared = ctx.currentFunction.symbolType.typeReturn;
 			d.argument.nodeType = nullType();
-			if (!isUnresolvedType(declared) && !isAssignable(nullType(), declared)) {
+			if (isUnresolvedType(declared)) {
+				if (ctx.matchExprDepth === 0 && ctx.inferredReturn !== null) {
+					if (ctx.inferredReturn.kind === TypeKind.Inferred) {
+						ctx.inferredReturn = nullType();
+					} else if (ctx.inferredReturn.kind !== TypeKind.Null) {
+						const joinedRet = joinBranchTypes([ctx.inferredReturn, nullType()]);
+						if (!isUnresolvedType(joinedRet)) ctx.inferredReturn = joinedRet;
+					}
+					ctx.inferredReturnStmts.push(node);
+				}
+				return;
+			}
+			if (!isAssignable(nullType(), declared)) {
 				addError(ctx,
 					"Return type mismatch in '" + ctx.currentFunction.name + "': expected " + formatTypeBrief(declared) + ", got null",
 					node.location.line, node.location.column);
@@ -1232,9 +1251,16 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	// Re-read the post-fitNode type so coercion-protocol substitutions
 	// (e.g. `expr` → `expr.asNumber()`) are reflected in downstream checks.
 	const finalRetType = d.argument !== null ? d.argument.nodeType : retType;
-	// Track inferred return type (first return wins)
-	if (ctx.matchExprDepth === 0 && ctx.inferredReturn !== null && ctx.inferredReturn.kind === TypeKind.Inferred) {
-		ctx.inferredReturn = finalRetType;
+	if (ctx.matchExprDepth === 0 && ctx.inferredReturn !== null) {
+		if (ctx.inferredReturn.kind === TypeKind.Inferred) {
+			ctx.inferredReturn = finalRetType;
+		} else if (returnExpected === null && finalRetType !== null && ctx.inferredReturn !== finalRetType) {
+			const joinedRet = joinBranchTypes([ctx.inferredReturn, finalRetType]);
+			if (!isUnresolvedType(joinedRet)) ctx.inferredReturn = joinedRet;
+		}
+		if (returnExpected === null && d.argument !== null) {
+			ctx.inferredReturnStmts.push(node);
+		}
 	}
 	// Assignability check against the (already-unwrapped) expected return type.
 	if (returnExpected !== null
@@ -3154,6 +3180,10 @@ function findFlowRef(root: Node, targetName: string): Node {
 			if (hit === null) hit = findFlowRef(d.condition, targetName);
 			if (hit === null) hit = findFlowRef(d.consequent, targetName);
 			if (hit === null) hit = findFlowRef(d.alternate, targetName);
+		},
+		NodeKind.HiddenSubConv | NodeKind.HiddenStdConv => {
+			const d = root.data as HiddenStdConvData;
+			if (hit === null) hit = findFlowRef(d.convExpr, targetName);
 		},
 		NodeKind.ExprStmt => {
 			const d = root.data as ExprStmtData;
