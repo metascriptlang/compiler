@@ -40,6 +40,7 @@ export interface CliOptions {
 	passC: string;
 	passL: string;
 	emitC: boolean;
+	splitModules: boolean;     // --split: js target emits one ES module per source module instead of a bundle
 	fmtCheck: boolean;
 	isHcr: boolean;
 	appMode: string;           // --app=console|lib|staticlib: executable vs shared/static library
@@ -83,6 +84,7 @@ export function parseArgs(): CliOptions {
 		passC: "",
 		passL: "",
 		emitC: false,
+		splitModules: false,
 		fmtCheck: false,
 		isHcr: false,
 		appMode: "console",
@@ -207,6 +209,8 @@ export function parseArgs(): CliOptions {
 			opts.autoYes = true;
 		} else if (arg === "--emit=c") {
 			opts.emitC = true;
+		} else if (arg === "--split") {
+			opts.splitModules = true;
 		} else if (arg.startsWith("-d:") || arg.startsWith("-d=") || arg.startsWith("--define:") || arg.startsWith("--define=")) {
 			applyDefineSwitch(opts.defines, arg);
 		} else if (arg === "--help-defines") {
