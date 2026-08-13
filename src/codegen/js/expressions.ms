@@ -13,7 +13,7 @@ import {
 	AwaitExprData, YieldExprData,
 } from "../../ast/node";
 import { emit, emitNode, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName } from "./emit";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar } from "../c/names";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner } from "../c/names";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { int64ToDecimal } from "../../utils/string";
 
@@ -273,6 +273,23 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		&& ((d.callee.data as MemberExprData).object.data as IdentifierData).name === "console";
 	if (isMsPrintln || isConsoleLog) {
 		emit(gen, "console.log(");
+		emitJoinedNodes(gen, d.arguments, ", ");
+		emit(gen, ")");
+		return;
+	}
+
+	// Overloaded call — bind the check-time winner; the identifier's own
+	// resolvedSym is always the primary.
+	if (d.callee.kind === NodeKind.Identifier && sym !== null
+			&& sym.overloads !== null && sym.overloads.length > 0) {
+		const w = resolveOverloadWinner(sym, d.resolvedOverloadIdx);
+		const ws = w.winnerSym;
+		if (ws !== null && ws.nativeName !== "" && hasNativePattern(ws.nativeName)) {
+			emitNativePattern(gen, ws.nativeName, d.arguments, ws.name);
+			return;
+		}
+		emit(gen, jsSymbolName(ws, (d.callee.data as IdentifierData).name, gen.bundleMode));
+		emit(gen, "(");
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");
 		return;
