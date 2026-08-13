@@ -677,6 +677,60 @@ export function importSymFromRegistry(
 	return sym;
 }
 
+// Rebuild an imported symbol's overload set from its exportInfo. Sibling of
+// propagateImportedExtensions below: importSymFromRegistry defines only the
+// PRIMARY symbol, so every caller must restore the overloads, and a caller that
+// forgets silently drops every overload but the first.
+function propagateImportedOverloads(
+	ctx: CheckerContext, primarySym: Symbol, exportInfo: ExportedSymInfo,
+	sourcePath: string, importName: string, localAlias: string, markExported: boolean
+): void {
+	if (primarySym === null || exportInfo.overloadTypes === null) return;
+	if (exportInfo.overloadTypes.length === 0) return;
+	for (let ovIdx = 0; ovIdx < exportInfo.overloadTypes.length; ovIdx += 1) {
+		const ovSym = makeSymbol(localAlias, exportInfo.kind, exportInfo.overloadTypes[ovIdx], false);
+		// Preserve source-module overload slot so Identifier-as-value references
+		// mangle to the correct `_u${N}` name (primary=0, overloads[k]=k+1).
+		ovSym.overloadIdx = ovIdx + 1;
+		ovSym.modulePath = resolveDefiningModule(exportInfo, sourcePath);
+		const ovOrigName = resolveOriginalName(exportInfo, importName);
+		if (ovOrigName !== localAlias) ovSym.originalName = ovOrigName;
+		if (exportInfo.overloadNativeNames !== null && ovIdx < exportInfo.overloadNativeNames.length && exportInfo.overloadNativeNames[ovIdx] !== "") {
+			ovSym.nativeName = exportInfo.overloadNativeNames[ovIdx];
+		}
+		if (exportInfo.overloadBuiltinKinds !== null && ovIdx < exportInfo.overloadBuiltinKinds.length && exportInfo.overloadBuiltinKinds[ovIdx] !== "") {
+			ovSym.builtinKind = exportInfo.overloadBuiltinKinds[ovIdx];
+		}
+		if (exportInfo.overloadDefaultParamsFlat !== null && exportInfo.overloadDefaultParamsCounts !== null && ovIdx < exportInfo.overloadDefaultParamsCounts.length) {
+			const cnt = exportInfo.overloadDefaultParamsCounts[ovIdx];
+			if (cnt > 0) {
+				let offset = 0;
+				let ci = 0;
+				while (ci < ovIdx) { offset = offset + exportInfo.overloadDefaultParamsCounts[ci]; ci = ci + 1; }
+				const dps: Node[] = [];
+				let di = 0;
+				while (di < cnt) { dps.push(exportInfo.overloadDefaultParamsFlat[offset + di]); di = di + 1; }
+				ovSym.defaultParams = dps;
+			}
+		}
+		if (exportInfo.headerPath !== "") ovSym.headerPath = exportInfo.headerPath;
+		if (exportInfo.overloadFlags !== null && ovIdx < exportInfo.overloadFlags.length
+				&& (exportInfo.overloadFlags[ovIdx] & SymbolFlag.OverloadSig) !== 0) {
+			setFlag(ovSym, SymbolFlag.OverloadSig);
+		}
+		if (exportInfo.overloadDeclNodes !== null
+				&& ovIdx < exportInfo.overloadDeclNodes.length
+				&& exportInfo.overloadDeclNodes[ovIdx] !== null) {
+			ovSym.declNode = exportInfo.overloadDeclNodes[ovIdx];
+		}
+		if (markExported) setFlag(ovSym, SymbolFlag.Exported);
+		primarySym.overloads.push(ovSym);
+		if (ctx.extensionRegistry !== null && exportInfo.overloadExtReceiverTypes !== null && ovIdx < exportInfo.overloadExtReceiverTypes.length && exportInfo.overloadExtReceiverTypes[ovIdx] !== "") {
+			registerExtension(ctx.extensionRegistry, createExtMethod(localAlias, exportInfo.overloadExtReceiverTypes[ovIdx], sourcePath, exportInfo.overloadTypes[ovIdx], exportInfo.overloadExtIsStatic[ovIdx], ovSym, 1));
+		}
+	}
+}
+
 // Propagate extension-method dispatch entries from an imported/re-exported
 // symbol's exportInfo into the current module's extensionRegistry. Single
 // path used by:
@@ -1052,6 +1106,7 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 						if (exportInfo !== null) {
 							const reNameLoc = imp.nameLocations !== null && i < imp.nameLocations.length ? imp.nameLocations[i] : d.exportedDecl.location;
 							importSymFromRegistry(ctx, alias, importName, exportInfo, sourcePath, reNameLoc, node);
+							propagateImportedOverloads(ctx, lookupLocal(ctx.table, alias), exportInfo, sourcePath, importName, alias, true);
 							// Phase E re-export parity: when re-exporting a macro through a
 							// hub (`export { jsonStringify } from "./encode"`), populate the
 							// hub's macroBodyRegistry too. Without this, the hub's own
