@@ -759,6 +759,27 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				}
 				return TypeRelation.Exact;
 			},
+			TypeKind.Function => {
+				// Nim procTypeRel (sigmatch.nim:789): arity, then every param, then
+				// the return type, combined with minRel — the weakest component wins.
+				// callConv is deliberately not folded in (NIM-REF row 77: MS has one
+				// closure repr, so it carries no discriminating information).
+				if (formal.typeChildren.length !== actual.typeChildren.length) return TypeRelation.None;
+				let worst = TypeRelation.Exact;
+				for (let pi = 0; pi < formal.typeChildren.length; pi += 1) {
+					const paramRel = typeRelation(formal.typeChildren[pi], actual.typeChildren[pi]);
+					if (paramRel === TypeRelation.None) return TypeRelation.None;
+					if (paramRel < worst) worst = paramRel;
+				}
+				// A null side carries no information (inference pending), so it does
+				// not penalise — only two known return types are compared.
+				if (formal.typeReturn !== null && actual.typeReturn !== null) {
+					const retRel = typeRelation(formal.typeReturn, actual.typeReturn);
+					if (retRel === TypeRelation.None) return TypeRelation.None;
+					if (retRel < worst) worst = retRel;
+				}
+				return worst;
+			},
 			_ => TypeRelation.Exact,
 		};
 	}
