@@ -65,6 +65,7 @@ import { lowerRvalueBridge } from "./lowering/rvalueLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerMethodToFunction } from "./lowering/methodToFunction";
 import { lowerCtorInit } from "./lowering/ctorLower";
+import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerBuiltins } from "./native/builtinLower";
 import { lowerCStringConv } from "./native/cstringConvLower";
 import { lowerSubscript } from "./lowering/subscriptLower";
@@ -124,6 +125,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// Field initializers become assignments inside the constructor, so both
 	// backends run them in one place and the parent chain reaches them.
 	result = lowerCtorInit(result, ctx);
+	result = lowerNewExpr(result, ctx);
 	// Lift class/actor methods → top-level FunctionDecl. C + Raiser want one
 	// uniform shape for codegen; JS keeps `class Foo {}` native (its semantics
 	// already match what we want at the source level).

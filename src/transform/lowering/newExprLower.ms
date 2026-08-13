@@ -1,85 +1,194 @@
-// New Expression Lowering — rewrite `new Foo(args)` to `Foo_new(args)`
+// New Expression Lowering — materialize positional `new C(a, b)` on a class
+// WITHOUT a user constructor into a hoisted temp + field assignments:
 //
-// In C backend, class constructors are emitted as ClassName_new() functions.
-// This transform rewrites NewExpr → CallExpr so codegen sees a normal call.
-// Follows standard allocation pattern: allocation delegated to constructor function.
+//   const p = new Pt(1, 2);
+//     →
+//   const $new_0 = new Pt();   // alloc + Pt_init (field defaults, super chain)
+//   $new_0.x = 1;
+//   $new_0.y = 2;
+//   const p = $new_0;
+//
+// Positional new without a constructor is a MetaScript extension (TS rejects
+// the args). Before this pass the C backend carried an inline positional
+// branch in codegen and JS had nothing — `new Pt(1, 2)` silently dropped both
+// args on JS. One statement-splice lowering here serves both backends: the
+// materialize-once shape Nim uses at sem (defaultFieldsForTheUninitialized).
+// The 0-arg `new` runs <Class>_init (super chain + field defaults, ctorLower),
+// then the positional assignments override — same order the C branch had.
+//
+// Classes WITH a user constructor (SymbolFlag.HasConstructor) are untouched:
+// their `new` routes to <Class>_new / the JS constructor with real parameters.
+//
+// Skipped positions (same reasoning as callHoist): a statement whose
+// expression contains a conditionally-evaluated spot (`&&`/`||` RHS, ternary
+// branch) — an eager hoist would evaluate the args unconditionally — and
+// while-loop conditions, which re-evaluate every iteration. Those keep the
+// old per-backend behavior.
 
-import { Node, NodeKind, NewExprData, IdentifierData, MemberExprData } from "../../ast/node";
-import { TransformContext, createTransformContext } from "../context";
-import { walkNode } from "../walker";
-import { makeCall, makeIdent } from "../util";
+import {
+	Node, NodeKind, NewExprData, VariableDeclData, ExprStmtData, IfStmtData,
+	ReturnStmtData, DeclKind, Type, TypeKind,
+} from "../../ast/node";
+import { SymbolFlag, hasFlag } from "../../checker/symbol";
+import { TransformContext, createTransformContext, freshTempSym } from "../context";
+import { walkExpandBlocks, replaceInExpr } from "../walker";
+import { containsConditionalEval } from "./callHoist";
+import { makeVarDecl, makeIdentResolved, makeMember, makeAssign, makeExprStmt, makeBlock } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
-import { ExprStmtData, CallExprData } from "../../ast/node";
 
-// ===== Visitor =====
+// ===== Gate =====
 
-function lowerNewNode(node: Node): Node {
-	if (node.kind !== NodeKind.NewExpr) return node;
+// The unwrapped Struct type of a lowerable NewExpr, or null. Lowerable means:
+// resolved callee without a user constructor, at least one argument, and a
+// class type carrying field names to map the positional args onto.
+function positionalStruct(node: Node): Type | null {
+	if (node.kind !== NodeKind.NewExpr) return null;
 	const d = node.data as NewExprData;
-	const loc = node.location;
+	if (d.newArguments.length === 0) return null;
+	const sym = d.newCallee.resolvedSym;
+	if (sym === null || hasFlag(sym, SymbolFlag.HasConstructor)) return null;
+	const classType = node.nodeType;
+	if (classType === null) return null;
+	const inner = (classType.kind === TypeKind.Ref || classType.kind === TypeKind.Ptr) ? classType.typeReturn : classType;
+	if (inner === null) return null;
+	if (inner.typeNames === null || d.newArguments.length > inner.typeNames.length) return null;
+	return inner;
+}
 
-	// `new Foo(args)` → `Foo_new(args)`
-	// Extract class name from callee
-	if (d.newCallee.kind === NodeKind.Identifier) {
-		const id = d.newCallee.data as IdentifierData;
-		// With args: leave as NewExpr — codegen inlines allocation + positional field assignment
-		// (Standard reference parity: inline object construction — no separate _new function)
-		// No-arg new: also leave as NewExpr for inline allocation
+function hasPositionalNew(expr: Node): boolean {
+	let found = false;
+	replaceInExpr(expr, (node: Node): Node => {
+		if (positionalStruct(node) !== null) { found = true; }
 		return node;
-	}
+	});
+	return found;
+}
 
-	// `new ns.Foo(args)` → `ns_Foo_new(args)` (member expression callee)
-	if (d.newCallee.kind === NodeKind.MemberExpr) {
-		const m = d.newCallee.data as MemberExprData;
-		if (m.object.kind === NodeKind.Identifier) {
-			const objId = m.object.data as IdentifierData;
-			// Leave as NewExpr — codegen handles inline allocation
-			return node;
+// ===== Hoist =====
+
+// Bottom-up: an inner positional new inside another's args is materialized
+// first, so its temp ref is already in place when the outer one captures args.
+function hoistPositionalNews(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
+	return replaceInExpr(expr, (node: Node): Node => {
+		const inner = positionalStruct(node);
+		if (inner === null) return node;
+		const d = node.data as NewExprData;
+		const args = d.newArguments;
+		d.newArguments = [];
+		const ty = node.nodeType;
+		const loc = node.location;
+		const sym = freshTempSym(ctx, "new", ty);
+		const decl = makeVarDecl(sym.name, node, DeclKind.Const, loc);
+		decl.resolvedSym = sym;
+		decl.nodeType = ty;
+		hoisted.push(decl);
+		let i = 0;
+		while (i < args.length) {
+			const recv = makeIdentResolved(sym, loc);
+			recv.nodeType = ty;
+			const target = makeMember(recv, inner.typeNames[i], loc);
+			if (inner.typeChildren !== null && i < inner.typeChildren.length) {
+				target.nodeType = inner.typeChildren[i];
+			}
+			hoisted.push(makeExprStmt(makeAssign(target, args[i], loc), loc));
+			i += 1;
 		}
-	}
+		const ref = makeIdentResolved(sym, loc);
+		ref.nodeType = ty;
+		return ref;
+	});
+}
 
-	// Fallback: emit as Callee_new(args) with callee as-is
-	return makeCall(makeIdent("__new", loc), d.newArguments, loc);
+// ===== Statement expanders =====
+
+function expandVarDecl(stmt: Node, ctx: TransformContext): Node[] {
+	const d = stmt.data as VariableDeclData;
+	if (d.initializer === null || containsConditionalEval(d.initializer)) return [stmt];
+	const hoisted: Node[] = [];
+	d.initializer = hoistPositionalNews(d.initializer, hoisted, ctx);
+	if (hoisted.length === 0) return [stmt];
+	hoisted.push(stmt);
+	return hoisted;
+}
+
+function expandExprStmt(stmt: Node, ctx: TransformContext): Node[] {
+	const ed = stmt.data as ExprStmtData;
+	if (ed.expr === null || containsConditionalEval(ed.expr)) return [stmt];
+	const hoisted: Node[] = [];
+	ed.expr = hoistPositionalNews(ed.expr, hoisted, ctx);
+	if (hoisted.length === 0) return [stmt];
+	hoisted.push(stmt);
+	return hoisted;
+}
+
+function expandReturn(stmt: Node, ctx: TransformContext): Node[] {
+	const rd = stmt.data as ReturnStmtData;
+	if (rd.argument === null || containsConditionalEval(rd.argument)) return [stmt];
+	const hoisted: Node[] = [];
+	rd.argument = hoistPositionalNews(rd.argument, hoisted, ctx);
+	if (hoisted.length === 0) return [stmt];
+	hoisted.push(stmt);
+	return hoisted;
+}
+
+function altChainHasPositionalNew(alt: Node): boolean {
+	if (alt.kind !== NodeKind.IfStmt) return false;
+	const d = alt.data as IfStmtData;
+	if (hasPositionalNew(d.condition)) return true;
+	if (d.alternate !== null) return altChainHasPositionalNew(d.alternate);
+	return false;
+}
+
+// `if (COND)` evaluates once when control reaches it → hoisting before the if
+// is correct. An `else if` condition is the `.alternate`, never a statement-
+// list entry — wrap it in a block so the walker descends and lowers the
+// now-listed inner if (same trick as callHoist expandIf).
+function expandIf(stmt: Node, ctx: TransformContext): Node[] {
+	const ifd = stmt.data as IfStmtData;
+	if (ifd.alternate !== null && ifd.alternate.kind === NodeKind.IfStmt && altChainHasPositionalNew(ifd.alternate)) {
+		ifd.alternate = makeBlock([ifd.alternate], ifd.alternate.location);
+	}
+	if (containsConditionalEval(ifd.condition)) return [stmt];
+	const hoisted: Node[] = [];
+	ifd.condition = hoistPositionalNews(ifd.condition, hoisted, ctx);
+	if (hoisted.length === 0) return [stmt];
+	hoisted.push(stmt);
+	return hoisted;
+}
+
+function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
+	return match (stmt.kind) {
+		NodeKind.VariableDecl => expandVarDecl(stmt, ctx),
+		NodeKind.ExprStmt => expandExprStmt(stmt, ctx),
+		NodeKind.ReturnStmt => expandReturn(stmt, ctx),
+		NodeKind.IfStmt => expandIf(stmt, ctx),
+		_ => [stmt],
+	};
 }
 
 // ===== Entry Point =====
 
 export function lowerNewExpr(program: Node, ctx: TransformContext): Node {
-	return walkNode(program, lowerNewNode);
-}
-
-// ===== Test Helpers =====
-
-function getCallName(input: string): string {
-	const result = parseInput(input);
-	if (!result.ok) return "PARSE_ERROR";
-	const ctx = createTransformContext();
-	const prog = lowerNewExpr(result.value, ctx);
-	const stmts = getStmts(prog);
-	if (stmts.length === 0) return "NO_STMTS";
-	if (stmts[0].kind !== NodeKind.ExprStmt) return "NOT_EXPR";
-	const sd = stmts[0].data as ExprStmtData;
-	if (sd.expr.kind !== NodeKind.CallExpr) return "NOT_CALL";
-	const cd = sd.expr.data as CallExprData;
-	if (cd.callee.kind !== NodeKind.Identifier) return "NOT_IDENT";
-	const id = cd.callee.data as IdentifierData;
-	return id.name;
+	walkExpandBlocks(program, expandStmt, ctx);
+	return program;
 }
 
 // ===== Tests =====
-test "new Foo() stays NewExpr (inline alloc)" { assert firstExprKindAfter("new Foo();", lowerNewExpr) === NodeKind.NewExpr; }
+// Parse-only input carries no resolvedSym/nodeType, so the gate skips it —
+// these pin the pass to leaving unresolved and 0-arg news untouched. The
+// end-to-end lowering is proven by the positional-new guard programs.
 
-test "new Bar(x, y) stays NewExpr (inline alloc)" {
+test "new Foo() stays NewExpr (no args, nothing to lower)" { assert firstExprKindAfter("new Foo();", lowerNewExpr) === NodeKind.NewExpr; }
+
+test "unresolved new Bar(x, y) is left untouched" {
 	assert firstExprKindAfter("new Bar(x, y);", lowerNewExpr) === NodeKind.NewExpr;
 }
 
-test "new with args stays NewExpr" { assert firstExprKindAfter("new Foo(x);", lowerNewExpr) === NodeKind.NewExpr; }
-
 test "non-new unchanged" { assert firstExprKindAfter("foo();", lowerNewExpr) === NodeKind.CallExpr; }
 
-test "stmt count preserved" { assert stmtCountAfter("new A(); new B();", lowerNewExpr) === 2; }
+test "stmt count preserved on unresolved input" { assert stmtCountAfter("new A(); new B();", lowerNewExpr) === 2; }
 
-test "new with args preserved in NewExpr" {
+test "unresolved args preserved in NewExpr" {
 	const result = parseInput("new Foo(1, 2);");
 	if (!result.ok) { assert false; return; }
 	const ctx = createTransformContext();
@@ -87,4 +196,6 @@ test "new with args preserved in NewExpr" {
 	const stmts = getStmts(prog);
 	const sd = stmts[0].data as ExprStmtData;
 	assert sd.expr.kind === NodeKind.NewExpr;
+	const nd = (sd.expr.data as NewExprData);
+	assert nd.newArguments.length === 2;
 }

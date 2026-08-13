@@ -1,7 +1,7 @@
 // Native-Backend Transform Pipeline — AST transforms for compiled backends (C, Raiser)
 //
 // These transforms lower constructs that JS handles natively but compiled backends need rewritten:
-//  1. newExprLower        — new Foo(args) → Foo_new(args) constructor call
+//  1. (moved) newExprLower — positional-new lowering now runs in the shared pipeline
 //  2. closureCallMarker   — mark calls through closure types for different calling convention
 //  3. (removed) pointerParam — now handled at codegen time (Reference: indirect location parity)
 //  4. rangeCheckInject    — insert runtime range checks for narrowing integer casts
@@ -15,7 +15,6 @@
 
 import { Node } from "../../ast/node";
 import { TransformContext } from "../context";
-import { lowerNewExpr } from "../lowering/newExprLower";
 import { markClosureCalls } from "./closureCallMarker";
 // closureCallLower removed — Reference parity: dispatch generated at codegen time
 import { injectRangeChecks } from "./rangeCheckInject";
@@ -25,8 +24,7 @@ import { lowerStringOps } from "./stringOpLower";
 import { lowerEnumToString } from "./enumToStringLower";
 
 export function transformForNative(program: Node, ctx: TransformContext): Node {
-	let result = lowerNewExpr(program, ctx);
-	result = markClosureCalls(result, ctx);
+	let result = markClosureCalls(program, ctx);
 	result = injectRangeChecks(result, ctx);
 	result = coerceOptionals(result, ctx);
 	result = lowerBuiltins(result, ctx);

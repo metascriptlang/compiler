@@ -86,7 +86,7 @@ function isRcReturning(t: Type | null): boolean {
 // break the guard (proven: `if (xs.length>0 && xs[0].slice(...))` hoisted the slice
 // before the length guard → crash). Such inits are skipped until the nested-if
 // lowering (which preserves short-circuit) is in place.
-function containsConditionalEval(expr: Node): boolean {
+export function containsConditionalEval(expr: Node): boolean {
 	let found = false;
 	replaceInExpr(expr, (node: Node): Node => {
 		if (node.kind === NodeKind.ConditionalExpr) { found = true; }
