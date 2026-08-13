@@ -12,7 +12,7 @@ import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
-import { generateJS, generateJSBundleModule } from "../codegen/js/jsgen";
+import { generateJS, generateJSBundleModule, generateJSModule } from "../codegen/js/jsgen";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
@@ -1642,15 +1642,55 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 // ===== Run JS =====
 
+function outRelForModule(modPath: string, projectRoot: string, stdRoot: string): string {
+	if (stdRoot !== "" && modPath.startsWith(stdRoot)) {
+		let rel = modPath.slice(stdRoot.length, modPath.length);
+		if (rel.startsWith("/")) rel = rel.slice(1, rel.length);
+		return replaceExt(`_std/${rel}`, ".js");
+	}
+	const rootPrefix = projectRoot.endsWith("/") ? projectRoot : `${projectRoot}/`;
+	if (modPath.startsWith(rootPrefix)) {
+		return replaceExt(modPath.slice(rootPrefix.length, modPath.length), ".js");
+	}
+	return `_ext/${mangleModuleName(modPath)}.js`;
+}
+
+function lookupOutRel(keys: string[], vals: string[], k: string): string {
+	for (let i = 0; i < keys.length; i += 1) {
+		if (keys[i] === k) return vals[i];
+	}
+	return "";
+}
+
+// Both arguments are '/'-separated paths relative to the same out root; the
+// result is a node-resolvable specifier (always ./ or ../ prefixed).
+function relSpecBetween(fromRel: string, toRel: string): string {
+	const spec = relative(dirname(`/${fromRel}`), `/${toRel}`);
+	if (spec.startsWith(".")) return spec;
+	return `./${spec}`;
+}
+
 export function cmdRunJS(filePath: string, opts: CliOptions): void {
+	filePath = canonicalModulePath(filePath);
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
 
-	const outDir = "out/debug";
-	ensureDir(outDir);
-	const baseDir = dirname(filePath);
+	// Self-contained out tree rooted at the PROJECT, not the CWD: user modules
+	// mirror the source tree, std/runtime modules land under _std/, anything
+	// outside both roots under _ext/. Every emitted import is relative inside
+	// the tree, so plain node can execute the directory from anywhere.
+	const projectRoot = opts.projectRoot !== "" ? opts.projectRoot : dirname(filePath);
+	const outRoot = `${projectRoot}/${outDirForMode(opts.mode)}`;
+	const stdRoot = config.stdPath;
+
+	const outRelKeys: string[] = [];
+	const outRelVals: string[] = [];
+	for (const modPath of graph.loadOrder) {
+		outRelKeys.push(modPath);
+		outRelVals.push(outRelForModule(modPath, projectRoot, stdRoot));
+	}
 
 	// Two phases for the same reason as cmdBuildJS: expand every module before
 	// any backend transform mutates a declaring module's AST.
@@ -1670,28 +1710,110 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 
 		const macroExpanded = expandMacros(program, ctx);
 		exitOnCheckerErrors(ctx, modPath, mod.source);
+		const unitProgram = evaluateComptimeBlocks(macroExpanded);
+
+		// Caller-side generic instantiation (P0 emit contract): everything
+		// pending after this module's check was requested by it — define it
+		// here. Restamping modulePath makes the definition local (both the
+		// mangled name and import derivation key off it); later modules
+		// reusing the instance import it from the first requester through
+		// the forced-export pass.
+		for (const instNode of drainPendingInstances()) {
+			if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
+				instNode.nodeType = instNode.resolvedSym.symbolType;
+			}
+			if (instNode.resolvedSym !== null) { instNode.resolvedSym.modulePath = modPath; }
+			(unitProgram.data as ProgramData).programStmts.push(instNode);
+		}
+
 		unitPaths.push(modPath);
-		unitPrograms.push(evaluateComptimeBlocks(macroExpanded));
+		unitPrograms.push(unitProgram);
 		unitCtxs.push(ctx);
 	}
 
+	// Export-name surface per module — jsMultiFileName keys public naming off
+	// this list on BOTH the declaring and the referencing side (symbol flags
+	// don't survive the registry round-trip; mod.exportNames does).
+	const modExportKeys: string[] = [];
+	const modExportVals: string[][] = [];
+	for (const modPath of unitPaths) {
+		const mod = findModule(graph, modPath);
+		if (mod === null) continue;
+		modExportKeys.push(modPath);
+		modExportVals.push(mod.exportNames);
+	}
+
+	const moduleCodes: string[] = [];
+	const moduleNeededMods: string[][] = [];
+	const moduleNeededNames: string[][][] = [];
+	const moduleExported: string[][] = [];
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const modPath = unitPaths[ui];
 		const ctx = unitCtxs[ui];
+		const mod = findModule(graph, modPath);
 		const transformed = transformProgram(unitPrograms[ui], ctx, true);
-		const jsCode = generateJS(transformed, ctx.jsImportRegistry);
 
-		const relPath = relative(baseDir, modPath);
-		const outPath = outDir + "/" + replaceExt(relPath, ".js");
+		const fromRel = lookupOutRel(outRelKeys, outRelVals, modPath);
+		const importSpecKeys: string[] = [];
+		const importSpecVals: string[] = [];
+		if (mod !== null) {
+			for (const imp of mod.imports) {
+				const toRel = lookupOutRel(outRelKeys, outRelVals, imp.sourcePath);
+				if (toRel === "") continue;
+				importSpecKeys.push(imp.sourceSpecifier);
+				importSpecVals.push(relSpecBetween(fromRel, toRel));
+			}
+		}
+		const moduleSpecKeys: string[] = [];
+		const moduleSpecVals: string[] = [];
+		for (let mi = 0; mi < outRelKeys.length; mi += 1) {
+			moduleSpecKeys.push(outRelKeys[mi]);
+			moduleSpecVals.push(relSpecBetween(fromRel, outRelVals[mi]));
+		}
+
+		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals);
+		moduleCodes.push(res.code);
+		moduleNeededMods.push(res.neededModules);
+		moduleNeededNames.push(res.neededNames);
+		moduleExported.push(res.exportedNames);
+	}
+
+	// Forced exports: names other modules reference that this module didn't
+	// export (private helpers reachable from generic bodies, caller-side
+	// instances reused by later modules). A name needed here but not defined
+	// here is a compiler bug — node fails loudly at the gate, by design.
+	for (let ui = 0; ui < unitPaths.length; ui += 1) {
+		const forced: string[] = [];
+		for (let vi = 0; vi < unitPaths.length; vi += 1) {
+			if (vi === ui) continue;
+			for (let mi = 0; mi < moduleNeededMods[vi].length; mi += 1) {
+				if (moduleNeededMods[vi][mi] !== unitPaths[ui]) continue;
+				for (const n of moduleNeededNames[vi][mi]) {
+					let already = false;
+					for (const e of moduleExported[ui]) { if (e === n) { already = true; } }
+					for (const f of forced) { if (f === n) { already = true; } }
+					if (!already) forced.push(n);
+				}
+			}
+		}
+		let code = moduleCodes[ui];
+		if (forced.length > 0) {
+			let names = "";
+			for (let fi = 0; fi < forced.length; fi += 1) {
+				if (fi > 0) names = `${names}, `;
+				names = names + forced[fi];
+			}
+			code = `${code}export { ${names} };\n`;
+		}
+		const outPath = `${outRoot}/${lookupOutRel(outRelKeys, outRelVals, unitPaths[ui])}`;
 		ensureDir(dirname(outPath));
-		writeOutput(outPath, jsCode);
+		writeOutput(outPath, code);
 	}
 
 	if (opts.showTime) printTiming("compiled", t0);
 
 	// Execute entry module
-	const entryRel = relative(baseDir, filePath);
-	const entryJs = `${outDir}/${replaceExt(entryRel, ".js")}`;
+	const entryJs = `${outRoot}/${lookupOutRel(outRelKeys, outRelVals, filePath)}`;
 	if (opts.verbose) verboseLog(`exec node ${entryJs}`);
 	const r = exec(`node ${entryJs}`);
 	if (r.ok) {
