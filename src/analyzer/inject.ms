@@ -1936,6 +1936,14 @@ function skipConversionWrappers(expr: Node): Node {
 // ONLY returns true for RcKind.Ref — strings/arrays/named types need passCopyToSink
 // (deep copy), not msIncref (pointer refcount bump). See processReturn for those.
 function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
+	// A stamped union→member projection (narrowUnionToVariant) with a pointer
+	// surface re-materializes the payload as a fresh owned heap cell in codegen;
+	// increfing by the underlying borrowed reference strands that cell one ref
+	// high (measured: guard ledger Fake alloc=5 destroy=3).
+	if (expr.kind === NodeKind.HiddenSubConv && ((expr.flags >> 16) & 65535) > 0) {
+		const cv = expr.data as HiddenStdConvData;
+		if (cv.convType !== null && cv.convType.kind === TypeKind.Ref) return false;
+	}
 	return needsReturnIncrefBare(skipConversionWrappers(expr), dctx);
 }
 
