@@ -3,9 +3,8 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, TypeKind, Type } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, TypeKind, Type } from "../../ast/node";
 import { hasGenericParams, isIntegerType } from "../../checker/types";
-import { getGenericDecl } from "../../parser/context";
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, emitStmtsLine, readProcStmts, readProcLocals,
@@ -428,15 +427,12 @@ function genClassDecl(g: CGen, node: Node): void {
 		addNewline(types);
 	}
 
-	// Emit methods + constructor (always, even if struct was already declared).
-	// Skip constructors for generic classes — only monomorphized instances get constructors.
-	const isGenericClass = d.classExtends === "" && getGenericDecl(d.className) !== "";
+	// Emit methods (always, even if struct was already declared). ConstructorDecl
+	// never reaches this loop — methodToFunction lifts it out of classBody into a
+	// top-level `<Class>_init` FunctionDecl (mono instances included).
 	for (const member of d.classBody) {
 		if (member.kind === NodeKind.MethodDecl) {
 			genMethodAsFunction(g, member, name);
-		} else if (member.kind === NodeKind.ConstructorDecl && !isGenericClass) {
-			nameSetAdd(g.classesWithCtors, name);
-			genConstructor(g, member, name);
 		}
 	}
 }
@@ -505,66 +501,6 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 		addLine(procs, "}");
 		addNewline(procs);
 	}
-}
-
-// ===== Constructor =====
-
-function genConstructor(g: CGen, node: Node, className: string): void {
-	const d = node.data as ConstructorDeclData;
-	const ctorName = className + "_new";
-	const initName = className + "_init";
-
-	// Build user param list — shared by _init and _new.
-	const ctorType = node.nodeType;
-	let userParams = "";
-	for (let i = 0; i < d.ctorParams.length; i += 1) {
-		if (i > 0) userParams = userParams + ", ";
-		const pType = getTypeDesc(g, ctorType.typeChildren[i]);
-		userParams = userParams + `${pType} ${safeName(d.ctorParams[i])}`;
-	}
-
-	// Phase 5 split: ClassName_init(this, params) runs the user ctor body;
-	// ClassName_new(params) allocates + delegates to _init. This split lets
-	// `super(args)` in derived ctors call ParentClass_init((Parent*)this, args)
-	// to run parent's init logic on the SAME `this` (no new allocation).
-	const initParamList = userParams === "" ? `${className}* this` : `${className}* this, ${userParams}`;
-	const initProto = `void ${initName}(${initParamList})`;
-	addLine(sec(g, CSection.ProcHeaders), initProto + ";");
-
-	const newParamList = userParams === "" ? "void" : userParams;
-	const newProto = `${className}* ${ctorName}(${newParamList})`;
-	addLine(sec(g, CSection.ProcHeaders), newProto + ";");
-
-	// Multi-module dedup: each constructor emitted once (same as generic function instances).
-	// Second module gets forward declarations only.
-	if (isInstanceEmitted(ctorName)) return;
-	markInstanceEmitted(ctorName);
-
-	const procs = sec(g, CSection.Procs);
-
-	// Emit _init first (called by _new and by super(args)).
-	addLine(procs, initProto + " {");
-	if (d.ctorBody !== null) {
-		const p = createProc(initName, null);
-		genStmt(g, p, d.ctorBody);
-		emitProcBody(p, procs);
-	}
-	addLine(procs, "}");
-	addNewline(procs);
-
-	// Emit _new wrapper: alloc + call _init + return this.
-	addLine(procs, newProto + " {");
-	ensureTypeInfoDef(g, className, null as unknown as Type);
-	const typeInfoArg = (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) ? "NULL" : `&${className}TypeInfo`;
-	addLine(procs, `  ${className}* this = (${className}*)msAllocTyped(sizeof(${className}), ${typeInfoArg});`);
-	let initArgList = "this";
-	for (let pi = 0; pi < d.ctorParams.length; pi += 1) {
-		initArgList = initArgList + ", " + safeName(d.ctorParams[pi]);
-	}
-	addLine(procs, `  ${initName}(${initArgList});`);
-	addLine(procs, "  return this;");
-	addLine(procs, "}");
-	addNewline(procs);
 }
 
 // genExportDecl and genDecoratedDecl inlined into genDecl (exported flag threading)

@@ -962,7 +962,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	if (kind === NodeKind.NewExpr) {
 		const d = node.data as NewExprData;
 		// Constructor check (reference parity: sfConstructor flag on symbol).
-		// If the class has HasConstructor flag, call ClassName_new(args).
+		// If the class has HasConstructor flag, inline alloc + `<Class>_init(this, args)`.
 		// Works cross-module via ExportedSymInfo propagation.
 		if (d.newCallee.resolvedSym !== null && hasFlag(d.newCallee.resolvedSym, SymbolFlag.HasConstructor)) {
 			const newType = node.nodeType;
@@ -1132,7 +1132,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void
 	const sym = node.resolvedSym;
 
 	// Phase 5: super(args) → emit ParentClass_init((Parent*)this, args).
-	// Reuses the parent's _init function (split out from _new in genConstructor).
+	// Reuses the parent's _init function (lifted by methodToFunction).
 	// The cast is C-ABI-correct because Phase 4 flattens parent fields into the
 	// child struct prefix in field-declaration order (parent first, then child).
 	if (cd.callee.kind === NodeKind.Identifier

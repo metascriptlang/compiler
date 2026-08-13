@@ -568,7 +568,6 @@ export class CGen {
 	stringPool: StringPool;    // interned string literals
 	declaredProcs: NameSet;    // prevents duplicate prototypes
 	declaredThings: NameSet;   // prevents duplicate declarations
-	classesWithCtors: NameSet; // classes that have ConstructorDecl → use ClassName_new() in NewExpr
 	checkerCtx: CheckerContext;
 	modulePath: string;        // source file path (for module-qualified init names)
 	labels: number;            // module-scope unique counter
@@ -602,7 +601,6 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		stringPool: createStringPool(),
 		declaredProcs: createNameSet(),
 		declaredThings: createNameSet(),
-		classesWithCtors: createNameSet(),
 		checkerCtx: ctx,
 		modulePath,
 		labels: 0,

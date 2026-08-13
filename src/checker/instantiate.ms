@@ -615,8 +615,8 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		}
 	}
 
-	// Create FunctionDecl: the codegen's genConstructor handles alloc + body + return this.
-	// We emit a ClassDecl with just the constructor so genClassDecl generates ClassName_new().
+	// We emit a ClassDecl with just the constructor; methodToFunction lifts it into a
+	// top-level `<Class>_init` FunctionDecl, and NewExpr inlines alloc + `_init` call.
 	const loc = ctorNode.location !== null ? ctorNode.location : makeLoc(0, 0);
 	const clonedCtor: NodeData = { ctorParams: fnParams, ctorParamTypes: fnParamTypes, ctorBody: clonedBody, ctorDefaults: fnDefaults };
 	const ctorDeclNode = createNodeAt(NodeKind.ConstructorDecl, clonedCtor, loc);
