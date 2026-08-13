@@ -21,7 +21,7 @@ import {
 	emitBlockStmt, emitExprStmt, emitReturnStmt,
 	emitBreakStmt, emitContinueStmt,
 	emitSwitchStmt, emitThrowStmt, emitTryCatchStmt,
-	emitForStmt, emitForOfStmt, emitUnreachableStmt,
+	emitForStmt, emitForOfStmt, emitUnreachableStmt, emitAssertStmt,
 } from "./statements";
 import {
 	emitFunctionDecl, emitEnumDecl, emitClassDecl,
@@ -29,6 +29,7 @@ import {
 	emitImportDecl, emitExportDecl, emitDecoratedDecl,
 } from "./declarations";
 
+import { emitTestDecl } from "./test";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram } from "../../checker/checkPass";
 import { transformProgram } from "../../transform/index";
@@ -101,6 +102,9 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 		NodeKind.ForOfStmt => { emitForOfStmt(gen, node); },
 		NodeKind.UnreachableStmt => { emitUnreachableStmt(gen, node); },
 
+		NodeKind.AssertStmt => { emitAssertStmt(gen, node); },
+		NodeKind.TestDecl => { emitTestDecl(gen, node); },
+
 		// Declarations
 		NodeKind.FunctionDecl => { emitFunctionDecl(gen, node); },
 		NodeKind.EnumDecl => { emitEnumDecl(gen, node); },
@@ -164,6 +168,8 @@ export interface JsModuleResult {
 	neededModules: string[];
 	neededNames: string[][];
 	exportedNames: string[];
+	testNames: string[];
+	testFuncs: string[];
 }
 
 export function generateJSModule(
@@ -171,9 +177,11 @@ export function generateJSModule(
 	importSpecKeys: string[], importSpecVals: string[],
 	moduleSpecKeys: string[], moduleSpecVals: string[],
 	modExportKeys: string[], modExportVals: string[][],
+	isTestBuild: boolean,
 ): JsModuleResult {
 	const gen = createJSGenerator();
 	gen.multiFile = true;
+	gen.isTestBuild = isTestBuild;
 	gen.currentModulePath = currentModulePath;
 	gen.importSpecKeys = importSpecKeys;
 	gen.importSpecVals = importSpecVals;
@@ -206,7 +214,7 @@ export function generateJSModule(
 		}
 		emit(gen, ` } from "${spec}";\n`);
 	}
-	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, exportedNames: gen.exportedNames };
+	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, exportedNames: gen.exportedNames, testNames: gen.testNames, testFuncs: gen.testFuncs };
 }
 
 // Bundle mode: generate JS for a single module without header/imports.
