@@ -46,6 +46,25 @@ function crossModuleCtorParamTypes(sym: Symbol): Type[] {
 	return null as unknown as Type[];
 }
 
+// Every class carries a `<Class>_init(this)` — ctorLower synthesizes one when
+// the source has no constructor — so field defaults and the parent chain run
+// in one place instead of being re-emitted at each `new` site.
+function classHasInitFn(innerType: Type): boolean {
+	if (innerType === null || innerType.sym === null) return false;
+	const decl = innerType.sym.declNode;
+	return decl !== null && decl.kind === NodeKind.ClassDecl;
+}
+
+function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void {
+	const initName = cName + "_init";
+	const protoKey = "proto:" + initName;
+	if (!nameSetHas(g.declaredProcs, protoKey)) {
+		nameSetAdd(g.declaredProcs, protoKey);
+		addLine(sec(g, CSection.ProcHeaders), `void ${initName}(${cName}* this);`);
+	}
+	emitStmtsLine(p, `${initName}(${tmp});`);
+}
+
 // Build a msAllocTyped/msAllocTypedUninit call expression. Under --gc=manual,
 // TypeInfo is not emitted so we pass NULL; otherwise we reference the type's
 // TypeInfo global.
@@ -206,48 +225,6 @@ function pickAllocExpr(g: CGen, cType: string, innerType: Type | null, argsCover
 // Our Identifier handler already applies rdLoc (pushes (*name) for indirect params).
 // So for indirect args: snippet on stack = (*name), but we need raw pointer = name.
 // We use the raw safeName directly (the reference implementation's snippet is always the raw name).
-// Check if a class type has instance fields with default initializers
-function hasInstanceFieldDefaults(classType: Type): boolean {
-	if (classType === null) return false;
-	const classSym = classType.sym;
-	if (classSym === null || classSym.declNode === null) return false;
-	const cd = classSym.declNode.data as ClassDeclData;
-	for (const member of cd.classBody) {
-		if (member.kind === NodeKind.PropertyDecl) {
-			const pd = member.data as PropertyDeclData;
-			if (!pd.propIsStatic && pd.propInitializer !== null) return true;
-		}
-	}
-	return false;
-}
-
-// Emit instance field default initializers for fields not covered by constructor args
-function emitInstanceFieldDefaults(g: CGen, p: CProc, tmp: string, classType: Type, argCount: number): void {
-	if (classType === null) return;
-	const classSym = classType.sym;
-	if (classSym === null || classSym.declNode === null) return;
-	const cd = classSym.declNode.data as ClassDeclData;
-	let fieldIdx = 0;
-	for (const member of cd.classBody) {
-		if (member.kind === NodeKind.PropertyDecl) {
-			const pd = member.data as PropertyDeclData;
-			if (!pd.propIsStatic) {
-				if (pd.propInitializer !== null && fieldIdx >= argCount) {
-					// Propagate declared property type to untyped initializer so codegen
-					// (e.g., genArrayLiteral) can choose the correct C type instead of
-					// defaulting to msRefArray for empty array literals.
-					if (pd.propInitializer.nodeType === null && member.nodeType !== null) {
-						pd.propInitializer.nodeType = member.nodeType;
-					}
-					const initVal = genExpr(g, p, pd.propInitializer);
-					emitStmtsLine(p, `${tmp}->${mangleFieldName(pd.propName)} = ${initVal};`);
-				}
-				fieldIdx += 1;
-			}
-		}
-	}
-}
-
 // Check if a node is effectively null — unwraps TypeAssertion chains (e.g., `null as unknown as T`).
 function isNullExpr(node: Node): boolean {
 	let cur = node;
@@ -1029,7 +1006,6 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			const newTmp = `_new${g.labels}_`;
 			emitProcLocalsLine(p, `${cName}* ${newTmp};`);
 			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName)};`);
-			emitInstanceFieldDefaults(g, p, newTmp, node.nodeType, 0);
 			let initArgs = newTmp;
 			for (const argNode of d.newArguments) {
 				let argSnippet = genExpr(g, p, argNode);
@@ -1063,13 +1039,12 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			const cType = getTypeDesc(g, innerType);
 			ensureTypeInfoDef(g, cType, innerType);
 			if (d.newArguments.length === 0) {
-				// Check if any instance fields have initializers
-				if (hasInstanceFieldDefaults(node.nodeType)) {
+				if (classHasInitFn(innerType)) {
 					g.labels += 1;
 					const tmp0 = `_new${g.labels}_`;
 					emitProcLocalsLine(p, `${cType}* ${tmp0};`);
 					emitStmtsLine(p, `${tmp0} = ${genAllocTyped(g, cType)};`);
-					emitInstanceFieldDefaults(g, p, tmp0, node.nodeType, 0);
+					emitClassInitCall(g, p, cType, tmp0);
 					ctx.results.push(tmp0);
 				} else {
 					ctx.results.push(`${genAllocTyped(g, cType)}`);
@@ -1079,6 +1054,9 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 				const tmp = `_new${g.labels}_`;
 				emitProcLocalsLine(p, `${cType}* ${tmp};`);
 				emitStmtsLine(p, `${tmp} = ${genAllocTyped(g, cType)};`);
+				// Defaults first, positional arguments second — the explicit
+				// argument for a field wins over that field's initializer.
+				if (classHasInitFn(innerType)) { emitClassInitCall(g, p, cType, tmp); }
 				const fieldNames = (innerType.typeNames !== null) ? innerType.typeNames : null as unknown as string[];
 				let fi = 0;
 				while (fi < d.newArguments.length) {
@@ -1087,8 +1065,6 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 					emitStmtsLine(p, `${tmp}->${fieldName} = ${fieldVal};`);
 					fi += 1;
 				}
-				// Apply instance field initializers for fields not covered by constructor args
-				emitInstanceFieldDefaults(g, p, tmp, node.nodeType, d.newArguments.length);
 				ctx.results.push(tmp);
 			}
 			return;
