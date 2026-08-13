@@ -14,7 +14,7 @@ import {
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
 	emitProcLocalsLine, lookupLocalName, typeCacheGet,
 } from "./context";
-import { mangle, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, safeName, staticFieldCName } from "./names";
+import { mangle, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
@@ -2325,40 +2325,9 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 
 	if (tag === TAG_CALL_OVERLOAD) {
 		// Overloaded: all cc children are args (no callee child).
-		//
-		// cd.resolvedOverloadIdx is the RAW winner slot from check-time
-		// overload resolution — slot 0 = primary, slot k = sym.overloads[k-1].
-		// The winner may be a body-less signature (OverloadSig flag). In that
-		// case we sig→impl redirect HERE (codegen-local concern): find the
-		// unique body-bearing sym in the overload set and emit the call
-		// against ITS mangled name. Keeping the redirect in codegen lets
-		// check-time preserve the winner slot for LSP views (hover, sig
-		// help) while still emitting correct C.
-		const winnerIdx = cd.resolvedOverloadIdx;
-		let winnerSym: Symbol = sym;
-		if (winnerIdx > 0 && winnerIdx - 1 < sym.overloads.length) {
-			winnerSym = sym.overloads[winnerIdx - 1];
-		}
-		let emitIdx = winnerIdx;
-		let emitSym = winnerSym;
-		if (winnerSym !== null && hasFlag(winnerSym, SymbolFlag.OverloadSig)) {
-			// Winner is a body-less sig — redirect to the impl.
-			if (!hasFlag(sym, SymbolFlag.OverloadSig)) {
-				emitSym = sym;
-				emitIdx = 0;
-			} else {
-				let oi: int32 = 0;
-				while (oi < sym.overloads.length) {
-					const cand = sym.overloads[oi];
-					if (cand !== null && !hasFlag(cand, SymbolFlag.OverloadSig)) {
-						emitSym = cand;
-						emitIdx = oi + 1;
-						break;
-					}
-					oi = oi + 1;
-				}
-			}
-		}
+		const w = resolveOverloadWinner(sym, cd.resolvedOverloadIdx);
+		const emitSym = w.winnerSym;
+		const emitIdx = w.winnerIdx;
 		// ABI shim uses the EMITTED (impl) function type — that's the
 		// actual C function signature we're calling into.
 		let ovType = emitSym !== null && emitSym.symbolType !== null

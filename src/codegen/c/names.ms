@@ -228,6 +228,44 @@ export function mangledFunctionName(sym: Symbol, name: string, overloadIdx: numb
 	return safeName(baseName);
 }
 
+// ===== Overload winner selection (shared by C and JS call emission) =====
+// rawIdx is the RAW winner slot from check-time overload resolution —
+// slot 0 = primary, slot k = sym.overloads[k-1]. The winner may be a
+// body-less signature (OverloadSig flag); redirect to the unique
+// body-bearing sym in the set. Keeping the redirect in codegen lets
+// check-time preserve the winner slot for LSP views (hover, sig help).
+
+export interface OverloadWinner {
+	winnerSym: Symbol;
+	winnerIdx: number;
+}
+
+export function resolveOverloadWinner(sym: Symbol, rawIdx: number): OverloadWinner {
+	let winnerSym: Symbol = sym;
+	if (rawIdx > 0 && rawIdx - 1 < sym.overloads.length) {
+		winnerSym = sym.overloads[rawIdx - 1];
+	}
+	let emitIdx = rawIdx;
+	let emitSym = winnerSym;
+	if (winnerSym !== null && hasFlag(winnerSym, SymbolFlag.OverloadSig)) {
+		if (!hasFlag(sym, SymbolFlag.OverloadSig)) {
+			emitSym = sym;
+			emitIdx = 0;
+		} else {
+			for (let oi = 0; oi < sym.overloads.length; oi += 1) {
+				const cand = sym.overloads[oi];
+				if (cand !== null && !hasFlag(cand, SymbolFlag.OverloadSig)) {
+					emitSym = cand;
+					emitIdx = oi + 1;
+					break;
+				}
+			}
+		}
+	}
+	if (emitIdx < 0) emitIdx = 0;
+	return { winnerSym: emitSym, winnerIdx: emitIdx };
+}
+
 // ===== Symbol-aware classification — is this a module-level global variable? =====
 // Single source of truth for the condition that differentiates module-level `const`/`let`
 // from locals and other SymbolKind.Variable cases. Used by multiple codegen emission sites
