@@ -61,7 +61,7 @@ function emitVariableDeclCore(gen: JSGenerator, node: Node): void {
 		DeclKind.Var => { emit(gen, "var "); },
 		_ => { emit(gen, "let "); },
 	};
-	emit(gen, jsSymbolName(node.resolvedSym, d.declName, gen.bundleMode));
+	emit(gen, jsSymbolName(gen, node.resolvedSym, d.declName));
 	if (d.initializer !== null) {
 		emit(gen, " = ");
 		emitNode(gen, d.initializer);
@@ -76,7 +76,7 @@ function emitVariableDeclCore(gen: JSGenerator, node: Node): void {
 // placement and the run-once guard are emitted here.
 function emitStaticStorageDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as VariableDeclData;
-	const slot = jsSymbolName(node.resolvedSym, d.declName, gen.bundleMode);
+	const slot = jsSymbolName(gen, node.resolvedSym, d.declName);
 	gen.staticSlots.push("let " + slot + ";\n");
 	if (d.initializer === null) return;
 	if (d.declKind !== DeclKind.Const) {

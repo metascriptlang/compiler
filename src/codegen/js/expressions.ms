@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData,
 } from "../../ast/node";
-import { emit, emitNode, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName } from "./emit";
+import { emit, emitNode, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner } from "../c/names";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { int64ToDecimal } from "../../utils/string";
@@ -115,10 +115,11 @@ export function safeJsName(name: string): string {
 // they agree by construction. Uniqueness is required within the EMITTED scope:
 // the bundle is one flat scope (mangle everything), while non-bundle emits one
 // ES module per file where the import/export pair binds public names.
-export function jsSymbolName(sym: Symbol, name: string, bundleMode: boolean): string {
+export function jsSymbolName(gen: JSGenerator, sym: Symbol, name: string): string {
 	if (sym === null) return safeJsName(name);
 	if (sym.nativeName !== null && sym.nativeName !== "") return safeJsName(name);
-	if (!bundleMode && (hasFlag(sym, SymbolFlag.Exported) || hasFlag(sym, SymbolFlag.Imported))) return safeJsName(name);
+	if (gen.multiFile) return jsMultiFileName(gen, sym, name);
+	if (!gen.bundleMode && (hasFlag(sym, SymbolFlag.Exported) || hasFlag(sym, SymbolFlag.Imported))) return safeJsName(name);
 	if (sym.symbolKind === SymbolKind.Function && sym.modulePath !== null && sym.modulePath !== "") {
 		return mangledFunctionName(sym, name, sym.overloadIdx);
 	}
@@ -129,10 +130,48 @@ export function jsSymbolName(sym: Symbol, name: string, bundleMode: boolean): st
 	return safeJsName(name);
 }
 
+// Multi-file naming derives from the module's export surface, NOT from
+// Exported/Imported symbol flags: registry clones on the importing side can
+// arrive with no flags at all, while the declaring side sees flagged symbols —
+// flag-based branching makes the two sides disagree. mod.exportNames is the
+// same list on both sides. Overload sets append the slot (`f_u0`/`f_u1`)
+// because ES modules cannot export two bindings under one name; sole functions
+// keep the source name. Non-exported module-level symbols keep the bundle
+// mangling — generic instances share a post-mono name (`wrap__int32`) across
+// owners, so the module qualifier is what keeps them unique.
+function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string): string {
+	const baseName = (sym.originalName !== null && sym.originalName !== "") ? sym.originalName : name;
+	const hasModule = sym.modulePath !== null && sym.modulePath !== "";
+	let emitted = "";
+	if (sym.symbolKind === SymbolKind.EnumMember && hasModule) {
+		// Checker lowers E.Member to a flat E_Member identifier; the emitted
+		// enum declaration exports exactly those flat names.
+		emitted = safeJsName(name);
+		if (sym.modulePath !== gen.currentModulePath) recordNeededImport(gen, sym.modulePath, emitted);
+		return emitted;
+	}
+	if (sym.symbolKind === SymbolKind.Function && hasModule) {
+		if (moduleExportsName(gen, sym.modulePath, baseName)) {
+			const inSet = sym.overloadIdx > 0 || (sym.overloads !== null && sym.overloads.length > 0);
+			emitted = inSet ? `${safeJsName(baseName)}_u${sym.overloadIdx}` : safeJsName(baseName);
+		} else {
+			emitted = mangledFunctionName(sym, name, sym.overloadIdx);
+		}
+	} else if (sym.symbolKind === SymbolKind.Class && hasModule) {
+		emitted = moduleExportsName(gen, sym.modulePath, baseName) ? safeJsName(baseName) : mangledGlobalName(sym, name);
+	} else if (isModuleGlobalVar(sym)) {
+		emitted = moduleExportsName(gen, sym.modulePath, baseName) ? safeJsName(baseName) : mangledGlobalName(sym, name);
+	} else {
+		return safeJsName(name);
+	}
+	if (sym.modulePath !== gen.currentModulePath) recordNeededImport(gen, sym.modulePath, emitted);
+	return emitted;
+}
+
 export function emitIdentifier(gen: JSGenerator, node: Node): void {
 	const d = node.data as IdentifierData;
 	if (d.name === "this") { emit(gen, gen.thisName); return; }
-	emit(gen, jsSymbolName(node.resolvedSym, d.name, gen.bundleMode));
+	emit(gen, jsSymbolName(gen, node.resolvedSym, d.name));
 }
 
 // ===== Binary Expression =====
@@ -288,7 +327,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 			emitNativePattern(gen, ws.nativeName, d.arguments, ws.name);
 			return;
 		}
-		emit(gen, jsSymbolName(ws, (d.callee.data as IdentifierData).name, gen.bundleMode));
+		emit(gen, jsSymbolName(gen, ws, (d.callee.data as IdentifierData).name));
 		emit(gen, "(");
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");

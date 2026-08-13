@@ -4,7 +4,7 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitBodyOrEmpty } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitBodyOrEmpty, lookupImportSpec } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
 
 // ===== Function Declaration =====
@@ -17,7 +17,7 @@ function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 		"async_generator" => { emit(gen, "async function* "); },
 		_ => { emit(gen, "function "); },
 	};
-	emit(gen, jsSymbolName(node.resolvedSym, d.fnName, gen.bundleMode));
+	emit(gen, jsSymbolName(gen, node.resolvedSym, d.fnName));
 	emit(gen, "(");
 	const savedThisName = gen.thisName;
 	if (d.params.length > 0 && d.params[0] === "this") { gen.thisName = "$this"; }
@@ -57,43 +57,45 @@ export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
 // ===== Enum Declaration =====
 // TypeScript IIFE pattern: var E; (function(E) { E[E["A"]=0]="A"; })(E || (E = {}));
 
-function emitEnumDeclInner(gen: JSGenerator, node: Node): void {
+function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): void {
 	const d = node.data as EnumDeclData;
 	// Flat constants matching the checker's `EnumName_Member` rewrite, in both
 	// bundle and non-bundle output. The IIFE `E.Member` object form is never
 	// referenced — the checker lowers every `E.Member` access to `E_Member`.
 	// Honor explicit values (enumValues), else fall back to ordinal index.
+	// linePrefix carries `export ` to members past the first — the caller
+	// already spent its own `export ` on member zero.
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		const val = (d.enumValues !== null && i < d.enumValues.length) ? d.enumValues[i] : i;
-		if (i > 0) emitIndent(gen);
+		if (i > 0) { emitIndent(gen); emit(gen, linePrefix); }
 		emit(gen, `var ${safeJsName(d.enumName)}_${d.enumMembers[i]} = ${val};\n`);
 	}
 }
 
 export function emitEnumDecl(gen: JSGenerator, node: Node): void {
 	emitIndent(gen);
-	emitEnumDeclInner(gen, node);
+	emitEnumDeclInner(gen, node, "");
 }
 
 // ===== Class Declaration =====
 
-function jsBaseClassName(node: Node, declaredName: string, bundleMode: boolean): string {
+function jsBaseClassName(gen: JSGenerator, node: Node, declaredName: string): string {
 	const sym = node.resolvedSym;
 	if (sym === null || sym.symbolType === null) return safeJsName(declaredName);
 	let inner = sym.symbolType;
 	if (inner.kind === TypeKind.Ref && inner.typeReturn !== null) inner = inner.typeReturn;
 	if (inner.typeExtra === null || inner.typeExtra.sym === null) return safeJsName(declaredName);
 	const parent = inner.typeExtra.sym;
-	return jsSymbolName(parent, parent.name, bundleMode);
+	return jsSymbolName(gen, parent, parent.name);
 }
 
 function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as ClassDeclData;
 	emit(gen, "class ");
-	emit(gen, jsSymbolName(node.resolvedSym, d.className, gen.bundleMode));
+	emit(gen, jsSymbolName(gen, node.resolvedSym, d.className));
 	if (d.classExtends !== "") {
 		emit(gen, " extends ");
-		emit(gen, jsBaseClassName(node, d.classExtends, gen.bundleMode));
+		emit(gen, jsBaseClassName(gen, node, d.classExtends));
 	}
 	emit(gen, " {\n");
 	gen.indentLevel = gen.indentLevel + 1;
@@ -128,7 +130,7 @@ function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): 
 		"async_generator" => { emit(gen, "async function* "); },
 		_ => { emit(gen, "function "); },
 	};
-	emit(gen, jsSymbolName(member.resolvedSym, className + "_" + d.methodName, gen.bundleMode));
+	emit(gen, jsSymbolName(gen, member.resolvedSym, className + "_" + d.methodName));
 	emit(gen, "(");
 	emitJoinedSafeStrings(gen, skipThisParams(d.methodParams), ", ", safeJsName);
 	emit(gen, ") ");
@@ -200,6 +202,16 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	// Bundle: every module shares one flat scope and names carry module
 	// identity, so cross-module references need no binding statement.
 	if (gen.bundleMode) return;
+	// Multi-file: named bindings are derived from actual references
+	// (recordNeededImport), so the source import contributes only module
+	// evaluation order — a bare side-effect import.
+	if (gen.multiFile) {
+		const spec = lookupImportSpec(gen, d.importSource);
+		if (spec === "") return;
+		emitIndent(gen);
+		emit(gen, `import "${spec}";\n`);
+		return;
+	}
 	// Non-bundle mode: ES module import
 	emitIndent(gen);
 	if (d.importNames.length === 0) {
@@ -239,6 +251,19 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	// Star re-export: export * from "path"
 	if (inner.kind === NodeKind.ImportDecl) {
 		const imp = inner.data as ImportDeclData;
+		// Multi-file: every re-export form emits as `export * from` — a named
+		// list can mix runtime values with types, and naming a type binding
+		// that has no JS emission is a load-time error. Star matches at
+		// runtime, so type names simply don't participate. MS-compiled
+		// consumers resolve through the registry straight to the origin
+		// module anyway; the hub's surface only matters to hand-written JS.
+		if (gen.multiFile) {
+			const spec = lookupImportSpec(gen, imp.importSource);
+			if (spec === "") return;
+			emitIndent(gen);
+			emit(gen, `export * from "${spec}";\n`);
+			return;
+		}
 		if (imp.importNames.length === 1 && imp.importNames[0] === "*") {
 			if (!gen.bundleMode) {
 				emitIndent(gen);
@@ -275,7 +300,10 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	emitIndent(gen);
 	emit(gen, "export ");
 	match (inner.kind) {
-		NodeKind.FunctionDecl => { emitFunctionDeclInner(gen, inner); },
+		NodeKind.FunctionDecl => {
+			if (gen.multiFile) { gen.exportedNames.push(jsSymbolName(gen, inner.resolvedSym, (inner.data as FunctionDeclData).fnName)); }
+			emitFunctionDeclInner(gen, inner);
+		},
 		NodeKind.VariableDecl => {
 			const vd = inner.data as VariableDeclData;
 			match (vd.declKind) {
@@ -283,6 +311,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 				DeclKind.Var => { emit(gen, "var "); },
 				_ => { emit(gen, "let "); },
 			};
+			if (gen.multiFile) { gen.exportedNames.push(safeJsName(vd.declName)); }
 			emit(gen, safeJsName(vd.declName));
 			if (vd.initializer !== null) {
 				emit(gen, " = ");
@@ -290,8 +319,17 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 			}
 			emit(gen, ";\n");
 		},
-		NodeKind.EnumDecl => { emitEnumDeclInner(gen, inner); },
-		NodeKind.ClassDecl => { emitClassDeclInner(gen, inner); },
+		NodeKind.EnumDecl => {
+			if (gen.multiFile) {
+				const ed = inner.data as EnumDeclData;
+				for (const m of ed.enumMembers) { gen.exportedNames.push(`${safeJsName(ed.enumName)}_${m}`); }
+			}
+			emitEnumDeclInner(gen, inner, gen.multiFile ? "export " : "");
+		},
+		NodeKind.ClassDecl => {
+			if (gen.multiFile) { gen.exportedNames.push(jsSymbolName(gen, inner.resolvedSym, (inner.data as ClassDeclData).className)); }
+			emitClassDeclInner(gen, inner);
+		},
 		_ => { emitNode(gen, inner); },
 	};
 }
