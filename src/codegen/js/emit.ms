@@ -23,10 +23,60 @@ export class JSGenerator {
 	thisName: string;
 	jsBigInt64: boolean;
 	staticSlots: string[]; // module-scope storage for `static` decls written inside bodies
+	// Multi-file emit (one ES module per source module). Names derive from the
+	// export surface, imports derive from actual references — source import
+	// statements only contribute side-effect ordering.
+	multiFile: boolean;
+	currentModulePath: string;
+	importSpecKeys: string[];   // source import specifier → emitted specifier
+	importSpecVals: string[];
+	moduleSpecKeys: string[];   // absolute module path → emitted specifier
+	moduleSpecVals: string[];
+	modExportKeys: string[];    // absolute module path → source-level export names
+	modExportVals: string[][];
+	neededModules: string[];    // cross-module references collected during emission
+	neededNames: string[][];
 }
 
 export function createJSGenerator(): JSGenerator {
-	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", jsBigInt64: false, staticSlots: [] };
+	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", jsBigInt64: false, staticSlots: [],
+		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], neededModules: [], neededNames: [] };
+}
+
+export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): void {
+	for (let i = 0; i < gen.neededModules.length; i += 1) {
+		if (gen.neededModules[i] === modulePath) {
+			for (const n of gen.neededNames[i]) { if (n === name) return; }
+			gen.neededNames[i].push(name);
+			return;
+		}
+	}
+	gen.neededModules.push(modulePath);
+	gen.neededNames.push([name]);
+}
+
+export function lookupImportSpec(gen: JSGenerator, specifier: string): string {
+	for (let i = 0; i < gen.importSpecKeys.length; i += 1) {
+		if (gen.importSpecKeys[i] === specifier) return gen.importSpecVals[i];
+	}
+	return "";
+}
+
+export function lookupModuleSpec(gen: JSGenerator, modulePath: string): string {
+	for (let i = 0; i < gen.moduleSpecKeys.length; i += 1) {
+		if (gen.moduleSpecKeys[i] === modulePath) return gen.moduleSpecVals[i];
+	}
+	return "";
+}
+
+export function moduleExportsName(gen: JSGenerator, modulePath: string, name: string): boolean {
+	for (let i = 0; i < gen.modExportKeys.length; i += 1) {
+		if (gen.modExportKeys[i] === modulePath) {
+			for (const n of gen.modExportVals[i]) { if (n === name) return true; }
+			return false;
+		}
+	}
+	return false;
 }
 
 // ===== Typed Array Mapping (reference: arrayTypeForElemType) =====
