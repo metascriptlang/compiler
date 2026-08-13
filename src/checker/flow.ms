@@ -12,7 +12,7 @@ import {
 	FlowNode, FlowFlags, FlowList,
 	Type, TypeKind,
 	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData,
-	StringLiteralData,
+	StringLiteralData, HiddenStdConvData,
 	SwitchStmtData, SwitchCaseData, VariableDeclData, CallExprData,
 } from "../ast/node";
 import {
@@ -1037,6 +1037,17 @@ function extractNullFromType(t: Type | null): Type | null {
 // Compound assignments (`+=`, `-=`), UpdateExpr (`x++`, `--x`), and
 // destructuring assignments fall through to `null` — the caller widens to
 // `declared` by tail-recursing to the antecedent, which is the safe default.
+// Hidden conversions are repr plumbing (fitNode's variant↔union wrap/project);
+// the flow fact lives on the expression underneath.
+function skipHiddenConv(n: Node): Node {
+	let walk: Node = n;
+	while (walk !== null
+			&& (walk.kind === NodeKind.HiddenSubConv || walk.kind === NodeKind.HiddenStdConv)) {
+		walk = (walk.data as HiddenStdConvData).convExpr;
+	}
+	return walk;
+}
+
 function narrowByAssignment(node: Node, refNode: Node, declared: Type): Type | null {
 	if (node === null) return null;
 	if (node.kind === NodeKind.BinaryExpr) {
@@ -1045,19 +1056,21 @@ function narrowByAssignment(node: Node, refNode: Node, declared: Type): Type | n
 		if (d.left === null || !isMatchingReference(d.left, refNode)) {
 			return null;
 		}
-		if (d.right === null || d.right.nodeType === null) return null;
-		return constrainToDeclared(d.right.nodeType, declared);
+		const rhs = skipHiddenConv(d.right);
+		if (rhs === null || rhs.nodeType === null) return null;
+		return constrainToDeclared(rhs.nodeType, declared);
 	}
 	if (node.kind === NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
-		if (d.initializer === null || d.initializer.nodeType === null) {
+		const init = skipHiddenConv(d.initializer);
+		if (init === null || init.nodeType === null) {
 			return null;
 		}
 		// The reference must be an Identifier whose resolvedSym is this decl.
 		if (refNode.kind !== NodeKind.Identifier) return null;
 		const sym = refNode.resolvedSym;
 		if (sym === null || sym.declNode !== node) return null;
-		return constrainToDeclared(d.initializer.nodeType, declared);
+		return constrainToDeclared(init.nodeType, declared);
 	}
 	return null;
 }
