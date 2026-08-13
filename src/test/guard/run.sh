@@ -11,6 +11,7 @@
 #
 # Directives in a probe's header comments (optional):
 #   // GUARD-BALANCE <MangledType>   assert alloc==destroy for that type at exit
+#   // GUARD-JS                      also build --target=js + node-run; pass = exit 0 + GUARD-OK printed
 # The double-destroy abort needs no directive — it is name-agnostic.
 #
 # Env: MSC=<path to msc> (default: msc)   GUARD_GC="drc orc" (default both)
@@ -50,6 +51,7 @@ for ms in "$DIR"/*.ms; do
   name="$(basename "$ms" .ms)"
   balance=$(grep -oE '// *GUARD-BALANCE +[A-Za-z0-9_]+' "$ms" | awk '{print $NF}')
   checkfails=$(grep -E '^// GUARD-CHECK-FAIL ' "$ms" | sed -E 's|^// GUARD-CHECK-FAIL ||')
+  wantjs=$(grep -cE '^// GUARD-JS' "$ms" || true)
   for gc in $MODES; do
     bin="$TMP/$name.$gc"
     if [ -n "$checkfails" ]; then
@@ -90,6 +92,24 @@ for ms in "$DIR"/*.ms; do
     done
     [ $ok -eq 1 ] && echo "ok   $name [$gc]"
   done
+  # // GUARD-JS: the invariant also lives in the node bundle — build for the JS
+  # target and run it; pass iff exit 0 AND the probe printed GUARD-OK (values
+  # are printed before the checks, so a red run shows what it saw).
+  if [ "$wantjs" != "0" ]; then
+    jsout="$TMP/$name.mjs.js"
+    if ! ( cd "$WORK" && "$MSC" build "$ms" --target=js --output="$jsout" ) >"$TMP/$name.js.build" 2>&1; then
+      echo "FAIL $name [js]: build error"; grep -iE '^error' "$TMP/$name.js.build" | head -3
+      fail=1
+    else
+      node "$jsout" >"$TMP/$name.js.out" 2>&1; rc=$?
+      if [ $rc -ne 0 ] || ! grep -q 'GUARD-OK' "$TMP/$name.js.out"; then
+        echo "FAIL $name [js]: exit=$rc last='$(tail -1 "$TMP/$name.js.out")'"
+        fail=1
+      else
+        echo "ok   $name [js]"
+      fi
+    fi
+  fi
 done
 
 [ $fail -eq 0 ] && echo "nim-guard: ALL GREEN" || echo "nim-guard: FAILURES ABOVE"
