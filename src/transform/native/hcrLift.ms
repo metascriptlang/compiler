@@ -164,7 +164,7 @@ function varDeclToGlobal(node: Node): HcrGlobal {
 	if (d.declName.length > 8 && d.declName.endsWith("TypeInfo")) {
 		return null as unknown as HcrGlobal;
 	}
-	const t = node.nodeType !== null ? node.nodeType : null;
+	const t = node.nodeType !== null ? node.nodeType : null as unknown as Type;
 	return { name: d.declName, declType: t, initNode: d.initializer };
 }
 

@@ -339,7 +339,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		const carrierName = carrierType !== null ? typeNameOf(carrierType) : "";
 		const carriersAgree = !leftIsMaybe || !rightIsMaybe
 			|| typeNameOf(leftType) === typeNameOf(rightOperandType);
-		if ((leftIsMaybe || rightIsMaybe) && carrierName !== "" && carriersAgree) {
+		if ((leftIsMaybe || rightIsMaybe) && carrierType !== null && carrierName !== "" && carriersAgree) {
 			const eqLeft = leftIsMaybe ? d.left : makeMaybeCarrier(d.left, carrierType, loc);
 			const eqRight = rightIsMaybe ? d.right : makeMaybeCarrier(d.right, carrierType, loc);
 			registerCarrierEq(ctx, carrierType);

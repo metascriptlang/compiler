@@ -250,7 +250,7 @@ export function hasOverloads(sym: Symbol): boolean {
 
 // ===== Helper: Create Symbol Shorthand =====
 
-export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutable: boolean): Symbol {
+export function makeSymbol(name: string, kind: SymbolKind, symType: Type | null, mutable: boolean): Symbol {
 	return makeSymbolState(name, kind, symType, mutable, SymbolState.Hollow);
 }
 

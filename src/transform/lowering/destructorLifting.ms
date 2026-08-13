@@ -1062,7 +1062,7 @@ function buildVariantChain(hook: string, objType: Type, p1: string, p2: string, 
 // classType is non-null for class types (= sym.symbolType = Ref<Struct>),
 // null for value types. When non-null, param types use classType so codegen
 // emits Doc* instead of Doc — matching the pointer the runtime passes.
-function generateHook(hook: string, typeName: string, objType: Type, classType: Type, lctx: LiftCtx, loc: SourceLocation): void {
+function generateHook(hook: string, typeName: string, objType: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf = newBuf();
 	const isTrace = hook === "trace";
 	const isUnary = hook === "destroy" || hook === "wasMoved" || isTrace;
@@ -1231,7 +1231,7 @@ function emitFullTypeInfo(typeName: string, hasCycles: boolean, lctx: LiftCtx, l
 // Emit the <T>Dup hook. Ref types (class/interface) get the incref shortcut;
 // value types copy through <T>Copy. Signature identical to the paired Ref/val
 // dup emission in the old Path A / Path B, just deduplicated.
-function emitDup(typeName: string, objType: Type, classType: Type, isRef: boolean, lctx: LiftCtx, loc: SourceLocation): void {
+function emitDup(typeName: string, objType: Type, classType: Type | null, isRef: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	const dupStmts: Node[] = [];
 	if (isRef) {
 		// ref types: result = src; incref(result). No =copy call — just pointer copy + refcount.

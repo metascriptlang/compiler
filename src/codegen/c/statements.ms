@@ -3,7 +3,7 @@
 // Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
-import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
@@ -70,7 +70,7 @@ function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): st
 	let callee = genExpr(g, p, cd.callee);
 	// Resolve callee symbol + function type once (used for ABI shim + proto)
 	const nrvoSym = callNode.resolvedSym !== null ? callNode.resolvedSym : (cd.callee.resolvedSym !== null ? cd.callee.resolvedSym : null as unknown as Symbol);
-	const nrvoFnType = nrvoSym !== null && nrvoSym.symbolType !== null ? nrvoSym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null);
+	const nrvoFnType = nrvoSym !== null && nrvoSym.symbolType !== null ? nrvoSym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null as unknown as Type);
 	const hasParamTypes = nrvoFnType !== null && nrvoFnType.kind === TypeKind.Function && nrvoFnType.typeChildren !== null;
 	let argsStr = "";
 	for (let i = 0; i < cd.arguments.length; i += 1) {
@@ -87,7 +87,7 @@ function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): st
 	// Closure NRVO call: dispatch through fn pointer with env (reference: genClosureCall)
 	if (!cd.isDirectCall) {
 		const clCalleeType = cd.callee.nodeType !== null ? cd.callee.nodeType :
-			(cd.callee.resolvedSym !== null && cd.callee.resolvedSym.symbolType !== null ? cd.callee.resolvedSym.symbolType : null);
+			(cd.callee.resolvedSym !== null && cd.callee.resolvedSym.symbolType !== null ? cd.callee.resolvedSym.symbolType : null as unknown as Type);
 		const nrvoType = getTypeDesc(g, getCalleeReturnType(callNode));
 		const clFull = genClFullCastNrvo(g, clCalleeType, nrvoType);
 		const clHalf = genClHalfCastNrvo(g, clCalleeType, nrvoType);

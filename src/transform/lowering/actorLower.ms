@@ -519,7 +519,7 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 
 			// Proxy: enqueues message (what extensionMethodLower resolves to)
 			const methodParamTypes = m.nodeType !== null ? m.nodeType.typeChildren : [];
-			const methodRetType = m.nodeType !== null && m.nodeType.typeReturn !== null ? m.nodeType.typeReturn : null;
+			const methodRetType = m.nodeType !== null && m.nodeType.typeReturn !== null ? m.nodeType.typeReturn : voidType();
 			const proxyBody = isVoid
 				? buildSendProxy(msgKind, md.methodParams, methodParamTypes, ctx, loc)
 				: buildCallProxy(msgKind, md.methodParams, methodParamTypes, methodRetType, ctx, loc);

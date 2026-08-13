@@ -2196,7 +2196,7 @@ function litFieldPrimitiveUnion(node: Node, key: string): Type | null {
 function genTypeofExpr(g: CGen, opNode: Node, opC: string): string {
 	const t = opNode !== null ? opNode.nodeType : null;
 	// All-strlit unions are msString-carried — no _tag to switch on.
-	if (isTagCarriedUnion(t)) {
+	if (t !== null && isTagCarriedUnion(t)) {
 		return typeofTagSwitch(g, t, opC);
 	}
 	if (t !== null && isMaybeType(t) && t.typeReturn !== null) {
@@ -2404,7 +2404,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// cd.callee.nodeType holds the Function type (callee is an ObjectLiteral
 	// whose nodeType is a struct). Fall back to getCalleeFuncType which
 	// peeks inside the closure pair's `fn` property's nodeType.
-	let calleeType = sym !== null && sym.symbolType !== null ? sym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null);
+	let calleeType = sym !== null && sym.symbolType !== null ? sym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null as unknown as Type);
 	if (calleeType === null || calleeType.kind !== TypeKind.Function) {
 		const cpType = getCalleeFuncType(node);
 		if (cpType !== null) calleeType = cpType;
