@@ -11,6 +11,7 @@
 #
 # Directives in a probe's header comments (optional):
 #   // GUARD-BALANCE <MangledType>   assert alloc==destroy for that type at exit
+#   // GUARD-BALANCE-ORC <MangledType>  same, but under orc only (cycle leaks are by-design under drc/ARC)
 #   // GUARD-JS                      also build --target=js + node-run; pass = exit 0 + GUARD-OK printed
 # The double-destroy abort needs no directive — it is name-agnostic.
 #
@@ -50,6 +51,7 @@ for ms in "$DIR"/*.ms; do
   [ -e "$ms" ] || continue
   name="$(basename "$ms" .ms)"
   balance=$(grep -oE '// *GUARD-BALANCE +[A-Za-z0-9_]+' "$ms" | awk '{print $NF}')
+  balanceOrc=$(grep -oE '// *GUARD-BALANCE-ORC +[A-Za-z0-9_]+' "$ms" | awk '{print $NF}')
   checkfails=$(grep -E '^// GUARD-CHECK-FAIL ' "$ms" | sed -E 's|^// GUARD-CHECK-FAIL ||')
   wantjs=$(grep -cE '^// GUARD-JS' "$ms" || true)
   for gc in $MODES; do
@@ -82,7 +84,11 @@ for ms in "$DIR"/*.ms; do
       fail=1; continue
     fi
     ok=1
-    for t in $balance; do
+    # GUARD-BALANCE always; GUARD-BALANCE-ORC only under orc (cycle leaks are
+    # by-design under drc/ARC, like Nim — assert collection only where ORC runs).
+    eff="$balance"
+    [ "$gc" = "orc" ] && eff="$eff $balanceOrc"
+    for t in $eff; do
       line=$(grep -E "^LEDGER $t " "$TMP/$name.$gc.err" | tail -1)
       a=$(echo "$line" | sed -nE 's/.*alloc=([0-9]+).*/\1/p')
       d=$(echo "$line" | sed -nE 's/.*destroy=([0-9]+).*/\1/p')
