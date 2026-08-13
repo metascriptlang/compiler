@@ -308,21 +308,22 @@ function computeLastUseCaptures(captures: NameSet, closureIdx: number, stmts: No
 // outlive any single invocation of this closure — moving from them nulls the
 // field for the next call. sharedActive is unreliable here (deactivated on
 // descent into nested closures); sharedEnvCapturedNames stays populated.
+// Module-level safety: a global's readers are not confined to the statement
+// list scanned here — later top-level statements, any function, and the module
+// teardown destroy all read it, and the destructuring lowering leaves the temp
+// it was sliced from alive alongside it. The analyzer's CFG sees those and
+// rejects the move the scan would have claimed.
 function computeLastUseCapturesForState(captures: NameSet, state: LiftState): void {
 	if (state.insideLoop > 0) {
 		state.lastUseCaptures = createNameSet();
 		return;
 	}
 	const candidates = computeLastUseCaptures(captures, state.currentStmtIdx, state.currentStmts);
-	if (state.sharedEnvCapturedNames.items.length === 0) {
-		state.lastUseCaptures = candidates;
-		return;
-	}
 	const filtered: NameSet = createNameSet();
 	for (const name of candidates.items) {
-		if (!nameSetContains(state.sharedEnvCapturedNames, name)) {
-			nameSetAdd(filtered, name);
-		}
+		if (isModuleLevelVar(state.ss, name)) continue;
+		if (nameSetContains(state.sharedEnvCapturedNames, name)) continue;
+		nameSetAdd(filtered, name);
 	}
 	state.lastUseCaptures = filtered;
 }
