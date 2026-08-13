@@ -207,7 +207,7 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 		for (const arg of nd.newArguments) {
 			walkBody(arg, modulePath, importMap);
 		}
-		if (nd.newCallee.resolvedSym !== null && hasFlag(nd.newCallee.resolvedSym, SymbolFlag.HasConstructor)) {
+		if (nd.newCallee.resolvedSym !== null) {
 			const classSym = nd.newCallee.resolvedSym;
 			const className = (classSym.originalName !== "" && classSym.originalName !== null) ? classSym.originalName : classSym.name;
 			const initName = className + "_init";
@@ -274,20 +274,17 @@ function markAndWalk(modulePath: string, name: string): void {
 		const found = matchDeclName(stmt, name);
 		if (found !== null) {
 			walkBody(found, modulePath, importMap);
-			// When a class with a constructor becomes alive, also mark
-			// `<className>_init` alive — `methodToFunction` transform lifts
-			// the ctor body into a top-level FunctionDecl with that name and
-			// removes the ConstructorDecl from classBody. By the time
-			// reachability runs (post-transform), the marker we can rely on
-			// is the class symbol's HasConstructor flag (set at Phase 2
-			// collect, persists through transform). Required for both
-			// `new C(...)` (also seen by the NewExpr walker for the leaf
-			// class) and `super(args)` from a child class — which codegen
-			// lowers to `<Parent>_init(this, args)`, so any reachable parent
-			// in the inheritance chain needs its `_init` alive too.
-			if (found.kind === NodeKind.ClassDecl
-					&& found.resolvedSym !== null
-					&& hasFlag(found.resolvedSym, SymbolFlag.HasConstructor)) {
+			// When a class becomes alive, also mark `<className>_init` alive —
+			// `methodToFunction` lifts the ctor body into a top-level
+			// FunctionDecl with that name and removes the ConstructorDecl from
+			// classBody, so the name is not discoverable from the class node.
+			// Every class carries an `_init` (ctorLower synthesizes one when
+			// the source has no constructor), and marking a name that has no
+			// declaration is inert. Required for both `new C(...)` and
+			// `super(args)` from a child class — which codegen lowers to
+			// `<Parent>_init(this, args)`, so any reachable parent in the
+			// inheritance chain needs its `_init` alive too.
+			if (found.kind === NodeKind.ClassDecl) {
 				// Recursive: markAndWalk so the lifted `_init` body is also
 				// visited. The ctor body may contain `super(args)` whose
 				// parent class needs to be reached + that parent's `_init`
