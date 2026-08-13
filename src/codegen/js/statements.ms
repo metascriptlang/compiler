@@ -6,11 +6,38 @@ import {
 	ExprStmtData, ReturnStmtData, BreakStmtData, ContinueStmtData,
 	SwitchStmtData, SwitchCaseData, ThrowStmtData, TryCatchStmtData,
 	ForStmtData, ForOfStmtData, MacroInvocationData, StringLiteralData,
-	isEmptyBlock, Type,
+	AssertStmtData, isEmptyBlock, Type,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt, jsTypedArrayName } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt, jsTypedArrayName, escapeJSString } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
+
+// A failing assert must abandon the rest of its test body — the C harness does
+// this with `goto` after setting msErr, so the JS side throws and lets the
+// generated runner catch per test. Outside a test build there is no harness to
+// report to, so the throw is the report.
+export function emitAssertStmt(gen: JSGenerator, node: Node): void {
+	const d = node.data as AssertStmtData;
+	emitIndent(gen);
+	emit(gen, "if (!(");
+	emitNode(gen, d.assertExpr);
+	emit(gen, ")) { ");
+	if (gen.isTestBuild) {
+		emit(gen, "__msAssertFail(");
+		if (d.assertMessageExpr !== null) {
+			emitNode(gen, d.assertMessageExpr);
+		} else {
+			const raw = d.assertMessage.length > 0 ? d.assertMessage : d.assertSource;
+			emit(gen, `"${escapeJSString(raw)}"`);
+		}
+		emit(gen, `, "${escapeJSString(gen.currentModulePath)}", ${node.location.line.toString()});`);
+	} else {
+		emit(gen, "throw new Error(\"assert failed: ");
+		const raw = d.assertMessage.length > 0 ? d.assertMessage : d.assertSource;
+		emit(gen, `${escapeJSString(raw)}");`);
+	}
+	emit(gen, " }\n");
+}
 
 // Emit default initializer for uninitialized variable based on type.
 // Reference: createVar — typed arrays for numeric, inline literal for small, arrayConstr for large.
