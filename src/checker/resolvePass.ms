@@ -1874,6 +1874,13 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		if (!isUnresolvedType(parentType)) {
 			inner.typeExtra = parentType;
 			const parentStruct = unwrapToStruct(parentType);
+			// Stamp the parent as non-final (OpenClass) so canFormAcycle adopts the
+			// Nim tfFinal rule (types.nim:436-438): a CBase-typed field may point at
+			// a subclass that closes a back-edge, so any class that IS extended can
+			// form a cycle regardless of its own declared fields.
+			if (parentStruct.kind === TypeKind.Struct) {
+				parentStruct.typeFlags = (parentStruct.typeFlags | TypeFlag.OpenClass) as int32;
+			}
 			// B8: only struct/class parents allowed.
 			if (parentStruct.kind !== TypeKind.Struct) {
 				addError(ctx, "class can only extend another class — '" + parentExpr + "' is not a class type", node.location.line, node.location.column);

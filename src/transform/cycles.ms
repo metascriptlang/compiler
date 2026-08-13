@@ -13,11 +13,10 @@
 // a fresh IntSet marker per query and no cache at all).
 //
 // Unknown pointee (Ref with null typeReturn) is conservatively cyclic.
-// When class `extends` lands in the C backend (LANG-STRUCT Phase 2.8), this
-// oracle MUST adopt the reference non-final rule (types.nim:436-438) or a
-// closed-world subclass walk.
+// The reference non-final rule (types.nim:436-438) is implemented via the
+// OpenClass bit on the Struct arm below — a class that is extended is cyclic.
 
-import { Type, TypeKind } from "../ast/node";
+import { Type, TypeKind, TypeFlag } from "../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
 import { isAwaitable, unwrapRefNullUnion, isUnresolvedType } from "../checker/types";
 import { anonTypeName, isAnonTypeName } from "../codegen/c/types";
@@ -42,6 +41,12 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 		},
 		TypeKind.Function => true,
 		TypeKind.Struct => {
+			// Non-final rule (types.nim:436-438 `if tfFinal notin t.flags: result = true`):
+			// a class that is extended (OpenClass bit, stamped in resolveClass) can be
+			// subclassed into a back-edge, so it can form a cycle independent of its
+			// own declared fields. Independent of the typeExtra walk below (that covers
+			// field inheritance; BOTH apply).
+			if ((t.typeFlags & TypeFlag.OpenClass) !== 0) return true;
 			const key = typeIdentity(t);
 			if (withRef && key !== "" && key === origKey) return true;
 			if (key !== "") {
