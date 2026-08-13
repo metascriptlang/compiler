@@ -148,7 +148,7 @@ function instrumentAssert(assertNode: Node): Node {
 	// Build: if (!result) { ...fail... }
 	const notResult = makeUnary("!", resultRef, loc);
 	const failBlock = makeBlock(failStmts, loc);
-	const ifStmt = makeIf(notResult, failBlock, makeNull(loc), loc);
+	const ifStmt = makeIf(notResult, failBlock, null, loc);
 	stmts.push(ifStmt);
 
 	return makeBlock(stmts, loc);
@@ -185,6 +185,8 @@ function decomposeExpr(
 			object: objRef, property: d.property, isOptional: d.isOptional,
 		}, syntheticToken(loc));
 		if (expr.nodeType !== null) newMember.nodeType = expr.nodeType;
+		newMember.flags = expr.flags;
+		if (expr.resolvedSym !== null) newMember.resolvedSym = expr.resolvedSym;
 		return captureValue(newMember, exprLabel(expr), expr.location.column - baseCol, captures, loc);
 	}
 
@@ -197,6 +199,8 @@ function decomposeExpr(
 			operator: d.operator, left: leftRef, right: rightRef,
 		}, syntheticToken(loc));
 		if (expr.nodeType !== null) newBinary.nodeType = expr.nodeType;
+		newBinary.flags = expr.flags;
+		if (expr.resolvedSym !== null) newBinary.resolvedSym = expr.resolvedSym;
 		return captureValue(newBinary, exprLabel(expr), expr.location.column - baseCol, captures, loc);
 	}
 
@@ -208,6 +212,8 @@ function decomposeExpr(
 			unaryOp: d.unaryOp, operand: operandRef,
 		}, syntheticToken(loc));
 		if (expr.nodeType !== null) newUnary.nodeType = expr.nodeType;
+		newUnary.flags = expr.flags;
+		if (expr.resolvedSym !== null) newUnary.resolvedSym = expr.resolvedSym;
 		return captureValue(newUnary, exprLabel(expr), expr.location.column - baseCol, captures, loc);
 	}
 
@@ -218,16 +224,17 @@ function decomposeExpr(
 		for (let i = 0; i < d.arguments.length; i += 1) {
 			newArgs.push(decomposeExpr(d.arguments[i], captures, baseCol, loc));
 		}
-		// Callee is typically an identifier or member — decompose it too if it's a member
-		let newCallee = d.callee;
-		if (d.callee.kind === NodeKind.MemberExpr) {
-			newCallee = decomposeExpr(d.callee, captures, baseCol, loc);
-		}
+		// A method callee is left intact — later passes lower it by matching on
+		// the original node (protocol methods have no property to read at all),
+		// and a temp holding `obj.method` would be detached from its receiver.
+		// Arguments and the call result still get captured.
+		const newCallee = d.callee;
 		const newCall = createNode(NodeKind.CallExpr, {
 			callee: newCallee, arguments: newArgs,
 			isDirectCall: d.isDirectCall, resolvedOverloadIdx: d.resolvedOverloadIdx,
 		}, syntheticToken(loc));
 		if (expr.nodeType !== null) newCall.nodeType = expr.nodeType;
+		newCall.flags = expr.flags;
 		if (expr.resolvedSym !== null) newCall.resolvedSym = expr.resolvedSym;
 		return captureValue(newCall, exprLabel(expr), expr.location.column - baseCol, captures, loc);
 	}
