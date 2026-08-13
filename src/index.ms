@@ -4,7 +4,7 @@ import { exit, platform } from "std/process";
 import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
 import { setParserDefines } from "./parser/context";
 import { VERSION, printUsage } from "./compiler/usage";
-import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
+import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest, cmdTestJS } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
 import { lspRunServer } from "./compiler/lsp/server";
 import { loadBuildConfig, loadFmtSection, resolveCcForTarget } from "./compiler/buildConfig";
@@ -106,7 +106,7 @@ export function main(): number {
 		"test" => {
 			requireFile(opts);
 			if (opts.target === Target.JS) {
-				cmdRunJS(opts.inputFile, opts);
+				cmdTestJS(opts.inputFile, opts);
 			} else {
 				cmdTest(opts.inputFile, opts);
 			}
