@@ -13,6 +13,7 @@ import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule } from "../codegen/js/jsgen";
+import { escapeJSString } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
@@ -1670,10 +1671,16 @@ function relSpecBetween(fromRel: string, toRel: string): string {
 	return `./${spec}`;
 }
 
-export function cmdRunJS(filePath: string, opts: CliOptions): void {
-	filePath = canonicalModulePath(filePath);
+export interface JsTreeResult {
+	outRoot: string;
+	modulePaths: string[];
+	moduleOutRels: string[];
+	testNames: string[][];
+	testFuncs: string[][];
+}
+
+function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boolean): JsTreeResult {
 	setTargetSizes(8, 8);
-	const t0 = performance.now();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
 
@@ -1747,6 +1754,8 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	const moduleNeededMods: string[][] = [];
 	const moduleNeededNames: string[][][] = [];
 	const moduleExported: string[][] = [];
+	const moduleTestNames: string[][] = [];
+	const moduleTestFuncs: string[][] = [];
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const modPath = unitPaths[ui];
 		const ctx = unitCtxs[ui];
@@ -1771,11 +1780,13 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 			moduleSpecVals.push(relSpecBetween(fromRel, outRelVals[mi]));
 		}
 
-		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals);
+		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals, isTestBuild);
 		moduleCodes.push(res.code);
 		moduleNeededMods.push(res.neededModules);
 		moduleNeededNames.push(res.neededNames);
 		moduleExported.push(res.exportedNames);
+		moduleTestNames.push(res.testNames);
+		moduleTestFuncs.push(res.testFuncs);
 	}
 
 	// Forced exports: names other modules reference that this module didn't
@@ -1810,12 +1821,135 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 		writeOutput(outPath, code);
 	}
 
+	const outRels: string[] = [];
+	for (const mp of unitPaths) { outRels.push(lookupOutRel(outRelKeys, outRelVals, mp)); }
+	return { outRoot, modulePaths: unitPaths, moduleOutRels: outRels, testNames: moduleTestNames, testFuncs: moduleTestFuncs };
+}
+
+export function cmdRunJS(filePath: string, opts: CliOptions): void {
+	filePath = canonicalModulePath(filePath);
+	const t0 = performance.now();
+	const tree = emitJSModuleTree(filePath, opts, false);
+
 	if (opts.showTime) printTiming("compiled", t0);
 
-	// Execute entry module
-	const entryJs = `${outRoot}/${lookupOutRel(outRelKeys, outRelVals, filePath)}`;
+	let entryRel = "";
+	for (let i = 0; i < tree.modulePaths.length; i += 1) {
+		if (tree.modulePaths[i] === filePath) entryRel = tree.moduleOutRels[i];
+	}
+	const entryJs = `${tree.outRoot}/${entryRel}`;
 	if (opts.verbose) verboseLog(`exec node ${entryJs}`);
 	const r = exec(`node ${entryJs}`);
+	if (r.ok) {
+		if (r.value !== "") console.log(r.value);
+		exit(0);
+	}
+	if (r.error.output !== "") console.log(r.error.output);
+	if (r.error.errorOutput !== "") console.log(r.error.errorOutput);
+	exit(r.error.exitCode !== 0 ? r.error.exitCode : 1);
+}
+
+// ===== Test (JS backend) =====
+// Same module tree as cmdRunJS plus a generated harness. The harness owns the
+// reporting format so `msc test` reads identically on both targets; the
+// assertion shims are installed on globalThis before the test modules are
+// dynamically imported, because the emitted power-assert calls are bare
+// identifiers with no import to bind them.
+
+function jsTestHarnessSource(): string {
+	const lines: string[] = [
+		"const RESET = \"\\u001b[0m\", GREEN = \"\\u001b[32m\", RED = \"\\u001b[31m\", CYAN = \"\\u001b[36m\", DIM = \"\\u001b[2m\";",
+		"let paSource = \"\", paEntries = [], paPending = null;",
+		"globalThis.__paBegin = (src) => { paSource = src; paEntries = []; paPending = null; };",
+		"globalThis.__paValueStr = (col, label, val) => { paEntries.push({ col, label, val: JSON.stringify(val) }); };",
+		"globalThis.__paValueNum = (col, label, val) => { paEntries.push({ col, label, val: String(val) }); };",
+		"globalThis.__paValueInt = (col, label, val) => { paEntries.push({ col, label, val: String(val) }); };",
+		"globalThis.__paValueBool = (col, label, val) => { paEntries.push({ col, label, val: val ? \"true\" : \"false\" }); };",
+		"globalThis.__paEnd = () => {",
+		"  const sorted = paEntries.slice().sort((a, b) => b.col - a.col);",
+		"  const out = [paSource];",
+		"  for (const e of sorted) out.push(\"  \" + e.label + \" => \" + e.val);",
+		"  paPending = out;",
+		"};",
+		"globalThis.__msAssertFail = (msg, file, line) => {",
+		"  const err = new Error(msg);",
+		"  err.msAssert = true; err.msFile = file; err.msLine = line; err.msDiag = paPending;",
+		"  paPending = null;",
+		"  throw err;",
+		"};",
+		"export async function run(modules) {",
+		"  let filesPassed = 0, filesFailed = 0, testsPassed = 0, testsFailed = 0;",
+		"  const failures = [];",
+		"  const t0 = Date.now();",
+		"  for (const mod of modules) {",
+		"    const ns = await import(mod.spec);",
+		"    const started = Date.now();",
+		"    let modFailed = 0;",
+		"    for (let i = 0; i < mod.funcs.length; i += 1) {",
+		"      try { ns[mod.funcs[i]](); testsPassed += 1; }",
+		"      catch (e) { testsFailed += 1; modFailed += 1; failures.push({ file: mod.path, name: mod.names[i], err: e }); }",
+		"    }",
+		"    const ms = Date.now() - started;",
+		"    if (modFailed > 0) { filesFailed += 1; console.log(RED + \"\\u00d7\" + RESET + \" \" + mod.path + \" (\" + mod.funcs.length + \") \" + DIM + ms + \"ms\" + RESET); }",
+		"    else { filesPassed += 1; console.log(GREEN + \"\\u2713\" + RESET + \" \" + mod.path + \" (\" + mod.funcs.length + \") \" + DIM + ms + \"ms\" + RESET); }",
+		"  }",
+		"  let lastFile = null;",
+		"  for (const f of failures) {",
+		"    if (f.file !== lastFile) { console.log(\"\\n \" + RED + \"FAIL\" + RESET + \"  \" + f.file + \"\\n\"); lastFile = f.file; }",
+		"    console.log(\"  \" + RED + \"\\u00d7 \" + f.name + RESET);",
+		"    if (f.err && f.err.msDiag) { console.log(\"    AssertionError:\"); for (const l of f.err.msDiag) console.log(\"    \" + l); }",
+		"    else { console.log(\"    AssertionError: \" + (f.err && f.err.message ? f.err.message : String(f.err))); }",
+		"    if (f.err && f.err.msFile) console.log(\"\\n      \" + DIM + \"at \" + f.err.msFile + \":\" + f.err.msLine + RESET);",
+		"    console.log(\"\");",
+		"  }",
+		"  const total = testsPassed + testsFailed;",
+		"  console.log(\"\");",
+		"  let filesLine = \" Test Files  \" + GREEN + filesPassed + \" passed\" + RESET;",
+		"  if (filesFailed > 0) filesLine += \" | \" + RED + filesFailed + \" failed\" + RESET;",
+		"  console.log(filesLine + \" (\" + (filesPassed + filesFailed) + \")\");",
+		"  let testsLine = \"      Tests  \" + GREEN + testsPassed + \" passed\" + RESET;",
+		"  if (testsFailed > 0) testsLine += \" | \" + RED + testsFailed + \" failed\" + RESET;",
+		"  console.log(testsLine + \" (\" + total + \")\");",
+		"  console.log(\"   Duration  \" + CYAN + (Date.now() - t0) + \"ms\" + RESET);",
+		"  console.log(\"\");",
+		"  if (testsFailed > 0) process.exitCode = 1;",
+		"}",
+	];
+	let src = "";
+	for (const line of lines) { src = `${src}${line}\n`; }
+	return src;
+}
+
+export function cmdTestJS(filePath: string, opts: CliOptions): void {
+	filePath = canonicalModulePath(filePath);
+	const t0 = performance.now();
+	const tree = emitJSModuleTree(filePath, opts, true);
+
+	const harnessRel = "_test/harness.js";
+	ensureDir(`${tree.outRoot}/_test`);
+	writeOutput(`${tree.outRoot}/${harnessRel}`, jsTestHarnessSource());
+
+	let entries = "";
+	for (let i = 0; i < tree.modulePaths.length; i += 1) {
+		if (tree.testFuncs[i].length === 0) continue;
+		const spec = relSpecBetween(harnessRel, tree.moduleOutRels[i]);
+		let funcs = "";
+		let names = "";
+		for (let ti = 0; ti < tree.testFuncs[i].length; ti += 1) {
+			if (ti > 0) { funcs = `${funcs}, `; names = `${names}, `; }
+			funcs = `${funcs}"${tree.testFuncs[i][ti]}"`;
+			names = `${names}"${escapeJSString(tree.testNames[i][ti])}"`;
+		}
+		entries = `${entries}  { path: "${escapeJSString(tree.modulePaths[i])}", spec: "${spec}", funcs: [${funcs}], names: [${names}] },\n`;
+	}
+	const mainSrc = `import { run } from "./harness.js";\nawait run([\n${entries}]);\n`;
+	writeOutput(`${tree.outRoot}/_test/main.js`, mainSrc);
+
+	if (opts.showTime) printTiming("compiled", t0);
+
+	const mainJs = `${tree.outRoot}/_test/main.js`;
+	if (opts.verbose) verboseLog(`exec node ${mainJs}`);
+	const r = exec(`node ${mainJs}`);
 	if (r.ok) {
 		if (r.value !== "") console.log(r.value);
 		exit(0);
