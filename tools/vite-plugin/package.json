@@ -1,0 +1,16 @@
+{
+  "name": "vite-plugin-metascript",
+  "version": "0.1.0",
+  "description": "Vite plugin for MetaScript — resolves .ms imports to compiler-emitted ES modules",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js"
+  ],
+  "peerDependencies": {
+    "vite": ">=5"
+  }
+}
