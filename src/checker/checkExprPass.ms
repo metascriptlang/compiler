@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { inferredType, noneType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct } from "./types";
+import { inferredType, noneType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, isMaybeWrappable, createMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed, getCtorParamTypes } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
@@ -1586,6 +1586,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			} else {
 				retypeEmptyArrayBranch(d.ternaryConsequent, d.ternaryAlternate.nodeType);
 				retypeEmptyArrayBranch(d.ternaryAlternate, d.ternaryConsequent.nodeType);
+				const joined = joinNullTernary(d.ternaryConsequent.nodeType, d.ternaryAlternate.nodeType);
+				if (joined !== null) {
+					d.ternaryConsequent = fitNode(ctx, d.ternaryConsequent, joined, d.ternaryConsequent.nodeType);
+					d.ternaryAlternate = fitNode(ctx, d.ternaryAlternate, joined, d.ternaryAlternate.nodeType);
+					node.nodeType = joined; return;
+				}
 			}
 			node.nodeType = d.ternaryConsequent.nodeType; return;
 		},
@@ -2011,6 +2017,19 @@ function synthCStringConv(expr: Node, cstr: Type): Node {
 	conv.nodeType = cstr;
 	conv.flags = conv.flags | NodeFlag.Sem;
 	return conv;
+}
+
+function joinNullTernary(a: Type | null, b: Type | null): Type | null {
+	if (a === null || b === null) return null;
+	const aNull = a.kind === TypeKind.Null;
+	const bNull = b.kind === TypeKind.Null;
+	if (aNull === bNull) return null;
+	let t = aNull ? b : a;
+	if (t.kind === TypeKind.StringLiteral) t = stringType();
+	if (isMaybeType(t)) return t;
+	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr || t.kind === TypeKind.Unknown) return t;
+	if (isMaybeWrappable(t)) return createMaybeType(t);
+	return null;
 }
 
 function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
