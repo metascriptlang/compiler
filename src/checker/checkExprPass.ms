@@ -2392,9 +2392,39 @@ function arrayDisplay(t: Type | null): string {
 // Index of `exprType` among a discriminated union's variants, or -1. Matches
 // codegen's own rule (expressions.ms, "Variant struct → discriminated union")
 // so the checker and the emitter agree on which slot a value belongs in.
+// Non-struct member match. Refuses unions with a Null member (those are the
+// Maybe/nilable family — synthMaybeWrap and nullableLower own them, and their C
+// repr is not a tagged union) and all-string-literal unions (repr = msString).
+function primitiveMemberIndexInUnion(formal: Type, exprType: Type): int32 {
+	if (formal.kind !== TypeKind.Union || formal.typeChildren === null) return -1;
+	const ek = exprType.kind;
+	if (ek === TypeKind.Struct || ek === TypeKind.Union || ek === TypeKind.Null) return -1;
+	let allStrLit = true;
+	for (const child of formal.typeChildren) {
+		if (child === null || child.kind === TypeKind.Null) return -1;
+		if (child.kind !== TypeKind.StringLiteral) allStrLit = false;
+	}
+	if (allStrLit) return -1;
+	let found: int32 = -1;
+	let vi: int32 = 0;
+	for (const child of formal.typeChildren) {
+		let hit = child === exprType;
+		if (!hit && child.kind !== TypeKind.Struct && child.kind !== TypeKind.Ref) {
+			hit = child.kind === ek
+				|| (child.kind === TypeKind.String && ek === TypeKind.StringLiteral);
+		}
+		if (hit) {
+			if (found >= 0) return -1;
+			found = vi;
+		}
+		vi += 1;
+	}
+	return found;
+}
+
 function variantIndexInUnion(formal: Type, exprType: Type): int32 {
 	if (formal.kind !== TypeKind.Union || formal.typeChildren === null) return -1;
-	if (exprType.kind !== TypeKind.Struct) return -1;
+	if (exprType.kind !== TypeKind.Struct) return primitiveMemberIndexInUnion(formal, exprType);
 	// Identity/name first; a named variant resolves there. Union variants are
 	// often ANONYMOUS object types while the value carries a type ALIAS name
 	// (`NodeData`'s variants vs `TypeUnionData`), so fall back to the same
