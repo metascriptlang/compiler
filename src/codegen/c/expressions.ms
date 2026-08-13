@@ -8,7 +8,7 @@
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag } from "../../checker/types";
-import { SymbolFlag, hasFlag } from "../../checker/symbol";
+import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
@@ -56,7 +56,7 @@ function classHasInitFn(innerType: Type): boolean {
 }
 
 function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void {
-	const initName = cName + "_init";
+	const initName = initFnName(cName);
 	const protoKey = "proto:" + initName;
 	if (!nameSetHas(g.declaredProcs, protoKey)) {
 		nameSetAdd(g.declaredProcs, protoKey);
@@ -985,7 +985,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			// `methodToFunction` transform) — no `<Class>_new` wrapper exists any
 			// more. This matches the inline pattern already used for class-without-
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
-			const initName = cName + "_init";
+			const initName = initFnName(cName);
 			const ctorEntry = lookupCtorDefaults(cName + "_new");
 			let ctorChildren: Type[] = null as unknown as Type[];
 			if (ctorEntry !== null && ctorEntry.fnType !== null) {
@@ -1146,7 +1146,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void
 			parentName = getTypeDesc(g, parentSym.symbolType);
 		}
 		if (parentName !== "") {
-			const parentInitName = parentName + "_init";
+			const parentInitName = initFnName(parentName);
 			const parentEntry = lookupCtorDefaults(parentName + "_new");
 			let parentChildren: Type[] = null as unknown as Type[];
 			if (parentEntry !== null && parentEntry.fnType !== null) {

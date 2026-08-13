@@ -10,7 +10,7 @@ import { Node, NodeKind, ProgramData, FunctionDeclData, ImportDeclData,
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
 import { AliveSet, createAliveSet, aliveSetAdd } from "../codegen/c/context";
-import { hasFlag, SymbolFlag } from "./symbol";
+import { hasFlag, SymbolFlag, initFnName } from "./symbol";
 
 // ===== Module Index =====
 // Maps module path to its program AST for cross-module tracing.
@@ -210,7 +210,7 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 		if (nd.newCallee.resolvedSym !== null) {
 			const classSym = nd.newCallee.resolvedSym;
 			const className = (classSym.originalName !== "" && classSym.originalName !== null) ? classSym.originalName : classSym.name;
-			const initName = className + "_init";
+			const initName = initFnName(className);
 			const ctorMod = classSym.modulePath !== "" ? classSym.modulePath : modulePath;
 			markAndWalk(ctorMod, initName);
 		}
@@ -290,7 +290,7 @@ function markAndWalk(modulePath: string, name: string): void {
 				// parent class needs to be reached + that parent's `_init`
 				// chained alive too. Without recursion, A → B → C inheritance
 				// chains stop at the leaf and parent `_init`s drop out.
-				markAndWalk(modulePath, name + "_init");
+				markAndWalk(modulePath, initFnName(name));
 			}
 		}
 	}

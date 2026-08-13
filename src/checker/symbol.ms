@@ -2,6 +2,13 @@ import { Node, NodeKind, ClassDeclData, ActorDeclData, Symbol, SymbolKind, Symbo
 import { noneType } from "./types";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 
+// The lifted constructor's name. Read by reachability (DCE marking),
+// methodToFunction (which creates it) and the C backend (call + proto sites) —
+// they must agree exactly or the call resolves to nothing at link time.
+export function initFnName(className: string): string {
+	return className + "_init";
+}
+
 function classStructTypeOf(classSym: Symbol): Type {
 	let t = classSym.symbolType;
 	if (t === null) return null as unknown as Type;

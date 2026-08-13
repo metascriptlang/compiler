@@ -26,7 +26,7 @@
 
 import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind, Type } from "../../ast/node";
 import { TransformContext } from "../context";
-import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
+import { makeSymbol, setFlag, SymbolFlag, initFnName } from "../../checker/symbol";
 import { createFunction, voidType, noneType } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 
@@ -88,7 +88,7 @@ function methodToFunctionDecl(methodNode: Node): Node {
 function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: Node): Node {
 	const cd = ctorNode.data as ConstructorDeclData;
 	const className = (classNode.data as ClassDeclData).className;
-	const initName = `${className}_init`;
+	const initName = initFnName(className);
 	const receiverType = classGenerics !== "" ? `${className}<${classGenerics}>` : className;
 	const newParams: string[] = ["this"];
 	const newParamTypes: string[] = [receiverType];
