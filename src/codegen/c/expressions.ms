@@ -1049,24 +1049,10 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 				} else {
 					ctx.results.push(`${genAllocTyped(g, cType)}`);
 				}
-			} else {
-				g.labels += 1;
-				const tmp = `_new${g.labels}_`;
-				emitProcLocalsLine(p, `${cType}* ${tmp};`);
-				emitStmtsLine(p, `${tmp} = ${genAllocTyped(g, cType)};`);
-				// Defaults first, positional arguments second — the explicit
-				// argument for a field wins over that field's initializer.
-				if (classHasInitFn(innerType)) { emitClassInitCall(g, p, cType, tmp); }
-				const fieldNames = (innerType.typeNames !== null) ? innerType.typeNames : null as unknown as string[];
-				let fi = 0;
-				while (fi < d.newArguments.length) {
-					const fieldVal = genExpr(g, p, d.newArguments[fi]);
-					const fieldName = (fieldNames !== null && fi < fieldNames.length) ? mangleFieldName(fieldNames[fi]) : ("_f" + fi);
-					emitStmtsLine(p, `${tmp}->${fieldName} = ${fieldVal};`);
-					fi += 1;
-				}
-				ctx.results.push(tmp);
 			}
+			// Positional args>0 on a ctor-less Ref type used to be emitted inline
+			// here; newExprLower now materializes it (alloc + `_init` + field
+			// assigns) in the shared transform, so only the 0-arg path remains.
 			return;
 		}
 		// TypeReference eliminated — all types resolved before codegen
@@ -1096,28 +1082,10 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		if (d.newArguments.length === 0) {
 			// No-arg new without constructor: allocate with zero-init
 			ctx.results.push(`${genAllocTyped(g, calleeName)}`);
-		} else {
-			// Positional args → field-by-field assignment using type info
-			g.labels += 1;
-			const tmp = `_new${g.labels}_`;
-			emitProcLocalsLine(p, `${calleeName}* ${tmp};`);
-			// Get field names from the class type (Ref → unwrap to Struct → typeNames)
-			const classType = node.nodeType;
-			const innerType = (classType !== null && (classType.kind === TypeKind.Ref || classType.kind === TypeKind.Ptr)) ? classType.typeReturn : classType;
-			const fieldNames = (innerType !== null && innerType.typeNames !== null) ? innerType.typeNames : null as unknown as string[];
-			// Positional args cover EVERY declared field → the loop below writes each
-			// explicitly, so Uninit is safe (subject to the no-inheritance guard in pickAllocExpr).
-			const argsCover = fieldNames !== null && d.newArguments.length === fieldNames.length;
-			emitStmtsLine(p, `${tmp} = ${pickAllocExpr(g, calleeName, innerType, argsCover)};`);
-			let fi = 0;
-			while (fi < d.newArguments.length) {
-				const fieldVal = genExpr(g, p, d.newArguments[fi]);
-				const fieldName = (fieldNames !== null && fi < fieldNames.length) ? mangleFieldName(fieldNames[fi]) : ("_f" + fi);
-				emitStmtsLine(p, `(*${tmp}).${fieldName} = ${fieldVal};`);
-				fi += 1;
-			}
-			ctx.results.push(tmp);
 		}
+		// Positional args>0 fallback used to emit field-by-field assignments
+		// here; newExprLower materializes it in the shared transform now, so
+		// only the 0-arg path remains.
 		return;
 	}
 
@@ -2966,8 +2934,6 @@ test "postfix decrement" { assert exprSnippet("x--;") === "(x--)"; }
 test "prefix decrement" { assert exprSnippet("--x;") === "(--x)"; }
 
 test "simple new" { assert exprSnippet("new Foo();") === "(Foo*)msAllocTyped(sizeof(Foo), &FooTypeInfo)"; }
-
-test "new with args" { assert exprSnippet("new Bar(1, 2);") === "_new1_"; }
 
 test "move identifier" { assert exprSnippet("move x;") === "x"; }
 
