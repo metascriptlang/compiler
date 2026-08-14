@@ -18,7 +18,7 @@ import {
 	makeTestModule, getFuncConst, getFuncConstLen, getFuncInst, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
 import { orcCollectCycles } from "./orc";
-import { lookupHostFn, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps } from "./hostRegistry";
+import { lookupHostFn, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap } from "./hostRegistry";
 import { RaiserHostFn } from "./marshal";
 
 // --- VM State ---
@@ -889,8 +889,15 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 		i = i + 1;
 	}
 
+	// Save/restore so a bridge that re-enters a nested VM leaves the outer
+	// VM's heaps active when it resumes.
+	const prevObjHeap = activeHostObjectHeap();
+	const prevArrHeap = activeHostArrayHeap();
 	setActiveHostHeaps(vm.objectHeap, vm.arrayHeap);
 	const result = fn(args);
+	if (prevObjHeap !== null && prevArrHeap !== null) {
+		setActiveHostHeaps(prevObjHeap, prevArrHeap);
+	}
 
 	const dst = getReg(vm, base + inst.a);
 	vmIncref(vm, result);

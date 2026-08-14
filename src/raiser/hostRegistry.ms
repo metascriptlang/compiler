@@ -64,7 +64,8 @@ export function hostRegistrySize(): number {
 // Bridges receive RaiserValue args by value; an Object/Array value is only a
 // handle, so a bridge that must dereference one (msNodeChildCount/At) needs
 // the executing VM's heaps. vmHandleCallHost publishes them here before each
-// dispatch.
+// dispatch and restores the previous pair after, so nested VM runs inside a
+// bridge leave the outer VM's heaps active when the outer bridge resumes.
 
 let _activeObjectHeap: RaiserObjectHeap | null = null;
 let _activeArrayHeap: RaiserArrayHeap | null = null;
@@ -86,6 +87,8 @@ export function activeHostArrayHeap(): RaiserArrayHeap | null {
 export function _resetHostRegistryForTests(): void {
 	_registry.entries.length = 0;
 	_registry.initialized = false;
+	_activeObjectHeap = null;
+	_activeArrayHeap = null;
 }
 
 // --- Tests ---
