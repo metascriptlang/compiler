@@ -39,12 +39,19 @@ export class JSGenerator {
 	isTestBuild: boolean;
 	testNames: string[];        // parallel with testFuncs: declared name → wrapper fn
 	testFuncs: string[];
+	// Statement-level `/* line N:C "path" */` markers; sourcemap.ms reads them
+	// back out of the finished text to build the mapping.
+	lineDir: boolean;
+	sourceFile: string;
+	lastDirLine: int32;
+	lastDirColumn: int32;
 }
 
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", jsBigInt64: false, staticSlots: [],
 		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], neededModules: [], neededNames: [],
-		isTestBuild: false, testNames: [], testFuncs: [] };
+		isTestBuild: false, testNames: [], testFuncs: [],
+		lineDir: false, sourceFile: "", lastDirLine: 0 as int32, lastDirColumn: -1 as int32 };
 }
 
 export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): void {
@@ -135,6 +142,23 @@ export function emitLine(gen: JSGenerator, text: string): void {
 
 export function emitNewline(gen: JSGenerator): void {
 	emit(gen, "\n");
+}
+
+// Must own its line: the map parser reads a marker only when it is the whole
+// line, and treats every following line as belonging to the same source line.
+export function emitLineDir(gen: JSGenerator, node: Node): void {
+	if (!gen.lineDir) return;
+	if (node === null || node.location === null) return;
+	const line = node.location.line;
+	const column = node.location.column;
+	if (line <= 0) return;
+	// A repeat of the exact same position leaves the parser in the state it is
+	// already in, so the marker would only add noise.
+	if (line === gen.lastDirLine && column === gen.lastDirColumn) return;
+	gen.lastDirLine = line;
+	gen.lastDirColumn = column;
+	emitIndent(gen);
+	emit(gen, `/* line ${line.toString()}:${column.toString()} "${escapeJSString(gen.sourceFile)}" */\n`);
 }
 
 // ===== Composite Emit Helpers =====
