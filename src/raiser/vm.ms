@@ -18,7 +18,7 @@ import {
 	makeTestModule, getFuncConst, getFuncConstLen, getFuncInst, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
 import { orcCollectCycles } from "./orc";
-import { lookupHostFn, registerHostFn, _resetHostRegistryForTests } from "./hostRegistry";
+import { lookupHostFn, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps } from "./hostRegistry";
 import { RaiserHostFn } from "./marshal";
 
 // --- VM State ---
@@ -889,6 +889,7 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 		i = i + 1;
 	}
 
+	setActiveHostHeaps(vm.objectHeap, vm.arrayHeap);
 	const result = fn(args);
 
 	const dst = getReg(vm, base + inst.a);
