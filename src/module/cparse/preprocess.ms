@@ -127,10 +127,7 @@ function copyLine(ctx: PPContext, tok: CToken): CToken[] {
 		cur = c;
 	}
 	cur.next = newEof(ctx, tok);
-	// When the line runs to EOF, tok IS the EOF token and tok.next is null —
-	// return the EOF itself so callers always get a walkable token.
-	let rest = tok.next;
-	if (tok.kind === CTokenKind.Eof) rest = tok;
+	const rest = tok.kind === CTokenKind.Eof ? tok : tok.next;
 	return [head.next, rest]; // [copied line head, rest of stream]
 }
 
