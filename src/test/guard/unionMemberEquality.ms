@@ -19,6 +19,11 @@
 //   `=== null` and an absent carrier are the two presence cases: neither is a
 //   member comparison, and both must survive the lowering unchanged.
 //
+//   A carrier whose payload is itself a tagged union (`number | string | null`)
+//   compares two `msUnion_*` structs inside the generated body — not valid C.
+//   Tags must agree, and a slot is only read when its own tag is live, so two
+//   absent-or-inactive slots never compare their garbage.
+//
 // SCOPE: only the Maybe carrier. A general tagged union compared against one of
 //   its members (`let u: number | string = 200; u === 200`) is still broken on C
 //   — it reaches the backend un-narrowed and clang rejects
@@ -45,6 +50,29 @@ function main(): void {
 	if (c === null) { throw "GUARD RED: presence test flipped"; }
 	if (absent === 200) { throw "GUARD RED: an absent carrier compared equal to a member"; }
 	if (c === 201) { throw "GUARD RED: unequal member compared equal"; }
+
+	let w: number | string | null = 200;
+	let sameW: number | string | null = 200;
+	let pct: number | string | null = "50%";
+	let samePct: number | string | null = "50%";
+	let otherPct: number | string | null = "60%";
+	let unset: number | string | null = null;
+	let alsoUnset: number | string | null = null;
+
+	console.log("w=" + (w === 200));
+	console.log("pct=" + (pct === "50%"));
+	console.log("crossTag=" + (w === pct));
+	console.log("bothUnset=" + (unset === alsoUnset));
+
+	if (!(w === 200)) { throw "GUARD RED: number slot of a union payload"; }
+	if (!(w === sameW)) { throw "GUARD RED: two carriers holding the same number"; }
+	if (!(pct === "50%")) { throw "GUARD RED: string slot of a union payload"; }
+	if (!(pct === samePct)) { throw "GUARD RED: two carriers holding the same string"; }
+	if (pct === otherPct) { throw "GUARD RED: different strings compared equal"; }
+	if (w === pct) { throw "GUARD RED: different tags compared equal"; }
+	if (w === "50%") { throw "GUARD RED: number slot matched a string literal"; }
+	if (!(unset === alsoUnset)) { throw "GUARD RED: two absent payloads compared unequal"; }
+	if (unset === w) { throw "GUARD RED: an absent payload matched a live one"; }
 
 	console.log("GUARD-OK");
 }
