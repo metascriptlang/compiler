@@ -123,7 +123,31 @@ function resolveDbgIdent(name: string, ctx: TransformContext, loc: SourceLocatio
 
 // Wrap a field access node in the appropriate json builder call.
 // Handles primitives, nested structs, and arrays recursively.
-function wrapFieldAsJson(fieldAccess: Node, ftype: Type, loc: SourceLocation, ctx: TransformContext): Node {
+const debugJsonMaxDepth = 16;
+
+function structIsExpanding(expanding: string[], name: string): boolean {
+	if (expanding.length >= debugJsonMaxDepth) return true;
+	if (name === "") return false;
+	let i = 0;
+	while (i < expanding.length) {
+		if (expanding[i] === name) return true;
+		i = i + 1;
+	}
+	return false;
+}
+
+function withStructName(expanding: string[], name: string): string[] {
+	const out: string[] = [];
+	let i = 0;
+	while (i < expanding.length) {
+		out.push(expanding[i]);
+		i = i + 1;
+	}
+	out.push(name);
+	return out;
+}
+
+function wrapFieldAsJson(fieldAccess: Node, ftype: Type, loc: SourceLocation, ctx: TransformContext, expanding: string[]): Node {
 	if (ftype === null) return makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc);
 
 	// Primitives
@@ -141,7 +165,10 @@ function wrapFieldAsJson(fieldAccess: Node, ftype: Type, loc: SourceLocation, ct
 	// Nested struct → recursive jsonObject
 	const inner = unwrapRef(ftype);
 	if (inner.kind === TypeKind.Struct && inner.typeNames !== null && inner.typeChildren !== null) {
-		return buildNestedJsonObject(fieldAccess, inner, loc, ctx);
+		if (structIsExpanding(expanding, inner.typeName)) {
+			return makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc);
+		}
+		return buildNestedJsonObject(fieldAccess, inner, loc, ctx, expanding);
 	}
 
 	// Fallback: jsonNull
@@ -159,7 +186,7 @@ function jsonObjectParamType(ctx: TransformContext, loc: SourceLocation, index: 
 }
 
 // Build jsonObject(keys, vals) for a nested struct field
-function buildNestedJsonObject(obj: Node, structType: Type | null, loc: SourceLocation, ctx: TransformContext): Node {
+function buildNestedJsonObject(obj: Node, structType: Type | null, loc: SourceLocation, ctx: TransformContext, expanding: string[]): Node {
 	const keyNodes: Node[] = [];
 	const valNodes: Node[] = [];
 	if (structType === null) {
@@ -171,6 +198,7 @@ function buildNestedJsonObject(obj: Node, structType: Type | null, loc: SourceLo
 		valsArrEmpty.nodeType = valsTypeEmpty !== null ? valsTypeEmpty : createArray(createPtr(voidType()));
 		return makeCall(resolveDbgIdent("jsonObject", ctx, loc), [keysArrEmpty, valsArrEmpty], loc);
 	}
+	const nested = withStructName(expanding, structType.typeName);
 	let fi = 0;
 	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
 		const fname = structType.typeNames[fi];
@@ -180,7 +208,7 @@ function buildNestedJsonObject(obj: Node, structType: Type | null, loc: SourceLo
 		// Codegen reads the node's type to pick `.` vs `->`; a synthesized access
 		// with no type reads a Ref field as a value.
 		fa.nodeType = ftype;
-		valNodes.push(wrapFieldAsJson(fa, ftype, loc, ctx));
+		valNodes.push(wrapFieldAsJson(fa, ftype, loc, ctx, nested));
 		fi = fi + 1;
 	}
 	const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticToken(loc));
@@ -213,7 +241,7 @@ function buildStructDebugString(arg: Node, typeName: string, structType: Type | 
 	const prefix = makeString(color + label + "\x1b[0m", loc);
 	prefix.nodeType = stringType();
 
-	const objCall = buildNestedJsonObject(arg, structType, loc, ctx);
+	const objCall = buildNestedJsonObject(arg, structType, loc, ctx, []);
 
 	// stringify(obj, true) — colored console output
 	const strCall = makeCall(resolveDbgIdent("stringify", ctx, loc), [objCall, makeBool(true, loc)], loc);
@@ -234,7 +262,7 @@ export function buildStructToString(arg: Node, inner: Type, loc: SourceLocation,
 		structType = inner;
 	}
 	if (structType === null) return arg;
-	const objCall = buildNestedJsonObject(arg, structType, loc, ctx);
+	const objCall = buildNestedJsonObject(arg, structType, loc, ctx, []);
 	const strCall = makeCall(resolveDbgIdent("stringify", ctx, loc), [objCall, makeBool(false, loc)], loc);
 	strCall.nodeType = stringType();
 	return strCall;
