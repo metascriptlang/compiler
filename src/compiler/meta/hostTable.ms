@@ -49,6 +49,7 @@ import {
 	unboxString, unboxInt,
 	boxString, boxInt,
 } from "../../raiser/marshal";
+import { isNodeWireMetaField } from "./wire";
 
 import { exists, isFile, isDir, fileSize, readFile, writeFile, mkdir, rmdir, remove, rename, readDir } from "std/fs";
 import { cwd, platform, env, exec } from "std/process";
@@ -239,21 +240,30 @@ function _bridge_msProcSpawnGetStderr(args: RaiserValue[]): RaiserValue {
 // macro VM's flat wire (the Nim n[i]/n.len analog), so a top-level helper
 // shared between macros can walk nodes without engine-mode flat-field reads.
 // A child slot is any Object field carrying a numeric "kind" (a Node), or
-// each such element of an Array field, in field-insertion order — the order
-// addKindFields (compiler/meta/expand.ms) wrote them. kind/location/
-// nodeType/resolvedSym/symHandle are metadata, never children. childAt
-// returns the live heap ref, not a copy — mutations through it stick.
-
-function _isNodeChildMetaKey(name: string): boolean {
-	return name === "kind" || name === "line" || name === "column"
-		|| name === "endLine" || name === "endColumn"
-		|| name === "nodeType" || name === "resolvedSym" || name === "symHandle";
-}
+// each such element of an Array field (recursively, so Node[][] fields like
+// typExprFieldDecorators are reachable), in field-insertion order — the order
+// addKindFields (compiler/meta/expand.ms) wrote them. Metadata fields are
+// never children; resolvedSym and nodeType ARE node-shaped, so telling them
+// apart rests on isNodeWireMetaField (wire.ms) — the one list the wire
+// writer and this reader share. childAt returns the live heap ref, not a
+// copy — mutations through it stick.
 
 function _isNodeShaped(objHeap: RaiserObjectHeap, v: RaiserValue): boolean {
 	if (v.kind !== RaiserValueKind.Object) return false;
 	const kindField = heapObjectGetField(objHeap, v.intVal, "kind");
 	return kindField.kind === RaiserValueKind.Int || kindField.kind === RaiserValueKind.Float;
+}
+
+function _pushNodeShapedElems(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, arrHandle: number, out: RaiserValue[]): void {
+	const len = heapArrayLen(arrHeap, arrHandle);
+	for (let j = 0; j < len; j = j + 1) {
+		const el = heapArrayGet(arrHeap, arrHandle, j);
+		if (_isNodeShaped(objHeap, el)) {
+			out.push(el);
+		} else if (el.kind === RaiserValueKind.Array) {
+			_pushNodeShapedElems(objHeap, arrHeap, el.intVal, out);
+		}
+	}
 }
 
 function _nodeChildSlots(h: number): RaiserValue[] {
@@ -266,16 +276,12 @@ function _nodeChildSlots(h: number): RaiserValue[] {
 	const n = heapObjectFieldCount(objHeap, h);
 	for (let i = 0; i < n; i = i + 1) {
 		const name = heapObjectFieldNameAt(objHeap, h, i);
-		if (_isNodeChildMetaKey(name)) continue;
+		if (isNodeWireMetaField(name)) continue;
 		const v = heapObjectFieldValueAt(objHeap, h, i);
 		if (_isNodeShaped(objHeap, v)) {
 			out.push(v);
 		} else if (v.kind === RaiserValueKind.Array) {
-			const len = heapArrayLen(arrHeap, v.intVal);
-			for (let j = 0; j < len; j = j + 1) {
-				const el = heapArrayGet(arrHeap, v.intVal, j);
-				if (_isNodeShaped(objHeap, el)) out.push(el);
-			}
+			_pushNodeShapedElems(objHeap, arrHeap, v.intVal, out);
 		}
 	}
 	return out;
