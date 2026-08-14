@@ -118,4 +118,5 @@ import "./bug102StaticStorageClass";
 import "./bug103MacroExprHoist";
 import "./bug104ClosureCallChain";
 import "./bug105ArrowExprBodyFit";
+import "./bug106LocalDeclRejected";
 import "./bug107MacroArgSourceForm";

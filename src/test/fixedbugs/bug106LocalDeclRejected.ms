@@ -38,44 +38,74 @@ console.log(f());
 	assert c.error.indexOf("local class", 0) >= 0;
 }
 
-test "bug106: local class with a unique name errors at the decl, not only the use site" {
+test "bug106 stage2: unique-name local class with ctor and method works" {
 	const c = compileToC(`
 function f(): number {
-	class M { x: number = 3 }
-	return new M().x;
+	class M {
+		x: number = 0;
+		constructor(x: number) { this.x = x; }
+		twice(): number { return this.x * 2; }
+	}
+	return new M(3).twice();
 }
+console.log(f());
 `);
-	assert !c.ok;
-	assert c.error.indexOf("local class", 0) >= 0;
+	assert c.ok;
+
+	const cSibling = compileToC(`
+function f(): void { class R { x: number = 1 } }
+function g(): void { class R { x: string = "a" } }
+`);
+	assert !cSibling.ok;
+	assert cSibling.error.indexOf("local class", 0) >= 0;
 }
 
 test "bug106: local enum / interface / type alias / struct / extern / actor rejected" {
-	const cEnum = compileToC("function f(): number { enum E { A = 2 } return 0 }");
+	const cEnum = compileToC("enum E { A = 1 }\nfunction f(): number { enum E { A = 2 } return 0 }");
 	assert !cEnum.ok;
 	assert cEnum.error.indexOf("local enum", 0) >= 0;
 
-	const cIface = compileToC("function f(): void { interface I { x: number } }");
+	const cIface = compileToC("interface I { x: string }\nfunction f(): void { interface I { x: number } }");
 	assert !cIface.ok;
 	assert cIface.error.indexOf("local interface", 0) >= 0;
 
-	const cAlias = compileToC("function f(): void { type T = number; }");
-	assert !cAlias.ok;
-	assert cAlias.error.indexOf("local type alias", 0) >= 0;
+	const cAliasGeneric = compileToC("function f(): void { type P<T> = T[]; }");
+	assert !cAliasGeneric.ok;
+	assert cAliasGeneric.error.indexOf("local type alias", 0) >= 0;
 
-	const cStruct = compileToC("function f(): void { struct S { x: number } }");
+	const cStruct = compileToC("struct S { x: string }\nfunction f(): void { struct S { x: number } }");
 	assert !cStruct.ok;
 	assert cStruct.error.indexOf("local struct", 0) >= 0;
 
-	const cExtern = compileToC("function f(): void { extern function puts(s: cstring): number from \"puts\"; }");
+	const cExtern = compileToC("extern function puts(s: cstring): number from \"puts\";\nfunction f(): void { extern function puts(s: cstring): number from \"puts\"; }");
 	assert !cExtern.ok;
-	assert cExtern.error.indexOf("local extern", 0) >= 0;
+	assert cExtern.error.indexOf("local extern function", 0) >= 0;
 
-	const cActor = compileToC("function f(): number { actor A { x: number = 1 } return 5 }");
+	const cActor = compileToC("actor A { x: number = 1 }\nfunction f(): number { actor A { x: number = 2 } return 5 }");
 	assert !cActor.ok;
 	assert cActor.error.indexOf("local actor", 0) >= 0;
 }
 
-test "bug106: local macro rejected" {
+test "bug106 stage2: local extern function and extern const are admitted" {
+	const cFn = compileToC("function f(): number { extern function myAbs(x: number): number from \"abs\"; return myAbs(0 - 7) }");
+	assert cFn.ok;
+
+	const cConst = compileToC("function f(): void { extern const myCVar: number from \"myCVar\"; }");
+	assert cConst.ok;
+
+	const cSibling = compileToC(`
+function f(): void { extern function dup(x: number): number from "abs"; }
+function g(): void { extern function dup(x: string): number from "atoi"; }
+`);
+	assert !cSibling.ok;
+	assert cSibling.error.indexOf("local extern function", 0) >= 0;
+
+	const cVarShadow = compileToC("extern const shared: number from \"shared\";\nfunction f(): void { extern const shared: number from \"shared\"; }");
+	assert !cVarShadow.ok;
+	assert cVarShadow.error.indexOf("local extern", 0) >= 0;
+}
+
+test "bug106 stage2: local macro is admitted, a shadowing one is not" {
 	const c = compileToCWithStd(`
 import { Node } from "std/meta";
 function f(): void {
@@ -84,18 +114,93 @@ function f(): void {
 	}
 }
 `);
-	assert !c.ok;
-	assert c.error.indexOf("local macro", 0) >= 0;
+	assert c.ok;
+
+	const cShadow = compileToCWithStd(`
+import { Node } from "std/meta";
+macro m(): Node {
+	return null;
+}
+function f(): void {
+	macro m(): Node {
+		return null;
+	}
+}
+`);
+	assert !cShadow.ok;
+	assert cShadow.error.indexOf("local macro", 0) >= 0;
+}
+
+test "bug106 stage2: local actor is admitted" {
+	const c = compileToC("function f(): number { actor A { x: number = 1 } return 5 }");
+	assert c.ok;
 }
 
 test "bug106: bare top-level block and arrow body are non-module scopes too" {
 	const cBlock = compileToC("{ class L { x: number = 3 } }");
-	assert !cBlock.ok;
-	assert cBlock.error.indexOf("local class", 0) >= 0;
+	assert cBlock.ok;
 
 	const cArrow = compileToC("const g = (): number => { class L { x: number = 3 } return 0 };");
-	assert !cArrow.ok;
-	assert cArrow.error.indexOf("local class", 0) >= 0;
+	assert cArrow.ok;
+
+	const cBlockShadow = compileToC("class L { x: number = 1 }\n{ class L { x: number = 3 } }");
+	assert !cBlockShadow.ok;
+	assert cBlockShadow.error.indexOf("local class", 0) >= 0;
+}
+
+test "bug106 stage2: local plain type alias resolves and shadows a module-level alias" {
+	const c = compileToC(`
+type T = string;
+function f(): number {
+	type T = number;
+	const x: T = 5;
+	return x;
+}
+console.log(f());
+`);
+	assert c.ok;
+
+	const cBlock = compileToC("{ type B = number; const y: B = 1; console.log(y); }");
+	assert cBlock.ok;
+
+	const cUseBefore = compileToC("function g(): void { const z: Q = 1; type Q = number; }");
+	assert !cUseBefore.ok;
+}
+
+test "bug106 stage2: unique-name local interface and struct work; sibling duplicate rejected" {
+	const c = compileToC(`
+function f(): number {
+	interface P { x: number }
+	const p: P = { x: 7 };
+	return p.x;
+}
+function g(): number {
+	struct Q { y: number }
+	const q: Q = { y: 4 };
+	return q.y;
+}
+console.log(f() + g());
+`);
+	assert c.ok;
+
+	const cSibling = compileToC(`
+function f(): void { interface R { x: number } }
+function g(): void { interface R { x: string } }
+`);
+	assert !cSibling.ok;
+	assert cSibling.error.indexOf("local interface", 0) >= 0;
+}
+
+test "bug106 stage2: unique-name local enum works" {
+	const c = compileToC(`
+function f(): number {
+	enum Level { Low = 2, High = 9 }
+	const v: Level = Level.High;
+	return v as number;
+}
+console.log(f());
+`);
+	assert c.ok;
 }
 
 test "bug106: module-level decls and nested functions unaffected" {
