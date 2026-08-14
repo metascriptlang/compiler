@@ -36,7 +36,7 @@ import {
 	ConditionalExprData, SpreadExprData, NewExprData,
 	TryExprData, MatchExprData, MatchCaseData,
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData,
-	HiddenDerefData, QuoteExprData, ComptimeBlockData,
+	HiddenDerefData, HiddenStdConvData, QuoteExprData, ComptimeBlockData,
 	// Patterns
 	ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData,
 	// Statements
@@ -556,7 +556,25 @@ function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {
 // field — checker re-resolves types on macro output, so reverse path would be
 // dead work and risk shape drift. DO NOT add a paired read.
 
-export function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap): RaiserValue {
+// Strip checker-inserted wrappers (HiddenDeref/HiddenAddr/HiddenStdConv/
+// HiddenSubConv) so a macro sees the source-form AST, not the C-codegen
+// details (auto-deref of class pointers, implicit numeric casts).
+export function stripMacroArgWrappers(node: Node): Node {
+	let n = node;
+	while (n !== null) {
+		if (n.kind === NodeKind.HiddenDeref || n.kind === NodeKind.HiddenAddr) {
+			n = (n.data as HiddenDerefData).expr;
+		} else if (n.kind === NodeKind.HiddenStdConv || n.kind === NodeKind.HiddenSubConv) {
+			n = (n.data as HiddenStdConvData).convExpr;
+		} else {
+			break;
+		}
+	}
+	return n;
+}
+
+export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap): RaiserValue {
+	const node = stripMacroArgWrappers(nodeIn);
 	const handle = heapAllocObject(objHeap);
 	// Common fields: kind, line, column
 	const kindVal = raiserInt(node.kind as number);

@@ -64,7 +64,7 @@ import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { RaiserVM, vmCallFunction } from "../../raiser/vm";
-import { valueToNode, nodeToValue, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym } from "./bridge";
+import { valueToNode, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym } from "./bridge";
 import { ensureShaped } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
@@ -145,20 +145,6 @@ function lowerQuoteExpr(node: Node): Node {
 //
 // Implementation strategy: build an ObjectLiteralData with kind, line, column,
 // + the kind-specific fields. Recursive for child Node fields.
-// Strip checker-inserted wrappers (HiddenDeref/HiddenAddr/HiddenStdConv/
-// HiddenSubConv) so a macro sees the source-form AST, not the C-codegen
-// details (auto-deref of class pointers, implicit numeric casts).
-function stripMacroArgWrappers(node: Node): Node {
-	let n = node;
-	while (n !== null && (n.kind === NodeKind.HiddenDeref || n.kind === NodeKind.HiddenAddr)) {
-		n = (n.data as HiddenDerefData).expr;
-	}
-	if (n !== null && (n.kind === NodeKind.HiddenStdConv || n.kind === NodeKind.HiddenSubConv)) {
-		n = (n.data as HiddenStdConvData).convExpr;
-	}
-	return n;
-}
-
 function nodeToASTLiteral(node: Node | null, loc: SourceLocation): Node {
 	if (node === null) return mkNull(loc);
 	node = stripMacroArgWrappers(node);

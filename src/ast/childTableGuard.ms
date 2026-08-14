@@ -26,7 +26,7 @@ const KNOWN_GAPS: string[] = [
 	"printer:arrowDefaults", "printer:assertMessageExpr", "printer:caseGuard",
 	"printer:ctorDefaults", "printer:fnDefaults", "printer:methodDefaults",
 	"printer:propInitializer",
-	"bridge:arrowDefaults", "bridge:convExpr", "bridge:ctorDefaults",
+	"bridge:arrowDefaults", "bridge:ctorDefaults",
 	"bridge:fnDefaults", "bridge:forOfPattern", "bridge:methodDefaults",
 	"bridge:propInitializer",
 ];
