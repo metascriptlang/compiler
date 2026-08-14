@@ -1406,6 +1406,26 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 // Reference implementation uses compile-time `fields()` magic iterator unrolling; we do the same here
 // by iterating typeNames/typeChildren at transform time.
 
+function isPayloadUnion(t: Type): boolean {
+	if (t.kind !== TypeKind.Union) return false;
+	if (!isPrimitiveOnlyUnion(t)) return false;
+	for (const m of t.typeChildren) {
+		if (m === null || m.kind === TypeKind.Null) return false;
+	}
+	return true;
+}
+
+function payloadUnionEqExpr(aField: Node, bField: Node, u: Type, lctx: LiftCtx, loc: SourceLocation): Node {
+	let acc = makeBinary(makeMember(clonePath(aField, loc), "_tag", loc), "===", makeMember(clonePath(bField, loc), "_tag", loc), loc);
+	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
+		const vName = `v${vi}`;
+		const memberEq = fieldEqExpr(makeMember(clonePath(aField, loc), vName, loc), makeMember(clonePath(bField, loc), vName, loc), u.typeChildren[vi], lctx, loc);
+		const inactive = makeBinary(makeMember(clonePath(aField, loc), "_tag", loc), "!==", makeNumber(vi, loc), loc);
+		acc = makeBinary(acc, "&&", makeBinary(inactive, "||", memberEq, loc), loc);
+	}
+	return acc;
+}
+
 function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
 	// For nested value-type objects, call their _eq function — ensure it exists (on-demand, like tuples below)
 	if (fieldType.kind === TypeKind.Struct && fieldType.typeName !== "") {
@@ -1423,6 +1443,9 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 	// msString is a C struct, so === doesn't work. Call msStringEquals(a, b).
 	if (isStringLike(fieldType)) {
 		return makeCall(makeIdent("msStringEquals", loc), [aField, bField], loc);
+	}
+	if (isPayloadUnion(fieldType)) {
+		return payloadUnionEqExpr(aField, bField, fieldType, lctx, loc);
 	}
 	// Array fields — arrays are C structs, can't use ==.
 	// JavaScript semantics: === is reference equality (same object).
