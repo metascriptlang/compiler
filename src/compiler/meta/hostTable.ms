@@ -6,12 +6,13 @@
 // to a host shim during bootstrap, or to a C native after self-host), and
 // boxes the return.
 //
-// All bridges return SCALAR types only (string / int / float / bool-as-int).
+// Most bridges return SCALAR types only (string / int / float / bool-as-int).
 // Result<T,E>, arrays, and objects are constructed inside Raiser bytecode by
 // the calling MS code (via NewObject/StoreField opcodes after Phase 3 lowers
-// `Result.ok(x)` to `{ok: true, value: x}`). The bridge never needs heap
-// access — it just returns raw scalars, and the MS wrapper builds the higher-
-// level structure on the VM side.
+// `Result.ok(x)` to `{ok: true, value: x}`), so those bridges never need heap
+// access. The one exception is the Node child accessors (msNodeChildCount/At),
+// which dereference Object/Array handles through the active-VM heaps that
+// vmHandleCallHost publishes via setActiveHostHeaps.
 //
 // For natives that use the errno-poll pattern (`msFsReadFile` + `msFsLastErrno`),
 // the bridge stores last-error in a module-level slot that the matching getter
@@ -35,10 +36,17 @@
 // `registerHostFn` line. The cost is bounded — ~20 bridges cover the fs +
 // process surface that @comptime actually uses today.
 
-import { RaiserValue } from "../../raiser/value";
-import { registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized } from "../../raiser/hostRegistry";
 import {
-	unboxString,
+	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
+	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
+	heapArrayLen, heapArrayGet,
+} from "../../raiser/value";
+import {
+	registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized,
+	activeHostObjectHeap, activeHostArrayHeap,
+} from "../../raiser/hostRegistry";
+import {
+	unboxString, unboxInt,
 	boxString, boxInt,
 } from "../../raiser/marshal";
 
@@ -226,6 +234,66 @@ function _bridge_msProcSpawnGetStderr(args: RaiserValue[]): RaiserValue {
 	return boxString(_spawnStderr);
 }
 
+// --- Macro Node child accessors ---
+// childCount/childAt (std/meta) traverse a Node's children BY INDEX on the
+// macro VM's flat wire (the Nim n[i]/n.len analog), so a top-level helper
+// shared between macros can walk nodes without engine-mode flat-field reads.
+// A child slot is any Object field carrying a numeric "kind" (a Node), or
+// each such element of an Array field, in field-insertion order — the order
+// addKindFields (compiler/meta/expand.ms) wrote them. kind/location/
+// nodeType/resolvedSym/symHandle are metadata, never children. childAt
+// returns the live heap ref, not a copy — mutations through it stick.
+
+function _isNodeChildMetaKey(name: string): boolean {
+	return name === "kind" || name === "line" || name === "column"
+		|| name === "endLine" || name === "endColumn"
+		|| name === "nodeType" || name === "resolvedSym" || name === "symHandle";
+}
+
+function _isNodeShaped(objHeap: RaiserObjectHeap, v: RaiserValue): boolean {
+	if (v.kind !== RaiserValueKind.Object) return false;
+	const kindField = heapObjectGetField(objHeap, v.intVal, "kind");
+	return kindField.kind === RaiserValueKind.Int || kindField.kind === RaiserValueKind.Float;
+}
+
+function _nodeChildSlots(h: number): RaiserValue[] {
+	const out: RaiserValue[] = [];
+	const objHeapOrNull = activeHostObjectHeap();
+	const arrHeapOrNull = activeHostArrayHeap();
+	if (objHeapOrNull === null || arrHeapOrNull === null) return out;
+	const objHeap: RaiserObjectHeap = objHeapOrNull;
+	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
+	const n = heapObjectFieldCount(objHeap, h);
+	for (let i = 0; i < n; i = i + 1) {
+		const name = heapObjectFieldNameAt(objHeap, h, i);
+		if (_isNodeChildMetaKey(name)) continue;
+		const v = heapObjectFieldValueAt(objHeap, h, i);
+		if (_isNodeShaped(objHeap, v)) {
+			out.push(v);
+		} else if (v.kind === RaiserValueKind.Array) {
+			const len = heapArrayLen(arrHeap, v.intVal);
+			for (let j = 0; j < len; j = j + 1) {
+				const el = heapArrayGet(arrHeap, v.intVal, j);
+				if (_isNodeShaped(objHeap, el)) out.push(el);
+			}
+		}
+	}
+	return out;
+}
+
+function _bridge_msNodeChildCount(args: RaiserValue[]): RaiserValue {
+	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxInt(0);
+	return boxInt(_nodeChildSlots(args[0].intVal).length);
+}
+
+function _bridge_msNodeChildAt(args: RaiserValue[]): RaiserValue {
+	if (args.length < 2 || args[0].kind !== RaiserValueKind.Object) return raiserNil();
+	const slots = _nodeChildSlots(args[0].intVal);
+	const i = unboxInt(args[1]);
+	if (i < 0 || i >= slots.length) return raiserNil();
+	return slots[i];
+}
+
 // --- String bridges ---
 // Bridges exist so `@comptime` code calling `s.trim()` etc. can
 // dispatch through the CallHost path without falling into "Unknown host
@@ -326,6 +394,9 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcSpawnGetExitCode", _bridge_msProcSpawnGetExitCode);
 	registerHostFn("msProcSpawnGetSignal",  _bridge_msProcSpawnGetSignal);
 	registerHostFn("msProcSpawnGetStderr",  _bridge_msProcSpawnGetStderr);
+	// macro Node child accessors (std/meta childCount/childAt)
+	registerHostFn("msNodeChildCount",      _bridge_msNodeChildCount);
+	registerHostFn("msNodeChildAt",         _bridge_msNodeChildAt);
 	// string ops — extension methods called as `s.trim()` etc.
 	// Coverage: trim family + case + indexOf/contains/start/end + replace.
 	// Hot paths (charAt/slice) stay hardcoded in raiser/expressions.ms for

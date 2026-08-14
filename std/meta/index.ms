@@ -16,3 +16,14 @@ extern function readFile(path: string): string;
 extern function exec(cmd: string): string;
 extern function error(msg: string, loc: SourceLocation): never;
 extern function warning(msg: string, loc: SourceLocation): void;
+
+// Node child access by index over the macro VM's flat wire — the Nim
+// n[i]/n.len analog. Flat field names (n.object, n.left, ...) resolve only
+// inside engine-mode checks, so a top-level helper shared between macros
+// must traverse through these instead. Bridges live in
+// src/compiler/meta/hostTable.ms.
+extern function msNodeChildCount(n: Node): number;
+extern function msNodeChildAt(n: Node, i: number): Node;
+
+export function childCount(n: Node): number { return msNodeChildCount(n); }
+export function childAt(n: Node, i: number): Node { return msNodeChildAt(n, i); }
