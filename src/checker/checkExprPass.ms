@@ -1892,6 +1892,12 @@ function branchContributesToJoin(t: Type | null): boolean {
 		&& t.kind !== TypeKind.Error;
 }
 
+function isPointerKindJoinPair(a: Type, b: Type): boolean {
+	if (a === null || b === null) return false;
+	if (a.kind === TypeKind.Ref && b.kind === TypeKind.Ptr) return true;
+	return a.kind === TypeKind.Ptr && b.kind === TypeKind.Ref;
+}
+
 export function joinBranchTypes(types: Type[]): Type {
 	const prepared: Type[] = [];
 	for (const t of types) {
@@ -1899,7 +1905,7 @@ export function joinBranchTypes(types: Type[]): Type {
 		const w = widenBranchLiteral(t);
 		let dup = false;
 		for (const p of prepared) {
-			if (p === w || sameType(p, w)) { dup = true; break; }
+			if (p === w || sameType(p, w) || isPointerKindJoinPair(p, w)) { dup = true; break; }
 		}
 		if (!dup) prepared.push(w);
 	}
@@ -1937,7 +1943,7 @@ function canonicalizeBranchJoin(t: Type): Type {
 		}
 		let dup = false;
 		for (const p of nonNull) {
-			if (p === member || sameType(p, member)) { dup = true; break; }
+			if (p === member || sameType(p, member) || isPointerKindJoinPair(p, member)) { dup = true; break; }
 		}
 		if (!dup) nonNull.push(member);
 	}
