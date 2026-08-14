@@ -57,37 +57,6 @@ function scopeRecord(scopes: TypeScope[], name: string, t: Type): void {
 
 // Fallback for Object types where typeNames/typeChildren aren't populated.
 // Uses well-known field names from core compiler types (Node, Symbol, Type).
-function recoverKnownField(node: Node, typeName: string, prop: string): void {
-	// Node fields
-	if (typeName === "Node") {
-		if (prop === "kind") { node.nodeType = registryTypeLookup("NodeKind"); }
-		else if (prop === "nodeType") { node.nodeType = registryTypeLookup("Type"); }
-		else if (prop === "resolvedSym") { node.nodeType = registryTypeLookup("Symbol"); }
-		else if (prop === "flags") { node.nodeType = numberType(); }
-	}
-	// Symbol fields
-	else if (typeName === "Symbol") {
-		if (prop === "symbolKind") { node.nodeType = registryTypeLookup("SymbolKind"); }
-		else if (prop === "symbolType") { node.nodeType = registryTypeLookup("Type"); }
-		else if (prop === "name" || prop === "nativeName" || prop === "builtinKind") { node.nodeType = stringType(); }
-		else if (prop === "symFlags") { node.nodeType = numberType(); }
-		else if (prop === "declNode") { node.nodeType = registryTypeLookup("Node"); }
-		else if (prop === "overloads") { node.nodeType = registryTypeLookup("msRefArray"); }
-	}
-	// Type fields
-	else if (typeName === "Type") {
-		if (prop === "kind") { node.nodeType = registryTypeLookup("TypeKind"); }
-		else if (prop === "typeName") { node.nodeType = stringType(); }
-		else if (prop === "typeReturn" || prop === "typeExtra") { node.nodeType = registryTypeLookup("Type"); }
-		else if (prop === "typeFlags") { node.nodeType = numberType(); }
-	}
-	// Token fields
-	else if (typeName === "Token") {
-		if (prop === "kind") { node.nodeType = registryTypeLookup("TokenKind"); }
-		else if (prop === "value") { node.nodeType = stringType(); }
-		else if (prop === "line" || prop === "column") { node.nodeType = int32Type(); }
-	}
-}
 
 // Extract field type from structural typeName: "{ name : type , name2 : type2 }"
 // Returns a Type or null if field not found.
@@ -122,10 +91,6 @@ function rederiveMemberType(node: Node): void {
 				}
 				pi = pi + 1;
 			}
-		}
-		// Fallback: well-known field types by typeName (when typeNames not populated)
-		if (!found && ot.typeName !== null && node.nodeType === null) {
-			recoverKnownField(node, ot.typeName, prop);
 		}
 	} else if (ot.kind === TypeKind.SizedArray) {
 		if (prop === "length") { node.nodeType = int32Type(); }
@@ -343,27 +308,6 @@ function registryTypeLookup(name: string): Type | null {
 	return null;
 }
 
-// Desperation heuristic: map common compiler variable names to known types.
-// Last resort when resolvedSym, scope, and registry all fail.
-function desperationHeuristic(name: string): Type | null {
-	// Suffix-based: *Type/*type → Type, *Sym → Symbol
-	if (name.endsWith("Type") || name.endsWith("type")) return registryTypeLookup("Type");
-	if (name.endsWith("Sym")) return registryTypeLookup("Symbol");
-
-	// Exact match: common AST variable names → Node
-	if (name === "node" || name === "stmt" || name === "elem" || name === "arg" ||
-		name === "dec" || name === "member" || name === "left" || name === "right" ||
-		name === "body" || name === "expr" || name === "tryExpr" || name === "child" ||
-		name === "stmts") {
-		return registryTypeLookup("Node");
-	}
-	if (name === "sym" || name === "symbol") return registryTypeLookup("Symbol");
-	if (name === "tok" || name === "token") return registryTypeLookup("Token");
-	if (name === "ot" || name === "st") return registryTypeLookup("Type");
-
-	return null;
-}
-
 function refineNode(node: Node): void {
 	if (node === null) return;
 
@@ -469,12 +413,6 @@ function refineNode(node: Node): void {
 					const regType = registryLookup(id.name);
 					if (regType !== null) {
 						node.nodeType = regType;
-					} else {
-						// Desperation heuristic: common compiler variable names → known types
-						const recovered = desperationHeuristic(id.name);
-						if (recovered !== null) {
-							node.nodeType = recovered;
-						}
 					}
 				}
 			}
