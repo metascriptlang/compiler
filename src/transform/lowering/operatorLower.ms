@@ -339,7 +339,9 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		const carrierName = carrierType !== null ? typeNameOf(carrierType) : "";
 		const carriersAgree = !leftIsMaybe || !rightIsMaybe
 			|| typeNameOf(leftType) === typeNameOf(rightOperandType);
-		if ((leftIsMaybe || rightIsMaybe) && carrierType !== null && carrierName !== "" && carriersAgree) {
+		// The carrier is a C repr: js de-materializes a Maybe to the value itself,
+		// so there is no carrier to compare and no generated Eq body to call.
+		if (!ctx.jsBackend && (leftIsMaybe || rightIsMaybe) && carrierType !== null && carrierName !== "" && carriersAgree) {
 			const eqLeft = leftIsMaybe ? d.left : makeMaybeCarrier(d.left, carrierType, loc);
 			const eqRight = rightIsMaybe ? d.right : makeMaybeCarrier(d.right, carrierType, loc);
 			registerCarrierEq(ctx, carrierType);
