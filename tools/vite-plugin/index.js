@@ -69,6 +69,22 @@ export default function metascript(options = {}) {
 			});
 		},
 
+		// Rollup loads the emitted file through its own fs and does not follow
+		// the sourceMappingURL comment, so a production bundle maps back to the
+		// generated .js unless the map is handed over here. Dev goes through the
+		// same hook, which also spares the browser a second request for it.
+		load(id) {
+			const file = stripQuery(id);
+			if (!file.startsWith(outDir + sep) || !file.endsWith(".js")) return null;
+			const mapFile = `${file}.map`;
+			if (!existsSync(file) || !existsSync(mapFile)) return null;
+			const code = readFileSync(file, "utf8");
+			return {
+				code: code.replace(/\n*\/\/# sourceMappingURL=[^\n]*\n?/, "\n"),
+				map: JSON.parse(readFileSync(mapFile, "utf8")),
+			};
+		},
+
 		resolveId(source, importer) {
 			if (!MS_RE.test(source)) return null;
 			const base = importer ? dirname(stripQuery(importer)) : root;
