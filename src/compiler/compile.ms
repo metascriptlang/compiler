@@ -713,6 +713,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		console.log(success(`${tree.modulePaths.length} module(s) → ${bold(splitRoot)}`));
 		return;
 	}
+	entryPath = canonicalModulePath(entryPath);
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
