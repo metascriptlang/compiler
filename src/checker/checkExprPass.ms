@@ -2993,9 +2993,27 @@ function checkTryExpr(ctx: CheckerContext, node: Node): Type | null {
 		checkExpr(ctx, d.catchVal, null);
 	}
 	if (argType !== null && isResult(argType) && getResultOkType(argType) !== null) {
-		return getResultOkType(argType);
+		const okT = getResultOkType(argType);
+		if (d.hasCatch && d.catchVal !== null && okT !== null) {
+			const joined = joinBranchTypes([okT, d.catchVal.nodeType]);
+			if (!isUnresolvedType(joined) && isNullableWideningOf(joined, okT)) {
+				d.catchVal = fitJoinedBranch(ctx, d.catchVal, joined);
+				node.nodeType = joined;
+				return joined;
+			}
+		}
+		return okT;
 	}
 	return argType;
+}
+
+function isNullableWideningOf(joined: Type | null, okT: Type | null): boolean {
+	if (joined === null || okT === null) return false;
+	if (sameType(joined, okT)) return true;
+	if (isMaybeType(joined) && joined.typeReturn !== null && sameType(joined.typeReturn, okT)) return true;
+	const ptrMember = unwrapRefNullUnion(joined);
+	if (ptrMember !== null && sameType(ptrMember, okT)) return true;
+	return false;
 }
 
 // ===== Call Expression + Overload Resolution =====

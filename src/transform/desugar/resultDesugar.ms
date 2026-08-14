@@ -20,14 +20,14 @@
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData, CallExprData, MemberExprData, IdentifierData, HiddenDerefData, IfStmtData, Type, TypeKind } from "../../ast/node";
-import { booleanType, noneType, isUnresolvedType, isResult, getResultOkType, getResultErrType } from "../../checker/types";
+import { booleanType, noneType, isUnresolvedType, isResult, isMaybeType, getResultOkType, getResultErrType } from "../../checker/types";
 import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import {
 	makeIdentResolved, makeVarDecl, makeBlock,
 	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull,
-	makeExprStmt, makeTryCatch, makeAssign, makeDefaultValue,
+	makeExprStmt, makeTryCatch, makeAssign, makeDefaultValue, makeTypedObjectLiteral,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
@@ -206,7 +206,13 @@ function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node 
 			if (tryData.catchVal.nodeType === null && valueAccess.nodeType !== null) {
 				tryData.catchVal.nodeType = valueAccess.nodeType;
 			}
-			const condExpr = makeConditional(okCheck, valueAccess, tryData.catchVal, loc);
+			let okBranch = valueAccess;
+			const joinedT = node.nodeType;
+			if (joinedT !== null && isMaybeType(joinedT)
+				&& valueAccess.nodeType !== null && !isMaybeType(valueAccess.nodeType)) {
+				okBranch = makeTypedObjectLiteral(["value", "present"], [valueAccess, makeBool(true, loc)], joinedT, loc);
+			}
+			const condExpr = makeConditional(okCheck, okBranch, tryData.catchVal, loc);
 			condExpr.nodeType = node.nodeType;
 			return condExpr;
 		}
