@@ -1111,7 +1111,7 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 		// base classes are always declared so always reach ensureHooks.
 		const baseTypeName = getBaseClass(typeName, lctx);
 		if (baseTypeName !== "") {
-			ensureHooksByName(baseTypeName, lctx, loc);
+			ensureHooksByName(baseTypeName, lctx, loc, null as unknown as Symbol);
 		}
 
 		// Ref types: HiddenDeref unwraps Ref<Struct> → Struct for field access.
@@ -2015,10 +2015,17 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 // Look up the declared type's sym and dispatch to `ensureHooks`. Pulled out of
 // processDecl's match arms so all three decl kinds share one resolve+dispatch.
 // processDecl is the DEFINING-module path — passes emitTypeInfo=true.
-function ensureHooksByName(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
+function ensureHooksByName(typeName: string, lctx: LiftCtx, loc: SourceLocation, declSym: Symbol): void {
 	if (typeName === "") return;
 	if (lctx.checkerCtx === null) return;
-	const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
+	// Local (block-scoped) type decls are invisible to a module-scope name
+	// lookup by the time transforms run — their scope is closed. The lifted
+	// decl node still holds the symbol, so fall back to it.
+	// Only when the node's symbol IS this type: a monomorphized instance decl
+	// carries the GENERIC symbol, and taking its type would emit the instance's
+	// hook with the uninstantiated param type.
+	let sym = lookupSymbol(lctx.checkerCtx.table, typeName);
+	if (sym === null && declSym !== null && declSym.name === typeName) sym = declSym;
 	if (sym !== null && sym.symbolType !== null) {
 		// TypeAlias-to-Ref: ensureHooks' category resolver handles it (same skip path).
 		const objType = unwrapRef(sym.symbolType);
@@ -2047,15 +2054,15 @@ function processDecl(stmt: Node, lctx: LiftCtx): void {
 	match (stmt.kind) {
 		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = stmt.data as InterfaceDeclData;
-			ensureHooksByName(d.interfaceName, lctx, stmt.location);
+			ensureHooksByName(d.interfaceName, lctx, stmt.location, stmt.resolvedSym);
 		},
 		NodeKind.ClassDecl => {
 			const d = stmt.data as ClassDeclData;
-			ensureHooksByName(d.className, lctx, stmt.location);
+			ensureHooksByName(d.className, lctx, stmt.location, stmt.resolvedSym);
 		},
 		NodeKind.TypeAliasDecl => {
 			const d = stmt.data as TypeAliasDeclData;
-			ensureHooksByName(d.aliasName, lctx, stmt.location);
+			ensureHooksByName(d.aliasName, lctx, stmt.location, stmt.resolvedSym);
 		},
 		NodeKind.ExportDecl => {
 			const ed = stmt.data as ExportDeclData;
