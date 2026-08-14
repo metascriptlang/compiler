@@ -342,6 +342,30 @@ export function heapObjectFieldCount(heap: RaiserObjectHeap, handle: number): nu
 	return obj.fields.length;
 }
 
+export function heapObjectFieldNameAt(heap: RaiserObjectHeap, handle: number, index: number): string {
+	const obj = heap.objects[handle];
+	if (index < 0 || index >= obj.fields.length) return "";
+	return obj.fields[index].name;
+}
+
+test "heapObjectFieldNameAt/ValueAt follow insertion order" {
+	const heap = createStructHeap();
+	const h = heapAllocObject(heap);
+	heapObjectSetField(heap, h, "kind", raiserInt(5));
+	heapObjectSetField(heap, h, "left", raiserString("L"));
+	assert heapObjectFieldNameAt(heap, h, 0) === "kind";
+	assert heapObjectFieldNameAt(heap, h, 1) === "left";
+	assert heapObjectFieldValueAt(heap, h, 1).strVal === "L";
+	assert heapObjectFieldNameAt(heap, h, 2) === "";
+	assert heapObjectFieldValueAt(heap, h, 9).kind === RaiserValueKind.Nil;
+}
+
+export function heapObjectFieldValueAt(heap: RaiserObjectHeap, handle: number, index: number): RaiserValue {
+	const obj = heap.objects[handle];
+	if (index < 0 || index >= obj.fields.length) return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0, strVal: "" };
+	return obj.fields[index].value;
+}
+
 export function heapObjectGetField(heap: RaiserObjectHeap, handle: number, name: string): RaiserValue {
 	const obj = heap.objects[handle];
 	for (const field of obj.fields) {
