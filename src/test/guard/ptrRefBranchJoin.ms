@@ -1,8 +1,11 @@
 // nim-guard: branch join of {Ref<T>, Ptr<T>} collapses to one pointer member
 //
-// INVARIANT: joinBranchTypes/canonicalizeBranchJoin treat a Ref<T>/Ptr<T> kind
-//   pair as ONE member — first contributing branch wins, the shape of Nim
-//   commonType (sem.nim:138) `return x` for {tyRef, tyPtr}. fitJoinedBranch
+// INVARIANT: joinBranchTypes/canonicalizeBranchJoin treat a Ref<T>/Ptr<T> pair
+//   over the SAME pointee as ONE member, and the surviving member is the owning
+//   Ref regardless of branch order (see ptrFirstRefJoinOwnership.ms for why the
+//   order matters). Nim's commonType (sem.nim:200-207) instead leaves a
+//   mismatched {tyRef, tyPtr} pair as a type the later fit rejects; MS accepts
+//   the pair under the Ptr<T> cursor coercion (NIM-REF §4). fitJoinedBranch
 //   coerces the other branch via the intentional Ref<->Ptr cursor coercion
 //   (NIM-REF §4). A ternary/array-literal join over a Ptr<T> linked-list field
 //   must NOT mint a tagged union.
