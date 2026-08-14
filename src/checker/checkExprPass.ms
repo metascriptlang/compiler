@@ -1896,8 +1896,20 @@ function branchContributesToJoin(t: Type | null): boolean {
 
 function isPointerKindJoinPair(a: Type, b: Type): boolean {
 	if (a === null || b === null) return false;
-	if (a.kind === TypeKind.Ref && b.kind === TypeKind.Ptr) return true;
-	return a.kind === TypeKind.Ptr && b.kind === TypeKind.Ref;
+	const cross = (a.kind === TypeKind.Ref && b.kind === TypeKind.Ptr)
+		|| (a.kind === TypeKind.Ptr && b.kind === TypeKind.Ref);
+	if (!cross) return false;
+	if (isAtomicRef(a) || isAtomicRef(b)) return false;
+	if (a.typeReturn === null || b.typeReturn === null) return false;
+	const pa = peelToStructOrUnion(a);
+	const pb = peelToStructOrUnion(b);
+	if (pa === null || pb === null) return false;
+	if (pa.kind !== TypeKind.Struct && pa.kind !== TypeKind.Union) return false;
+	return pa === pb || sameType(pa, pb);
+}
+
+function joinedPointerMember(existing: Type, incoming: Type): Type {
+	return existing.kind === TypeKind.Ptr && incoming.kind === TypeKind.Ref ? incoming : existing;
 }
 
 export function joinBranchTypes(types: Type[]): Type {
@@ -1906,8 +1918,14 @@ export function joinBranchTypes(types: Type[]): Type {
 		if (!branchContributesToJoin(t)) continue;
 		const w = widenBranchLiteral(t);
 		let dup = false;
-		for (const p of prepared) {
-			if (p === w || sameType(p, w) || isPointerKindJoinPair(p, w)) { dup = true; break; }
+		for (let pi = 0; pi < prepared.length; pi++) {
+			const p = prepared[pi];
+			if (p === w || sameType(p, w)) { dup = true; break; }
+			if (isPointerKindJoinPair(p, w)) {
+				prepared[pi] = joinedPointerMember(p, w);
+				dup = true;
+				break;
+			}
 		}
 		if (!dup) prepared.push(w);
 	}
@@ -1944,8 +1962,14 @@ function canonicalizeBranchJoin(t: Type): Type {
 			member = m.typeReturn;
 		}
 		let dup = false;
-		for (const p of nonNull) {
-			if (p === member || sameType(p, member) || isPointerKindJoinPair(p, member)) { dup = true; break; }
+		for (let pi = 0; pi < nonNull.length; pi++) {
+			const p = nonNull[pi];
+			if (p === member || sameType(p, member)) { dup = true; break; }
+			if (isPointerKindJoinPair(p, member)) {
+				nonNull[pi] = joinedPointerMember(p, member);
+				dup = true;
+				break;
+			}
 		}
 		if (!dup) nonNull.push(member);
 	}
