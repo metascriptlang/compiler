@@ -227,22 +227,37 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation): Node {
 	}, loc);
 }
 
+import { isNodeWireMetaField } from "./wire";
+
+// A kind-data field named like a wire metadata key would be misread as
+// metadata by the msNodeChildCount/At bridges (hostTable.ms) — fail loud
+// at serialization instead of silently hiding a child.
+function guardChildFieldName(name: string): void {
+	if (isNodeWireMetaField(name)) {
+		unreachable;
+	}
+}
+
 function addStrField(keys: string[], values: Node[], name: string, val: string, loc: SourceLocation): void {
+	guardChildFieldName(name);
 	keys.push(name);
 	values.push(mkString(val, loc));
 }
 
 function addNumField(keys: string[], values: Node[], name: string, val: number, loc: SourceLocation): void {
+	guardChildFieldName(name);
 	keys.push(name);
 	values.push(mkNumber(val, loc));
 }
 
 function addBoolField(keys: string[], values: Node[], name: string, val: boolean, loc: SourceLocation): void {
+	guardChildFieldName(name);
 	keys.push(name);
 	values.push(mkBool(val, loc));
 }
 
 function addNodeField(keys: string[], values: Node[], name: string, val: Node | null, loc: SourceLocation): void {
+	guardChildFieldName(name);
 	keys.push(name);
 	// splice(expr) inside a quote body: emit the arg expression directly
 	// (Raiser evaluates at runtime) instead of converting to ObjectLiteral.
@@ -254,6 +269,7 @@ function addNodeField(keys: string[], values: Node[], name: string, val: Node | 
 }
 
 function addNodeArrayField(keys: string[], values: Node[], name: string, arr: Node[], loc: SourceLocation): void {
+	guardChildFieldName(name);
 	const elements: Node[] = [];
 	for (const child of arr) {
 		elements.push(nodeToASTLiteral(child, loc));
@@ -263,6 +279,7 @@ function addNodeArrayField(keys: string[], values: Node[], name: string, arr: No
 }
 
 function addStrArrayField(keys: string[], values: Node[], name: string, arr: string[], loc: SourceLocation): void {
+	guardChildFieldName(name);
 	const elements: Node[] = [];
 	for (const s of arr) {
 		elements.push(mkString(s, loc));
@@ -274,6 +291,7 @@ function addStrArrayField(keys: string[], values: Node[], name: string, arr: str
 // V2 — emit Node[][] as ArrayLiteral of ArrayLiteral of Node-AST-literals.
 // Macro reads `arr[i][j]` to get the j-th decorator of the i-th field.
 function addNodeArrayArrayField(keys: string[], values: Node[], name: string, arr: Node[][], loc: SourceLocation): void {
+	guardChildFieldName(name);
 	const outerElements: Node[] = [];
 	for (const inner of arr) {
 		const innerElements: Node[] = [];
