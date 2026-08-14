@@ -866,63 +866,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 					const searchDir = getModuleDir(exportInfo.definingModule);
 					if (searchDir !== "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, "-iquote" + searchDir);
 				}
-				// Register overloads from source module
-				if (exportInfo.overloadTypes.length > 0 && primarySym !== null) {
-					let ovIdx = 0;
-					while (ovIdx < exportInfo.overloadTypes.length) {
-						const ovSym = makeSymbol(localAlias, exportInfo.kind, exportInfo.overloadTypes[ovIdx], false);
-						// Preserve source-module overload slot so Identifier-as-value
-						// references mangle to the correct `_u${N}` name. Matches
-						// defineSymbol numbering: primary=0, sym.overloads[k]=k+1.
-						ovSym.overloadIdx = ovIdx + 1;
-						ovSym.modulePath = resolveDefiningModule(exportInfo, sourcePath);
-						const ovOrigName = resolveOriginalName(exportInfo, importName);
-						if (ovOrigName !== localAlias) ovSym.originalName = ovOrigName;
-						// Restore per-overload cross-module metadata
-						if (exportInfo.overloadNativeNames !== null && ovIdx < exportInfo.overloadNativeNames.length && exportInfo.overloadNativeNames[ovIdx] !== "") {
-							ovSym.nativeName = exportInfo.overloadNativeNames[ovIdx];
-						}
-						if (exportInfo.overloadBuiltinKinds !== null && ovIdx < exportInfo.overloadBuiltinKinds.length && exportInfo.overloadBuiltinKinds[ovIdx] !== "") {
-							ovSym.builtinKind = exportInfo.overloadBuiltinKinds[ovIdx];
-						}
-						if (exportInfo.overloadDefaultParamsFlat !== null && exportInfo.overloadDefaultParamsCounts !== null && ovIdx < exportInfo.overloadDefaultParamsCounts.length) {
-							const cnt = exportInfo.overloadDefaultParamsCounts[ovIdx];
-							if (cnt > 0) {
-								let offset = 0;
-								let ci = 0;
-								while (ci < ovIdx) { offset = offset + exportInfo.overloadDefaultParamsCounts[ci]; ci = ci + 1; }
-								const dps: Node[] = [];
-								let di = 0;
-								while (di < cnt) { dps.push(exportInfo.overloadDefaultParamsFlat[offset + di]); di = di + 1; }
-								ovSym.defaultParams = dps;
-							}
-						}
-						if (exportInfo.headerPath !== "") ovSym.headerPath = exportInfo.headerPath;
-						// Preserve OverloadSig flag so findOverloadImpl works cross-module.
-						if (exportInfo.overloadFlags !== null && ovIdx < exportInfo.overloadFlags.length
-								&& (exportInfo.overloadFlags[ovIdx] & SymbolFlag.OverloadSig) !== 0) {
-							setFlag(ovSym, SymbolFlag.OverloadSig);
-						}
-						// Cross-module generic mono — restore overload's declNode
-						// for generic overloads. Same rule as primary sym path.
-						// NOTE: overloaded-generic mono is currently blocked at a
-						// pre-existing site in `resolveOverloadCall` which doesn't
-						// invoke `tryInstantiateGenericCallee` for the winning
-						// overload. Carrying declNode here is preparation; the
-						// fix at resolveOverloadCall is out of scope for now.
-						if (exportInfo.overloadDeclNodes !== null
-								&& ovIdx < exportInfo.overloadDeclNodes.length
-								&& exportInfo.overloadDeclNodes[ovIdx] !== null) {
-							ovSym.declNode = exportInfo.overloadDeclNodes[ovIdx];
-						}
-						primarySym.overloads.push(ovSym);
-						// Register per-overload extension if it has one
-						if (ctx.extensionRegistry !== null && exportInfo.overloadExtReceiverTypes !== null && ovIdx < exportInfo.overloadExtReceiverTypes.length && exportInfo.overloadExtReceiverTypes[ovIdx] !== "") {
-							registerExtension(ctx.extensionRegistry, createExtMethod(localAlias, exportInfo.overloadExtReceiverTypes[ovIdx], sourcePath, exportInfo.overloadTypes[ovIdx], exportInfo.overloadExtIsStatic[ovIdx], ovSym, 1));
-						}
-						ovIdx = ovIdx + 1;
-					}
-				}
+				propagateImportedOverloads(ctx, primarySym, exportInfo, sourcePath, importName, localAlias, false);
 				// If imported symbol is an extension method, register primary locally.
 				// Reference parity: sym is the single source of truth for the type.
 				// When sym is available, fnType = noneType() to avoid double-decref.
@@ -1056,27 +1000,7 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 								// Propagate overloads through star re-export. Required
 								// for createNodeAt's per-kind overloads to flow from
 								// std/meta → src/ast/node → callers (compiler source).
-								if (expInfo.overloadTypes !== null && expInfo.overloadTypes.length > 0) {
-									for (let ovIdx = 0; ovIdx < expInfo.overloadTypes.length; ovIdx += 1) {
-										const ovSym = makeSymbol(expInfo.name, expInfo.kind, expInfo.overloadTypes[ovIdx], false);
-										ovSym.overloadIdx = ovIdx + 1;
-										ovSym.modulePath = resolveDefiningModule(expInfo, sourcePath);
-										if (expInfo.overloadNativeNames !== null && ovIdx < expInfo.overloadNativeNames.length && expInfo.overloadNativeNames[ovIdx] !== "") {
-											ovSym.nativeName = expInfo.overloadNativeNames[ovIdx];
-										}
-										if (expInfo.overloadBuiltinKinds !== null && ovIdx < expInfo.overloadBuiltinKinds.length && expInfo.overloadBuiltinKinds[ovIdx] !== "") {
-											ovSym.builtinKind = expInfo.overloadBuiltinKinds[ovIdx];
-										}
-										if (expInfo.headerPath !== "") ovSym.headerPath = expInfo.headerPath;
-										setFlag(ovSym, SymbolFlag.Exported);
-										// Preserve OverloadSig flag so findOverloadImpl works cross-module.
-										if (expInfo.overloadFlags !== null && ovIdx < expInfo.overloadFlags.length
-												&& (expInfo.overloadFlags[ovIdx] & SymbolFlag.OverloadSig) !== 0) {
-											setFlag(ovSym, SymbolFlag.OverloadSig);
-										}
-										sym.overloads.push(ovSym);
-									}
-								}
+								propagateImportedOverloads(ctx, sym, expInfo, sourcePath, expInfo.name, expInfo.name, true);
 								// Star re-export: propagate extension-method dispatch.
 								propagateImportedExtensions(ctx, expInfo.name, expInfo, sourcePath, sym);
 							}
