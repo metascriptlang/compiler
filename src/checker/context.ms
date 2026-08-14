@@ -992,6 +992,8 @@ export class CheckerContext {
 	pendingHoisted: Node[];      // statements an expression-position macro emitted ahead of its value; a stack — each statement-list walk takes a high-water mark on entry and drains only what was queued above it, so a block nested in the value cannot take the call site's prefix
 	condEvalDepth: int32;        // >0 while checking a conditionally-evaluated position (&&/|| rhs, ternary arm, loop condition) — hoisting out of one would run it unconditionally
 	stmtPosExpr: Node;           // the expression that IS a statement: a macro there emits statements outright, so the expression-position rules (last element is the value, empty is an error) must not apply
+	localTypeNames: HashMap<string, boolean>; // names claimed by local (non-module-scope) type decls, module-wide — C keys struct emission and its include guard by bare name, so same-named locals in sibling scopes would silently merge into one definition
+	pendingLocalTypeDecls: Node[]; // admitted local type decls, appended to programStmts after body checking — destructorLifting and codegen discover types by walking module statements only, so a body-only decl would never get DRC hooks or TypeInfo
 	preludeCtx: CheckerContext;  // access private prelude symbols during instantiation
 }
 
@@ -1043,6 +1045,8 @@ export function createContext(): CheckerContext {
 		generatedInstances: [],
 		pendingEnumToStrings: [],
 		pendingHoisted: [],
+		localTypeNames: new HashMap<string, boolean>(),
+		pendingLocalTypeDecls: [],
 		condEvalDepth: 0,
 		stmtPosExpr: null as unknown as Node,
 		preludeCtx: null as unknown as CheckerContext,

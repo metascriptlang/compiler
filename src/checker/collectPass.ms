@@ -201,7 +201,7 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 
 // ===== Individual Collectors =====
 
-function collectFunction(ctx: CheckerContext, node: Node): void {
+export function collectFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	// 3-pass idempotency contract — Pass 1 (collect) parity with Pass 2/3.
 	// If this FunctionDecl was already collected in another context (macro
@@ -245,7 +245,7 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 	}
 }
 
-function collectClass(ctx: CheckerContext, node: Node): void {
+export function collectClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	// Reference parity: struct contains DATA fields only, never methods.
 	// Methods are standalone procs resolved via extension registry.
@@ -303,7 +303,7 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 	}
 }
 
-function collectActor(ctx: CheckerContext, node: Node): void {
+export function collectActor(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ActorDeclData;
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
@@ -440,15 +440,15 @@ function collectStructLike(ctx: CheckerContext, node: Node, kind: SymbolKind, is
 	defineOrError(ctx, sym, node);
 }
 
-function collectInterface(ctx: CheckerContext, node: Node): void {
+export function collectInterface(ctx: CheckerContext, node: Node): void {
 	collectStructLike(ctx, node, SymbolKind.Interface, true);
 }
 
-function collectStruct(ctx: CheckerContext, node: Node): void {
+export function collectStruct(ctx: CheckerContext, node: Node): void {
 	collectStructLike(ctx, node, SymbolKind.Struct, false);
 }
 
-function collectEnumDecl(ctx: CheckerContext, node: Node): void {
+export function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as EnumDeclData;
 	const enumValues = d.enumValues !== null ? d.enumValues : [] as number[];
 	const enumType = createEnum(d.enumName, d.enumMembers, enumValues);
@@ -475,7 +475,7 @@ function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	node.nodeType = enumType;
 }
 
-function collectTypeAlias(ctx: CheckerContext, node: Node): void {
+export function collectTypeAlias(ctx: CheckerContext, node: Node): void {
 	const d = node.data as TypeAliasDeclData;
 	const aliasType = inferredType();
 	const sym = makeSymbol(d.aliasName, SymbolKind.TypeAlias, aliasType, false);
@@ -483,7 +483,7 @@ function collectTypeAlias(ctx: CheckerContext, node: Node): void {
 	defineOrError(ctx, sym, node);
 }
 
-function collectExtern(ctx: CheckerContext, node: Node): void {
+export function collectExtern(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ExternDeclData;
 	const kind = match (d.externKind) {
 		ExternKind.Function => SymbolKind.Function,
@@ -506,7 +506,7 @@ function collectExtern(ctx: CheckerContext, node: Node): void {
 	defineOrError(ctx, sym, node);
 }
 
-function collectMacro(ctx: CheckerContext, node: Node): void {
+export function collectMacro(ctx: CheckerContext, node: Node): void {
 	const d = node.data as MacroDeclData;
 	// Phase B+: Use SymbolKind.Macro so checkCallExpr can detect macro calls
 	// and rewrite them to MacroInvocation (enables bare-call invocation: foo(args)

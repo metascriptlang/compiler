@@ -1094,7 +1094,7 @@ function findPredicateInfix(text: string): int32 {
 	return (idxSp + 1) as int32;
 }
 
-function resolveFunction(ctx: CheckerContext, node: Node): void {
+export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	// Use resolvedSym set by collectPass (preserves overloadIdx for overloaded functions).
 	let sym = node.resolvedSym;
@@ -1282,7 +1282,7 @@ function interfaceCycleChain(ctx: CheckerContext, currentName: string, targetNam
 	return "";
 }
 
-function resolveInterface(ctx: CheckerContext, node: Node): void {
+export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	const d = node.data as InterfaceDeclData;
 	const sym = lookupSymbol(ctx.table, d.interfaceName);
 	if (sym === null) return;
@@ -1433,7 +1433,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	}
 }
 
-function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
+export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	const d = node.data as TypeAliasDeclData;
 	const sym = lookupSymbol(ctx.table, d.aliasName);
 	if (sym === null) return;
@@ -1663,7 +1663,7 @@ function resolveVariable(ctx: CheckerContext, node: Node): void {
 
 // Resolve extern const/let/var type annotation → set symbol type.
 // Reference parity: importc symbols get their type resolved during sem pass.
-function resolveExtern(ctx: CheckerContext, node: Node): void {
+export function resolveExtern(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ExternDeclData;
 	const sym = lookupSymbol(ctx.table, d.externName);
 	if (sym === null) return;
@@ -1691,7 +1691,7 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 	}
 }
 
-function resolveClass(ctx: CheckerContext, node: Node): void {
+export function resolveClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	const sym = lookupSymbol(ctx.table, d.className);
 	if (sym === null) return;
@@ -1920,7 +1920,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 	node.nodeType = sym.symbolType;
 }
 
-function resolveActor(ctx: CheckerContext, node: Node): void {
+export function resolveActor(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ActorDeclData;
 	const sym = lookupSymbol(ctx.table, d.actorName);
 	if (sym === null) return;

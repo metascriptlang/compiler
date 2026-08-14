@@ -1,7 +1,7 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { inferredType, noneType, isUnresolvedType, charType, float64Type, voidType, nullType, createFunction, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
@@ -10,7 +10,7 @@ import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal,
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords } from "./context";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
-import { collectTopLevel, defineOrError, registerConverter, getDeclName } from "./collectPass";
+import { collectTopLevel, collectTypeAlias, collectInterface, collectStruct, collectEnumDecl, collectClass, collectActor, collectExtern, collectFunction, collectMacro, defineOrError, registerConverter, getDeclName } from "./collectPass";
 import { readFile } from "std/fs";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize } from "std/fs/path";
@@ -21,7 +21,7 @@ import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/me
 import { isAssignable, explainStructuralPrefix, isObjectShapeMismatch } from "./compat";
 import { setConditionalAssignFn } from "./types";
 setConditionalAssignFn(isAssignable);
-import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
+import { resolveDeclarations, resolveAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { registerModuleCtx } from "./instantiate";
 import { getGenericDecl } from "../parser/context";
 import { splitTopLevel } from "../utils/string";
@@ -212,6 +212,139 @@ function rejectLocalDecl(ctx: CheckerContext, node: Node, what: string): boolean
 	return true;
 }
 
+// Nim registers a local type into the current scope at its point of semantic
+// analysis (typeDefLeftSidePass -> addInterfaceDeclAt(c, c.currentScope, sym))
+// and resolves the right side in that same scope. Reusing the module-level
+// collect+resolve pair here does exactly that, because defineSymbol targets
+// table.current. Generic and discriminated-union aliases still go through the
+// instantiation machinery keyed on module-level decls, so they stay gated.
+function checkTypeAliasStmt(ctx: CheckerContext, node: Node): void {
+	const k = ctx.table.current.scopeKind;
+	if (k === ScopeKind.Module || k === ScopeKind.Global) return;
+	const d = node.data as TypeAliasDeclData;
+	if (d.discriminantName !== "" || (d.aliasGenericParams !== null && d.aliasGenericParams !== "")) {
+		rejectLocalDecl(ctx, node, "type alias");
+		return;
+	}
+	collectTypeAlias(ctx, node);
+	resolveTypeAlias(ctx, node);
+}
+
+// Same current-scope registration as checkTypeAliasStmt, with one extra gate the
+// alias path does not need: interfaces/structs EMIT a C struct keyed by bare name
+// (genObjectType: mangle(typeName) + "#ifndef name_DEFINED"), so a local decl is
+// only admitted when its name is unique module-wide — a shadowing or sibling
+// duplicate would silently merge into whichever definition emitted first.
+// A local type that EMITS (struct, enum) is admitted only when its name is free
+// module-wide: C keys both the emitted symbol and its include guard by the bare
+// name, so a shadow or a sibling-scope duplicate would silently collapse into
+// whichever definition was emitted first. Shadowing stays rejected until
+// mangling keys on symbol identity the way Nim's getTypeName does.
+function claimLocalTypeName(ctx: CheckerContext, node: Node, what: string): boolean {
+	const name = getDeclName(node);
+	if (lookupSymbol(ctx.table, name) !== null || ctx.localTypeNames.get(name) !== null || getGenericDecl(name) !== "") {
+		rejectLocalDecl(ctx, node, what);
+		return false;
+	}
+	ctx.localTypeNames.set(name, true);
+	return true;
+}
+
+function checkStructLikeStmt(ctx: CheckerContext, node: Node, what: string): void {
+	const k = ctx.table.current.scopeKind;
+	if (k === ScopeKind.Module || k === ScopeKind.Global) return;
+	if (!claimLocalTypeName(ctx, node, what)) return;
+	if (node.kind === NodeKind.InterfaceDecl) {
+		collectInterface(ctx, node);
+	} else {
+		collectStruct(ctx, node);
+	}
+	resolveInterface(ctx, node);
+	ctx.pendingLocalTypeDecls.push(node);
+}
+
+// Classes carry the full three-pass treatment (collect builds the symbol and its
+// members, resolve shapes the fields, check validates the bodies) and the lift
+// matters most here: ctorLower and methodToFunction walk programStmts only, so
+// an unlifted local class would reach codegen with no _init and no methods.
+function checkClassStmt(ctx: CheckerContext, node: Node): void {
+	const k = ctx.table.current.scopeKind;
+	if (k === ScopeKind.Module || k === ScopeKind.Global) {
+		checkClassDecl(ctx, node);
+		return;
+	}
+	if (!claimLocalTypeName(ctx, node, "class")) return;
+	collectClass(ctx, node);
+	resolveClass(ctx, node);
+	checkClassDecl(ctx, node);
+	ctx.pendingLocalTypeDecls.push(node);
+}
+
+// Enums need no resolve step — collectEnumDecl builds the member list and values
+// eagerly — but they DO emit (typedef + per-member #define), so they lift too.
+function checkEnumStmt(ctx: CheckerContext, node: Node): void {
+	const k = ctx.table.current.scopeKind;
+	if (k === ScopeKind.Module || k === ScopeKind.Global) return;
+	if (!claimLocalTypeName(ctx, node, "enum")) return;
+	collectEnumDecl(ctx, node);
+	ctx.pendingLocalTypeDecls.push(node);
+}
+
+// A macro emits nothing, but its body must be in the registry before
+// expandMacros runs; collectMacro is what puts it there.
+function checkMacroStmt(ctx: CheckerContext, node: Node): void {
+	const k = ctx.table.current.scopeKind;
+	if (k === ScopeKind.Module || k === ScopeKind.Global) {
+		checkMacroDecl(ctx, node);
+		return;
+	}
+	if (!claimLocalTypeName(ctx, node, "macro")) return;
+	collectMacro(ctx, node);
+	checkMacroDecl(ctx, node);
+	ctx.pendingLocalTypeDecls.push(node);
+}
+
+// Actors follow the class shape — collect, resolve, check, lift — because
+// actorLower rebuilds programStmts to wire the mailbox and the dispatch table,
+// and only sees what is there.
+function checkActorStmt(ctx: CheckerContext, node: Node): void {
+	const k = ctx.table.current.scopeKind;
+	if (k === ScopeKind.Module || k === ScopeKind.Global) {
+		checkActorDecl(ctx, node);
+		return;
+	}
+	if (!claimLocalTypeName(ctx, node, "actor")) return;
+	collectActor(ctx, node);
+	resolveActor(ctx, node);
+	checkActorDecl(ctx, node);
+	ctx.pendingLocalTypeDecls.push(node);
+}
+
+// An extern binds a bare C name — nativeName defaults to the identifier itself —
+// so two siblings sharing a name would emit one prototype and silently pick a
+// signature; the same module-wide uniqueness gate as the emitting type kinds
+// keeps that out. Nothing here defines a type (genExternDecl only forward-declares
+// opaque class/type kinds), but the lift is still required: prototypes are emitted
+// from the module-level walk, so an unlifted extern links against nothing.
+function checkExternStmt(ctx: CheckerContext, node: Node): void {
+	const k = ctx.table.current.scopeKind;
+	if (k === ScopeKind.Module || k === ScopeKind.Global) return;
+	if (!claimLocalTypeName(ctx, node, "extern")) return;
+	collectExtern(ctx, node);
+	resolveExtern(ctx, node);
+	ctx.pendingLocalTypeDecls.push(node);
+}
+
+// An extern function arrives as a FunctionDecl carrying the flag, not as an
+// ExternDecl, and must never reach rewriteNestedFunctionDecl: it has no body to
+// turn into a closure.
+function checkExternFunctionStmt(ctx: CheckerContext, node: Node): void {
+	if (!claimLocalTypeName(ctx, node, "extern function")) return;
+	collectFunction(ctx, node);
+	resolveFunction(ctx, node);
+	ctx.pendingLocalTypeDecls.push(node);
+}
+
 // ===== Statement Checker =====
 
 export function checkStmt(ctx: CheckerContext, node: Node): void {
@@ -219,7 +352,10 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.VariableDecl => checkVariableDecl(ctx, node),
 		NodeKind.FunctionDecl => {
 			const fdFlags = (node.data as FunctionDeclData).fnFlags;
-			if (fdFlags.indexOf("extern", 0) >= 0 && rejectLocalDecl(ctx, node, "extern function")) {
+			const fdScope = ctx.table.current.scopeKind;
+			const fdLocal = fdScope !== ScopeKind.Module && fdScope !== ScopeKind.Global;
+			if (fdFlags.indexOf("extern", 0) >= 0 && fdLocal) {
+				checkExternFunctionStmt(ctx, node);
 			} else if (ctx.currentFunction !== null) {
 				rewriteNestedFunctionDecl(ctx, node);
 				checkVariableDecl(ctx, node);
@@ -227,15 +363,15 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 				checkFunctionDecl(ctx, node);
 			}
 		},
-		NodeKind.ClassDecl => { if (!rejectLocalDecl(ctx, node, "class")) checkClassDecl(ctx, node); },
-		NodeKind.ActorDecl => { if (!rejectLocalDecl(ctx, node, "actor")) checkActorDecl(ctx, node); },
-		NodeKind.InterfaceDecl => { rejectLocalDecl(ctx, node, "interface"); },
-		NodeKind.StructDecl => { rejectLocalDecl(ctx, node, "struct"); },
-		NodeKind.EnumDecl => { rejectLocalDecl(ctx, node, "enum"); },
-		NodeKind.TypeAliasDecl => { rejectLocalDecl(ctx, node, "type alias"); },
-		NodeKind.ExternDecl => { rejectLocalDecl(ctx, node, "extern"); },
+		NodeKind.ClassDecl => checkClassStmt(ctx, node),
+		NodeKind.ActorDecl => checkActorStmt(ctx, node),
+		NodeKind.InterfaceDecl => checkStructLikeStmt(ctx, node, "interface"),
+		NodeKind.StructDecl => checkStructLikeStmt(ctx, node, "struct"),
+		NodeKind.EnumDecl => checkEnumStmt(ctx, node),
+		NodeKind.TypeAliasDecl => checkTypeAliasStmt(ctx, node),
+		NodeKind.ExternDecl => checkExternStmt(ctx, node),
 		NodeKind.ImportDecl => {},
-		NodeKind.MacroDecl => { if (!rejectLocalDecl(ctx, node, "macro")) checkMacroDecl(ctx, node); },
+		NodeKind.MacroDecl => checkMacroStmt(ctx, node),
 		NodeKind.ExportDecl => checkExportDecl(ctx, node),
 		NodeKind.IfStmt => checkIfStmt(ctx, node),
 		NodeKind.WhileStmt => checkWhileStmt(ctx, node),
@@ -1587,6 +1723,20 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) return;
 		checkStmt(ctx, stmts.programStmts[i]);
 		i = i + drainHoisted(ctx, stmts.programStmts, i, hoistMark) + 1;
+	}
+	if (ctx.pendingLocalTypeDecls.length > 0) {
+		// Front, not back: C claims TypeInfo ownership when the declaration is
+		// emitted (declaredThings), so a decl landing after its use site emits an
+		// extern reference and links against nothing.
+		const merged: Node[] = [];
+		for (const d of ctx.pendingLocalTypeDecls) {
+			merged.push(d);
+		}
+		for (const s of stmts.programStmts) {
+			merged.push(s);
+		}
+		stmts.programStmts = merged;
+		ctx.pendingLocalTypeDecls = [];
 	}
 }
 
