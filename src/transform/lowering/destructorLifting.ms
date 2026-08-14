@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf, voidType } from "../../checker/types";
+import { isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf, voidType } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
@@ -757,6 +757,7 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 	if (objType.kind !== TypeKind.Struct && objType.kind !== TypeKind.Union) return false;
 	const probe = newBuf();
 	if (objType.kind === TypeKind.Union) {
+		if (isPrimitiveOnlyUnion(objType) && primitiveUnionStringIdx(objType) >= 0) return true;
 		// Probe each variant's fields. Peel Ref/Ptr — interface variants are
 		// Ref<Struct> in the C backend.
 		for (let vi = 0; vi < objType.typeChildren.length; vi += 1) {
@@ -1127,7 +1128,11 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 		// still needs hooks emitted for cross-module references).
 		const fieldsFlattened = (objType.typeFlags & TypeFlag.HasInheritedFields) !== 0;
 		if (objType.kind === TypeKind.Union) {
-			generateUnionArms(hook, typeName, objType, p1, p2, lctx, buf, loc);
+			if (isPrimitiveOnlyUnion(objType)) {
+				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
+			} else {
+				generateUnionArms(hook, typeName, objType, p1, p2, lctx, buf, loc);
+			}
 		} else if (hook === "destroy") {
 			// Destroy: fields first (reverse), then base class (LIFO — standard pattern)
 			for (let i = objType.typeNames.length - 1; i >= 0; i -= 1) {
@@ -1937,6 +1942,11 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 				// undefined symbols. DU-variant payloads excluded (classify defers them
 				// to the DU machinery; a stray unstamped copy just makes a dead def).
 				ensureHooks(anonTypeName(node.nodeType), node.nodeType, null as unknown as Type, false, lctx, node.location);
+			} else if (node.nodeType.kind === TypeKind.Union && node.nodeType.typeName !== ""
+				&& hasAsgnFlag(node.nodeType)
+				&& !isAllStringLiteralUnion(node.nodeType)
+				&& unwrapRefNullUnion(node.nodeType) === null) {
+				ensureHooks(node.nodeType.typeName, node.nodeType, null as unknown as Type, false, lctx, node.location);
 			} else if (node.nodeType.kind === TypeKind.Ref && node.nodeType.typeReturn !== null
 				&& node.nodeType.typeReturn.kind === TypeKind.Struct && node.nodeType.typeReturn.typeName !== "") {
 				// Monomorphized class/interface: unwrap Ref, pass Ref as refType for HiddenDeref.
