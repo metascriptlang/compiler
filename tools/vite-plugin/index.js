@@ -33,7 +33,11 @@ export default function metascript(options = {}) {
 	// nothing whenever the two disagree.
 	function emit() {
 		mkdirSync(outDir, { recursive: true });
-		execFileSync(msc, ["build", entry, "--target=js", "--split", `--output=${outDir}`], {
+		// Vite reads the sourceMappingURL comment off the file it loads, so the
+		// map only has to exist beside the emitted module.
+		const args = ["build", entry, "--target=js", "--split", `--output=${outDir}`];
+		if (options.sourcemap !== false) args.push("--sourcemap");
+		execFileSync(msc, args, {
 			stdio: options.quiet === false ? "inherit" : "pipe",
 		});
 		const manifest = JSON.parse(readFileSync(join(outDir, "_manifest.json"), "utf8"));
