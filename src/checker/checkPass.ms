@@ -10,7 +10,7 @@ import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal,
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords } from "./context";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
-import { collectTopLevel, defineOrError, registerConverter } from "./collectPass";
+import { collectTopLevel, defineOrError, registerConverter, getDeclName } from "./collectPass";
 import { readFile } from "std/fs";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize } from "std/fs/path";
@@ -199,24 +199,43 @@ function rewriteNestedFunctionDecl(ctx: CheckerContext, node: Node): void {
 	node.data = { declName: d.fnName, declType: fnAnnot, initializer: fnExpr, declKind: DeclKind.Const, nameLocation: d.nameLocation };
 }
 
+// Nim enters type symbols into the CURRENT scope (typeDefLeftSidePass ->
+// addInterfaceDeclAt(c, c.currentScope, sym), lookups.nim:435); collectPass only
+// registers module-level declarations, so until local declarations are lifted
+// per-block a non-module decl must fail LOUD at the decl — a missed one either
+// dies at the use site, links against nothing (extern), or silently binds a
+// same-named outer symbol (wrong answer, backend-divergent).
+function rejectLocalDecl(ctx: CheckerContext, node: Node, what: string): boolean {
+	const k = ctx.table.current.scopeKind;
+	if (k === ScopeKind.Module || k === ScopeKind.Global) return false;
+	addError(ctx, "local " + what + " '" + getDeclName(node) + "' is not supported yet - move the declaration to module level", node.location.line, node.location.column);
+	return true;
+}
+
 // ===== Statement Checker =====
 
 export function checkStmt(ctx: CheckerContext, node: Node): void {
 	match (node.kind) {
 		NodeKind.VariableDecl => checkVariableDecl(ctx, node),
 		NodeKind.FunctionDecl => {
-			if (ctx.currentFunction !== null) {
+			const fdFlags = (node.data as FunctionDeclData).fnFlags;
+			if (fdFlags.indexOf("extern", 0) >= 0 && rejectLocalDecl(ctx, node, "extern function")) {
+			} else if (ctx.currentFunction !== null) {
 				rewriteNestedFunctionDecl(ctx, node);
 				checkVariableDecl(ctx, node);
 			} else {
 				checkFunctionDecl(ctx, node);
 			}
 		},
-		NodeKind.ClassDecl => checkClassDecl(ctx, node),
-		NodeKind.ActorDecl => checkActorDecl(ctx, node),
-		NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.EnumDecl | NodeKind.TypeAliasDecl |
-		NodeKind.ExternDecl | NodeKind.ImportDecl => {},
-		NodeKind.MacroDecl => checkMacroDecl(ctx, node),
+		NodeKind.ClassDecl => { if (!rejectLocalDecl(ctx, node, "class")) checkClassDecl(ctx, node); },
+		NodeKind.ActorDecl => { if (!rejectLocalDecl(ctx, node, "actor")) checkActorDecl(ctx, node); },
+		NodeKind.InterfaceDecl => { rejectLocalDecl(ctx, node, "interface"); },
+		NodeKind.StructDecl => { rejectLocalDecl(ctx, node, "struct"); },
+		NodeKind.EnumDecl => { rejectLocalDecl(ctx, node, "enum"); },
+		NodeKind.TypeAliasDecl => { rejectLocalDecl(ctx, node, "type alias"); },
+		NodeKind.ExternDecl => { rejectLocalDecl(ctx, node, "extern"); },
+		NodeKind.ImportDecl => {},
+		NodeKind.MacroDecl => { if (!rejectLocalDecl(ctx, node, "macro")) checkMacroDecl(ctx, node); },
 		NodeKind.ExportDecl => checkExportDecl(ctx, node),
 		NodeKind.IfStmt => checkIfStmt(ctx, node),
 		NodeKind.WhileStmt => checkWhileStmt(ctx, node),
