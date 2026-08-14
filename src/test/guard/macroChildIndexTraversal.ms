@@ -30,6 +30,15 @@ macro reactiveFlag(e: Node): Node {
 	return quote { splice(v) };
 }
 
+// metaSolo pins the metadata exclusion: a checked identifier carries
+// resolvedSym + nodeType (+ symHandle when BoundSym) on the wire, and
+// resolvedSym/nodeType are node-shaped — a broken isNodeWireMetaField
+// (wire.ms) would count them as children.
+macro kidCount(e: Node): Node {
+	const v = childCount(e);
+	return quote { splice(v) };
+}
+
 function f(): number { return 3; }
 const gate = true;
 
@@ -44,11 +53,17 @@ function main(): void {
 	console.log(inArray === 1 ? "inArray:ok" : "inArray:RED");
 	console.log(inTernary === 1 ? "inTernary:ok" : "inTernary:RED");
 	console.log(behindArrow === 0 ? "behindArrow:ok" : "behindArrow:RED");
+	const metaSolo = kidCount(f);
+	const callKids = kidCount(f());
+	console.log(metaSolo === 0 ? "metaSolo:ok" : "metaSolo:RED");
+	console.log(callKids === 1 ? "callKids:ok" : "callKids:RED");
 	if (plain !== 0) { throw "GUARD RED: static expr classified reactive"; }
 	if (direct !== 1) { throw "GUARD RED: call in binary expr missed"; }
 	if (inArray !== 1) { throw "GUARD RED: call inside array literal missed"; }
 	if (inTernary !== 1) { throw "GUARD RED: call inside ternary missed"; }
 	if (behindArrow !== 0) { throw "GUARD RED: arrow boundary not respected"; }
+	if (metaSolo !== 0) { throw "GUARD RED: metadata field counted as child"; }
+	if (callKids !== 1) { throw "GUARD RED: callee child missed"; }
 	console.log("macroChildIndexTraversal ok");
 }
 main();
