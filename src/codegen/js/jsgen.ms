@@ -4,7 +4,8 @@
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
 import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData, TryExprData, FunctionDeclData, ExportDeclData } from "../../ast/node";
-import { JSGenerator, createJSGenerator, registerEmitNode, finalize, emit, lookupModuleSpec } from "./emit";
+import { JSGenerator, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec } from "./emit";
+import { SourceInfo } from "./sourcemap";
 import {
 	emitNumberLiteral, emitStringLiteral, emitBooleanLiteral, emitNullLiteral,
 	emitBigIntLiteral, emitRegexLiteral,
@@ -40,6 +41,7 @@ import { JsImportEntry } from "../../checker/context";
 
 function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 	if (node === null) return;
+	mark(gen, node);
 	match (node.kind) {
 		// Literals
 		NodeKind.NumberLiteral => { emitNumberLiteral(gen, node); },
@@ -171,6 +173,7 @@ export interface JsModuleResult {
 	exportedNames: string[];
 	testNames: string[];
 	testFuncs: string[];
+	smap: SourceInfo;
 }
 
 function emitAutoCallMain(gen: JSGenerator, program: Node): void {
@@ -182,6 +185,9 @@ function emitAutoCallMain(gen: JSGenerator, program: Node): void {
 		if (decl.kind !== NodeKind.FunctionDecl) continue;
 		if ((decl.data as FunctionDeclData).fnName !== "main") continue;
 		const name = jsSymbolName(gen, decl.resolvedSym, "main");
+		// The entry frame has no call site in the source; without a name here a
+		// debugger labels it with whatever mapping precedes it.
+		if (name !== "main") markNamed(gen, decl, "main");
 		emit(gen, `Promise.resolve(${name}()).then((r) => { if (typeof process !== "undefined" && typeof r === "number") { process.exitCode = r | 0; } });\n`);
 		return;
 	}
@@ -192,13 +198,13 @@ export function generateJSModule(
 	importSpecKeys: string[], importSpecVals: string[],
 	moduleSpecKeys: string[], moduleSpecVals: string[],
 	modExportKeys: string[], modExportVals: string[][],
-	isTestBuild: boolean, autoCallMain: boolean, lineDir: boolean,
+	isTestBuild: boolean, autoCallMain: boolean, sourcemap: boolean,
 ): JsModuleResult {
 	const gen = createJSGenerator();
 	gen.multiFile = true;
 	gen.isTestBuild = isTestBuild;
 	gen.currentModulePath = currentModulePath;
-	gen.lineDir = lineDir;
+	gen.smap = sourcemap;
 	gen.sourceFile = currentModulePath;
 	gen.importSpecKeys = importSpecKeys;
 	gen.importSpecVals = importSpecVals;
@@ -232,7 +238,7 @@ export function generateJSModule(
 		emit(gen, ` } from "${spec}";\n`);
 	}
 	if (autoCallMain) { emitAutoCallMain(gen, program); }
-	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, exportedNames: gen.exportedNames, testNames: gen.testNames, testFuncs: gen.testFuncs };
+	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, exportedNames: gen.exportedNames, testNames: gen.testNames, testFuncs: gen.testFuncs, smap: gen.smapInfo };
 }
 
 // Bundle mode: generate JS for a single module without header/imports.
@@ -240,20 +246,21 @@ export function generateJSModule(
 export interface BundleModuleResult {
 	code: string;
 	exportedNames: string[];
+	smap: SourceInfo;
 }
 
-export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean, autoCallMain: boolean, sourceFile: string, lineDir: boolean): BundleModuleResult {
+export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean, autoCallMain: boolean, sourceFile: string, sourcemap: boolean): BundleModuleResult {
 	const gen = createJSGenerator();
 	gen.bundleMode = true;
 	gen.bundleIsPrelude = isPrelude;
-	gen.lineDir = lineDir;
+	gen.smap = sourcemap;
 	gen.sourceFile = sourceFile;
 	gen.jsImports = [];
 	gen.importSourceToModuleId = importSourceMap;
 	gen.importSourceToModuleIdKeys = importSourceMapKeys;
 	emitNodeDispatch(gen, program);
 	if (autoCallMain) { emitAutoCallMain(gen, program); }
-	return { code: finalize(gen), exportedNames: gen.exportedNames };
+	return { code: finalize(gen), exportedNames: gen.exportedNames, smap: gen.smapInfo };
 }
 
 // Generate JS without header (for internal/test use)

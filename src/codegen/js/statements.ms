@@ -8,7 +8,7 @@ import {
 	ForStmtData, ForOfStmtData, MacroInvocationData, StringLiteralData,
 	AssertStmtData, isEmptyBlock, Type,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, emitLine, emitLineDir, JSGenerator, emitBlockInline, emitBlockOrStmt, jsTypedArrayName, escapeJSString } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt, jsTypedArrayName, escapeJSString } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
@@ -17,7 +17,6 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 // generated runner catch per test. Outside a test build there is no harness to
 // report to, so the throw is the report.
 export function emitAssertStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	const d = node.data as AssertStmtData;
 	emitIndent(gen);
 	emit(gen, "if (!(");
@@ -123,7 +122,6 @@ function emitStaticStorageDecl(gen: JSGenerator, node: Node): void {
 }
 
 export function emitVariableDecl(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	if (node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.ComptimeNodeAlias)) return;
 	if (node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.StaticLocal)) {
 		emitStaticStorageDecl(gen, node);
@@ -157,14 +155,12 @@ function emitIfStmtInner(gen: JSGenerator, node: Node, withIndent: boolean): voi
 }
 
 export function emitIfStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	emitIfStmtInner(gen, node, true);
 }
 
 // ===== While Statement =====
 
 export function emitWhileStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	const d = node.data as WhileStmtData;
 	emitIndent(gen);
 	emit(gen, "while (");
@@ -177,7 +173,6 @@ export function emitWhileStmt(gen: JSGenerator, node: Node): void {
 // ===== Do-While Statement =====
 
 export function emitDoWhileStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	const d = node.data as DoWhileStmtData;
 	emitIndent(gen);
 	emit(gen, "do ");
@@ -198,7 +193,6 @@ export function emitBlockStmt(gen: JSGenerator, node: Node): void {
 // ===== Expression Statement =====
 
 export function emitExprStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	const d = node.data as ExprStmtData;
 	// @emit: raw JS injection (reference emit generation parity)
 	if (d.expr.kind === NodeKind.MacroInvocation) {
@@ -225,7 +219,6 @@ export function emitExprStmt(gen: JSGenerator, node: Node): void {
 // ===== Return Statement =====
 
 export function emitReturnStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	const d = node.data as ReturnStmtData;
 	emitIndent(gen);
 	if (d.argument !== null) {
@@ -240,7 +233,6 @@ export function emitReturnStmt(gen: JSGenerator, node: Node): void {
 // ===== Break Statement =====
 
 export function emitBreakStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	const d = node.data as BreakStmtData;
 	emitIndent(gen);
 	if (d.breakLabel !== "") {
@@ -255,7 +247,6 @@ export function emitBreakStmt(gen: JSGenerator, node: Node): void {
 // ===== Continue Statement =====
 
 export function emitContinueStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	const d = node.data as ContinueStmtData;
 	emitIndent(gen);
 	if (d.continueLabel !== "") {
@@ -270,7 +261,6 @@ export function emitContinueStmt(gen: JSGenerator, node: Node): void {
 // ===== Switch Statement =====
 
 export function emitSwitchStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	const d = node.data as SwitchStmtData;
 	emitIndent(gen);
 	emit(gen, "switch (");
@@ -308,7 +298,6 @@ export function emitSwitchCase(gen: JSGenerator, node: Node): void {
 // ===== Throw Statement =====
 
 export function emitThrowStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	const d = node.data as ThrowStmtData;
 	emitIndent(gen);
 	emit(gen, "throw ");
@@ -319,7 +308,6 @@ export function emitThrowStmt(gen: JSGenerator, node: Node): void {
 // ===== Try-Catch Statement =====
 
 export function emitTryCatchStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	const d = node.data as TryCatchStmtData;
 	emitIndent(gen);
 	emit(gen, "try ");
@@ -344,7 +332,6 @@ export function emitTryCatchStmt(gen: JSGenerator, node: Node): void {
 // ===== For Statement (fallback if not lowered) =====
 
 export function emitForStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	const d = node.data as ForStmtData;
 	emitIndent(gen);
 	emit(gen, "for (");
@@ -368,7 +355,6 @@ export function emitForStmt(gen: JSGenerator, node: Node): void {
 // ===== For-Of Statement (fallback if not lowered) =====
 
 export function emitForOfStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	const d = node.data as ForOfStmtData;
 	emitIndent(gen);
 	if (d.forOfIsConst) {
@@ -387,6 +373,5 @@ export function emitForOfStmt(gen: JSGenerator, node: Node): void {
 // ===== Unreachable Statement =====
 
 export function emitUnreachableStmt(gen: JSGenerator, node: Node): void {
-	emitLineDir(gen, node);
 	emitLine(gen, "throw new Error(\"unreachable\");");
 }

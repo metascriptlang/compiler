@@ -5,6 +5,7 @@
 
 import { Node, NodeKind, TypeKind, BlockStmtData } from "../../ast/node";
 import { JsImportEntry } from "../../checker/context";
+import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
 
 
 // ===== JS Generator =====
@@ -39,19 +40,26 @@ export class JSGenerator {
 	isTestBuild: boolean;
 	testNames: string[];        // parallel with testFuncs: declared name → wrapper fn
 	testFuncs: string[];
-	// Statement-level `/* line N:C "path" */` markers; sourcemap.ms reads them
-	// back out of the finished text to build the mapping.
-	lineDir: boolean;
+	// Source map v3, recorded as the text is written.
+	smap: boolean;
 	sourceFile: string;
-	lastDirLine: int32;
-	lastDirColumn: int32;
+	smapInfo: SourceInfo;
+	genLine: int32;           // 0-indexed line in the emitted JS
+	genCol: int32;            // 0-indexed UTF-16 column, what the spec counts
+	// A mark waits for the next non-blank byte, so indentation and separators
+	// never take the position that belongs to the token.
+	pendingLine: int32;       // 1-based .ms line, 0 = nothing pending
+	pendingCol: int32;
+	pendingName: int32;
 }
 
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", jsBigInt64: false, staticSlots: [],
 		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], neededModules: [], neededNames: [],
 		isTestBuild: false, testNames: [], testFuncs: [],
-		lineDir: false, sourceFile: "", lastDirLine: 0 as int32, lastDirColumn: -1 as int32 };
+		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
+		genLine: 0 as int32, genCol: 0 as int32,
+		pendingLine: 0 as int32, pendingCol: 0 as int32, pendingName: -1 as int32 };
 }
 
 export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): void {
@@ -124,8 +132,61 @@ export function emitNode(gen: JSGenerator, node: Node): void {
 
 // ===== Emit Helpers =====
 
+// Lexer positions count from 1 on both axes; the map counts from 0 on both.
+function flushPending(gen: JSGenerator): void {
+	recordSegment(gen.smapInfo, gen.genLine, gen.genCol,
+		internFile(gen.smapInfo, gen.sourceFile),
+		(gen.pendingLine - 1) as int32, (gen.pendingCol - 1) as int32, gen.pendingName);
+	gen.pendingLine = 0 as int32;
+	gen.pendingName = -1 as int32;
+}
+
+// Source map columns count UTF-16 units, so a byte walk has to widen astral
+// characters to the surrogate pair a debugger will see.
+function advance(gen: JSGenerator, text: string): void {
+	let i: int32 = 0;
+	while (i < text.byteLength) {
+		const b = text.byteAt(i);
+		if (b === "\n".code) {
+			gen.genLine += 1;
+			gen.genCol = 0 as int32;
+			i += 1;
+		} else {
+			if (gen.pendingLine > 0 && b !== " ".code && b !== "\t".code && b !== "\r".code) {
+				flushPending(gen);
+			}
+			if (b < 128) { gen.genCol += 1; i += 1; }
+			else if (b < 224) { gen.genCol += 1; i += 2; }
+			else if (b < 240) { gen.genCol += 1; i += 3; }
+			else { gen.genCol += 2; i += 4; }
+		}
+	}
+}
+
 export function emit(gen: JSGenerator, text: string): void {
 	gen.buf.push(text);
+	if (gen.smap) advance(gen, text);
+}
+
+// Claims the next token emitted for `node`. A node that emits nothing of its
+// own is overwritten by the child it delegates to, which is the better answer.
+export function mark(gen: JSGenerator, node: Node): void {
+	if (!gen.smap) return;
+	if (node === null || node.location === null) return;
+	// A synthetic node carries no column. Leaving the enclosing node's mark in
+	// place points at real code instead of at the start of the line.
+	if (node.location.line <= 0 || node.location.column <= 0) return;
+	gen.pendingLine = node.location.line;
+	gen.pendingCol = node.location.column;
+	gen.pendingName = -1 as int32;
+}
+
+// Same as mark, plus the .ms name this token was renamed from.
+export function markNamed(gen: JSGenerator, node: Node, original: string): void {
+	if (!gen.smap) return;
+	mark(gen, node);
+	if (gen.pendingLine === 0 || original === "") return;
+	gen.pendingName = internName(gen.smapInfo, original);
 }
 
 export function emitIndent(gen: JSGenerator): void {
@@ -142,23 +203,6 @@ export function emitLine(gen: JSGenerator, text: string): void {
 
 export function emitNewline(gen: JSGenerator): void {
 	emit(gen, "\n");
-}
-
-// Must own its line: the map parser reads a marker only when it is the whole
-// line, and treats every following line as belonging to the same source line.
-export function emitLineDir(gen: JSGenerator, node: Node): void {
-	if (!gen.lineDir) return;
-	if (node === null || node.location === null) return;
-	const line = node.location.line;
-	const column = node.location.column;
-	if (line <= 0) return;
-	// A repeat of the exact same position leaves the parser in the state it is
-	// already in, so the marker would only add noise.
-	if (line === gen.lastDirLine && column === gen.lastDirColumn) return;
-	gen.lastDirLine = line;
-	gen.lastDirColumn = column;
-	emitIndent(gen);
-	emit(gen, `/* line ${line.toString()}:${column.toString()} "${escapeJSString(gen.sourceFile)}" */\n`);
 }
 
 // ===== Composite Emit Helpers =====
@@ -230,11 +274,20 @@ export function emitBodyOrEmpty(gen: JSGenerator, body: Node): void {
 
 // ===== Finalize =====
 
+// The static slots go in front of everything the emitters wrote, so every
+// position recorded during emission owes them their line count.
 export function finalize(gen: JSGenerator): string {
 	let result = "";
+	let slotLines: int32 = 0;
 	for (const slot of gen.staticSlots) {
 		result = result + slot;
+		if (gen.smap) {
+			for (let i: int32 = 0; i < slot.byteLength; i += 1) {
+				if (slot.byteAt(i) === "\n".code) slotLines += 1;
+			}
+		}
 	}
+	if (gen.smap) shiftLines(gen.smapInfo, slotLines);
 	for (const chunk of gen.buf) {
 		result = result + chunk;
 	}

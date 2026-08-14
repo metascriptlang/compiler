@@ -1,7 +1,7 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, execFile, platform } from "std/process";
-import { exists } from "std/fs";
+import { exit, exec, execFile, platform, cwd } from "std/process";
+import { exists, readFile } from "std/fs";
 import { parseSource } from "../parser/statements/validation";
 import { Node, ProgramData } from "../ast/node";
 import { CheckerContext, GcMode, hasErrors, hasFatalErrors, errorCount, Severity } from "../checker/context";
@@ -13,7 +13,7 @@ import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule } from "../codegen/js/jsgen";
-import { genSourceMap } from "../codegen/js/sourcemap";
+import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson } from "../codegen/js/sourcemap";
 import { escapeJSString } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
@@ -692,6 +692,27 @@ function writeDepsFile(graph: ModuleGraph, entryPath: string, outDir: string): v
 
 // ===== JS Build =====
 
+// `relative` bails out to an absolute path unless both sides are absolute, so
+// an `--output` spelled relative to the cwd has to be resolved first.
+function mapDirOf(outPath: string): string {
+	const d = dirname(outPath);
+	return isAbsolute(d) ? d : join(cwd(), d);
+}
+
+function countNewlines(s: string): int32 {
+	let n: int32 = 0;
+	for (let i: int32 = 0; i < s.byteLength; i += 1) {
+		if (s.byteAt(i) === "\n".code) n += 1;
+	}
+	return n;
+}
+
+function readSourceText(path: string): string {
+	const r = readFile(path);
+	if (!r.ok) return "";
+	return r.value;
+}
+
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
 	// Split mode is what a bundler plugin consumes: one ES module per source
 	// module, imports already relative inside the tree, nothing executed.
@@ -747,6 +768,11 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	// Single-file bundle: accumulate all module code
 	let bundle = "";
 	let compiled = 0;
+	// Each module's map is recorded from its own line 0, so composing them into
+	// one bundle map needs the line each module landed on.
+	const moduleSmaps: SourceInfo[] = [];
+	const moduleSmapLines: int32[] = [];
+	let bundleLines: int32 = 0;
 
 	// Phase 1 — check + expand + comptime for EVERY module before any backend
 	// transform runs: transformProgram mutates the registered module AST in
@@ -852,7 +878,14 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const isPrelude = moduleId.startsWith("std/core/");
 		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, jsAutoCallMain && modPath === entryPath, modPath, opts.sourcemap);
 
-		bundle = bundle + `\n// --- Module: ${moduleId} ---\n`;
+		const separator = `\n// --- Module: ${moduleId} ---\n`;
+		bundle = bundle + separator;
+		if (opts.sourcemap) {
+			bundleLines += countNewlines(separator);
+			moduleSmaps.push(result.smap);
+			moduleSmapLines.push(bundleLines);
+			bundleLines += countNewlines(result.code);
+		}
 		bundle = bundle + result.code;
 		compiled = compiled + 1;
 	}
@@ -867,6 +900,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		}
 		output = output + ` } from "${extImportKeys[ei]}";\n`;
 	}
+	const headerLines = opts.sourcemap ? countNewlines(output) : 0 as int32;
 	output = output + bundle;
 
 	// `--output` wins here exactly as it does for the C binary. Deriving the
@@ -876,11 +910,15 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		? opts.outputPath
 		: `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
 	ensureDir(dirname(outPath));
-	// The map describes the text as emitted, so it is built before the link
-	// comment is appended.
+	// The link comment goes after the map is built; it sits past every mapped
+	// line, so it shifts nothing.
 	if (opts.sourcemap) {
 		const mapName = `${basename(outPath)}.map`;
-		writeOutput(`${outPath}.map`, genSourceMap(output, basename(outPath)));
+		const combined = createSourceInfo();
+		for (let mi = 0; mi < moduleSmaps.length; mi += 1) {
+			appendInfo(combined, moduleSmaps[mi], (headerLines + moduleSmapLines[mi]) as int32);
+		}
+		writeOutput(`${outPath}.map`, toSourceMapJson(combined, basename(outPath), mapDirOf(outPath), readSourceText));
 		output = `${output}\n//# sourceMappingURL=${mapName}\n`;
 	}
 	writeOutput(outPath, output);
@@ -1815,6 +1853,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	}
 
 	const moduleCodes: string[] = [];
+	const moduleSmaps: SourceInfo[] = [];
 	const moduleNeededMods: string[][] = [];
 	const moduleNeededNames: string[][][] = [];
 	const moduleExported: string[][] = [];
@@ -1846,6 +1885,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 
 		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals, isTestBuild, !isTestBuild && jsAutoCallMain && modPath === filePath, opts.sourcemap);
 		moduleCodes.push(res.code);
+		moduleSmaps.push(res.smap);
 		moduleNeededMods.push(res.neededModules);
 		moduleNeededNames.push(res.neededNames);
 		moduleExported.push(res.exportedNames);
@@ -1884,7 +1924,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		ensureDir(dirname(outPath));
 		if (opts.sourcemap) {
 			const mapName = `${basename(outPath)}.map`;
-			writeOutput(`${outPath}.map`, genSourceMap(code, basename(outPath)));
+			writeOutput(`${outPath}.map`, toSourceMapJson(moduleSmaps[ui], basename(outPath), mapDirOf(outPath), readSourceText));
 			code = `${code}\n//# sourceMappingURL=${mapName}\n`;
 		}
 		writeOutput(outPath, code);
