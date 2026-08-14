@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData,
 } from "../../ast/node";
-import { emit, emitNode, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName } from "./emit";
+import { emit, emitNode, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner } from "../c/names";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { int64ToDecimal } from "../../utils/string";
@@ -171,7 +171,11 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string): string {
 export function emitIdentifier(gen: JSGenerator, node: Node): void {
 	const d = node.data as IdentifierData;
 	if (d.name === "this") { emit(gen, gen.thisName); return; }
-	emit(gen, jsSymbolName(gen, node.resolvedSym, d.name));
+	// The name recorded at a call site is what a debugger shows as the name of
+	// the frame it enters, so a renamed callee has to carry its .ms name here.
+	const emitted = jsSymbolName(gen, node.resolvedSym, d.name);
+	if (emitted !== d.name) markNamed(gen, node, d.name);
+	emit(gen, emitted);
 }
 
 // ===== Binary Expression =====

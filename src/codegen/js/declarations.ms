@@ -4,7 +4,7 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitBodyOrEmpty, lookupImportSpec } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitBodyOrEmpty, lookupImportSpec } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
 
 // ===== Function Declaration =====
@@ -17,7 +17,9 @@ function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 		"async_generator" => { emit(gen, "async function* "); },
 		_ => { emit(gen, "function "); },
 	};
-	emit(gen, jsSymbolName(gen, node.resolvedSym, d.fnName));
+	const fnEmitted = jsSymbolName(gen, node.resolvedSym, d.fnName);
+	if (fnEmitted !== d.fnName) markNamed(gen, node, d.fnName);
+	emit(gen, fnEmitted);
 	emit(gen, "(");
 	const savedThisName = gen.thisName;
 	if (d.params.length > 0 && d.params[0] === "this") { gen.thisName = "$this"; }
