@@ -192,12 +192,14 @@ export function generateJSModule(
 	importSpecKeys: string[], importSpecVals: string[],
 	moduleSpecKeys: string[], moduleSpecVals: string[],
 	modExportKeys: string[], modExportVals: string[][],
-	isTestBuild: boolean, autoCallMain: boolean,
+	isTestBuild: boolean, autoCallMain: boolean, lineDir: boolean,
 ): JsModuleResult {
 	const gen = createJSGenerator();
 	gen.multiFile = true;
 	gen.isTestBuild = isTestBuild;
 	gen.currentModulePath = currentModulePath;
+	gen.lineDir = lineDir;
+	gen.sourceFile = currentModulePath;
 	gen.importSpecKeys = importSpecKeys;
 	gen.importSpecVals = importSpecVals;
 	gen.moduleSpecKeys = moduleSpecKeys;
@@ -240,10 +242,12 @@ export interface BundleModuleResult {
 	exportedNames: string[];
 }
 
-export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean, autoCallMain: boolean): BundleModuleResult {
+export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean, autoCallMain: boolean, sourceFile: string, lineDir: boolean): BundleModuleResult {
 	const gen = createJSGenerator();
 	gen.bundleMode = true;
 	gen.bundleIsPrelude = isPrelude;
+	gen.lineDir = lineDir;
+	gen.sourceFile = sourceFile;
 	gen.jsImports = [];
 	gen.importSourceToModuleId = importSourceMap;
 	gen.importSourceToModuleIdKeys = importSourceMapKeys;

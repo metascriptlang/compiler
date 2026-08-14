@@ -13,6 +13,7 @@ import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule } from "../codegen/js/jsgen";
+import { genSourceMap } from "../codegen/js/sourcemap";
 import { escapeJSString } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
@@ -849,7 +850,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 		const moduleId = replaceExt(relative(projectRoot, modPath), "");
 		const isPrelude = moduleId.startsWith("std/core/");
-		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, jsAutoCallMain && modPath === entryPath);
+		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, jsAutoCallMain && modPath === entryPath, modPath, opts.sourcemap);
 
 		bundle = bundle + `\n// --- Module: ${moduleId} ---\n`;
 		bundle = bundle + result.code;
@@ -875,6 +876,13 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		? opts.outputPath
 		: `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
 	ensureDir(dirname(outPath));
+	// The map describes the text as emitted, so it is built before the link
+	// comment is appended.
+	if (opts.sourcemap) {
+		const mapName = `${basename(outPath)}.map`;
+		writeOutput(`${outPath}.map`, genSourceMap(output, basename(outPath)));
+		output = `${output}\n//# sourceMappingURL=${mapName}\n`;
+	}
 	writeOutput(outPath, output);
 	console.log(success(`${compiled} module(s) bundled → ${bold(outPath)}`));
 }
@@ -1836,7 +1844,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			moduleSpecVals.push(relSpecBetween(fromRel, outRelVals[mi]));
 		}
 
-		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals, isTestBuild, !isTestBuild && jsAutoCallMain && modPath === filePath);
+		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals, isTestBuild, !isTestBuild && jsAutoCallMain && modPath === filePath, opts.sourcemap);
 		moduleCodes.push(res.code);
 		moduleNeededMods.push(res.neededModules);
 		moduleNeededNames.push(res.neededNames);
@@ -1874,6 +1882,11 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		}
 		const outPath = `${outRoot}/${lookupOutRel(outRelKeys, outRelVals, unitPaths[ui])}`;
 		ensureDir(dirname(outPath));
+		if (opts.sourcemap) {
+			const mapName = `${basename(outPath)}.map`;
+			writeOutput(`${outPath}.map`, genSourceMap(code, basename(outPath)));
+			code = `${code}\n//# sourceMappingURL=${mapName}\n`;
+		}
 		writeOutput(outPath, code);
 	}
 
