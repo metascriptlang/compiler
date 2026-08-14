@@ -820,6 +820,13 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		}
 	}
 
+	let jsAutoCallMain = false;
+	for (let ei = 0; ei < unitPaths.length; ei += 1) {
+		if (unitPaths[ei] !== entryPath) continue;
+		const entryMain = lookupSymbol(unitCtxs[ei].table, "main");
+		jsAutoCallMain = entryMain !== null && (entryMain.symFlags & SymbolFlag.Used) === 0;
+	}
+
 	// Phase 2 — backend transform + codegen
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const modPath = unitPaths[ui];
@@ -842,7 +849,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 		const moduleId = replaceExt(relative(projectRoot, modPath), "");
 		const isPrelude = moduleId.startsWith("std/core/");
-		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude);
+		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, jsAutoCallMain && modPath === entryPath);
 
 		bundle = bundle + `\n// --- Module: ${moduleId} ---\n`;
 		bundle = bundle + result.code;
@@ -1792,6 +1799,13 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		modExportVals.push(mod.exportNames);
 	}
 
+	let jsAutoCallMain = false;
+	for (let ei = 0; ei < unitPaths.length; ei += 1) {
+		if (unitPaths[ei] !== filePath) continue;
+		const entryMain = lookupSymbol(unitCtxs[ei].table, "main");
+		jsAutoCallMain = entryMain !== null && (entryMain.symFlags & SymbolFlag.Used) === 0;
+	}
+
 	const moduleCodes: string[] = [];
 	const moduleNeededMods: string[][] = [];
 	const moduleNeededNames: string[][][] = [];
@@ -1822,7 +1836,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			moduleSpecVals.push(relSpecBetween(fromRel, outRelVals[mi]));
 		}
 
-		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals, isTestBuild);
+		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals, isTestBuild, !isTestBuild && jsAutoCallMain && modPath === filePath);
 		moduleCodes.push(res.code);
 		moduleNeededMods.push(res.neededModules);
 		moduleNeededNames.push(res.neededNames);

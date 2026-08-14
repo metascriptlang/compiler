@@ -3,7 +3,7 @@
 // Registers emitNodeDispatch callback, provides generateJS entry point.
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
-import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData, TryExprData } from "../../ast/node";
+import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData, TryExprData, FunctionDeclData, ExportDeclData } from "../../ast/node";
 import { JSGenerator, createJSGenerator, registerEmitNode, finalize, emit, lookupModuleSpec } from "./emit";
 import {
 	emitNumberLiteral, emitStringLiteral, emitBooleanLiteral, emitNullLiteral,
@@ -15,6 +15,7 @@ import {
 	emitConditionalExpr, emitSpreadExpr, emitNewExpr,
 	emitTypeAssertion, emitMoveExpr,
 	emitAwaitExpr, emitYieldExpr,
+	jsSymbolName,
 } from "./expressions";
 import {
 	emitVariableDecl, emitIfStmt, emitWhileStmt, emitDoWhileStmt,
@@ -172,12 +173,26 @@ export interface JsModuleResult {
 	testFuncs: string[];
 }
 
+function emitAutoCallMain(gen: JSGenerator, program: Node): void {
+	const pd = program.data as ProgramData;
+	for (const st of pd.programStmts) {
+		let decl = st;
+		if (decl.kind === NodeKind.ExportDecl) { decl = (decl.data as ExportDeclData).exportedDecl; }
+		if (decl === null) continue;
+		if (decl.kind !== NodeKind.FunctionDecl) continue;
+		if ((decl.data as FunctionDeclData).fnName !== "main") continue;
+		const name = jsSymbolName(gen, decl.resolvedSym, "main");
+		emit(gen, `Promise.resolve(${name}()).then((r) => { if (typeof process !== "undefined" && typeof r === "number") { process.exitCode = r | 0; } });\n`);
+		return;
+	}
+}
+
 export function generateJSModule(
 	program: Node, jsImports: JsImportEntry[], currentModulePath: string,
 	importSpecKeys: string[], importSpecVals: string[],
 	moduleSpecKeys: string[], moduleSpecVals: string[],
 	modExportKeys: string[], modExportVals: string[][],
-	isTestBuild: boolean,
+	isTestBuild: boolean, autoCallMain: boolean,
 ): JsModuleResult {
 	const gen = createJSGenerator();
 	gen.multiFile = true;
@@ -214,6 +229,7 @@ export function generateJSModule(
 		}
 		emit(gen, ` } from "${spec}";\n`);
 	}
+	if (autoCallMain) { emitAutoCallMain(gen, program); }
 	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, exportedNames: gen.exportedNames, testNames: gen.testNames, testFuncs: gen.testFuncs };
 }
 
@@ -224,7 +240,7 @@ export interface BundleModuleResult {
 	exportedNames: string[];
 }
 
-export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean): BundleModuleResult {
+export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean, autoCallMain: boolean): BundleModuleResult {
 	const gen = createJSGenerator();
 	gen.bundleMode = true;
 	gen.bundleIsPrelude = isPrelude;
@@ -232,6 +248,7 @@ export function generateJSBundleModule(program: Node, importSourceMap: string[],
 	gen.importSourceToModuleId = importSourceMap;
 	gen.importSourceToModuleIdKeys = importSourceMapKeys;
 	emitNodeDispatch(gen, program);
+	if (autoCallMain) { emitAutoCallMain(gen, program); }
 	return { code: finalize(gen), exportedNames: gen.exportedNames };
 }
 
