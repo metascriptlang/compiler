@@ -1622,6 +1622,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				const st0 = d.asExpr.nodeType;
 				if (st0 !== null && isMaybeType(st0) && st0.typeReturn !== null) {
 					node.nodeType = st0.typeReturn;
+				} else if (st0 !== null && st0.kind === TypeKind.Union && unwrapRefNullUnion(st0) !== null) {
+					node.nodeType = unwrapRefNullUnion(st0);
 				} else {
 					node.nodeType = st0 !== null ? st0 : inferredType();
 				}
