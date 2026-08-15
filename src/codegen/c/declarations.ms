@@ -4,7 +4,7 @@
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
 import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, TypeKind, Type } from "../../ast/node";
-import { hasGenericParams, isIntegerType } from "../../checker/types";
+import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, emitStmtsLine, readProcStmts, readProcLocals,
@@ -663,6 +663,13 @@ function genGlobalVar(g: CGen, node: Node): void {
 			&& node.nodeType !== null
 			&& isNilableValueType(node.nodeType)) {
 		addLine(sec(g, CSection.ModuleInit), `  ${varName} = (${cType}){0};`);
+		return;
+	}
+	if (d.initializer !== null
+			&& d.initializer.kind === NodeKind.NullLiteral
+			&& node.nodeType !== null
+			&& (isNumeric(node.nodeType) || node.nodeType.kind === TypeKind.Boolean)) {
+		addLine(sec(g, CSection.ModuleInit), `  ${varName} = 0;`);
 		return;
 	}
 	// Non-trivial initializers go to ModuleInit (not valid as C global initializers)
