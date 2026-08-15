@@ -38,3 +38,5 @@ function main(): void {
 	}
 	console.log(`arc-shared-box total=${total}`);
 }
+
+main();

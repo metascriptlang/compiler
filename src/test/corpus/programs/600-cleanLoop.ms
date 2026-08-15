@@ -25,3 +25,5 @@ function main(): void {
 	}
 	console.log(`clean-loop acc=${acc}`);
 }
+
+main();

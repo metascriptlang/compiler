@@ -30,3 +30,5 @@ function main(): void {
 	withLock(s.lock, () => { fin = lockerGet(s.lock) as int32; });
 	console.log(`arc-locker total=${fin}`);
 }
+
+main();

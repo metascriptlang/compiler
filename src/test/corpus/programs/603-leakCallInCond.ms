@@ -32,3 +32,5 @@ function main(): void {
 	}
 	console.log(`leak-call-in-cond hits=${hits}`);
 }
+
+main();

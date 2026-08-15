@@ -48,3 +48,5 @@ function main(): void {
 	const acc: int32 = (a.x + g.x + n.x + s + m + runs) as int32;
 	console.log(`cond-nrvo acc=${acc}`);
 }
+
+main();

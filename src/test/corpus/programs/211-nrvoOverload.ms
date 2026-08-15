@@ -31,3 +31,5 @@ function main(): void {
 	const acc: int32 = (sumV(r) + s1 + s2 + s3) as int32;  // 23+23+33+23 = 102
 	console.log(`nrvo-overload acc=${acc}`);
 }
+
+main();

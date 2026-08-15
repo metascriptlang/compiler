@@ -34,3 +34,5 @@ function main(): void {
 	const acc: int32 = (f1 + f2 + f3) as int32;            // 36+18+25 = 79
 	console.log(`nrvo-positions acc=${acc}`);
 }
+
+main();

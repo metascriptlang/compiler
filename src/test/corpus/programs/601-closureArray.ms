@@ -35,3 +35,5 @@ function main(): void {
 	}
 	console.log(`closure-array acc=${acc}`);
 }
+
+main();

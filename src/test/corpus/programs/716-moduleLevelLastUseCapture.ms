@@ -35,3 +35,5 @@ function main(): void {
 	}
 	console.log("sig=" + tail);
 }
+
+main();

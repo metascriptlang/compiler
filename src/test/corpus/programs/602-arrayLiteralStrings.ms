@@ -24,3 +24,5 @@ function main(): void {
 	}
 	console.log(`array-literal-strings acc=${acc}`);
 }
+
+main();

@@ -36,3 +36,5 @@ function main(): void {
 	const acc: int32 = (s1 + s2 + s3 + s4 + s5 + s6) as int32;  // 25+16+25+28+25-14 = 105
 	console.log(`op-chain acc=${acc}`);
 }
+
+main();

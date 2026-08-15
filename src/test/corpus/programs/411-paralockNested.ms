@@ -64,3 +64,5 @@ function main(): void {
 	if (tag !== "paralock-room") { console.log(`FAIL tag=[${tag}]`); return; }
 	console.log(`paralock-nested check=${check} total=${await acc.get()}`);
 }
+
+main();

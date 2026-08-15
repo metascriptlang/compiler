@@ -36,3 +36,5 @@ function main(): void {
 	if (t !== "topic-room-payload") { console.log(`FAIL tag=[${t}]`); return; }
 	console.log("PASS:actor-heapstr");
 }
+
+main();
