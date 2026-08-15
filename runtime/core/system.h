@@ -109,6 +109,7 @@ extern MS_THREAD_LOCAL msException* msCurrException;
 void msClearException(void);
 void msDiscardCurrentException(void);
 void msThrow(msString msg);
+void msTestErrorFlag(void);
 
 /* Check-and-clear the pending-exception flag. Emitted by the `try await X catch Y`
  * lowering immediately after the await read (which sets msErr on a rejected

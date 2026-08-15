@@ -63,6 +63,16 @@ void msThrow(msString msg) {
 	msErr = true;
 }
 
+void msTestErrorFlag(void) {
+	if (!msErr || msCurrException == NULL) return;
+	msString m = ((msError*)msCurrException)->message;
+	fputs("Error: unhandled exception: ", stderr);
+	if (m.p != NULL && m.len > 0) fwrite(m.p->data, 1, (size_t)m.len, stderr);
+	fputc('\n', stderr);
+	msCurrException = NULL;
+	exit(1);
+}
+
 void msFutureRaiseFrom(msFutureBase* f) {
 	msErr = true;
 	void* err = (f != NULL) ? f->error : NULL;

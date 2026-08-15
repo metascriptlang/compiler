@@ -258,6 +258,10 @@ static inline void msThrow(msString msg) {
     msErr = true;
 }
 
+static inline void msTestErrorFlag(void) {
+    if (msErr) __builtin_trap();
+}
+
 /* ===== I/O ===== */
 #ifdef MSOS_SOLANA
 /* Solana: log via sol_log_ syscall (provided by Solana runtime) */
