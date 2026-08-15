@@ -137,15 +137,25 @@ export function formatCFloat32(value: number): string {
 
 // ===== String Pool Emission =====
 // Emits interned string payload structs for msString literal support.
-// Each entry becomes a static struct { int64_t cap; char data[N+1]; }
-// with MS_STRLIT_FLAG set in cap. Usage: MS_STRING_LIT(&name, len)
+// Each entry becomes a static const struct { int64_t cap; char data[N+1]; }
+// (.rodata) with MS_STRLIT_FLAG plus baked ASCII-check flags in cap, so the
+// runtime never writes into a literal payload. Usage: MS_STRING_LIT(&name, len)
 
 export function emitStringPoolDecls(pool: StringPool, dest: Builder): void {
 	for (const entry of pool.entries) {
 		const escaped = escapeCString(entry.value);
 		const len = cStringByteLen(entry.value);
-		// static struct { int64_t cap; char data[N+1]; } TMP_STR_1 = { MS_STRLIT_FLAG | N, "..." };
-		addLine(dest, `static struct { int64_t cap; char data[${len + 1}]; } ${entry.cName} = { MS_STRLIT_FLAG | ${len}, "${escaped}" };`);
+		let ascii = true;
+		for (let i = 0; i < entry.value.byteLength; i++) {
+			if (entry.value.byteAt(i) >= 128) {
+				ascii = false;
+				break;
+			}
+		}
+		const flags = ascii
+			? "MS_STRLIT_FLAG | MS_ASCII_CHECKED | MS_ASCII_FLAG"
+			: "MS_STRLIT_FLAG | MS_ASCII_CHECKED";
+		addLine(dest, `static const struct { int64_t cap; char data[${len + 1}]; } ${entry.cName} = { ${flags} | ${len}, "${escaped}" };`);
 	}
 }
 
