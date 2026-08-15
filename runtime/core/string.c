@@ -1166,16 +1166,22 @@ void msStringSetSlice(msString* s, int64_t start, int64_t end) {
 	if (end > s->len) end = s->len;
 	if (start >= end) {
 		s->len = 0;
-		if (s->p != NULL) s->p->data[0] = '\0';
+		if (msIsLiteral(*s)) {
+			s->p = NULL;
+		} else {
+			s->p->data[0] = '\0';
+		}
 		return;
 	}
 	int64_t newLen = end - start;
-	if (start > 0) {
+	if (start > 0 || msIsLiteral(*s)) {
 		msStringPrepareMutation(s);
+	}
+	if (start > 0) {
 		memmove(s->p->data, s->p->data + start, newLen);
 	}
 	s->len = newLen;
-	if (s->p != NULL) s->p->data[newLen] = '\0';
+	s->p->data[newLen] = '\0';
 }
 
 void msStringStripInPlace(msString* s) {
