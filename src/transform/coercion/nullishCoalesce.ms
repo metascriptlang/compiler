@@ -5,7 +5,7 @@
 // Note: evaluates LHS twice for complex expressions (same limitation as reference).
 
 import { Node, NodeKind, BinaryExprData, TypeKind } from "../../ast/node";
-import { isMaybeType, unwrapMaybeType } from "../../checker/types";
+import { isMaybeType, unwrapMaybeType, isNumeric, isBoolType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeNull, makeBinary, makeConditional, makeMember } from "../util";
@@ -23,6 +23,14 @@ function lowerNullishNode(node: Node): Node {
 	if (node.kind !== NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	if (d.operator !== "??") return node;
+
+	// A scalar left operand carries no null, and the lowered test would emit
+	// `double !== NULL`, which is not valid C. TS keeps the expression legal and
+	// its value is the left operand.
+	const leftType = d.left.nodeType;
+	if (leftType !== null && !isMaybeType(leftType) && (isNumeric(leftType) || isBoolType(leftType))) {
+		return d.left;
+	}
 
 	const loc = node.location;
 	// x ?? y → x !== null ? x : y
