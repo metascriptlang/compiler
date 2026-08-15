@@ -68,6 +68,44 @@ static msStrPayload* reallocPayload0(msStrPayload* old, int64_t oldCap, int64_t 
 	return p;
 }
 
+/* ===== ASCII cache invariant =====
+   The cached answer describes the payload's CURRENT bytes, so any in-place
+   content change must retract it. Gateways (PrepareAdd/PrepareMutation) retract;
+   appenders re-derive by composition (ascii(a ++ b) = ascii(a) and ascii(b)).
+   Retracting too often only costs a rescan; keeping a stale bit makes .length
+   lie. Literal payloads are never written — their bytes cannot change, and they
+   may live in .rodata. */
+
+static inline bool msStrKnownAscii(const msStrPayload* p) {
+	return p != NULL && (p->cap & MS_ASCII_CHECKED) != 0 && (p->cap & MS_ASCII_FLAG) != 0;
+}
+
+/* Answer for the SOURCE of an append without writing to it: the cached bit when
+   present, else a scan bounded by the appended chunk (so a build loop stays
+   linear overall). Deciding the destination the same way would rescan the whole
+   accumulator on every append — quadratic — so the destination only ever uses
+   its cached bit. */
+static inline bool msStrScanAscii(const msStrPayload* p, int64_t len) {
+	if (p == NULL || len == 0) return true;
+	if ((p->cap & MS_ASCII_CHECKED) != 0) return (p->cap & MS_ASCII_FLAG) != 0;
+	for (int64_t i = 0; i < len; i++) {
+		if ((unsigned char)p->data[i] >= 0x80) return false;
+	}
+	return true;
+}
+
+static inline void msStrInvalidateAscii(msStrPayload* p) {
+	if (p != NULL && (p->cap & MS_STRLIT_FLAG) == 0) {
+		p->cap &= ~(MS_ASCII_CHECKED | MS_ASCII_FLAG);
+	}
+}
+
+static inline void msStrMarkAscii(msStrPayload* p) {
+	if (p != NULL && (p->cap & MS_STRLIT_FLAG) == 0) {
+		p->cap |= MS_ASCII_CHECKED | MS_ASCII_FLAG;
+	}
+}
+
 /* ===== Lifecycle ===== */
 
 msString msStringNew(const char* data, int64_t len) {
@@ -118,6 +156,8 @@ void msStringAssign(msString* a, msString b) {
 		}
 		a->len = b.len;
 		memcpy(a->p->data, b.p->data, b.len + 1);
+		msStrInvalidateAscii(a->p);
+		if (msStrKnownAscii(b.p)) msStrMarkAscii(a->p);
 	}
 }
 
@@ -128,6 +168,7 @@ void msStringPrepareMutation(msString* s) {
 		s->p->cap = s->len;
 		memcpy(s->p->data, oldP->data, s->len + 1);
 	}
+	msStrInvalidateAscii(s->p);
 }
 
 void msStringPrepareAdd(msString* s, int64_t addLen) {
@@ -154,6 +195,7 @@ void msStringPrepareAdd(msString* s, int64_t addLen) {
 			}
 		}
 	}
+	msStrInvalidateAscii(s->p);
 }
 
 void msStringAppend(msString* dest, msString src) {
@@ -163,19 +205,23 @@ void msStringAppend(msString* dest, msString src) {
 		   freeing the buffer src points at — read the preserved bytes from dest's grown buffer
 		   (prepareAdd copies existing content forward), like std::string::append(*this). */
 		int aliased = (src.p == dest->p);
+		bool bothAscii = (dest->len == 0 || msStrKnownAscii(dest->p)) && msStrScanAscii(src.p, src.len);
 		msStringPrepareAdd(dest, src.len);
 		const char* srcData = aliased ? dest->p->data : src.p->data;
 		memcpy(dest->p->data + dest->len, srcData, src.len);
 		dest->len += src.len;
 		dest->p->data[dest->len] = '\0';
+		if (bothAscii) msStrMarkAscii(dest->p);
 	}
 }
 
 void msStringAppendChar(msString* dest, char c) {
+	bool stillAscii = (dest->len == 0 || msStrKnownAscii(dest->p)) && (unsigned char)c < 0x80;
 	msStringPrepareAdd(dest, 1);
 	dest->p->data[dest->len] = c;
 	dest->len++;
 	dest->p->data[dest->len] = '\0';
+	if (stillAscii) msStrMarkAscii(dest->p);
 }
 
 void msStringSetLength(msString* s, int64_t newLen) {
@@ -208,6 +254,7 @@ void msStringSetLength(msString* s, int64_t newLen) {
 			memset(s->p->data + s->len, 0, newLen - s->len);
 		}
 		if (s->p) s->p->data[newLen] = '\0';
+		msStrInvalidateAscii(s->p);
 	}
 	s->len = newLen;
 }
