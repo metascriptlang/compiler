@@ -29,7 +29,7 @@
 import {
 	Node, NodeKind, DeclKind, SourceLocation,
 	VariableDeclData, ExprStmtData, ReturnStmtData, AssertStmtData,
-	AwaitExprData, CallExprData, ObjectLiteralData,
+	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData,
 	Type, NodeData, createNodeAt,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
@@ -392,6 +392,18 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 				d.argument = expanded.replacement;
 				expanded.stmts.push(stmt);
 				return expanded.stmts;
+			}
+		},
+		NodeKind.ExportDecl => {
+			const ed = stmt.data as ExportDeclData;
+			if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.VariableDecl) {
+				const d = ed.exportedDecl.data as VariableDeclData;
+				const expanded = tryExpandAwaitExpr(d.initializer, stmt, ctx);
+				if (expanded.replacement !== null) {
+					d.initializer = expanded.replacement;
+					expanded.stmts.push(stmt);
+					return expanded.stmts;
+				}
 			}
 		},
 		NodeKind.AssertStmt => {
