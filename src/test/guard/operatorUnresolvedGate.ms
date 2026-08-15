@@ -22,10 +22,14 @@
 //   instead of a compiler diagnostic about the operator, which is why the check
 //   pins the message text, not merely the failure.
 //
-// GUARD-CHECK-FAIL operator '**' reached codegen unresolved
+// SPECIMEN: `>>>`, the remaining operator the checker types but the C backend
+//   cannot emit (JS emits it natively — measured 2026-08-15). `**` was the
+//   original specimen until it got its pow() emit; re-specimen when this one
+//   does too.
+// GUARD-CHECK-FAIL operator '>>>' reached codegen unresolved
 
 export function main(): void {
-	const x: int32 = 2;
-	const y: int32 = 3;
-	console.log("pow=" + (x ** y).toString());
+	const x: int32 = 0 - 8;
+	const y: int32 = 1;
+	console.log("shr=" + (x >>> y).toString());
 }

@@ -1268,6 +1268,17 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				return;
 			}
 		}
+		// C has no exponent operator; pow() is the call form, same shape as fmod
+		// above. An integer result type casts back — pow is double-valued.
+		if (d.operator === "**") {
+			const rt = node.nodeType;
+			if (rt !== null && isIntegerType(rt)) {
+				ctx.results.push(`((${getTypeDesc(g, rt)})pow(${left}, ${finalRight}))`);
+				return;
+			}
+			ctx.results.push(`pow(${left}, ${finalRight})`);
+			return;
+		}
 		const cOp = mapBinaryOp(g, d.operator);
 		ctx.results.push(`(${left} ${cOp} ${finalRight})`);
 		return;
