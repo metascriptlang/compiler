@@ -2521,6 +2521,22 @@ export function typeDisplayName(t: Type | null): string {
 		return "..." + typeDisplayName(t.typeChildren[0]);
 	}
 	const name = typeNameOf(t);
+	// typeNameOf peels Ref and Ptr alike, which renders a pointer and its
+	// pointee with the SAME text ("got QB, expected QB"). Ref stays hidden — an
+	// interface IS Ref<Struct> here — but Ptr is a distinct spelling the reader
+	// writes, so put it back. Bounded like typeNameOf: a self-referential
+	// wrapper must not spin.
+	if (t.kind === TypeKind.Ptr && name !== "") {
+		let depth = 0;
+		let cur: Type | null = t;
+		while (cur !== null && cur.kind === TypeKind.Ptr && depth < PEEL_MAX_DEPTH) {
+			depth = depth + 1;
+			cur = cur.typeReturn;
+		}
+		let out = name;
+		for (let i = 0; i < depth; i += 1) { out = "Ptr<" + out + ">"; }
+		return out;
+	}
 	if (name !== "") return name;
 	return match (t.kind) {
 		TypeKind.Null => "null",
