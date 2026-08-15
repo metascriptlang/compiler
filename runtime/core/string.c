@@ -13,27 +13,28 @@
 
 /* ===== Single-Char Interning Table (zero-alloc s[i]) ===== */
 
-static struct { int64_t cap; char data[2]; } msCharPayloads[128];
-msString msCharTable[128];
-static bool msCharTableInit = false;
+#define MS_CHAR_CAP (MS_STRLIT_FLAG | MS_ASCII_CHECKED | MS_ASCII_FLAG | 1)
+#define MS_CP(c) { MS_CHAR_CAP, { (char)(c), '\0' } }
+#define MS_CP_ROW(b) MS_CP(b), MS_CP((b)+1), MS_CP((b)+2), MS_CP((b)+3), \
+	MS_CP((b)+4), MS_CP((b)+5), MS_CP((b)+6), MS_CP((b)+7)
 
-void msEnsureCharTable(void) {
-	if (msCharTableInit) return;
-	for (int i = 0; i < 128; i++) {
-		msCharPayloads[i].cap = MS_STRLIT_FLAG | 1;
-		msCharPayloads[i].data[0] = (char)i;
-		msCharPayloads[i].data[1] = '\0';
-		msCharTable[i].len = 1;
-		msCharTable[i].p = (msStrPayload*)&msCharPayloads[i];
-	}
-	msCharTableInit = true;
-}
+static const struct { int64_t cap; char data[2]; } msCharPayloads[128] = {
+	MS_CP_ROW(0),   MS_CP_ROW(8),   MS_CP_ROW(16),  MS_CP_ROW(24),
+	MS_CP_ROW(32),  MS_CP_ROW(40),  MS_CP_ROW(48),  MS_CP_ROW(56),
+	MS_CP_ROW(64),  MS_CP_ROW(72),  MS_CP_ROW(80),  MS_CP_ROW(88),
+	MS_CP_ROW(96),  MS_CP_ROW(104), MS_CP_ROW(112), MS_CP_ROW(120)
+};
 
-/* Auto-initialize at program start — avoids branch in hot path */
-__attribute__((constructor))
-static void msCharTableAutoInit(void) {
-	msEnsureCharTable();
-}
+#define MS_CS(c) { 1, (msStrPayload*)&msCharPayloads[c] }
+#define MS_CS_ROW(b) MS_CS(b), MS_CS((b)+1), MS_CS((b)+2), MS_CS((b)+3), \
+	MS_CS((b)+4), MS_CS((b)+5), MS_CS((b)+6), MS_CS((b)+7)
+
+msString msCharTable[128] = {
+	MS_CS_ROW(0),   MS_CS_ROW(8),   MS_CS_ROW(16),  MS_CS_ROW(24),
+	MS_CS_ROW(32),  MS_CS_ROW(40),  MS_CS_ROW(48),  MS_CS_ROW(56),
+	MS_CS_ROW(64),  MS_CS_ROW(72),  MS_CS_ROW(80),  MS_CS_ROW(88),
+	MS_CS_ROW(96),  MS_CS_ROW(104), MS_CS_ROW(112), MS_CS_ROW(120)
+};
 
 /* ===== Internal Allocation Helpers ===== */
 

@@ -307,10 +307,10 @@ void msStringSetSlice(msString* s, int64_t start, int64_t end);
 void msStringStripInPlace(msString* s);
 
 /* ===== Single-Char Interning Table ===== */
-/* 128 pre-allocated ASCII single-char strings. Each has MS_STRLIT_FLAG set
-   so DRC treats them as literals (no dealloc, shallow copy on share).
-   Eliminates malloc-per-char in s[i] loops. */
-void msEnsureCharTable(void);
+/* 128 precomputed ASCII single-char strings, const payloads (.rodata),
+   statically initialized — no init guard, no constructor. Each has
+   MS_STRLIT_FLAG set so DRC treats them as literals (no dealloc, shallow
+   copy on share). Eliminates malloc-per-char in s[i] loops. */
 extern msString msCharTable[128];
 
 #endif /* MS_STRING_H */
