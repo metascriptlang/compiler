@@ -9,7 +9,10 @@ import { isNumeric, isWideInteger, stringType, createPtr, voidType, createArray,
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension, requestEnumToString } from "../../checker/context";
-import { makeIdent, makeCall, makeString, makeBool, makeBinary, makeMember, enumToStringName, syntheticToken } from "../util";
+import { makeIdent, makeCall, makeString, makeBool, makeBinary, makeMember, enumToStringName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl } from "../util";
+import { anonTypeName, isAnonTypeName } from "../../codegen/c/types";
+import { makeSymbol } from "../../checker/symbol";
+import { SymbolKind } from "../../ast/node";
 
 // Resolve the struct type for a type name string (e.g., "Person" → struct type with fields).
 function resolveJsonTargetType(typeArgStr: string, ctx: TransformContext): Type | null {
@@ -123,31 +126,81 @@ function resolveDbgIdent(name: string, ctx: TransformContext, loc: SourceLocatio
 
 // Wrap a field access node in the appropriate json builder call.
 // Handles primitives, nested structs, and arrays recursively.
-const debugJsonMaxDepth = 16;
+let _dumpFnNames: string[] = [];
+let _dumpFnDecls: Node[] = [];
 
-function structIsExpanding(expanding: string[], name: string): boolean {
-	if (expanding.length >= debugJsonMaxDepth) return true;
-	if (name === "") return false;
+export function resetStructDumpFns(): void {
+	_dumpFnNames = [];
+	_dumpFnDecls = [];
+}
+
+export function takeStructDumpFns(): Node[] {
+	const out = _dumpFnDecls;
+	_dumpFnNames = [];
+	_dumpFnDecls = [];
+	return out;
+}
+
+function dumpFnNameFor(structType: Type): string {
+	const n = structType.typeName;
+	if (n !== "" && !isAnonTypeName(n)) return n + "_msDbgJson";
+	return anonTypeName(structType) + "_msDbgJson";
+}
+
+function dumpFnExists(name: string): boolean {
 	let i = 0;
-	while (i < expanding.length) {
-		if (expanding[i] === name) return true;
+	while (i < _dumpFnNames.length) {
+		if (_dumpFnNames[i] === name) return true;
 		i = i + 1;
 	}
 	return false;
 }
 
-function withStructName(expanding: string[], name: string): string[] {
-	const out: string[] = [];
-	let i = 0;
-	while (i < expanding.length) {
-		out.push(expanding[i]);
-		i = i + 1;
-	}
-	out.push(name);
-	return out;
+function jsonValueType(ctx: TransformContext, loc: SourceLocation): Type | null {
+	const ident = resolveDbgIdent("jsonObject", ctx, loc);
+	const ft = ident.nodeType;
+	if (ft === null) return null;
+	return ft.typeReturn;
 }
 
-function wrapFieldAsJson(fieldAccess: Node, ftype: Type, loc: SourceLocation, ctx: TransformContext, expanding: string[]): Node {
+// One dump function per canonical type; the recursive edge is a CALL, so depth
+// follows the data instead of being fixed when the AST is built.
+// Reference: Nim repr_v2.nim:152 (`if isNil(x): return "nil"` then per-field repr).
+function ensureDumpFn(outerType: Type, structType: Type, ctx: TransformContext, loc: SourceLocation): string {
+	const name = dumpFnNameFor(structType);
+	if (dumpFnExists(name)) return name;
+	_dumpFnNames.push(name);
+
+	const stmts: Node[] = [];
+	const isRef = outerType.kind === TypeKind.Ref;
+	if (isRef) {
+		const cmp = makeBinary(makeIdent("x", loc), "===", makeNull(loc), loc);
+		const nullRet = makeReturn(makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc), loc);
+		stmts.push(makeIf(cmp, makeBlock([nullRet], loc), null, loc));
+	}
+	stmts.push(makeReturn(buildJsonObjectFor(makeIdent("x", loc), structType, loc, ctx), loc));
+
+	const fnNode = makeFnDecl(name, ["x"], [structType.typeName], makeBlock(stmts, loc), "", "JsonValue", loc);
+	if (fnNode.nodeType !== null && fnNode.nodeType.typeChildren !== null
+		&& fnNode.nodeType.typeChildren.length > 0) {
+		fnNode.nodeType.typeChildren[0] = outerType;
+	}
+	const jv = jsonValueType(ctx, loc);
+	if (fnNode.nodeType !== null && jv !== null) fnNode.nodeType.typeReturn = jv;
+	const sym = makeSymbol(name, SymbolKind.Function, fnNode.nodeType, false);
+	fnNode.resolvedSym = sym;
+	_dumpFnDecls.push(fnNode);
+	return name;
+}
+
+function callDumpFn(name: string, arg: Node, ctx: TransformContext, loc: SourceLocation): Node {
+	const call = makeCall(makeIdent(name, loc), [arg], loc);
+	const jv = jsonValueType(ctx, loc);
+	if (jv !== null) call.nodeType = jv;
+	return call;
+}
+
+function wrapFieldAsJson(fieldAccess: Node, ftype: Type, loc: SourceLocation, ctx: TransformContext): Node {
 	if (ftype === null) return makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc);
 
 	// Primitives
@@ -165,10 +218,8 @@ function wrapFieldAsJson(fieldAccess: Node, ftype: Type, loc: SourceLocation, ct
 	// Nested struct → recursive jsonObject
 	const inner = unwrapRef(ftype);
 	if (inner.kind === TypeKind.Struct && inner.typeNames !== null && inner.typeChildren !== null) {
-		if (structIsExpanding(expanding, inner.typeName)) {
-			return makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc);
-		}
-		return buildNestedJsonObject(fieldAccess, inner, loc, ctx, expanding);
+		const fnName = ensureDumpFn(ftype, inner, ctx, loc);
+		return callDumpFn(fnName, fieldAccess, ctx, loc);
 	}
 
 	// Fallback: jsonNull
@@ -186,7 +237,7 @@ function jsonObjectParamType(ctx: TransformContext, loc: SourceLocation, index: 
 }
 
 // Build jsonObject(keys, vals) for a nested struct field
-function buildNestedJsonObject(obj: Node, structType: Type | null, loc: SourceLocation, ctx: TransformContext, expanding: string[]): Node {
+function buildJsonObjectFor(obj: Node, structType: Type | null, loc: SourceLocation, ctx: TransformContext): Node {
 	const keyNodes: Node[] = [];
 	const valNodes: Node[] = [];
 	if (structType === null) {
@@ -198,7 +249,6 @@ function buildNestedJsonObject(obj: Node, structType: Type | null, loc: SourceLo
 		valsArrEmpty.nodeType = valsTypeEmpty !== null ? valsTypeEmpty : createArray(createPtr(voidType()));
 		return makeCall(resolveDbgIdent("jsonObject", ctx, loc), [keysArrEmpty, valsArrEmpty], loc);
 	}
-	const nested = withStructName(expanding, structType.typeName);
 	let fi = 0;
 	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
 		const fname = structType.typeNames[fi];
@@ -208,7 +258,7 @@ function buildNestedJsonObject(obj: Node, structType: Type | null, loc: SourceLo
 		// Codegen reads the node's type to pick `.` vs `->`; a synthesized access
 		// with no type reads a Ref field as a value.
 		fa.nodeType = ftype;
-		valNodes.push(wrapFieldAsJson(fa, ftype, loc, ctx, nested));
+		valNodes.push(wrapFieldAsJson(fa, ftype, loc, ctx));
 		fi = fi + 1;
 	}
 	const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticToken(loc));
@@ -241,7 +291,9 @@ function buildStructDebugString(arg: Node, typeName: string, structType: Type | 
 	const prefix = makeString(color + label + "\x1b[0m", loc);
 	prefix.nodeType = stringType();
 
-	const objCall = buildNestedJsonObject(arg, structType, loc, ctx, []);
+	const outerT = arg.nodeType !== null ? arg.nodeType : structType;
+	const dumpName = ensureDumpFn(outerT, structType, ctx, loc);
+	const objCall = callDumpFn(dumpName, arg, ctx, loc);
 
 	// stringify(obj, true) — colored console output
 	const strCall = makeCall(resolveDbgIdent("stringify", ctx, loc), [objCall, makeBool(true, loc)], loc);
@@ -262,7 +314,9 @@ export function buildStructToString(arg: Node, inner: Type, loc: SourceLocation,
 		structType = inner;
 	}
 	if (structType === null) return arg;
-	const objCall = buildNestedJsonObject(arg, structType, loc, ctx, []);
+	const outerT = arg.nodeType !== null ? arg.nodeType : structType;
+	const dumpName = ensureDumpFn(outerT, structType, ctx, loc);
+	const objCall = callDumpFn(dumpName, arg, ctx, loc);
 	const strCall = makeCall(resolveDbgIdent("stringify", ctx, loc), [objCall, makeBool(false, loc)], loc);
 	strCall.nodeType = stringType();
 	return strCall;

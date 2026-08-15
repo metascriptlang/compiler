@@ -22,13 +22,14 @@ import {
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringName,
 	makeHiddenAddr,
 } from "../util";
-import { rewriteEcho, buildStructToString } from "./debugLower";
+import { rewriteEcho, buildStructToString, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 import { tryLowerPromiseBuiltin, lowerNewPromise } from "../lowering/promiseLower";
 
 // ===== Main Entry Point =====
 
 export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
+	resetStructDumpFns();
 	const result = walkNode(program, (node: Node): Node => {
 		if (node.kind === NodeKind.CallExpr) {
 			return lowerCallExpr(node, ctx);
@@ -47,6 +48,11 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		}
 		return node;
 	});
+	const dumpFns = takeStructDumpFns();
+	if (dumpFns.length > 0 && result.kind === NodeKind.Program) {
+		const pd = result.data as ProgramData;
+		for (const decl of dumpFns) { pd.programStmts.push(decl); }
+	}
 	return result;
 }
 
