@@ -509,8 +509,8 @@ function hasNoErrors(diags: string): boolean {
 	return diags.indexOf("\"severity\":1", 0) < 0;
 }
 
-test "phase 5: examples/phase5Overloads.ms type-checks cleanly" {
-	const src = loadExample("examples/phase5Overloads.ms");
+test "phase 5: src/test/fixtures/lsp/phase5Overloads.ms type-checks cleanly" {
+	const src = loadExample("src/test/fixtures/lsp/phase5Overloads.ms");
 	assert src.length > 0;
 	const uri = "file:///ex-phase5ovl.ms";
 	const db = testDb(uri, src);
@@ -518,8 +518,8 @@ test "phase 5: examples/phase5Overloads.ms type-checks cleanly" {
 	assert hasNoErrors(diags);
 }
 
-test "phase 6: examples/phase6AliasedCond.ms type-checks cleanly" {
-	const src = loadExample("examples/phase6AliasedCond.ms");
+test "phase 6: src/test/fixtures/lsp/phase6AliasedCond.ms type-checks cleanly" {
+	const src = loadExample("src/test/fixtures/lsp/phase6AliasedCond.ms");
 	assert src.length > 0;
 	const uri = "file:///ex-phase6alias.ms";
 	const db = testDb(uri, src);
@@ -527,8 +527,8 @@ test "phase 6: examples/phase6AliasedCond.ms type-checks cleanly" {
 	assert hasNoErrors(diags);
 }
 
-test "phase 6: examples/phase6Assignment.ms type-checks cleanly" {
-	const src = loadExample("examples/phase6Assignment.ms");
+test "phase 6: src/test/fixtures/lsp/phase6Assignment.ms type-checks cleanly" {
+	const src = loadExample("src/test/fixtures/lsp/phase6Assignment.ms");
 	assert src.length > 0;
 	const uri = "file:///ex-phase6assign.ms";
 	const db = testDb(uri, src);
@@ -536,8 +536,8 @@ test "phase 6: examples/phase6Assignment.ms type-checks cleanly" {
 	assert hasNoErrors(diags);
 }
 
-test "phase 6: examples/phase6TypePredicate.ms type-checks cleanly" {
-	const src = loadExample("examples/phase6TypePredicate.ms");
+test "phase 6: src/test/fixtures/lsp/phase6TypePredicate.ms type-checks cleanly" {
+	const src = loadExample("src/test/fixtures/lsp/phase6TypePredicate.ms");
 	assert src.length > 0;
 	const uri = "file:///ex-phase6pred.ms";
 	const db = testDb(uri, src);
@@ -545,11 +545,11 @@ test "phase 6: examples/phase6TypePredicate.ms type-checks cleanly" {
 	assert hasNoErrors(diags);
 }
 
-test "phase 5: sig help on examples/phase5Overloads.ms narrows to Square" {
+test "phase 5: sig help on src/test/fixtures/lsp/phase5Overloads.ms narrows to Square" {
 	// Inside `area(Kind.Square, { side: 5 })` the cursor inside the object
 	// literal should report activeSignature = 1 (Square is the 2nd specific
 	// overload; Circle is 0). Line 30 (0-indexed) col 32 — just after `{ `.
-	const src = loadExample("examples/phase5Overloads.ms");
+	const src = loadExample("src/test/fixtures/lsp/phase5Overloads.ms");
 	assert src.length > 0;
 	const uri = "file:///ex-phase5ovlsig.ms";
 	const db = testDb(uri, src);
@@ -572,7 +572,7 @@ test "phase 5: sig help on examples/phase5Overloads.ms narrows to Square" {
 // uses tabs so `area` starts at column 11 (tab + "const s = " = 11 chars).
 
 test "phase 5 hover: Kind.Circle call shows Circle overload" {
-	const src = loadExample("examples/phase5Overloads.ms");
+	const src = loadExample("src/test/fixtures/lsp/phase5Overloads.ms");
 	assert src.length > 0;
 	const uri = "file:///ex-phase5hovC.ms";
 	const db = testDb(uri, src);
@@ -585,7 +585,7 @@ test "phase 5 hover: Kind.Circle call shows Circle overload" {
 }
 
 test "phase 5 hover: Kind.Square call shows Square overload" {
-	const src = loadExample("examples/phase5Overloads.ms");
+	const src = loadExample("src/test/fixtures/lsp/phase5Overloads.ms");
 	assert src.length > 0;
 	const uri = "file:///ex-phase5hovS.ms";
 	const db = testDb(uri, src);
@@ -600,7 +600,7 @@ test "phase 5 hover: Kind.Square call shows Square overload" {
 }
 
 test "phase 5 hover: Kind.Line call shows Line overload" {
-	const src = loadExample("examples/phase5Overloads.ms");
+	const src = loadExample("src/test/fixtures/lsp/phase5Overloads.ms");
 	assert src.length > 0;
 	const uri = "file:///ex-phase5hovL.ms";
 	const db = testDb(uri, src);
@@ -616,7 +616,7 @@ test "phase 5 hover: runtime kind shows wide impl" {
 	// Opposite direction: when overload resolution picks the wide impl
 	// (runtime Kind value, not an EnumLiteral), hover must show the wide
 	// signature — NOT a specific variant.
-	const src = loadExample("examples/phase5Overloads.ms");
+	const src = loadExample("src/test/fixtures/lsp/phase5Overloads.ms");
 	assert src.length > 0;
 	const uri = "file:///ex-phase5hovR.ms";
 	const db = testDb(uri, src);
