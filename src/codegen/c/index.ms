@@ -167,12 +167,10 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, a
 	const b = createBuilder();
 	const retType = (mainRetType.length > 0) ? mainRetType : "void";
 
-	// Include stdint.h for int32_t, drc.h for msOrcCollect, system.h for async futures
+	// Include stdint.h for int32_t, drc.h for msOrcCollect, system.h for msTestErrorFlag + async futures
 	addLine(b, "#include <stdint.h>");
 	addLine(b, "#include \"runtime/drc.h\"");
-	if (retType.startsWith("msFuture_")) {
-		addLine(b, "#include \"runtime/core/system.h\"");
-	}
+	addLine(b, "#include \"runtime/core/system.h\"");
 	addNewline(b);
 
 	// Forward declarations for all module init functions
@@ -233,6 +231,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, a
 	addLine(b, "void MsMain(void) {");
 	addLine(b, "  MsPreMainInner();");
 	addLine(b, "  MsMainInner();");
+	addLine(b, "  msTestErrorFlag();");
 	addLine(b, "  msOrcCollect();");
 	addLine(b, "}");
 	addNewline(b);
