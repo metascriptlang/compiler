@@ -1811,7 +1811,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	const inner = unwrapRef(sym.symbolType);
 	inner.kind = TypeKind.Struct;
 	inner.typeName = d.className;
-	inner.typeFlags = TypeFlag.IsStruct as int32;
+	inner.typeFlags = (inner.typeFlags | TypeFlag.IsStruct) as int32;
 
 	// Phase 4: Class field flatten — merge parent fields into child's typeChildren.
 	// Mirrors interface/struct (Phases 1-3); for class we also keep typeExtra
