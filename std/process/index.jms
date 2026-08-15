@@ -5,14 +5,16 @@
  * readFile/writeFile re-exported from std/fs for backward compatibility.
  */
 
-@import("node:process", { argv, exit, cwd, platform as _nodePlatform });
+@import("node:process", { argv, exit, cwd });
 @import("node:child_process", { execSync, spawnSync });
 @import("node:fs", { existsSync, readdirSync });
 
 export extern const argv: string[];
 export extern function exit(code: number): void;
 export extern function cwd(): string;
-extern const _nodePlatform: string;
+extern class process {
+	static extern platform: string;
+}
 extern function execSync(cmd: string): string;
 extern function spawnSync(cmd: string, args: string[], options: SpawnOpts): SpawnResult;
 extern function existsSync(path: string): boolean;
@@ -26,7 +28,8 @@ export { readFile, writeFile } from "../fs/index";
 
 // Platform identifier — normalize Node's "win32" to our "windows" so MS code
 // sees the same values across backends.
-export const platform: string = _nodePlatform === "win32" ? "windows" : _nodePlatform;
+const nodePlatform: string = process.platform;
+export const platform: string = nodePlatform === "win32" ? "windows" : nodePlatform;
 
 export function fileExists(path: string): boolean {
 	return existsSync(path);
