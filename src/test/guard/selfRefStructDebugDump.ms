@@ -1,22 +1,25 @@
 // selfRefStructDebugDump — dumping a self-referential reference type must
-// terminate. `console.log(x)` lowers to jsonObject(keys, vals) via
-// buildNestedJsonObject; each struct-typed field recurses back through
-// wrapFieldAsJson, so a type reachable from itself expanded forever and the
-// COMPILER died with a stack overflow (exit 139) — no diagnostic, no location.
+// terminate AND report the data it was given, to full depth.
+//
+// `console.log(x)` / string-concat lower to a per-type dump function whose
+// recursive edge is a CALL, so depth follows the data at runtime instead of
+// being fixed when the AST is built. Reference: Nim repr_v2.nim:152 — a single
+// generic `repr[T]` guarded by `if isNil(x): return "nil"`, recursing through
+// itself. A nil field terminates the walk; a non-nil field does not.
 //
 // Reachable by design, not by accident: std/meta warns about three such fields
 // (Node.nodeTypeAst, Node.typeExpr, FlowNode.antecedent) on every build.
 //
-// The guard is the type-name path currently being expanded; a field whose type
-// is already on that path dumps as null. Mutual recursion (A→B→A) and the
-// depth cap are covered too — a cap alone would still expand 2^depth nodes for
-// a wide type, and a visited-set alone cannot stop an anonymous struct.
+// RED pre-fix, two distinct eras:
+//   - AST-expansion era: compiler stack overflow (exit 139) building this file.
+//   - cycle-guard era: compiled and ran, but a field whose type was already on
+//     the expansion path dumped as `null`, so a→b→c printed
+//     `Chain { label: "a", next: null }` — a silent lie. That is what the
+//     depth assertions below catch.
 //
-// RED pre-fix: compiler stack overflow building this file.
-//
-// Nested fields are populated on purpose: dumping a reference-type field that
-// is NULL dereferences it and dies at runtime (exit 255) — a separate,
-// pre-existing hole, reproducible with no cycle anywhere.
+// A NULL reference field is covered too: it used to be dereferenced and die at
+// runtime (exit 255). The nil-check is the first statement of every dump
+// function, so `null` is now printed rather than followed.
 
 class Chain {
 	label: string;
@@ -33,16 +36,37 @@ class Pong {
 	back: Ping;
 }
 
+class Outer {
+	tag: string;
+	inner: Chain;
+}
+
 function main(): void {
 	const c = new Chain();
-	c.label = "head";
-	console.log(c);
+	c.label = "a";
+	c.next = new Chain();
+	c.next.label = "b";
+	c.next.next = new Chain();
+	c.next.next.label = "c";
+
+	const dump = "" + c;
+	console.log(dump);
+	if (dump.indexOf("\"b\"") < 0) { throw "GUARD RED: chain dump truncated before depth 2: " + dump; }
+	if (dump.indexOf("\"c\"") < 0) { throw "GUARD RED: chain dump truncated before depth 3: " + dump; }
 
 	const p = new Ping();
 	p.tag = "ping";
 	p.other = new Pong();
 	p.other.tag = "pong";
-	console.log(p);
+	const mutual = "" + p;
+	console.log(mutual);
+	if (mutual.indexOf("\"pong\"") < 0) { throw "GUARD RED: mutual recursion dropped the far side: " + mutual; }
+
+	const o = new Outer();
+	o.tag = "t";
+	const nulled = "" + o;
+	console.log(nulled);
+	if (nulled.indexOf("null") < 0) { throw "GUARD RED: null reference field not reported as null: " + nulled; }
 
 	console.log("selfRefStructDebugDump ok");
 }
