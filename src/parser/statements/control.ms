@@ -87,6 +87,7 @@ export function parseWhileStmt(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.WhileStmt, {
 		whileCondition: condition,
 		whileBody: try parseBodyOrStmt(state),
+		whileLabel: "",
 	}, whileToken));
 }
 

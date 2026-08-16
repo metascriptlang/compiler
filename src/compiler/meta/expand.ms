@@ -2340,6 +2340,7 @@ test "hasUserMacroInvocation detects macro in WhileStmt condition" {
 	const whileNode = createNode(NodeKind.WhileStmt, {
 		whileCondition: inv,
 		whileBody: createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)),
+		whileLabel: "",
 	}, synthToken(loc));
 	assert hasUserMacroInvocation(whileNode, ctx);
 }

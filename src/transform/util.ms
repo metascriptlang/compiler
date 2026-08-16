@@ -233,7 +233,7 @@ export function makeIf(cond: Node, thenBranch: Node, elseBranch: Node | null, lo
 }
 
 export function makeWhile(cond: Node, body: Node, loc: SourceLocation): Node {
-	return createNode(NodeKind.WhileStmt, { whileCondition: cond, whileBody: body }, syntheticToken(loc));
+	return createNode(NodeKind.WhileStmt, { whileCondition: cond, whileBody: body, whileLabel: "" }, syntheticToken(loc));
 }
 
 export function makeTryCatch(tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, loc: SourceLocation): Node {

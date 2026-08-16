@@ -340,7 +340,7 @@ export type NodeData =
 	// Statement variants
 	| { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation }  // VariableDecl
 	| { condition: Node, consequent: Node, alternate: Node }       // IfStmt
-	| { whileCondition: Node, whileBody: Node }                    // WhileStmt
+	| { whileCondition: Node, whileBody: Node, whileLabel: string } // WhileStmt
 	| { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node } // ForStmt
 	| { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node, bindingLocation: SourceLocation } // ForOfStmt
 	| { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node } // ForInStmt
@@ -563,7 +563,7 @@ export type DestructuringDeclData = { destrPattern: Node, destrInit: Node, destr
 // Statements
 export type VariableDeclData = { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation };
 export type IfStmtData = { condition: Node, consequent: Node, alternate: Node };
-export type WhileStmtData = { whileCondition: Node, whileBody: Node };
+export type WhileStmtData = { whileCondition: Node, whileBody: Node, whileLabel: string };
 export type ForStmtData = { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node };
 export type ForOfStmtData = { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node, bindingLocation: SourceLocation };
 export type ForInStmtData = { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node };
