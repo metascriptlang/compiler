@@ -3,6 +3,7 @@
 import { exit, platform } from "std/process";
 import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
 import { setParserDefines } from "./parser/context";
+import { defineSymbol } from "./compiler/defines";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest, cmdTestJS } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
@@ -104,6 +105,7 @@ export function main(): number {
 			}
 		},
 		"test" => {
+			defineSymbol(opts.defines, "testBuild", "true");
 			requireFile(opts);
 			if (opts.target === Target.JS) {
 				cmdTestJS(opts.inputFile, opts);
@@ -201,4 +203,8 @@ export function main(): number {
 	};
 
 	return 0;
+}
+
+when (!testBuild) {
+	exit(main());
 }
