@@ -156,6 +156,7 @@ static inline msString msProcessArgvAt(double index) {
  * Exit the process with a status code.
  */
 static inline void msProcessExit(double code) {
+	msTestErrorFlag();
 	exit((int)code);
 }
 
