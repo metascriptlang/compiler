@@ -7,6 +7,10 @@ export extern class console {
 	static extern warn(value: string): void;
 }
 
+export extern class process {
+	static extern exit(code: int32): never;
+}
+
 export class Result<T, E> {
 	ok: boolean;
 	value: T;

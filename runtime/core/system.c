@@ -63,6 +63,11 @@ void msThrow(msString msg) {
 	msErr = true;
 }
 
+void msExit(int32_t code) {
+	msTestErrorFlag();
+	exit((int)code);
+}
+
 void msTestErrorFlag(void) {
 	if (!msErr || msCurrException == NULL) return;
 	msString m = ((msError*)msCurrException)->message;

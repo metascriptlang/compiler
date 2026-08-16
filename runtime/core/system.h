@@ -110,6 +110,7 @@ void msClearException(void);
 void msDiscardCurrentException(void);
 void msThrow(msString msg);
 void msTestErrorFlag(void);
+void msExit(int32_t code);
 
 /* Check-and-clear the pending-exception flag. Emitted by the `try await X catch Y`
  * lowering immediately after the await read (which sets msErr on a rejected

@@ -262,6 +262,16 @@ static inline void msTestErrorFlag(void) {
     if (msErr) __builtin_trap();
 }
 
+static inline void msExit(int32_t code) {
+    msTestErrorFlag();
+#ifdef MSOS_BARE
+    (void)code;
+    __builtin_trap();
+#else
+    exit((int)code);
+#endif
+}
+
 /* ===== I/O ===== */
 #ifdef MSOS_SOLANA
 /* Solana: log via sol_log_ syscall (provided by Solana runtime) */
