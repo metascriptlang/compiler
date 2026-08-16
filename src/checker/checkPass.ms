@@ -1,10 +1,10 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { inferredType, noneType, isUnresolvedType, charType, float64Type, voidType, nullType, createFunction, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
+import { inferredType, noneType, isUnresolvedType, charType, float64Type, voidType, nullType, createFunction, createClosureType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords } from "./context";
@@ -451,6 +451,31 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 
 // ===== Statement Helpers =====
 
+function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Type | null {
+	let paramNames: string[] = [];
+	let paramTypeStrs: string[] = [];
+	let returnTypeStr = "";
+	if (fn.kind === NodeKind.ArrowFunction) {
+		const ad = fn.data as ArrowFunctionData;
+		paramNames = ad.arrowParams;
+		paramTypeStrs = ad.arrowParamTypes;
+		returnTypeStr = ad.arrowReturnType;
+	} else {
+		const fd = fn.data as FunctionExprData;
+		paramNames = fd.funcExprParams;
+		paramTypeStrs = fd.funcExprParamTypes;
+		returnTypeStr = fd.funcExprReturnType;
+	}
+	if (returnTypeStr === "") return null;
+	if (paramTypeStrs.length !== paramNames.length) return null;
+	const paramTypes: Type[] = [];
+	for (let i = 0; i < paramTypeStrs.length; i += 1) {
+		if (paramTypeStrs[i] === "") return null;
+		paramTypes.push(resolveAnnotation(paramTypeStrs[i], ctx, loc.line, loc.column));
+	}
+	return createClosureType(paramTypes, paramNames, resolveAnnotation(returnTypeStr, ctx, loc.line, loc.column));
+}
+
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
 	if (d.declKind === DeclKind.Const && d.initializer !== null && d.declType === ""
@@ -485,20 +510,24 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		declType = resolveAnnotation(d.declType, ctx, typeLoc.line, typeLoc.column);
 		resolveTypeExpr(node.typeExpr, ctx);
 	}
-	// Self-recursive closure binding: `const fact: T = n => fact(n-1)`. The
-	// arrow body references `fact` before its symbol exists at the normal
-	// post-init registration site (line ~273). Pre-register the symbol with
-	// its declared type so the body's lookup resolves. Only when:
-	//   (1) we have a declared type — without it the symbol's type is unknown
-	//   (2) the initializer is an ArrowFunction or FunctionExpr — preserving
-	//       TDZ semantics for non-closure initializers like `const x = x + 1`
+	// Self-recursive closure binding: `const fact = (n: int32): int32 => fact(n-1)`.
+	// The body references `fact` before its symbol exists at the normal post-init
+	// registration site, so pre-register it — from the declared type when there is
+	// one, otherwise from the routine's own signature (reference parity:
+	// semProcAux sets s.typ from semParamList before the body is analysed).
+	// Restricted to ArrowFunction/FunctionExpr so `const x = x + 1` keeps TDZ.
 	let preRegisteredSelfRefSym: Symbol = null as unknown as Symbol;
-	if (declType !== null && d.initializer !== null
+	if (d.initializer !== null
 			&& (d.initializer.kind === NodeKind.ArrowFunction
-				|| d.initializer.kind === NodeKind.FunctionExpr)
-			&& lookupLocal(ctx.table, d.declName) === null) {
-		preRegisteredSelfRefSym = makeSymbol(d.declName, SymbolKind.Variable, declType, d.declKind !== DeclKind.Const);
-		defineOrError(ctx, preRegisteredSelfRefSym, node);
+				|| d.initializer.kind === NodeKind.FunctionExpr)) {
+		const selfRefType = declType !== null ? declType : signatureTypeOf(d.initializer, ctx, d.nameLocation);
+		const hoisted = lookupLocal(ctx.table, d.declName);
+		if (selfRefType !== null && hoisted === null) {
+			preRegisteredSelfRefSym = makeSymbol(d.declName, SymbolKind.Variable, selfRefType, d.declKind !== DeclKind.Const);
+			defineOrError(ctx, preRegisteredSelfRefSym, node);
+		} else if (selfRefType !== null && isUnresolvedType(hoisted.symbolType)) {
+			hoisted.symbolType = selfRefType;
+		}
 	}
 	checkExpr(ctx, d.initializer, declType);
 	const initType = d.initializer !== null ? d.initializer.nodeType : null;
