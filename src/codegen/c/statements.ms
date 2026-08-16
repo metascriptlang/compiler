@@ -3,7 +3,7 @@
 // Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
-import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
@@ -553,6 +553,7 @@ function genWhileStmt(g: CGen, p: CProc, node: Node): void {
 	// try/finally contract. nestedFinallyDepth is snapshot here so the delta is
 	// relative to finallys *enclosing* the loop, not those opened inside the body.
 	pushBlock(p, true);
+	if (d.whileLabel !== "") { p.blocks[p.blocks.length - 1].label = d.whileLabel; }
 	setStmtsIndent(p, oldIndent + 1);
 
 	// Reference parity: skip condition check for while(true) literals
@@ -568,6 +569,7 @@ function genWhileStmt(g: CGen, p: CProc, node: Node): void {
 	} else {
 		genStmt(g, p, d.whileBody);
 	}
+	if (d.whileLabel !== "") { emitStmtsLine(p, `${d.whileLabel}: ;`); }
 
 	popBlock(p);
 	emitStmtsLine(p, "}");
@@ -687,13 +689,18 @@ function genBreakStmt(g: CGen, p: CProc, node: Node): void {
 
 function genContinueStmt(g: CGen, p: CProc, node: Node): void {
 	// Same as break — continue must also run finally cleanup
+	const d = node.data as ContinueStmtData;
 	let idx = p.blocks.length - 1;
-	while (idx >= 0 && !p.blocks[idx].isLoop) { idx -= 1; }
+	if (d.continueLabel !== "") {
+		while (idx >= 0 && p.blocks[idx].label !== d.continueLabel) { idx -= 1; }
+	} else {
+		while (idx >= 0 && !p.blocks[idx].isLoop) { idx -= 1; }
+	}
 	if (idx >= 0) {
 		const delta = p.nestedFinally.length - p.blocks[idx].nestedFinallyDepth;
 		blockLeaveActions(g, p, delta);
 	}
-	emitStmtsLine(p, "continue;");
+	emitStmtsLine(p, d.continueLabel !== "" ? `goto ${d.continueLabel};` : "continue;");
 }
 
 // ===== Throw Statement =====

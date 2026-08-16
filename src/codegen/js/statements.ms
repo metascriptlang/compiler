@@ -163,6 +163,10 @@ export function emitIfStmt(gen: JSGenerator, node: Node): void {
 export function emitWhileStmt(gen: JSGenerator, node: Node): void {
 	const d = node.data as WhileStmtData;
 	emitIndent(gen);
+	if (d.whileLabel !== "") {
+		emit(gen, d.whileLabel);
+		emit(gen, ": ");
+	}
 	emit(gen, "while (");
 	emitNode(gen, d.whileCondition);
 	emit(gen, ") ");
