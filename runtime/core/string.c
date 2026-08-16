@@ -891,29 +891,25 @@ msString msStringPadEnd(msString s, int64_t targetLen, msString pad) {
    110xxxxx = 2-byte → 1 UTF-16 unit
    1110xxxx = 3-byte → 1 UTF-16 unit (BMP)
    11110xxx = 4-byte → 2 UTF-16 units (surrogate pair) */
+/* Stride-1 on purpose: a lead-byte skip loop (p += 1/2/3/4) gets if-converted
+   to csel under LTO, serializing every step on the load (~6x). With a fixed
+   advance there is nothing to serialize. Each codepoint counts via its lead
+   byte; a 4-byte lead adds one more for the surrogate pair. */
+__attribute__((noinline))
+static int64_t msStringLengthWalk(const unsigned char* p, int64_t len) {
+	int64_t count = 0;
+	for (int64_t i = 0; i < len; i++) {
+		unsigned char c = p[i];
+		count += ((c & 0xC0) != 0x80);
+		count += (c >= 0xF0);
+	}
+	return count;
+}
+
 int64_t msStringLength(msString s) {
 	if (s.len == 0 || s.p == NULL) return 0;
 	if (msStringIsAscii(s)) return s.len;  /* O(1) for ASCII strings */
-	const unsigned char* p = (const unsigned char*)s.p->data;
-	const unsigned char* end = p + s.len;
-	int64_t count = 0;
-	while (p < end) {
-		unsigned char c = *p;
-		if (c < 0x80) {
-			p += 1;
-			count += 1;
-		} else if ((c & 0xE0) == 0xC0) {
-			p += 2;
-			count += 1;
-		} else if ((c & 0xF0) == 0xE0) {
-			p += 3;
-			count += 1;
-		} else {
-			p += 4;
-			count += 2; /* surrogate pair */
-		}
-	}
-	return count;
+	return msStringLengthWalk((const unsigned char*)s.p->data, s.len);
 }
 
 /* Count Unicode scalar values (codepoints) */
