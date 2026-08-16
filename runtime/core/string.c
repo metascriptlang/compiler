@@ -29,7 +29,7 @@ static const struct { int64_t cap; char data[2]; } msCharPayloads[128] = {
 #define MS_CS_ROW(b) MS_CS(b), MS_CS((b)+1), MS_CS((b)+2), MS_CS((b)+3), \
 	MS_CS((b)+4), MS_CS((b)+5), MS_CS((b)+6), MS_CS((b)+7)
 
-msString msCharTable[128] = {
+const msString msCharTable[128] = {
 	MS_CS_ROW(0),   MS_CS_ROW(8),   MS_CS_ROW(16),  MS_CS_ROW(24),
 	MS_CS_ROW(32),  MS_CS_ROW(40),  MS_CS_ROW(48),  MS_CS_ROW(56),
 	MS_CS_ROW(64),  MS_CS_ROW(72),  MS_CS_ROW(80),  MS_CS_ROW(88),
@@ -206,7 +206,7 @@ void msStringPrepareAdd(msString* s, int64_t addLen) {
 	msStrInvalidateAscii(s->p);
 }
 
-void msStringAppend(msString* dest, msString src) {
+void msStringAppendSlow(msString* dest, msString src) {
 	if (src.len > 0) {
 		/* Self-append (`s = s + s`, `s += s`): stringOpLower rewrites self-first concat to an
 		   in-place append, so src may alias dest. msStringPrepareAdd can realloc dest's payload,
@@ -226,7 +226,7 @@ void msStringAppend(msString* dest, msString src) {
 	}
 }
 
-void msStringAppendChar(msString* dest, char c) {
+void msStringAppendCharSlow(msString* dest, char c) {
 	bool destKnown = dest->len == 0 || (dest->p != NULL && (dest->p->cap & MS_ASCII_CHECKED) != 0);
 	bool destAscii = dest->len == 0 || msStrKnownAscii(dest->p);
 	bool cAscii = (unsigned char)c < 0x80;

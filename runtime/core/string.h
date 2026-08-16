@@ -13,6 +13,7 @@
 #include "runtime/drc.h"
 #include <stdio.h>
 #include <ctype.h>
+#include <string.h>
 
 /* Forward declare array type for split/join */
 typedef struct msStringArray msStringArray;
@@ -63,9 +64,11 @@ static inline bool msStringIsAscii(msString s) {
 	for (int64_t i = 0; i < s.len; i++) {
 		if (p[i] >= 0x80) { ascii = false; break; }
 	}
-	/* Cache the result (mutate cap bits — safe because these bits don't affect capacity) */
-	s.p->cap |= MS_ASCII_CHECKED;
-	if (ascii) s.p->cap |= MS_ASCII_FLAG;
+	/* Cache the result. Relaxed atomic OR: concurrent readers may race to fill
+	   the cache with the same answer; a plain RMW would be a torn-write hazard
+	   against another reader's fill. Mutators are single-owner and never run
+	   concurrently with reads, so only the read-side fill needs the atomic. */
+	__atomic_fetch_or(&s.p->cap, MS_ASCII_CHECKED | (ascii ? MS_ASCII_FLAG : 0), __ATOMIC_RELAXED);
 	return ascii;
 }
 
@@ -151,11 +154,52 @@ void msStringPrepareMutation(msString* s);
 /* Grow buffer for appending */
 void msStringPrepareAdd(msString* s, int64_t addLen);
 
-/* Append string */
-void msStringAppend(msString* dest, msString src);
+/* Append string — slow path: grow, literal COW, self-alias, or src without a
+   cached ASCII answer. The inline fast path below covers the common in-place
+   case in the caller's TU, like the reference runtime's in-TU add. */
+void msStringAppendSlow(msString* dest, msString src);
 
-/* Append single char */
-void msStringAppendChar(msString* dest, char c);
+static inline void msStringAppend(msString* dest, msString src) {
+	if (src.len == 0) return;
+	msStrPayload* p = dest->p;
+	if (p == NULL) { msStringAppendSlow(dest, src); return; }
+	int64_t cap = p->cap;
+	int64_t scap = src.p->cap;
+	/* one branch: bitwise-or folds literal | alias | unchecked src | no room */
+	if (((cap & MS_STRLIT_FLAG) != 0) | (p == src.p) |
+	    ((scap & MS_ASCII_CHECKED) == 0) |
+	    (dest->len + src.len > (cap & MS_CAP_MASK))) {
+		msStringAppendSlow(dest, src);
+		return;
+	}
+	memcpy(p->data + dest->len, src.p->data, src.len);
+	dest->len += src.len;
+	p->data[dest->len] = '\0';
+	/* ascii(dest ++ src): appending ASCII changes no cached answer — zero flag
+	   writes. A non-ASCII src makes the result non-ASCII for any dest state. */
+	if ((scap & MS_ASCII_FLAG) == 0) {
+		p->cap = (cap | MS_ASCII_CHECKED) & ~MS_ASCII_FLAG;
+	}
+}
+
+/* Append single char — slow path (grow or literal COW) */
+void msStringAppendCharSlow(msString* dest, char c);
+
+static inline void msStringAppendChar(msString* dest, char c) {
+	msStrPayload* p = dest->p;
+	if (p == NULL) { msStringAppendCharSlow(dest, c); return; }
+	int64_t cap = p->cap;
+	if (((cap & MS_STRLIT_FLAG) != 0) | (dest->len + 1 > (cap & MS_CAP_MASK))) {
+		msStringAppendCharSlow(dest, c);
+		return;
+	}
+	p->data[dest->len] = c;
+	dest->len += 1;
+	p->data[dest->len] = '\0';
+	if ((unsigned char)c >= 0x80) {
+		p->cap = (cap | MS_ASCII_CHECKED) & ~MS_ASCII_FLAG;
+	}
+}
 
 /* ===== Comparison ===== */
 
@@ -311,6 +355,6 @@ void msStringStripInPlace(msString* s);
    statically initialized — no init guard, no constructor. Each has
    MS_STRLIT_FLAG set so DRC treats them as literals (no dealloc, shallow
    copy on share). Eliminates malloc-per-char in s[i] loops. */
-extern msString msCharTable[128];
+extern const msString msCharTable[128];
 
 #endif /* MS_STRING_H */
