@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
-import { exit, platform } from "std/process";
+import { platform } from "std/process";
 import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
 import { setParserDefines } from "./parser/context";
 import { defineSymbol } from "./compiler/defines";
@@ -29,7 +29,7 @@ function requireFile(opts: CliOptions): void {
 	if (opts.inputFile === "") {
 		console.log(`${error("error")}: ${cyan(opts.command)} requires an input file`);
 		printUsage();
-		exit(1);
+		process.exit(1);
 	}
 }
 
@@ -152,43 +152,43 @@ export function main(): number {
 			const addArgs: string[] = [];
 			if (opts.inputFile !== "") addArgs.push(opts.inputFile);
 			for (const ea of opts.extraArgs) { addArgs.push(ea); }
-			if (!cmdAdd(projectRoot, addArgs)) exit(1);
+			if (!cmdAdd(projectRoot, addArgs)) process.exit(1);
 		},
 		"remove" => {
 			const rmArgs: string[] = [];
 			if (opts.inputFile !== "") rmArgs.push(opts.inputFile);
-			if (!cmdRemove(projectRoot, rmArgs)) exit(1);
+			if (!cmdRemove(projectRoot, rmArgs)) process.exit(1);
 		},
 		"install" => {
-			if (!cmdInstall(projectRoot)) exit(1);
+			if (!cmdInstall(projectRoot)) process.exit(1);
 		},
 		"login" => {
-			if (!cmdLogin(projectRoot)) exit(1);
+			if (!cmdLogin(projectRoot)) process.exit(1);
 		},
 		"logout" => {
-			if (!cmdLogout()) exit(1);
+			if (!cmdLogout()) process.exit(1);
 		},
 		"whoami" => {
 			const whoArgs: string[] = [];
 			for (const ea of opts.extraArgs) { whoArgs.push(ea); }
-			if (!cmdWhoami(whoArgs)) exit(1);
+			if (!cmdWhoami(whoArgs)) process.exit(1);
 		},
 		"publish" => {
 			const pubArgs: string[] = [];
 			for (const ea of opts.extraArgs) { pubArgs.push(ea); }
-			if (!cmdPublish(projectRoot, pubArgs)) exit(1);
+			if (!cmdPublish(projectRoot, pubArgs)) process.exit(1);
 		},
 		"org" => {
 			const orgArgs: string[] = [];
 			if (opts.inputFile !== "") orgArgs.push(opts.inputFile);
 			for (const ea of opts.extraArgs) { orgArgs.push(ea); }
-			if (!cmdOrg(orgArgs)) exit(1);
+			if (!cmdOrg(orgArgs)) process.exit(1);
 		},
-		"upgrade" => { exit(cmdUpgrade(opts)); },
+		"upgrade" => { process.exit(cmdUpgrade(opts)); },
 		_ => {
 			console.log(`${error("error")}: unknown command '${bold(cmd)}'`);
 			printUsage();
-			exit(1);
+			process.exit(1);
 		},
 	};
 
@@ -206,5 +206,5 @@ export function main(): number {
 }
 
 when (!testBuild) {
-	exit(main());
+	process.exit(main());
 }
