@@ -1,9 +1,8 @@
 // @stdout: tailrec-nested r=56-5000000
-// Two halves. (1) A self tail call inside a while body must NOT be rewritten to
-// continue: continue would bind to the inner loop, skip the per-call reset of
-// `steps`, and yield 53 instead of 56 — that is why WhileStmt/DoWhileStmt/For*
-// sit in transformStmt's denylist until labeled continue exists (item 6).
-// A correct labeled-continue lowering also yields 56, so this stays green then.
+// Two halves. (1) A self tail call inside a while body is lowered via the
+// labeled wrapper (continue __tcl) — a rewrite whose continue binds the INNER
+// loop instead skips the per-call reset of `steps` and yields 53 instead of
+// 56. This pins that binding; 640 pins the depth behavior.
 // (2) A tail call behind bare nested blocks and a braceless if must be lowered
 // by the generic mapChildren recursion — 5M depth overflows the stack if not.
 
