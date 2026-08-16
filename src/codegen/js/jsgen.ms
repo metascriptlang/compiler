@@ -176,29 +176,13 @@ export interface JsModuleResult {
 	smap: SourceInfo;
 }
 
-function emitAutoCallMain(gen: JSGenerator, program: Node): void {
-	const pd = program.data as ProgramData;
-	for (const st of pd.programStmts) {
-		let decl = st;
-		if (decl.kind === NodeKind.ExportDecl) { decl = (decl.data as ExportDeclData).exportedDecl; }
-		if (decl === null) continue;
-		if (decl.kind !== NodeKind.FunctionDecl) continue;
-		if ((decl.data as FunctionDeclData).fnName !== "main") continue;
-		const name = jsSymbolName(gen, decl.resolvedSym, "main");
-		// The entry frame has no call site in the source; without a name here a
-		// debugger labels it with whatever mapping precedes it.
-		if (name !== "main") markNamed(gen, decl, "main");
-		emit(gen, `Promise.resolve(${name}()).then((r) => { if (typeof process !== "undefined" && typeof r === "number") { process.exitCode = r | 0; } });\n`);
-		return;
-	}
-}
 
 export function generateJSModule(
 	program: Node, jsImports: JsImportEntry[], currentModulePath: string,
 	importSpecKeys: string[], importSpecVals: string[],
 	moduleSpecKeys: string[], moduleSpecVals: string[],
 	modExportKeys: string[], modExportVals: string[][],
-	isTestBuild: boolean, autoCallMain: boolean, sourcemap: boolean,
+	isTestBuild: boolean, sourcemap: boolean,
 ): JsModuleResult {
 	const gen = createJSGenerator();
 	gen.multiFile = true;
@@ -237,7 +221,6 @@ export function generateJSModule(
 		}
 		emit(gen, ` } from "${spec}";\n`);
 	}
-	if (autoCallMain) { emitAutoCallMain(gen, program); }
 	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, exportedNames: gen.exportedNames, testNames: gen.testNames, testFuncs: gen.testFuncs, smap: gen.smapInfo };
 }
 
@@ -249,7 +232,7 @@ export interface BundleModuleResult {
 	smap: SourceInfo;
 }
 
-export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean, autoCallMain: boolean, sourceFile: string, sourcemap: boolean): BundleModuleResult {
+export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean, sourceFile: string, sourcemap: boolean): BundleModuleResult {
 	const gen = createJSGenerator();
 	gen.bundleMode = true;
 	gen.bundleIsPrelude = isPrelude;
@@ -259,7 +242,6 @@ export function generateJSBundleModule(program: Node, importSourceMap: string[],
 	gen.importSourceToModuleId = importSourceMap;
 	gen.importSourceToModuleIdKeys = importSourceMapKeys;
 	emitNodeDispatch(gen, program);
-	if (autoCallMain) { emitAutoCallMain(gen, program); }
 	return { code: finalize(gen), exportedNames: gen.exportedNames, smap: gen.smapInfo };
 }
 

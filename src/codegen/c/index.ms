@@ -1,7 +1,7 @@
 // C Codegen — Entry Point
 //
 // generateCModule(program, checkerCtx, modulePath, aliveSet, isTestBuild) → string  (self-contained per-module)
-// genProjectDispatcher(modulePaths, entryPath, hasUserMain) → string  (global init dispatcher)
+// genProjectDispatcher(modulePaths, entryPath, targetOs, noMain) → string  (global init dispatcher)
 //
 // Module init follows two-phase pattern:
 //   DatInit000 (data/type init, runs first) + Init000 (user code, runs second)
@@ -163,9 +163,8 @@ function genModuleInitFns(g: CGen): void {
 // Generates the global init dispatcher: forward decls, MsPreMainInner, MsMainInner,
 // MsMain, global vars, and POSIX main.
 
-export function genProjectDispatcher(modulePaths: string[], entryPath: string, autoCallMain: boolean, mainRetType: string, targetOs: string, noMain: boolean): string {
+export function genProjectDispatcher(modulePaths: string[], entryPath: string, targetOs: string, noMain: boolean): string {
 	const b = createBuilder();
-	const retType = (mainRetType.length > 0) ? mainRetType : "void";
 
 	// Include stdint.h for int32_t, drc.h for msOrcCollect, system.h for msTestErrorFlag + async futures
 	addLine(b, "#include <stdint.h>");
@@ -178,9 +177,6 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, a
 		const modName = mangleModuleName(mp);
 		addLine(b, `void ${modName}__DatInit000(void);`);
 		addLine(b, `void ${modName}__Init000(void);`);
-	}
-	if (autoCallMain) {
-		addLine(b, `${retType} main_(void);`);
 	}
 	addNewline(b);
 
@@ -210,19 +206,6 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, a
 		}
 	}
 	addLine(b, `${mangleModuleName(entryPath)}__Init000();`);
-	// Auto-invoke main only when the user never references it (see compile.ms autoCallMain).
-	// A user that calls main itself drives its own entry — auto-calling would double-run.
-	if (autoCallMain) {
-		if (retType.startsWith("msFuture_")) {
-			// Async main — run event loop until completion
-			addLine(b, "extern void* msWaitFor(void*);");
-			addLine(b, "msWaitFor(main_());");
-		} else if (retType !== "void") {
-			addLine(b, "msProgramResult = (int)main_();");
-		} else {
-			addLine(b, "main_();");
-		}
-	}
 	b.indent -= 1;
 	addLine(b, "}");
 	addNewline(b);
@@ -295,7 +278,7 @@ function cOutput(input: string): string {
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
 	const moduleCode = generateCModule(pr.value, null as unknown as CheckerContext, "test/input", createAliveSet(), false, false);
 	const paths: string[] = ["test/input"];
-	const dispatcher = genProjectDispatcher(paths, "test/input", false, "void", "", false);
+	const dispatcher = genProjectDispatcher(paths, "test/input", "", false);
 	return moduleCode + "\n" + dispatcher;
 }
 

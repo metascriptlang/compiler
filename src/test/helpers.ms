@@ -240,7 +240,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		combined = combined + generateCModule(analyzed, ctx, modPath, aliveSet, false, false);
 	}
 
-	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, false, "void", "", false);
+	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, "", false);
 	return `${combined}\n${dispatcher}`;
 }
 
@@ -328,7 +328,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		combined = combined + generateCModule(analyzed, ctx, modPath, aliveSet, false, false);
 	}
 
-	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, false, "void", "", false);
+	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, "", false);
 	return `${combined}\n${dispatcher}`;
 }
 

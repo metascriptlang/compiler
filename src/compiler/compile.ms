@@ -847,13 +847,6 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		}
 	}
 
-	let jsAutoCallMain = false;
-	for (let ei = 0; ei < unitPaths.length; ei += 1) {
-		if (unitPaths[ei] !== entryPath) continue;
-		const entryMain = lookupSymbol(unitCtxs[ei].table, "main");
-		jsAutoCallMain = entryMain !== null && (entryMain.symFlags & SymbolFlag.Used) === 0;
-	}
-
 	// Phase 2 — backend transform + codegen
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const modPath = unitPaths[ui];
@@ -876,7 +869,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 		const moduleId = replaceExt(relative(projectRoot, modPath), "");
 		const isPrelude = moduleId.startsWith("std/core/");
-		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, jsAutoCallMain && modPath === entryPath, modPath, opts.sourcemap);
+		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap);
 
 		const separator = `\n// --- Module: ${moduleId} ---\n`;
 		bundle = bundle + separator;
@@ -1046,8 +1039,6 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const processed: ProcessedModule[] = [];
 	let transformedPrograms: Node[] = [];
 	let transformedPaths: string[] = [];
-	let autoCallMain = false;
-	let mainRetType = "void";
 	const bs = initCBuildState(opts);
 	let allFlags = bs.allFlags;
 	const includePaths = bs.includePaths;
@@ -1205,23 +1196,6 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		// @passL/@link go directly to global linkState — no per-module merge
 		registerIncludePaths(resolved, includePaths);
 
-		// Check for user main() in entry module
-		if (modPath === entryPath && ctx !== null && ctx.table !== null) {
-			const mainSym = lookupSymbol(ctx.table, "main");
-			// Auto-invoke main ONLY when the user never references it themselves.
-			// A referenced main (top-level `main()`, `waitFor(main())`, etc.) means the
-			// program drives its own entry — auto-calling too would double-run it.
-			autoCallMain = mainSym !== null && (mainSym.symFlags & SymbolFlag.Used) === 0;
-			if (mainSym !== null && mainSym.symbolType !== null && mainSym.symbolType.typeReturn !== null) {
-				const retT = mainSym.symbolType.typeReturn;
-				if (isAwaitable(retT)) {
-					mainRetType = "msFuture_void*";
-				} else {
-					const ret = getSimpleTypeDesc(retT);
-					if (ret !== "") mainRetType = ret;
-				}
-			}
-		}
 	}
 
 	if (opts.showTime) printTiming("phase A (parse+check+transform)", tA);
@@ -1358,7 +1332,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Skip link step if --emit=c (only writing C source files)
 	if (opts.emitC) {
 		// Also emit dispatcher (MsMain + entry point)
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, autoCallMain, mainRetType, opts.targetOs, opts.appMode === "lib" || opts.appMode === "staticlib");
+		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode === "lib" || opts.appMode === "staticlib");
 		const emitDir = outDirForMode(opts.mode);
 		const dispPath = `${emitDir}/_dispatch.c`;
 		writeOutput(dispPath, dispatcher);
@@ -1372,7 +1346,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// HCR — .so has no main). No .c cache for the dispatcher; it always compiles.
 	if (!opts.isHcr) {
 		if (opts.verbose) verboseLog("generating dispatcher");
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, autoCallMain, mainRetType, opts.targetOs, opts.appMode === "lib" || opts.appMode === "staticlib");
+		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode === "lib" || opts.appMode === "staticlib");
 		const dispFile = `${cd}/_dispatch.c`;
 		writeOutput(dispFile, dispatcher);
 		oSlots.push("");
@@ -1845,13 +1819,6 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		modExportVals.push(mod.exportNames);
 	}
 
-	let jsAutoCallMain = false;
-	for (let ei = 0; ei < unitPaths.length; ei += 1) {
-		if (unitPaths[ei] !== filePath) continue;
-		const entryMain = lookupSymbol(unitCtxs[ei].table, "main");
-		jsAutoCallMain = entryMain !== null && (entryMain.symFlags & SymbolFlag.Used) === 0;
-	}
-
 	const moduleCodes: string[] = [];
 	const moduleSmaps: SourceInfo[] = [];
 	const moduleNeededMods: string[][] = [];
@@ -1883,7 +1850,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			moduleSpecVals.push(relSpecBetween(fromRel, outRelVals[mi]));
 		}
 
-		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals, isTestBuild, !isTestBuild && jsAutoCallMain && modPath === filePath, opts.sourcemap);
+		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals, isTestBuild, opts.sourcemap);
 		moduleCodes.push(res.code);
 		moduleSmaps.push(res.smap);
 		moduleNeededMods.push(res.neededModules);
@@ -2078,7 +2045,6 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 
 	const modules: RaiserModuleInput[] = [];
 	const entryCanonical = canonicalModulePath(filePath);
-	let autoCallMain = false;
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
@@ -2089,10 +2055,6 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		exitOnFatalCheckerErrors(modCtx, modPath, mod.source);
 		modCtx.errors = [];
 
-		if (modPath === entryCanonical && modCtx.table !== null) {
-			const mainSym = lookupSymbol(modCtx.table, "main");
-			autoCallMain = mainSym !== null && (mainSym.symFlags & SymbolFlag.Used) === 0;
-		}
 
 		const macroExpanded = expandMacros(program, modCtx);
 		exitOnCheckerErrors(modCtx, modPath, mod.source);
@@ -2106,7 +2068,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	}
 
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
-	const raiserMod = generateRaiserProject(modules, autoCallMain);
+	const raiserMod = generateRaiserProject(modules);
 
 	if (opts.showTime) printTiming("compiled", t0);
 
