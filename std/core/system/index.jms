@@ -8,6 +8,7 @@ export extern class console {
 }
 
 export extern class process {
+	static extern exit(): never;
 	static extern exit(code: int32): never;
 }
 

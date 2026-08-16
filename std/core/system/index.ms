@@ -14,7 +14,7 @@ export class console {
 
 export class process {
 	/** Terminate the process with the given status code. */
-	static extern exit(code: int32): never from "msExit";
+	static extern exit(code: int32 = 0): never from "msExit";
 }
 
 export class Result<T, E> {
