@@ -29,6 +29,7 @@ import {
 	IdentifierData, BlockStmtData, IfStmtData, BinaryExprData,
 	ClassDeclData, MethodDeclData, MemberExprData,
 	WhileStmtData, ContinueStmtData,
+	VariableDeclData, ArrowFunctionData, FunctionExprData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { noneType, peelToStruct } from "../../checker/types";
@@ -54,6 +55,7 @@ export function lowerTailCall(program: Node, ctx: TransformContext): Node {
 function tailCallVisitor(ctx: TransformContext): (node: Node) => Node {
 	return (node: Node): Node => {
 		if (node.kind === NodeKind.ClassDecl) return lowerClassMethods(node, ctx);
+		if (node.kind === NodeKind.VariableDecl) return lowerBoundRoutine(node, ctx);
 		if (node.kind !== NodeKind.FunctionDecl) return node;
 		const d = node.data as FunctionDeclData;
 		if (d.fnName === "") return node;
@@ -66,6 +68,40 @@ function tailCallVisitor(ctx: TransformContext): (node: Node) => Node {
 // replace it: Nim reads tfFinal for exactly this class of question
 // (ccgexprs.nim:1995, types.nim:456). An extended class carries OpenClass; a
 // class whose type cannot be resolved stays untouched.
+function lowerBoundRoutine(node: Node, ctx: TransformContext): Node {
+	const d = node.data as VariableDeclData;
+	if (d.declName === "" || d.initializer === null) return node;
+	const init = d.initializer;
+	if (init.kind === NodeKind.ArrowFunction) {
+		const ad = init.data as ArrowFunctionData;
+		const lowered = loweredRoutineBody(ad.arrowBody, d.declName, node.resolvedSym, ad.arrowParams, init.location, ctx);
+		if (lowered !== null) { ad.arrowBody = lowered; }
+		return node;
+	}
+	if (init.kind === NodeKind.FunctionExpr) {
+		const fd = init.data as FunctionExprData;
+		const lowered = loweredRoutineBody(fd.funcExprBody, d.declName, node.resolvedSym, fd.funcExprParams, init.location, ctx);
+		if (lowered !== null) { fd.funcExprBody = lowered; }
+		return node;
+	}
+	return node;
+}
+
+function loweredRoutineBody(body: Node, name: string, sym: Symbol | null, params: string[], loc: SourceLocation, ctx: TransformContext): Node | null {
+	const stmtBody = body.kind === NodeKind.BlockStmt ? body : makeBlock([makeReturn(body, loc)], loc);
+	const lowered = lowerSelfTailCalls(stmtBody, name, sym, params, loc, ctx);
+	if (!holdsLoweredLoop(lowered)) return null;
+	return lowered;
+}
+
+function holdsLoweredLoop(body: Node): boolean {
+	if (body.kind !== NodeKind.BlockStmt) return false;
+	for (const stmt of (body.data as BlockStmtData).statements) {
+		if (stmt.kind === NodeKind.WhileStmt && (stmt.data as WhileStmtData).whileLabel === tcLoopLabel) return true;
+	}
+	return false;
+}
+
 function lowerClassMethods(node: Node, ctx: TransformContext): Node {
 	const classStruct = peelToStruct(node.nodeType);
 	if (classStruct === null) return node;
