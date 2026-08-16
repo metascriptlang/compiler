@@ -60,3 +60,6 @@ function main(): int32 {
     console.log("ok");
     return 0;
 }
+
+const guardRc = main();
+if (guardRc !== 0) process.exit(guardRc);

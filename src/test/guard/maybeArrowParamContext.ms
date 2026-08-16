@@ -34,3 +34,5 @@ function main(): void {
 	if (!g) { throw "GUARD RED: generic Maybe-fn arrow param not contextually typed"; }
 	console.log("maybeArrowParamContext ok");
 }
+
+main();

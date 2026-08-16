@@ -109,3 +109,5 @@ function main(): void {
 	if (!normOk) { throw "GUARD RED: finally broke the normal path"; }
 	console.log("tryFinallyPropagates ok");
 }
+
+main();

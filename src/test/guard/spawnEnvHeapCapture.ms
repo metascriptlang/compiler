@@ -47,3 +47,5 @@ function main(): void {
     }
     console.log(acc);
 }
+
+main();

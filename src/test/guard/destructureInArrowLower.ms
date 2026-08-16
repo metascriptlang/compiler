@@ -53,3 +53,5 @@ function main(): void {
 
 	console.log("destructureInArrowLower ok");
 }
+
+main();

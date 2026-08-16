@@ -81,3 +81,5 @@ export function main(): void {
 
 	console.log("typeRelationStringUnion ok");
 }
+
+main();

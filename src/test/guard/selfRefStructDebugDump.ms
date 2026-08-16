@@ -70,3 +70,5 @@ function main(): void {
 
 	console.log("selfRefStructDebugDump ok");
 }
+
+main();

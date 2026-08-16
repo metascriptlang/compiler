@@ -38,3 +38,5 @@ function main(): void {
     for (let n = 0; n < 50; n = n + 1) { acc = acc + waitFor(work(n)); }
     console.log(acc.toString());
 }
+
+main();

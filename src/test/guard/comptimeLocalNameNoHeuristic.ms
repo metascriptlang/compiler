@@ -30,3 +30,5 @@ function main(): void {
 	console.log(got === "plain:n:e:t" ? "names:ok" : "names:RED " + got);
 	console.log("comptimeLocalNameNoHeuristic ok");
 }
+
+main();

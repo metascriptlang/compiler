@@ -22,3 +22,5 @@ function main(): void {
 
 	console.log("PASS: spawnOnly");
 }
+
+main();

@@ -46,3 +46,5 @@ function main(): void {
 
 	console.log("PASS: actorOnly");
 }
+
+main();

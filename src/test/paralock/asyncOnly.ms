@@ -39,3 +39,5 @@ function main(): void {
 		msIoRunOnce(10);
 	}
 }
+
+main();

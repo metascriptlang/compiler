@@ -70,3 +70,6 @@ function main(): number {
 	if (failures === 0) console.log("GUARD-OK stringAsciiCacheStale");
 	return failures;
 }
+
+const guardRc = main();
+if (guardRc !== 0) process.exit(guardRc);

@@ -31,3 +31,5 @@ function main(): void {
 	if (arr[1]() !== 10) { throw "GUARD RED: elem 1 wrong"; }
 	console.log("genericFnArrayAnnot ok");
 }
+
+main();

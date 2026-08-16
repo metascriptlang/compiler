@@ -54,3 +54,5 @@ function main(): void {
 	if (stored !== 7) { throw "GUARD RED: setter signature dropped (arity-0 collision)"; }
 	console.log("typeKeyFnSignature ok");
 }
+
+main();

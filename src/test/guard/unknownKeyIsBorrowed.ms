@@ -84,3 +84,5 @@ function main(): void {
 	if (sink < 0) { throw "GUARD RED: unreachable"; }
 	console.log("unknownKeyIsBorrowed ok");
 }
+
+main();

@@ -43,3 +43,5 @@ function main(): void {
 	if (cast !== true) { throw "GUARD RED: arrow in as-cast not lifted"; }
 	console.log("inlineArrowMemberLift ok");
 }
+
+main();

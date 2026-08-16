@@ -62,3 +62,5 @@ export function main(): void {
 
 	console.log("operatorFlatDecl ok");
 }
+
+main();

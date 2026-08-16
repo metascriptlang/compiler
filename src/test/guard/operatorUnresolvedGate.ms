@@ -33,3 +33,5 @@ export function main(): void {
 	const y: int32 = 1;
 	console.log("shr=" + (x >>> y).toString());
 }
+
+main();

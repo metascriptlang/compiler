@@ -47,3 +47,5 @@ async function main(): Promise<void> {
         const r = await spawn(() => x);
     }
 }
+
+await main();

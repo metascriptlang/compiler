@@ -68,3 +68,6 @@ function main(): number {
 	console.log("ptrFirstRefJoinOwnership ok");
 	return 0;
 }
+
+const guardRc = main();
+if (guardRc !== 0) process.exit(guardRc);

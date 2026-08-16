@@ -61,3 +61,6 @@ function main(): int32 {
 	console.log("GUARD-OK flowMergeDiscIdentity");
 	return 0;
 }
+
+const guardRc = main();
+if (guardRc !== 0) process.exit(guardRc);

@@ -41,3 +41,6 @@ function main(): int32 {
 	console.log("GUARD-OK operatorScopeTieBreak");
 	return 0;
 }
+
+const guardRc = main();
+if (guardRc !== 0) process.exit(guardRc);

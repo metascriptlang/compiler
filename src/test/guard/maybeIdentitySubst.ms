@@ -55,3 +55,5 @@ function main(): void {
 	if (eqFalse !== false) { throw "GUARD RED: present-equals result not flowing (false arm)"; }
 	console.log("maybeIdentitySubst ok");
 }
+
+main();
