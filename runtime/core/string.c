@@ -107,6 +107,12 @@ static inline void msStrMarkAscii(msStrPayload* p) {
 	}
 }
 
+static inline void msStrMarkNonAscii(msStrPayload* p) {
+	if (p != NULL && (p->cap & MS_STRLIT_FLAG) == 0) {
+		p->cap = (p->cap | MS_ASCII_CHECKED) & ~MS_ASCII_FLAG;
+	}
+}
+
 /* ===== Lifecycle ===== */
 
 msString msStringNew(const char* data, int64_t len) {
@@ -159,6 +165,7 @@ void msStringAssign(msString* a, msString b) {
 		memcpy(a->p->data, b.p->data, b.len + 1);
 		msStrInvalidateAscii(a->p);
 		if (msStrKnownAscii(b.p)) msStrMarkAscii(a->p);
+		else if (b.p != NULL && (b.p->cap & MS_ASCII_CHECKED) != 0) msStrMarkNonAscii(a->p);
 	}
 }
 
@@ -206,23 +213,29 @@ void msStringAppend(msString* dest, msString src) {
 		   freeing the buffer src points at — read the preserved bytes from dest's grown buffer
 		   (prepareAdd copies existing content forward), like std::string::append(*this). */
 		int aliased = (src.p == dest->p);
-		bool bothAscii = (dest->len == 0 || msStrKnownAscii(dest->p)) && msStrScanAscii(src.p, src.len);
+		bool destKnown = dest->len == 0 || (dest->p != NULL && (dest->p->cap & MS_ASCII_CHECKED) != 0);
+		bool destAscii = dest->len == 0 || msStrKnownAscii(dest->p);
+		bool srcAscii = msStrScanAscii(src.p, src.len);
 		msStringPrepareAdd(dest, src.len);
 		const char* srcData = aliased ? dest->p->data : src.p->data;
 		memcpy(dest->p->data + dest->len, srcData, src.len);
 		dest->len += src.len;
 		dest->p->data[dest->len] = '\0';
-		if (bothAscii) msStrMarkAscii(dest->p);
+		if (!srcAscii || (destKnown && !destAscii)) msStrMarkNonAscii(dest->p);
+		else if (destKnown) msStrMarkAscii(dest->p);
 	}
 }
 
 void msStringAppendChar(msString* dest, char c) {
-	bool stillAscii = (dest->len == 0 || msStrKnownAscii(dest->p)) && (unsigned char)c < 0x80;
+	bool destKnown = dest->len == 0 || (dest->p != NULL && (dest->p->cap & MS_ASCII_CHECKED) != 0);
+	bool destAscii = dest->len == 0 || msStrKnownAscii(dest->p);
+	bool cAscii = (unsigned char)c < 0x80;
 	msStringPrepareAdd(dest, 1);
 	dest->p->data[dest->len] = c;
 	dest->len++;
 	dest->p->data[dest->len] = '\0';
-	if (stillAscii) msStrMarkAscii(dest->p);
+	if (!cAscii || (destKnown && !destAscii)) msStrMarkNonAscii(dest->p);
+	else if (destKnown) msStrMarkAscii(dest->p);
 }
 
 void msStringSetLength(msString* s, int64_t newLen) {
