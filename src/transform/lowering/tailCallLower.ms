@@ -28,6 +28,7 @@ import {
 	FunctionDeclData, ReturnStmtData, CallExprData, ConditionalExprData,
 	IdentifierData, BlockStmtData, IfStmtData, BinaryExprData,
 	ClassDeclData, MethodDeclData, MemberExprData,
+	WhileStmtData, ContinueStmtData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { noneType, peelToStruct } from "../../checker/types";
@@ -40,6 +41,8 @@ import {
 } from "../util";
 import { lowerTernaryInReturn } from "./conditionalExprLower";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
+
+const tcLoopLabel = "__tcl";
 
 // ===== Main Entry Point =====
 
@@ -115,6 +118,7 @@ function lowerSelfTailCalls(body: Node, name: string, sym: Symbol | null, params
 
 	const whileBody = makeBlock(newStmts, loc);
 	const whileNode = makeWhile(makeBool(true, loc), whileBody, loc);
+	(whileNode.data as WhileStmtData).whileLabel = tcLoopLabel;
 	const outerStmts: Node[] = [];
 	for (const sd of shadowDecls) {
 		outerStmts.push(sd);
@@ -274,14 +278,8 @@ function isThisMethodCall(callee: Node, fnName: string, fnSym: Symbol | null): b
 	return true;
 }
 
-// Transform a statement: replace tail-call returns with reassign+continue
 function tailOpaque(stmt: Node): boolean {
-	return stmt.kind === NodeKind.WhileStmt ||
-		stmt.kind === NodeKind.DoWhileStmt ||
-		stmt.kind === NodeKind.ForStmt ||
-		stmt.kind === NodeKind.ForOfStmt ||
-		stmt.kind === NodeKind.ForInStmt ||
-		stmt.kind === NodeKind.TryCatchStmt ||
+	return stmt.kind === NodeKind.TryCatchStmt ||
 		stmt.kind === NodeKind.DeferStmt ||
 		isFuncBoundary(stmt);
 }
@@ -344,7 +342,9 @@ function buildTailCallReplacement(callExpr: Node, params: string[], localSyms: (
 	}
 
 	// 3. Continue (back to top of while loop)
-	stmts.push(makeContinue(loc));
+	const cont = makeContinue(loc);
+	(cont.data as ContinueStmtData).continueLabel = tcLoopLabel;
+	stmts.push(cont);
 
 	return makeBlock(stmts, loc);
 }
