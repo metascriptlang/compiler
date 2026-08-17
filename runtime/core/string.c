@@ -341,10 +341,19 @@ static int64_t msStringByteIndexOf(msString s, msString sub, int64_t byteStart) 
 	const char* haystack = s.p->data;
 	const char* needle = sub.p->data;
 	int64_t limit = s.len - sub.len;
-	for (int64_t i = byteStart; i <= limit; i++) {
-		if (memcmp(haystack + i, needle, sub.len) == 0) {
-			return i;
+	if (byteStart > limit) return -1;
+	/* memchr narrows to first-byte candidates; libc vectorizes it, a memcmp
+	   per offset does not. */
+	const char* p = haystack + byteStart;
+	const char* end = haystack + limit + 1;
+	const size_t tail = (size_t)(sub.len - 1);
+	while (p < end) {
+		const char* hit = (const char*)memchr(p, (unsigned char)needle[0], (size_t)(end - p));
+		if (hit == NULL) return -1;
+		if (tail == 0 || memcmp(hit + 1, needle + 1, tail) == 0) {
+			return (int64_t)(hit - haystack);
 		}
+		p = hit + 1;
 	}
 	return -1;
 }
