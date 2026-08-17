@@ -37,6 +37,8 @@ import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerObjectLiteralComplete } from "./coercion/objectLiteralComplete";
 import { lowerStringLengthJS } from "./coercion/stringLengthJS";
+import { lowerIntConvJS } from "./coercion/intConvJS";
+import { lowerIntArithJS } from "./coercion/intArithJS";
 import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
 import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
@@ -159,6 +161,11 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = unwrapMaybe(result, ctx); }
 	result = lowerDCE(result, ctx);
 	if (jsBackend) { result = resolveRuntimeIdents(result, ctx); }
+	// Must trail resolveRuntimeIdents: the synthesized `Math` receiver has to
+	// stay unbound, or it resolves to the prelude's own `class Math` and gets
+	// mangled as a module global.
+	if (jsBackend) { result = lowerIntConvJS(result, ctx); }
+	if (jsBackend) { result = lowerIntArithJS(result, ctx); }
 	if (!jsBackend) { result = liftDestructors(result, ctx); }
 	return result;
 }

@@ -1127,12 +1127,17 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 	const affineSnap = saveConsumeState(ctx.affineTracker);
 	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
 	const saved = enterLoopScope(ctx);
+	const prevForStmtPos = ctx.stmtPosExpr;
+	ctx.stmtPosExpr = d.forInit;
 	checkStmt(ctx, d.forInit);
+	ctx.stmtPosExpr = prevForStmtPos;
 	ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	checkExpr(ctx, d.forCondition, null);
 	// Ref parity: for loops — conservative, loop may not execute
 	const oldState = saveInitState(ctx.initTracker);
+	ctx.stmtPosExpr = d.forUpdate;
 	checkExpr(ctx, d.forUpdate, null);
+	ctx.stmtPosExpr = prevForStmtPos;
 	ctx.condEvalDepth = ctx.condEvalDepth - 1;
 	checkStmt(ctx, d.forBody);
 	exitLoopScope(ctx, saved);

@@ -564,6 +564,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const isAsgn = d.operator === "=" || d.operator === "+=" || d.operator === "-=" ||
 				d.operator === "*=" || d.operator === "/=" || d.operator === "%=" ||
 				d.operator === "&&=" || d.operator === "||=" || d.operator === "??=";
+			if (isAsgn && node !== ctx.stmtPosExpr) {
+				addError(ctx, "assignment is a statement, not an expression - assign first, then use the variable: 'x = f(); while (x !== null) { ... }'", node.location.line, node.location.column);
+			}
 			if (isAsgn) {
 				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
 			}
@@ -2077,6 +2080,7 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			if (isIntegerType(leftType)) return leftType;
 			return int32Type();
 		},
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&&=" | "||=" | "??=" => voidType(),
 		"??" => {
 			if (isMaybeType(leftType) && leftType.typeReturn !== null) {
 				const joined = joinBranchTypes([leftType.typeReturn, rightType]);
