@@ -1437,3 +1437,56 @@ test "instance extension isStatic false" {
 	assert found !== null;
 	assert !found.isStatic;
 }
+
+// ===== Global type-owner registry (compilation-wide) =====
+// bare type name → declaring modulePath, recorded at collect time for every
+// module-level type decl. Codegen's mangledTypeName consults this when a Type
+// lost its sym (macro-wire / mono round-trips are FLAT and drop identity) so
+// the consumer still derives the owner's qualified C name. A name claimed by
+// two different modules is ambiguous — resolution then keeps the bare name
+// (pre-existing behavior for that corner).
+
+const _globalTypeOwners: Map<string, string> = new Map<string, string>();
+
+export function recordGlobalTypeOwner(name: string, modulePath: string): void {
+	if (name === "" || modulePath === "") return;
+	const prev = _globalTypeOwners.get(name);
+	if (prev === null) {
+		_globalTypeOwners.set(name, modulePath);
+		return;
+	}
+	if (prev !== modulePath) {
+		_globalTypeOwners.set(name, "\u0001AMBIGUOUS");
+	}
+}
+
+export function getGlobalTypeOwner(name: string): string {
+	const v = _globalTypeOwners.get(name);
+	if (v === null || v === "AMBIGUOUS") return "";
+	return v;
+}
+
+// Shape-keyed variant: two modules may declare the same type NAME with
+// different fields (the coarse map goes ambiguous) — the field list usually
+// still identifies the owner. Recorded at ensureShaped, when fields exist.
+
+const _globalTypeShapes: Map<string, string> = new Map<string, string>();
+
+export function recordGlobalTypeShape(name: string, shapeKey: string, modulePath: string): void {
+	if (name === "" || shapeKey === "" || modulePath === "") return;
+	const key = name + "|" + shapeKey;
+	const prev = _globalTypeShapes.get(key);
+	if (prev === null) {
+		_globalTypeShapes.set(key, modulePath);
+		return;
+	}
+	if (prev !== modulePath) {
+		_globalTypeShapes.set(key, "AMBIGUOUS");
+	}
+}
+
+export function getGlobalTypeOwnerByShape(name: string, shapeKey: string): string {
+	const v = _globalTypeShapes.get(name + "|" + shapeKey);
+	if (v === null || v === "AMBIGUOUS") return "";
+	return v;
+}

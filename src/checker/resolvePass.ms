@@ -9,7 +9,7 @@
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { inferredType, errorType, noneType, isUnresolvedType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createArc, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
-import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
+import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName } from "./collectPass";
@@ -875,6 +875,16 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 		};
 	}
 	sym.state = SymbolState.Shaped;
+
+	if (node !== null && sym.modulePath !== ""
+		&& (node.kind === NodeKind.InterfaceDecl || node.kind === NodeKind.StructDecl
+			|| node.kind === NodeKind.ClassDecl || node.kind === NodeKind.TypeAliasDecl)) {
+		let st = sym.symbolType;
+		if (st !== null && st.kind === TypeKind.Ref && st.typeReturn !== null) st = st.typeReturn;
+		if (st !== null && st.kind === TypeKind.Struct && st.typeNames !== null && st.typeNames.length > 0) {
+			recordGlobalTypeShape(sym.name, st.typeNames.join(","), sym.modulePath);
+		}
+	}
 
 	// Recursively ensure all overloads are shaped (Demand-Driven Completeness)
 	for (const ov of sym.overloads) {

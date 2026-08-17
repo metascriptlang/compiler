@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym } from "./context";
+import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -193,6 +193,12 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 	sym.declNode = node; // Discovery Commitment: link symbol to its declaration node
 	// Implementation parity: stamp module ownership — set once at creation
 	if (sym.modulePath === "") sym.modulePath = ctx.modulePath;
+	match (node.kind) {
+		NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ClassDecl
+		| NodeKind.EnumDecl | NodeKind.TypeAliasDecl | NodeKind.ActorDecl =>
+			recordGlobalTypeOwner(sym.name, sym.modulePath),
+		_ => {},
+	};
 	const result = defineSymbol(ctx.table, sym);
 	if (!result.ok) {
 		addError(ctx, result.error, node.location.line, node.location.column);
