@@ -56,6 +56,12 @@ function rewriteStringOp(node: Node): Node {
 		if (rd.operator === "+" && isStringTyped(d.left) && isSameIdent(d.left, rd.left)) {
 			const loc = node.location;
 			const addrOf = makeHiddenAddr(d.left, loc);
+			const code = asAsciiCharCode(rd.right);
+			if (code >= 0) {
+				const result = makeCall(makeIdent("msStringAppendChar", loc), [addrOf, makeNumber(code, loc)], loc);
+				result.nodeType = node.nodeType;
+				return result;
+			}
 			const right = coercePartToString(rd.right, loc);
 			const result = makeCall(makeIdent("msStringAppend", loc), [addrOf, right], loc);
 			result.nodeType = node.nodeType;
@@ -76,6 +82,12 @@ function rewriteStringOp(node: Node): Node {
 			if (calleeName === "msStringConcat" && cd.arguments.length === 2
 					&& isSameIdent(d.left, cd.arguments[0])) {
 				const addrOf = makeHiddenAddr(d.left, loc);
+				const code = asAsciiCharCode(cd.arguments[1]);
+				if (code >= 0) {
+					const result = makeCall(makeIdent("msStringAppendChar", loc), [addrOf, makeNumber(code, loc)], loc);
+					result.nodeType = node.nodeType;
+					return result;
+				}
 				const result = makeCall(makeIdent("msStringAppend", loc),
 						[addrOf, cd.arguments[1]], loc);
 				result.nodeType = node.nodeType;
@@ -127,6 +139,12 @@ function rewriteStringOp(node: Node): Node {
 	// and codegen emits a normal call (no special-casing).
 	if (d.operator === "+=" && isStringTyped(d.left)) {
 		const addrOf = makeHiddenAddr(d.left, loc);
+		const code = asAsciiCharCode(d.right);
+		if (code >= 0) {
+			const result = makeCall(makeIdent("msStringAppendChar", loc), [addrOf, makeNumber(code, loc)], loc);
+			result.nodeType = node.nodeType;
+			return result;
+		}
 		const right = coercePartToString(d.right, loc);
 		const result = makeCall(makeIdent("msStringAppend", loc), [addrOf, right], loc);
 		result.nodeType = node.nodeType;
@@ -171,6 +189,15 @@ function coercePartToString(node: Node, loc: SourceLocation): Node {
 		return makeCall(makeIdent("msNumberToString", loc), [node], loc);
 	}
 	return node;
+}
+
+function asAsciiCharCode(node: Node): int32 {
+	if (node.kind !== NodeKind.StringLiteral) return -1;
+	const d = node.data as StringLiteralData;
+	if (d.value.length !== 1) return -1;
+	const code = d.value.charCodeAt(0);
+	if (code >= 128) return -1;
+	return code as int32;
 }
 
 function isStringTyped(node: Node): boolean {
