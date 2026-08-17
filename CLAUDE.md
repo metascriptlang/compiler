@@ -116,27 +116,46 @@ Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 Analyzer] -->
 - Phase 4 (Analyzer): COMPLETE -- DRC injection (6 files, ~2500 lines, 14 gap items, cross-scope last-read, branch-aware optimizer)
 - Phase 5 (Codegen): COMPLETE -- C backend (primary), JS backend (secondary)
 
-## Entry Point: `main()` auto-call (C backend only)
+## Entry Point: there is no `main()` auto-call
 
-The C backend **auto-invokes `main()`** — but ONLY when the user never references `main`
-themselves. The decision lives in `compile.ms` (`autoCallMain = mainSym !== null &&
-(mainSym.symFlags & SymbolFlag.Used) === 0`) and is emitted by `genProjectDispatcher`
-(`src/codegen/c/index.ms`) inside `MsMainInner`, after all module `__Init000()` (top-level
-code) run.
+**Nothing calls `main` for you.** A program is the top-level code of its entry module; `main`
+is an ordinary function with no special status in codegen. Removed 2026-08-16 (`15df69d`) on
+both backends — `genProjectDispatcher` (`src/codegen/c/index.ms`) and `emitAutoCallMain`
+(`src/codegen/js/jsgen.ms`) no longer know the name.
 
-- **Define `main`, don't call it** → auto-call fires. Idiomatic; zero boilerplate (entry model).
-- **Reference `main` yourself** (top-level `main()`, `waitFor(main())`, nested call) →
-  `SymbolFlag.Used` is set → auto-call **suppressed**, so it never double-runs. This is the
-  whole reason the convention is "auto-call an *unreferenced* main", not "always auto-call".
-- Return-type aware: async main (`Promise<T>`) → `msWaitFor(main_())` (awaited);
-  `main(): number` → return becomes the exit code; `void` → plain call. Otherwise exit code
-  comes from `process.exit()` (sets `msProgramResult`).
+Call it explicitly, in the shape its signature requires:
 
-**Why this keeps biting us (don't re-learn the hard way):** the auto-call is in *codegen*,
-NOT in source. Never "fix" a double-run by adding `main()` to a source file's top level —
-top-level code runs on import, so every test binary importing that module would run it.
-`export function main` does NOT set `Used` (verified), so the compiler self-host
-(`src/index.ms`, exported main, no call) correctly auto-runs.
+| Signature | Call site |
+|---|---|
+| `main(): void` | `main();` |
+| `async main()` | `await main();` — a bare call leaves a future nobody waits on (C) / a floating promise (JS) |
+| `main(): number` where the code is the exit status | `process.exit(main());` |
+
+`process.exit(code = 0)` is the exit-code surface: C routes to `msExit`
+(`std/core/system/index.ms` → `runtime/core/system.c`), JS declares it as **two overloads**
+(`exit()` and `exit(code)`) because a default arg on an extern member parses but is not
+applied at a zero-arg call — writing only `exit(code: int32 = 0)` there fails with
+*No matching overload*. Both paths run `msTestErrorFlag()` first, so a pending exception is
+still reported when the program exits explicitly.
+
+**Migrating a program that relied on the auto-call.** Symptom: it builds and links clean,
+prints nothing, exits 0. Fix is one line at the bottom of the entry module, per the table
+above. For test-suite programs scored by exit code (`src/test/guard/run.sh`), a bare `main();`
+swallows the status and turns a red guard green — forward it:
+`const rc = main(); if (rc !== 0) process.exit(rc);`
+
+**A module that is both a CLI and a test target needs a guard.** A test build still executes
+top-level code, so `src/index.ms` ends with `when (!testBuild) { process.exit(main()); }` and
+the test command sets that define (`src/index.ms:108`). Without it, `msc test src/index.ms`
+runs the CLI instead of the tests. `test` is a keyword and cannot be the flag name. The
+standard reference solves this with `isMainModule`, which we do not have — and which would
+*not* help here anyway, since the entry module is still the main module under `msc test`.
+
+**Why the auto-call went.** The trigger was `(mainSym.symFlags & SymbolFlag.Used) === 0`, so
+merely mentioning the name anywhere (`const g = main;`) silently disabled the program's entry
+point. The skeleton `main → MsMain → MsPreMainInner/MsMainInner → msProgramResult` is a
+name-for-name port of the standard reference and stays; the auto-call was our own addition,
+present in neither the reference nor TS. See `docs/NIM-REF.md` §1.
 
 ## CRITICAL: Codegen Must Be Thin/Dumb
 
