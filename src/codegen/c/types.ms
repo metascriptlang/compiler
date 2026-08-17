@@ -13,7 +13,33 @@ import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet } from "./context";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
-import { mangle, mangleFieldName, safeName } from "./names";
+import { mangle, mangledTypeName, mangleQualified, mangleModuleName, mangleFieldName, safeName } from "./names";
+import { getGlobalTypeOwner, getGlobalTypeOwnerByShape } from "../../checker/context";
+
+// Struct C-name resolution: a sym-less named struct (macro-wire / mono
+// round-trips drop identity) first tries the shape-keyed owner registry so
+// its spelling matches the declaring module's definition even when the bare
+// name is claimed by several modules.
+function typeIdentityName(g: CGen, t: Type): string {
+	if (t.sym !== null) return mangledTypeName(t.sym, t.typeName);
+	// A sym-less named type only borrows an owner from the registries during a
+	// real compilation; synthetic types built by unit tests (no checker context)
+	// keep the bare spelling.
+	if (g.checkerCtx !== null && t.typeName !== "") {
+		if (t.typeNames !== null && t.typeNames.length > 0) {
+			const byShape = getGlobalTypeOwnerByShape(t.typeName, t.typeNames.join(","));
+			if (byShape !== "") return mangleQualified(t.typeName, mangleModuleName(byShape));
+		}
+		const owner = getGlobalTypeOwner(t.typeName);
+		if (owner !== "") return mangleQualified(t.typeName, mangleModuleName(owner));
+	}
+	return mangledTypeName(t.sym, t.typeName);
+}
+
+function structIdentityName(g: CGen, t: Type): string {
+	if (isAnonTypeName(t.typeName)) return anonTypeName(t);
+	return typeIdentityName(g, t);
+}
 import { useHeader } from "./context";
 
 // ===== Generated destroy-hook registry (Nim graph.attachedOps[attachedDestructor] analog) =====
@@ -539,7 +565,9 @@ export function getTypeForward(g: CGen, t: Type | null): string {
 	if (cached !== "") return cached;
 	// For Object/Enum — forward-declare only
 	if (t.kind === TypeKind.Struct || t.kind === TypeKind.Enum) {
-		const name = isAnonTypeName(t.typeName) ? anonTypeName(t) : mangle(t.typeName);
+		const name = (t.kind === TypeKind.Struct)
+			? structIdentityName(g, t)
+			: typeIdentityName(g, t);
 		ensureForwardDecl(g, name);
 		return name;
 	}
@@ -582,6 +610,18 @@ export function ensureTypeInfo(g: CGen, className: string): void {
 // → harmless duplicate. For compiler-generated types ($Env_*) where destructorLifting
 // only emits hooks (consumer path), this is the ONLY assignment, and missing it
 // causes the env's Promise / Ref / managed fields to leak (async fn pattern).
+// Compiler-generated type names appear in two spellings depending on the stage
+// that produced the string: checker-level "$Env_*" and pre-mangled "dollarEnv_*"
+// (destructorLifting works with the latter). The bare-origin map covers names
+// that went through mangledTypeName.
+export function isCompilerGenCName(g: CGen, cn: string): boolean {
+	if (cn.length === 0) return false;
+	if (cn.slice(0, 1) === "$") return true;
+	if (cn.startsWith("dollarEnv_")) return true;
+	const bare = typeCacheGet(g.typeCache, "bare:" + cn);
+	return bare.length > 0 && bare.slice(0, 1) === "$";
+}
+
 export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | null): void {
 	// TypeInfo is DRC metadata — unused under --gc=manual (write-only in manual.h).
 	if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) return;
@@ -594,9 +634,20 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	// Ownership check (reference parity: genTypeInfoV2 routes to owning module).
 	// declaredThings has the mangled name if this module processed InterfaceDecl/ClassDecl/EnumDecl.
 	// Compiler-generated ($Env_*) and monomorphized generics (Map__K_V) are always local.
-	const isCompilerGen = className.length > 0 && className.slice(0, 1) === "$";
-	const isGeneric = className.indexOf("__", 0) >= 0;
-	const isOwner = nameSetHas(g.declaredThings, className) || isCompilerGen || isGeneric;
+	const isCompilerGen = isCompilerGenCName(g, className);
+	// Qualified named types (bare-map hit with a DIFFERENT bare origin) contain
+	// "__" from the module qualifier — only mono instances (bare-map identity
+	// or miss) count as generic here.
+	const bareOrigin = typeCacheGet(g.typeCache, "bare:" + className);
+	const isQualifiedNamed = bareOrigin !== "" && bareOrigin !== className;
+	const isGeneric = !isQualifiedNamed && className.indexOf("__", 0) >= 0;
+	// The declaring module owns the definition even when DCE dropped the decl
+	// arm (interface used only inside one function) — declaredThings alone
+	// misses that case and the extern would resolve to nothing.
+	let ownSym = objType !== null ? objType.sym : null;
+	if (ownSym === null && objType !== null && objType.typeReturn !== null) ownSym = objType.typeReturn.sym;
+	const isDeclaringModule = ownSym !== null && ownSym.modulePath === g.modulePath;
+	const isOwner = nameSetHas(g.declaredThings, className) || isCompilerGen || isGeneric || isDeclaringModule;
 	if (!isOwner) {
 		ensureTypeInfo(g, className);
 		return;
@@ -605,10 +656,17 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	// Generics use weak linkage — multiple modules may emit, linker deduplicates.
 	if (isGeneric) {
 		addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${className}TypeInfo;`);
+	} else if (isCompilerGen) {
+		// $-generated types (lambda envs) are only ever referenced in the module
+		// that lifted them — static keeps same-named envs in sibling modules apart.
+		addLine(sec(g, CSection.GlobalVars), `static msTypeInfo ${className}TypeInfo;`);
 	} else {
 		addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${className}TypeInfo;`);
 	}
-	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.name = "${className}";`);
+	// Runtime-visible name keeps the pre-qualification spelling (mangled bare
+	// name) — the DRC ledger and balance guards key on this exact string.
+	const runtimeName = bareOrigin !== "" ? mangle(bareOrigin) : className;
+	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.name = "${runtimeName}";`);
 	let destroyHook = "";
 	if (objType !== null && hasDestructor(objType)) {
 		destroyHook = mangle(getAttachedOp(objType, AttachedOp.AttachedDestructor));
@@ -852,9 +910,13 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 // ===== Enum Type Generation =====
 
 function genEnumType(g: CGen, t: Type): string {
-	const name = mangle(t.typeName);
+	const name = typeIdentityName(g, t);
 	const key = typeKey(t);
 	typeCacheSet(g.typeCache, key, name);
+	if (t.typeName !== "") {
+		typeCacheSet(g.typeCache, "cname:" + t.typeName, name);
+		typeCacheSet(g.typeCache, "bare:" + name, t.typeName);
+	}
 
 	if (isImportedType(t)) { useImportedTypeHeader(g, t); return name; }
 
@@ -880,7 +942,7 @@ function genEnumType(g: CGen, t: Type): string {
 
 function genObjectType(g: CGen, t: Type): string {
 	// Anonymous/structural types get hash-based names; named types get mangled names
-	const name = isAnonTypeName(t.typeName) ? anonTypeName(t) : mangle(t.typeName);
+	const name = structIdentityName(g, t);
 	const key = typeKey(t);
 
 	if (isImportedType(t)) {
@@ -892,6 +954,10 @@ function genObjectType(g: CGen, t: Type): string {
 	// Always value type — Ref<Object> adds the * via TypeKind.Ref path
 	const cTypeName = name;
 	typeCacheSet(g.typeCache, key, cTypeName);
+	if (!isAnonTypeName(t.typeName) && t.typeName !== "") {
+		typeCacheSet(g.typeCache, "cname:" + t.typeName, cTypeName);
+		typeCacheSet(g.typeCache, "bare:" + cTypeName, t.typeName);
+	}
 
 	// Ensure forward declaration
 	ensureForwardDecl(g, name);
@@ -964,8 +1030,12 @@ function genUnionType(g: CGen, t: Type): string {
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached !== "") return cached;
 
-	const name = (t.typeName.length > 0) ? mangle(t.typeName) : "msUnion_" + hashToBase36(key);
+	const name = (t.typeName.length > 0) ? typeIdentityName(g, t) : "msUnion_" + hashToBase36(key);
 	typeCacheSet(g.typeCache, key, name);
+	if (t.typeName.length > 0) {
+		typeCacheSet(g.typeCache, "cname:" + t.typeName, name);
+		typeCacheSet(g.typeCache, "bare:" + name, t.typeName);
+	}
 	ensureForwardDecl(g, name);
 
 	const b = sec(g, CSection.Types);
@@ -1400,7 +1470,8 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): boolean {
 	// by destructorLifting at `lookupSymbol(...) === null`, so using the hook
 	// there would produce an undefined reference at link. Match its filter.
 	if (innerType.kind === TypeKind.Struct && innerType.typeName !== "" && hasAsgnFlag(innerType)) {
-		const hookName = innerDesc + "Copy";
+		const bareInner = typeCacheGet(g.typeCache, "bare:" + innerDesc);
+		const hookName = (bareInner !== "" ? bareInner : innerDesc) + "Copy";
 		// Dedup the forward decl across repeat calls for the same T — multiple
 		// Promise.all sites in the same module otherwise emit N copies. Harmless
 		// in C but noisy; cache via g.forwTypeCache.

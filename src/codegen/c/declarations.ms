@@ -3,17 +3,17 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, TypeKind, Type } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, TypeKind, Type, Symbol } from "../../ast/node";
 import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, emitStmtsLine, readProcStmts, readProcLocals,
-	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheHas, aliveSetHas,
+	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas,
 } from "./context";
 import { genExpr } from "./expressions";
 import { genStmt, resolveEmitArgs } from "./statements";
-import { mangle, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfoDef, isNilableValueType } from "./types";
+import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfoDef, isCompilerGenCName, isNilableValueType } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cStringLiteral } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -260,13 +260,45 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 // ===== Overload Index Matching =====
 // ===== Enum Declaration =====
 
+// The C name of a declared type comes from the same sym-aware helper the
+// Type-driven path (genObjectType/genEnumType) uses, so both spellings agree.
+function declTypeSym(node: Node): Symbol | null {
+	const t = node.nodeType;
+	if (t !== null && t.sym !== null) return t.sym;
+	return node.resolvedSym;
+}
+
+// Pre-register bare↔qualified C-name mappings for every module-level type decl
+// BEFORE any emission. ensureDrcProto and the ctor call sites consult these;
+// lazy registration in the gen* emitters is walk-order dependent (a DRC hook
+// proto can be requested before its type materializes — bug100 union hooks).
+export function registerDeclCName(g: CGen, node: Node): void {
+	let n = node;
+	if (n.kind === NodeKind.ExportDecl) {
+		n = (n.data as ExportDeclData).exportedDecl;
+	}
+	if (n !== null && n.kind === NodeKind.DecoratedDecl) {
+		n = (n.data as DecoratedDeclData).decoratedNode;
+	}
+	if (n === null) return;
+	const k = n.kind;
+	if (k !== NodeKind.InterfaceDecl && k !== NodeKind.ClassDecl && k !== NodeKind.EnumDecl
+		&& k !== NodeKind.StructDecl && k !== NodeKind.TypeAliasDecl) return;
+	if ((n.flags & NodeFlag.ExternC) !== 0) return;
+	const sym = declTypeSym(n);
+	if (sym === null) return;
+	const cn = mangledTypeName(sym, sym.name);
+	typeCacheSet(g.typeCache, "cname:" + sym.name, cn);
+	typeCacheSet(g.typeCache, "bare:" + cn, sym.name);
+}
+
 function genEnumDecl(g: CGen, node: Node): void {
 	const d = node.data as EnumDeclData;
 
 	// Extern enum: defined in C header — skip emission entirely.
 	if ((node.flags & NodeFlag.ExternC) !== 0) return;
 
-	const name = mangle(d.enumName);
+	const name = mangledTypeName(declTypeSym(node), d.enumName);
 
 	// Skip if already declared (check both declaration set and type cache)
 	const key = "enum:" + d.enumName;
@@ -299,7 +331,7 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 	const declType = node.nodeType;
 	if (declType !== null && hasGenericParams(declType)) return;
 
-	const name = mangle(d.interfaceName);
+	const name = mangledTypeName(declTypeSym(node), d.interfaceName);
 
 	// Skip if already declared (check both declaration set and type cache)
 	const ifaceKey = "object:" + d.interfaceName;
@@ -349,7 +381,7 @@ function genClassDecl(g: CGen, node: Node): void {
 		return;
 	}
 
-	const name = mangle(d.className);
+	const name = mangledTypeName(declTypeSym(node), d.className);
 
 	// Check if struct type already declared (by genObjectType for generic instances)
 	const classKey = "object:" + d.className;
@@ -697,11 +729,22 @@ function genGlobalVar(g: CGen, node: Node): void {
 function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
 	// Extract base type name: strip "TypeInfo" suffix (8 chars)
 	const baseName = d.declName.slice(0, d.declName.length - 8);
+	// The emitted symbol must match what consumers derive from the Type
+	// (qualified C name via mangledTypeName) — the decl arm registered it
+	// in typeCache before destructorLifting's TypeInfo var reaches codegen.
+	const cBase = typeCacheGet(g.typeCache, "cname:" + baseName);
+	const infoName = (cBase !== "") ? cBase + "TypeInfo" : varName;
 	// Mark as defined so ensureTypeInfoDef doesn't duplicate
 	typeCacheSet(g.forwTypeCache, "typeInfoDef:" + baseName, baseName);
+	if (cBase !== "") {
+		typeCacheSet(g.forwTypeCache, "typeInfoDef:" + cBase, cBase);
+	}
 
-	// Emit declaration (non-static: other modules reference via extern for cross-module new)
-	addLine(sec(g, CSection.GlobalVars), "msTypeInfo " + varName + ";");
+	// Non-static: other modules reference via extern for cross-module new.
+	// $-generated types never leave their module — static keeps same-named
+	// sibling-module envs apart.
+	const linkage = isCompilerGenCName(g, baseName) ? "static msTypeInfo " : "msTypeInfo ";
+	addLine(sec(g, CSection.GlobalVars), linkage + infoName + ";");
 
 	// Emit field assignments to DatInit (runs before user code)
 	if (d.initializer !== null && d.initializer.kind === NodeKind.ObjectLiteral) {
@@ -713,27 +756,27 @@ function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
 			const key = od.keys[i];
 			if (key === "name") {
 				// name field: emit C string literal (const char*), not msString
-				addLine(datInit, `  ${varName}.name = "${baseName}";`);
+				addLine(datInit, `  ${infoName}.name = "${baseName}";`);
 			} else if (key === "destroyFn") {
 				// destroyFn: cast to msDestroyProc (void(*)(void*)) for C type safety
 				const val = genExpr(g, p, od.properties[i]);
 				if (val === "MS_NIL" || val === "NULL") {
-					addLine(datInit, `  ${varName}.destroyFn = NULL;`);
+					addLine(datInit, `  ${infoName}.destroyFn = NULL;`);
 				} else {
-					addLine(datInit, `  ${varName}.destroyFn = (msDestroyProc)${val};`);
+					addLine(datInit, `  ${infoName}.destroyFn = (msDestroyProc)${val};`);
 				}
 			} else if (key === "traceFn") {
 				// traceFn: cast to msTraceProc (void(*)(void*, void*)) for C type safety
 				const val = genExpr(g, p, od.properties[i]);
 				if (val === "MS_NIL" || val === "NULL") {
-					addLine(datInit, `  ${varName}.traceFn = NULL;`);
+					addLine(datInit, `  ${infoName}.traceFn = NULL;`);
 				} else {
-					addLine(datInit, `  ${varName}.traceFn = (msTraceProc)${val};`);
+					addLine(datInit, `  ${infoName}.traceFn = (msTraceProc)${val};`);
 				}
 			} else {
 				// isCyclic: use genExpr directly
 				const val = genExpr(g, p, od.properties[i]);
-				addLine(datInit, `  ${varName}.${key} = ${val};`);
+				addLine(datInit, `  ${infoName}.${key} = ${val};`);
 			}
 		}
 	}
