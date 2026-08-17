@@ -526,7 +526,7 @@ static int msWtf8EncodeSurrogate(uint32_t unit, char* out) {
 	return 3;
 }
 
-msString msStringCharAt(msString s, int64_t idx) {
+msString msStringCharAtSlow(msString s, int64_t idx) {
 	if (idx < 0 || s.p == NULL || idx >= s.len) return MS_EMPTY_STRING;
 	const unsigned char* p = (const unsigned char*)s.p->data;
 	const unsigned char* end = p + s.len;

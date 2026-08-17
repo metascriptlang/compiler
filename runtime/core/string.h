@@ -238,7 +238,22 @@ int64_t msStringCount(msString s, msString sub);
 /* ===== Extraction ===== */
 
 /* Single character as new string */
-msString msStringCharAt(msString s, int64_t idx);
+msString msStringCharAtSlow(msString s, int64_t idx);
+
+extern const msString msCharTable[128];
+
+/* An already-verified-ASCII string indexes by byte, so the interned table
+   answers without a call. Unknown/false flag, non-ASCII or out of range goes
+   out of line — including the flag-computing path, which must stay one place. */
+static inline msString msStringCharAt(msString s, int64_t idx) {
+	if (s.p != NULL && (uint64_t)idx < (uint64_t)s.len) {
+		const int64_t cap = s.p->cap;
+		if ((cap & (MS_ASCII_CHECKED | MS_ASCII_FLAG)) == (MS_ASCII_CHECKED | MS_ASCII_FLAG)) {
+			return msCharTable[(unsigned char)s.p->data[idx]];
+		}
+	}
+	return msStringCharAtSlow(s, idx);
+}
 
 /* Character code at index (UTF-16 code unit, TypeScript parity). Returns -1 if out of range. */
 int64_t msStringCharCodeAt(msString s, int64_t idx);
