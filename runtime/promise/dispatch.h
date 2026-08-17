@@ -82,6 +82,14 @@ int msProcessTimers(msDispatcher* d, bool* didWork);
 void msProcessCallbacks(msDispatcher* d, bool* didWork);
 int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs);
 
+/* ===== Exit drain (drain.c) — Node semantics: program ends when the loop is empty ===== */
+void msDrainUntilIdle(void);
+int msReportOrphanFailures(void);
+void msNoteOrphanFailure(void* fut);
+void msClearOrphanFailure(void* fut);
+/* Live busy-worker count (pool.c; 0 on single-threaded targets) */
+int32_t msPoolBusyPeek(void);
+
 bool msRunOnce(int timeoutMs);
 int32_t msGetWakePipeFd(void);
 void msPoll(int timeoutMs);

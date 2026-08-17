@@ -71,6 +71,7 @@ bool msPoolHelpOne(void);
  * Re-increment when exiting the wait loop. */
 void msPoolBusyDec(void);
 void msPoolBusyInc(void);
+int32_t msPoolBusyPeek(void);
 
 /* Wake a specific worker by scheduler ID (targeted: no spurious wakeups) */
 void msPoolWakeWorker(int schedulerID);

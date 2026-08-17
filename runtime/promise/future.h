@@ -84,6 +84,12 @@ typedef struct msFutureBase {
 	void (*valueDestructor)(void*); /* optional: frees value on destroy (combinators) */
 	msFutureCb* callbacks;
 	msFutureCb* cbTail;   /* tail pointer for O(1) append */
+	/* Set when a reader consumes the failure (msFutureRaiseFrom) or a callback
+	 * is attached to the already-failed future. A future that fires FAILED
+	 * with no callback AND errorObserved==false is an unhandled rejection.
+	 * Atomic because poll-style readers (waitFor) may run on worker threads
+	 * while the dispatcher fires callbacks on the main thread. */
+	_Atomic(bool) errorObserved;
 } msFutureBase;
 
 /* Verify: finished is the first field. awaitGroup.c uses msFutureBaseMinimal
@@ -207,6 +213,12 @@ static inline void msFutureDestroyInner(void* fp) {
 /* Non-DRC destroy (direct call) */
 static inline void msFutureDestroy(void* f) { msFutureDestroyInner(f); }
 
+/* Orphan-failure tracking (drain.c). A future that completes FAILED with no
+ * callback attached and is never awaited/rejection-read is an unhandled
+ * rejection: reported at process exit with exit code 1 (Node parity). */
+void msNoteOrphanFailure(void* fut);
+void msClearOrphanFailure(void* fut);
+
 /* Standard reference future.finished parity */
 static inline bool msFutureFinished(void* fp) {
 	return atomic_load_explicit(&((msFutureBase*)fp)->finished, memory_order_acquire);
@@ -222,6 +234,9 @@ static inline void msFutureFireCallbacks(msFutureBase* f) {
 	msFutureCb* cb = f->callbacks;
 	f->callbacks = NULL;
 	f->cbTail = NULL;
+	if (f->failed && cb == NULL && !atomic_load_explicit(&f->errorObserved, memory_order_relaxed)) {
+		msNoteOrphanFailure(f);
+	}
 	while (cb) {
 		msCallSoon((msClosure){ .fn = (msClosureFn)cb->fn, .env = cb->env });
 		msFutureCb* next = cb->next;
@@ -269,6 +284,10 @@ static inline bool msFutureCancelled(void* fp) { return ((msFutureBase*)fp)->can
 static inline void msFutureAddCallback(void* fp, msClosure cb) {
 	msFutureBase* f = (msFutureBase*)fp;
 	if (atomic_load_explicit(&f->finished, memory_order_acquire)) {
+		if (f->failed) {
+			atomic_store_explicit(&f->errorObserved, true, memory_order_relaxed);
+			msClearOrphanFailure(f);
+		}
 		msCallSoon(cb);
 		return;
 	}

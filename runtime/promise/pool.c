@@ -53,6 +53,10 @@ static inline int msCtz64(uint64_t x) { unsigned long idx; _BitScanForward64(&id
 static _Atomic(int32_t) msPoolBusyCount = 0;
 static int32_t msPoolWorkerCount = 0;
 
+int32_t msPoolBusyPeek(void) {
+	return atomic_load_explicit(&msPoolBusyCount, memory_order_relaxed);
+}
+
 /* Thread-local: true when current thread is a pool worker executing a task.
  * Used by shouldSend: only inline when caller is already a worker (recursive spawn).
  * Main thread always queues to ensure initial fan-out reaches workers.

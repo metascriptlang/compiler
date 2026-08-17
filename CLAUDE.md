@@ -128,7 +128,7 @@ Call it explicitly, in the shape its signature requires:
 | Signature | Call site |
 |---|---|
 | `main(): void` | `main();` |
-| `async main()` | `await main();` — a bare call leaves a future nobody waits on (C) / a floating promise (JS) |
+| `async main()` | `await main();` — preferred; a bare call also runs to completion (the exit drain pumps pending continuations) but style-wise reads like a bug |
 | `main(): number` where the code is the exit status | `process.exit(main());` |
 
 `process.exit(code = 0)` is the exit-code surface: C routes to `msExit`
@@ -137,6 +137,18 @@ Call it explicitly, in the shape its signature requires:
 applied at a zero-arg call — writing only `exit(code: int32 = 0)` there fails with
 *No matching overload*. Both paths run `msTestErrorFlag()` first, so a pending exception is
 still reported when the program exits explicitly.
+
+**Exit = event loop empty, orphan rejections = exit 1 (Node semantics, 2026-08-18).**
+After the entry module's top-level code returns, the generated `main` wrapper runs
+`msDrainUntilIdle()` (`runtime/promise/drain.c`): pending timers, ready continuations and
+busy pool workers all complete before the process exits — a dropped `work();` with an
+`await sleepAsync(...)` inside runs its continuation, like Node. Then
+`msReportOrphanFailures()` prints `Error: unhandled rejection: <msg>` per future that
+completed FAILED with no observer (no callback, never read) and forces exit code 1.
+`process.exit()` skips both — abrupt termination, Node parity. Poll-style readers
+(`waitFor`) set an `errorObserved` bit on the future at read time, so a failure that WILL
+be observed later is not misreported; the registry is in `drain.c` (pinned future, released
+on observe/report — keeps the DRC ledger balanced; see guard `spawnThrowUnwind`).
 
 **Migrating a program that relied on the auto-call.** Symptom: it builds and links clean,
 prints nothing, exits 0. Fix is one line at the bottom of the entry module, per the table

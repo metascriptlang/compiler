@@ -80,6 +80,10 @@ void msTestErrorFlag(void) {
 
 void msFutureRaiseFrom(msFutureBase* f) {
 	msErr = true;
+	if (f != NULL) {
+		atomic_store_explicit(&f->errorObserved, true, memory_order_relaxed);
+		msClearOrphanFailure(f);
+	}
 	void* err = (f != NULL) ? f->error : NULL;
 	if (err != NULL) {
 		msCurrException = (msException*)err;
