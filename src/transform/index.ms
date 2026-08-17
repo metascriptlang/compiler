@@ -16,7 +16,8 @@
 // 14. resultFieldCheck      — safety checks on $result_N.value/.error access
 // 15. switchLower           — user switch → the match engine (ordinal discs pass through)
 //     matchLower            — sees simplest AST
-// 16. tailCallLower         — tail recursion → while (sees fully normalized AST)
+// 16. tailCallLower         — tail recursion → while + loop-carried shadow locals (both targets)
+//     paramReassignLower    — assigned params → owned shadow locals (C only: DRC sink/destroy)
 // 17. asyncDesugar          — await → yield, async → generator (before generatorLower)
 // 18. generatorLower        — function* → state machine returning iterator object
 // 19. varHoist              — hoist var declarations to function scope top (JS semantics)
@@ -52,6 +53,7 @@ import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
 import { lowerTailCall } from "./lowering/tailCallLower";
+import { lowerParamReassign } from "./lowering/paramReassignLower";
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
@@ -110,7 +112,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = lowerResultConstructors(result); }
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
-	if (!jsBackend) { result = lowerTailCall(result, ctx); }
+	result = lowerTailCall(result, ctx);
+	if (!jsBackend) { result = lowerParamReassign(result, ctx); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); }
 	if (!jsBackend) { result = lowerSpawnGroup(result, ctx); }
 	if (!jsBackend) { result = lowerAsync(result, ctx); }
