@@ -180,7 +180,7 @@ function lowerTernaryInVar(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 // return cond ? a : b  →  <cond pre>; if (cond) { return a; } else { return b; }
-function lowerTernaryInReturn(stmt: Node, ctx: TransformContext): Node[] {
+export function lowerTernaryInReturn(stmt: Node, ctx: TransformContext): Node[] {
 	const rd = stmt.data as ReturnStmtData;
 	const cd = rd.argument.data as ConditionalExprData;
 	const loc = stmt.location;

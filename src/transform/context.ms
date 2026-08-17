@@ -88,3 +88,13 @@ export function freshTempSym(ctx: TransformContext, prefix: string, t: Type | nu
 	const name = freshTemp(ctx, prefix);
 	return makeSymbol(name, SymbolKind.Variable, t !== null ? t : noneType(), false);
 }
+
+// Owned long-lived synthetic local. Must NOT be $-prefixed: the DRC injector
+// treats $-prefixed locals with identifier inits as transform-managed cursors
+// (no copy/sink/destroy), which leaks any owned value parked in them.
+export function freshOwnedSym(ctx: TransformContext, prefix: string, t: Type | null): Symbol {
+	const n = ctx.tempCounter;
+	ctx.tempCounter += 1;
+	const name = "__" + prefix + "_" + n.toString();
+	return makeSymbol(name, SymbolKind.Variable, t !== null ? t : noneType(), false);
+}
