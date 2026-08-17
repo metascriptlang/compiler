@@ -71,6 +71,7 @@ function tailCallVisitor(ctx: TransformContext): (node: Node) => Node {
 function lowerBoundRoutine(node: Node, ctx: TransformContext): Node {
 	const d = node.data as VariableDeclData;
 	if (d.declName === "" || d.initializer === null) return node;
+	if (d.declKind !== DeclKind.Const) return node;
 	const init = d.initializer;
 	if (init.kind === NodeKind.ArrowFunction) {
 		const ad = init.data as ArrowFunctionData;
