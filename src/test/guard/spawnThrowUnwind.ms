@@ -35,7 +35,11 @@ function work(cc: string, jobs: Job[]): int32 {
         }));
     }
     let total = 0;
-    for (const f of futures) total = total + waitFor(f);
+    let bad = 0;
+    for (const f of futures) {
+        try { total = total + waitFor(f); } catch (e) { bad = bad + 1; }
+    }
+    if (bad > 0) { throw "boom"; }
     return total;
 }
 
