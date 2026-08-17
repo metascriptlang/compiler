@@ -190,6 +190,26 @@ export function mangleProcName(name: string, moduleName: string, id: number): st
 	return `${mangleQualified(name, moduleName)}_u${id}`;
 }
 
+// ===== Type Name Mangling (module-qualified identity) =====
+// Reference parity: Nim getTypeName — the C type name carries the declaring
+// symbol's identity (Nim appends sigHash; here the module qualifier, matching
+// the proc/global convention). extern/ImportC types keep the raw C name
+// (Nim sfImportc/sfExportc rule). Monomorphized instances ("__") and
+// compiler-generated ("$") names keep their existing spelling.
+
+export function mangledTypeName(sym: Symbol | null, name: string): string {
+	if (sym !== null) {
+		const early = symExternOrImportName(sym, name);
+		if (early !== "") return early;
+	}
+	if (name.length > 0 && name.slice(0, 1) === "$") return mangle(name);
+	if (name.indexOf("__", 0) >= 0) return mangle(name);
+	if (sym !== null && sym.modulePath !== "") {
+		return mangleQualified(name, mangleModuleName(sym.modulePath));
+	}
+	return mangle(name);
+}
+
 // Static field global name: "Counter.total" → "Counter__total"
 export function staticFieldCName(qualifiedName: string): string {
 	const dotIdx = qualifiedName.indexOf(".");
