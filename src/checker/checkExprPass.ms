@@ -1465,6 +1465,24 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// Reference parity: semArrayConstr does expectedType.skipTypes(abstractRange)
 			// which strips Sink/Lent/Var wrappers before checking Array kind
 			let arrExpected = skipModifier(expectedType);
+			// `T[] | null` (TS nullable array): the literal checks against the array
+			// member and the surrounding fit wraps it — the union counterpart of the
+			// Ref<Array> peel below, so it runs first and hands that peel its member.
+			// Without it an empty [] keeps an inferred element type all the way into
+			// the emission gate.
+			if (arrExpected !== null && arrExpected.kind === TypeKind.Union
+					&& arrExpected.typeChildren !== null && arrExpected.typeChildren.length === 2) {
+				const ua = arrExpected.typeChildren[0];
+				const ub = arrExpected.typeChildren[1];
+				const uNonNull = (ua !== null && ub !== null && ub.kind === TypeKind.Null) ? ua
+					: ((ua !== null && ub !== null && ua.kind === TypeKind.Null) ? ub : null);
+				if (uNonNull !== null
+						&& (uNonNull.kind === TypeKind.Array || uNonNull.kind === TypeKind.SizedArray
+							|| (uNonNull.kind === TypeKind.Ref && uNonNull.typeReturn !== null
+								&& uNonNull.typeReturn.kind === TypeKind.Array))) {
+					arrExpected = uNonNull;
+				}
+			}
 			// reference array: an expected Ref<Array<T>> checks the literal against the
 			// inner value array, but tags the result Ref so nativeLower boxes it onto the heap.
 			let refArrayWrap: Type | null = null;
@@ -5273,6 +5291,13 @@ function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		// the binder records a TrueCondition on x.field; here we narrow propType.
 		// Without this, accessing fields on a checked-non-null member-expr fails
 		// with "Property 'foo' does not exist on type 'T | null'".
+		// Assignment LHS: the declared type, not the flow-narrowed one — the
+		// identifier arm's leftPartOfAsgn rule, applied to the member write.
+		// Inside `if (x.f === null) { x.f = [] }` the RHS otherwise gets `null`
+		// as its contextual type and the literal never finds its donor.
+		if (ctx.initTracker.leftPartOfAsgn > 0) {
+			return propType;
+		}
 		const narrowed = getFlowTypeOfReference(node, propType);
 		return narrowed !== null ? narrowed : propType;
 	}
