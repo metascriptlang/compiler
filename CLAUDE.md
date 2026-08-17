@@ -147,9 +147,10 @@ swallows the status and turns a red guard green — forward it:
 **A module that is both a CLI and a test target needs a guard.** A test build still executes
 top-level code, so `src/index.ms` ends with `when (!testBuild) { process.exit(main()); }` and
 the test command sets that define (`src/index.ms:108`). Without it, `msc test src/index.ms`
-runs the CLI instead of the tests. `test` is a keyword and cannot be the flag name. The
-standard reference solves this with `isMainModule`, which we do not have — and which would
-*not* help here anyway, since the entry module is still the main module under `msc test`.
+runs the CLI instead of the tests. `test` is a keyword and cannot be the flag name. There is
+no entry-module predicate and none is wanted: nothing imports an entry module, and under
+`msc test` the entry module is still the entry — the discriminator is the build kind, not
+the module's position.
 
 **Why the auto-call went.** The trigger was `(mainSym.symFlags & SymbolFlag.Used) === 0`, so
 merely mentioning the name anywhere (`const g = main;`) silently disabled the program's entry
