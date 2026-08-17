@@ -739,6 +739,7 @@ function isAllStringCases(cases: Node[]): boolean {
 // Hash bucket entry: a guarded if-body for one string pattern within a hash bucket.
 interface HashBucket {
 	hash: int32;
+	test: Node;      // the case label: a hash constant on C, the string literal on js
 	guards: Node[];  // chained if-guards for patterns sharing this hash
 }
 
@@ -779,7 +780,9 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 		for (let j = 0; j < caseData.casePatterns.length; j += 1) {
 			const pat = caseData.casePatterns[j];
 			const strData = pat.data as StringLiteralData;
-			const hash = hashStringSigned(strData.value);
+			// js switches on the string itself (reference jsgen genCaseJS), so there
+			// is no hash to collide and every pattern gets its own case label.
+			const hash = ctx.jsBackend ? (0 as int32) : hashStringSigned(strData.value);
 
 			const body = wrapArmBody(caseData.caseBody, mode, varName, assignSym, loc);
 			let guardedBlock = body;
@@ -791,12 +794,12 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 				guardedBlock = makeBlock(guardedBodyStmts, loc);
 			}
 			const guard = makeBinary(makeTypedIdent(tempName, discType, loc), "===", pat, loc);
-			const guardedIf = makeIf(guard, guardedBlock, makeBlock([], loc), loc);
+			const guardedIf = ctx.jsBackend ? guardedBlock : makeIf(guard, guardedBlock, makeBlock([], loc), loc);
 
 			// Find existing bucket or create new one
 			let found = false;
 			let bi = 0;
-			while (bi < buckets.length) {
+			while (!ctx.jsBackend && bi < buckets.length) {
 				if (buckets[bi].hash === hash) {
 					buckets[bi].guards.push(guardedIf);
 					found = true;
@@ -807,7 +810,7 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 			if (!found) {
 				const guards: Node[] = [];
 				guards.push(guardedIf);
-				buckets.push({ hash, guards });
+				buckets.push({ hash, test: ctx.jsBackend ? pat : makeNumber(hash, loc), guards });
 			}
 		}
 	}
@@ -821,18 +824,22 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 		for (let gi = 0; gi < bucket.guards.length; gi += 1) {
 			caseStmts.push(bucket.guards[gi]);
 		}
-		const hashNode = makeNumber(bucket.hash, loc);
 		const tests: Node[] = [];
-		tests.push(hashNode);
+		tests.push(bucket.test);
 		switchCases.push(makeSwitchCase(tests, caseStmts, false, loc));
 	}
 
-	// switch (msStringHash(temp)) for C, switch (hashStringSigned(temp)) for JS
-	const hashFn = ctx.jsBackend ? "hashStringSigned" : "msStringHash";
-	const hashCallArgs: Node[] = [];
-	hashCallArgs.push(makeTypedIdent(tempName, discType, loc));
-	const hashCall = makeCall(makeIdent(hashFn, loc), hashCallArgs, loc);
-	const switchNode = makeSwitch(hashCall, switchCases, loc);
+	// C cannot switch on a string, so it switches on msStringHash (a runtime symbol
+	// always linked). js switches on the string itself — reference jsgen genCaseJS —
+	// which is both native and strictly less work than hashing then comparing.
+	const discNode = makeTypedIdent(tempName, discType, loc);
+	let switchDisc = discNode;
+	if (!ctx.jsBackend) {
+		const hashCallArgs: Node[] = [];
+		hashCallArgs.push(discNode);
+		switchDisc = makeCall(makeIdent("msStringHash", loc), hashCallArgs, loc);
+	}
+	const switchNode = makeSwitch(switchDisc, switchCases, loc);
 
 	const stmts: Node[] = [];
 	if (needsFlag) {
