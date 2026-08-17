@@ -14,7 +14,7 @@ import {
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
 	emitProcLocalsLine, lookupLocalName, typeCacheGet,
 } from "./context";
-import { mangle, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName } from "./names";
+import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
@@ -55,8 +55,16 @@ function classHasInitFn(innerType: Type): boolean {
 	return decl !== null && decl.kind === NodeKind.ClassDecl;
 }
 
+// Companion functions (ctor _init, DRC hooks) keep the checker-level bare
+// spelling; the C struct name is module-qualified. Reverse map registered by
+// the gen* emitters and registerDeclCName.
+function bareTypeName(g: CGen, cName: string): string {
+	const bare = typeCacheGet(g.typeCache, "bare:" + cName);
+	return bare !== "" ? bare : cName;
+}
+
 function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void {
-	const initName = initFnName(cName);
+	const initName = initFnName(bareTypeName(g, cName));
 	const protoKey = "proto:" + initName;
 	if (!nameSetHas(g.declaredProcs, protoKey)) {
 		nameSetAdd(g.declaredProcs, protoKey);
@@ -769,6 +777,19 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			let cName = "";
 			if (idSym !== null && idSym.nativeName !== "") {
 				cName = idSym.nativeName;
+			} else if (idSym !== null && idSym.symbolKind === SymbolKind.EnumMember && node.nodeType !== null) {
+				// Checker rewrote Enum.Member → Identifier("Enum_Member"); rebuild the
+				// C name from the enum TYPE so the qualified spelling matches the
+				// #define emitted by genEnumDecl/genEnumType.
+				const nt = node.nodeType;
+				const enumT = nt.kind === TypeKind.Enum ? nt
+					: (nt.kind === TypeKind.EnumLiteral && nt.typeReturn !== null && nt.typeReturn.kind === TypeKind.Enum ? nt.typeReturn : null);
+				if (enumT !== null && d.name.startsWith(enumT.typeName + "_")) {
+					const member = d.name.slice(enumT.typeName.length + 1, d.name.length);
+					cName = mangledTypeName(enumT.sym, enumT.typeName) + "_" + mangle(member);
+				} else {
+					cName = safe;
+				}
 			} else if (isModuleGlobalVar(idSym)) {
 				// Module-level variable: compute module-qualified C name on demand.
 				// Matches what genGlobalVar emits in the defining module and what the
@@ -985,8 +1006,9 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			// `methodToFunction` transform) — no `<Class>_new` wrapper exists any
 			// more. This matches the inline pattern already used for class-without-
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
-			const initName = initFnName(cName);
-			const ctorEntry = lookupCtorDefaults(cName + "_new");
+			const bareNew = bareTypeName(g, cName);
+			const initName = initFnName(bareNew);
+			const ctorEntry = lookupCtorDefaults(bareNew + "_new");
 			let ctorChildren: Type[] = null as unknown as Type[];
 			if (ctorEntry !== null && ctorEntry.fnType !== null) {
 				ctorChildren = ctorEntry.fnType.typeChildren;
@@ -1114,8 +1136,9 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void
 			parentName = getTypeDesc(g, parentSym.symbolType);
 		}
 		if (parentName !== "") {
-			const parentInitName = initFnName(parentName);
-			const parentEntry = lookupCtorDefaults(parentName + "_new");
+			const parentBare = bareTypeName(g, parentName);
+			const parentInitName = initFnName(parentBare);
+			const parentEntry = lookupCtorDefaults(parentBare + "_new");
 			let parentChildren: Type[] = null as unknown as Type[];
 			if (parentEntry !== null && parentEntry.fnType !== null) {
 				parentChildren = parentEntry.fnType.typeChildren;
@@ -1137,7 +1160,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void
 				argList = argList + ", " + genExpr(g, p, cd.arguments[ai]);
 				ai += 1;
 			}
-			ctx.results.push(`${parentName}_init(${argList})`);
+			ctx.results.push(`${parentInitName}(${argList})`);
 			return;
 		}
 	}
@@ -1820,7 +1843,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				emitProcLocalsLine(p, `${cName}* ${tmp};`);
 				emitStmtsLine(p, `${tmp} = ${genAllocTyped(g, cName)};`);
 				if (memberValue.typeName !== "" && hasAsgnFlag(memberValue)) {
-					const hookName = cName + "Copy";
+					const hookName = bareTypeName(g, cName) + "Copy";
 					ensureDrcProto(g, hookName);
 					emitStmtsLine(p, `${hookName}(${tmp}, &((${inner}).v${pvi}));`);
 				} else {

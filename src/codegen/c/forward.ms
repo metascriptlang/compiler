@@ -5,7 +5,7 @@
 // Extracted to break cycles: expressions↔declarations, statements↔declarations, expressions↔index.
 
 import { Type, TypeKind, Symbol } from "../../ast/node";
-import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, } from "./context";
+import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, typeCacheGet, } from "./context";
 import { getTypeDesc, isNrvoReturnType, shouldIndirectParam, shouldConstParam } from "./types";
 import { findExportedSymbol } from "../../checker/context";
 
@@ -92,7 +92,12 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 	nameSetAdd(g.declaredProcs, callee);
 
 	// Extract type name prefix: "TypeNameDestroy" → "TypeName"
-	const typeName = callee.slice(0, callee.length - suffix.length);
+	const bareName = callee.slice(0, callee.length - suffix.length);
+	// Hook names keep the checker-level spelling, but the C struct they take is
+	// module-qualified (mangledTypeName). The gen* emitters register the mapping;
+	// a TU that never materializes the type falls back to the bare opaque name.
+	const mapped = typeCacheGet(g.typeCache, "cname:" + bareName);
+	const typeName = mapped !== "" ? mapped : bareName;
 	// The full typedef block only exists in TUs where getTypeDesc ran for the
 	// type — a TU referencing just the hook (anon consumer, or the defining
 	// module whose TypeInfo cites the hook without otherwise using the type)
