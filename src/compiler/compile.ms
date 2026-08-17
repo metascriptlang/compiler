@@ -946,6 +946,8 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 		}
 	}
 
+	rtFiles = rtFiles + "\n" + "runtime/promise/drain.c";
+
 	if (rtFiles === "") return "";
 	return processCompileDirectives(rtFiles, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 }

@@ -244,6 +244,8 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 			// WASI crt1 provides _start which calls main().
 			addLine(b, "int main(void) {");
 			addLine(b, "  MsMain();");
+			addLine(b, "  msDrainUntilIdle();");
+			addLine(b, "  if (msReportOrphanFailures()) msProgramResult = 1;");
 			addLine(b, "  return msProgramResult;");
 			addLine(b, "}");
 		},
@@ -257,6 +259,8 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 			addLine(b, "  cmdCount = argc;");
 			addLine(b, "  gEnv = env;");
 			addLine(b, "  MsMain();");
+			addLine(b, "  msDrainUntilIdle();");
+			addLine(b, "  if (msReportOrphanFailures()) msProgramResult = 1;");
 			addLine(b, "  return msProgramResult;");
 			addLine(b, "}");
 		},
