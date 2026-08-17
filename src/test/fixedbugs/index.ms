@@ -121,3 +121,4 @@ import "./bug105ArrowExprBodyFit";
 import "./bug106LocalDeclRejected";
 import "./bug107MacroArgSourceForm";
 import "./bug108AwaitTopLevelExport";
+import "./bug109AssignmentIsStatement";
