@@ -298,7 +298,7 @@ export function makeLocRange(line: int32, column: int32, endLine: int32, endColu
 
 export type NodeData =
 	// Literal variants
-	| { value: number, isFloat: boolean, intVal: int64 }           // NumberLiteral
+	| { value: number, isFloat: boolean, intVal: int64, outOfRangeText: string, isBitPattern: boolean }           // NumberLiteral
 	| { value: string }                                            // StringLiteral
 	| { boolValue: boolean }                                       // BooleanLiteral
 	| { nullPlaceholder: boolean }                                 // NullLiteral (always true)
@@ -521,7 +521,7 @@ export type Expression = Node;
 // only needs magnitude. `intVal` is authoritative when !isFloat: a double cannot
 // round-trip an integer past 2^53, so the exact value would otherwise be lost in
 // the parser, before any backend sees it.
-export type NumberLiteralData = { value: number, isFloat: boolean, intVal: int64 };
+export type NumberLiteralData = { value: number, isFloat: boolean, intVal: int64, outOfRangeText: string, isBitPattern: boolean };
 export type StringLiteralData = { value: string };
 export type BooleanLiteralData = { boolValue: boolean };
 export type RegexLiteralData = { regexPattern: string };
