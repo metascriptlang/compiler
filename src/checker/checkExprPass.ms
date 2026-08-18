@@ -2700,9 +2700,10 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	if (coercionCall !== null as unknown as Node) {
 		return coercionCall;
 	}
-	// Scope: only container element-repr is enforced here. General `!isAssignable`
-	// rejection is intentionally NOT applied — see NIM-REF.md row 72 (terminal
-	// design; two intentional divergences: TS non-null types + Ref→Ptr cursor).
+	// Scope: the memory-safety class only — container element-repr and pointer vs
+	// scalar. General `!isAssignable` rejection is intentionally NOT applied — see
+	// NIM-REF.md "Container element assignability + enforcement site" (terminal;
+	// two intentional divergences: TS non-null types + Ref→Ptr cursor).
 	if (isReinterpretUnsafe(exprType, formal)) {
 		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — memory layout differs (pointer vs scalar, array element, shared field, or function signature repr); a raw cast would reinterpret, not convert (convert explicitly or provide an as" + (formal.typeName !== "" ? formal.typeName.slice(0, 1).toUpperCase() + formal.typeName.slice(1, formal.typeName.length) : "X") + " extension)", expr.location.line, expr.location.column);
 	}
