@@ -53,6 +53,8 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 		const sn = nonNullMemberOfNullable(source);
 		if (sn !== null) return isReinterpretUnsafe(sn, target);
 	}
+	if ((isPointerShapedRepr(source) && isScalarRepr(target))
+		|| (isScalarRepr(source) && isPointerShapedRepr(target))) return true;
 	if (source.kind !== target.kind) return false;
 	if (source.kind === TypeKind.Array || source.kind === TypeKind.Span
 		|| source.kind === TypeKind.Ptr || source.kind === TypeKind.SizedArray) {
@@ -93,6 +95,20 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 		return false;
 	}
 	return false;
+}
+
+function isPointerShapedRepr(t: Type | null): boolean {
+	if (t === null) return false;
+	return t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr
+		|| t.kind === TypeKind.Array || t.kind === TypeKind.Span
+		|| t.kind === TypeKind.SizedArray || t.kind === TypeKind.Function;
+}
+
+function isScalarRepr(t: Type | null): boolean {
+	if (t === null) return false;
+	if (isNumeric(t)) return true;
+	return t.kind === TypeKind.Boolean || t.kind === TypeKind.BooleanLiteral
+		|| t.kind === TypeKind.Enum || t.kind === TypeKind.EnumLiteral;
 }
 
 // msString-repr family: string, string literals, and pure string-literal unions
