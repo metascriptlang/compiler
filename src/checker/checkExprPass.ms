@@ -341,8 +341,9 @@ function foldComptimeNodeAliasArgs(ctx: CheckerContext, args: Node[]): void {
 function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const result = match (node.kind) {
 		NodeKind.NumberLiteral => {
+			reportLiteralRange(ctx, node);
 			if (expectedType !== null && isIntegerType(expectedType)) {
-				if (literalFitsInType(node, expectedType)) {
+				if (literalFitsInType(node, expectedType, false)) {
 					node.nodeType = expectedType; return;
 				} else if (isNodeIntLit(node)) {
 					// Reference parity: standard reference's type change diagnostic emits compile-time error for out-of-range literals
@@ -362,7 +363,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				// fits `float32 | string | null` (first numeric member wins).
 				for (const child of expectedType.typeChildren) {
 					if (child === null) continue;
-					if (isIntegerType(child) && literalFitsInType(node, child)) {
+					if (isIntegerType(child) && literalFitsInType(node, child, false)) {
 						node.nodeType = child; return;
 					}
 					if (child.kind === TypeKind.Float64 || child.kind === TypeKind.Float32
@@ -824,11 +825,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			let effLeft = leftType;
 			let effRight = rightType;
 			if (isIntegerType(leftType) && rightType !== null
-				&& isNodeIntLit(d.right) && literalFitsInType(d.right, leftType)) {
+				&& isNodeIntLit(d.right) && literalFitsInType(d.right, leftType, false)) {
 				effRight = leftType;
 				d.right.nodeType = leftType;
 			} else if (isIntegerType(rightType) && leftType !== null
-				&& isNodeIntLit(d.left) && literalFitsInType(d.left, rightType)) {
+				&& isNodeIntLit(d.left) && literalFitsInType(d.left, rightType, false)) {
 				effLeft = rightType;
 				d.left.nodeType = rightType;
 			}
@@ -911,6 +912,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const d = node.data as UnaryExprData;
 			// Propagate expectedType through unary +/- for literal coercion (e.g., -128 → int8)
 			const unaryExpected = (d.unaryOp === "-" || d.unaryOp === "+") ? expectedType : null;
+			if (d.unaryOp === "-" && isNodeIntLit(d.operand)
+				&& unaryExpected !== null && isIntegerType(unaryExpected)) {
+				checkNegatedIntLiteral(ctx, d.operand, unaryExpected);
+				node.nodeType = unaryExpected;
+				return;
+			}
 			checkExpr(ctx, d.operand, unaryExpected);
 			const operandType = d.operand.nodeType;
 			// Bitwise NOT: integer/enum = ok, number = warn, other = error
@@ -2257,20 +2264,71 @@ function isNodeIntLit(node: Node): boolean {
 	return d.value % 1 === 0;
 }
 
-function literalFitsInType(node: Node, target: Type): boolean {
+// INT64_MIN is the one int64 that is its own negation.
+function isInt64Min(v: int64): boolean {
+	return v < 0 && ((0 - (v as uint64)) as int64) === v;
+}
+
+// Nim splits this in two. A BIT-PATTERN literal may fill the whole UNSIGNED
+// width of its target and still be legal — `0x80` as int8 is -128, deliberately
+// (lexer.nim:494-509). A DECIMAL literal is held to the target's SIGNED range
+// (lexer.nim:536-548). `negated` is the unary minus the caller folded in: the
+// token itself is always a magnitude, because the lexer never eats the sign.
+function literalFitsInType(node: Node, target: Type, negated: boolean): boolean {
 	if (!isNodeIntLit(node)) return false;
-	const v = (node.data as NumberLiteralData).value;
+	const d = node.data as NumberLiteralData;
+	const mag = d.value;
+	if (d.isBitPattern) {
+		return match (target.kind) {
+			TypeKind.Int8   => mag <= 255,
+			TypeKind.Int16  => mag <= 65535,
+			TypeKind.Int32  => mag <= 4294967295,
+			TypeKind.Int64  => true,
+			TypeKind.Uint8  => mag <= 255,
+			TypeKind.Uint16 => mag <= 65535,
+			TypeKind.Uint32 => mag <= 4294967295,
+			TypeKind.Uint64 => true,
+			_ => false,
+		};
+	}
+	const v = negated ? 0 - mag : mag;
 	return match (target.kind) {
 		TypeKind.Int8   => v >= -128 && v <= 127,
 		TypeKind.Int16  => v >= -32768 && v <= 32767,
 		TypeKind.Int32  => v >= -2147483648 && v <= 2147483647,
-		TypeKind.Int64  => true,
+		// Past 2^53 the double cannot answer this, so the magnitude is read off
+		// intVal: a negative bit pattern means the magnitude reached 2^63, which
+		// only a negated literal may do, and only exactly.
+		TypeKind.Int64  => d.intVal >= 0 || (negated && isInt64Min(d.intVal)),
 		TypeKind.Uint8  => v >= 0 && v <= 255,
 		TypeKind.Uint16 => v >= 0 && v <= 65535,
 		TypeKind.Uint32 => v >= 0 && v <= 4294967295,
-		TypeKind.Uint64 => v >= 0,
+		TypeKind.Uint64 => !negated || mag === 0,
 		_ => false,
 	};
+}
+
+// The parser decides this on the digits: at the boundary the double in `value`
+// cannot separate 2^64-1 from 2^64, and the position the diagnostic needs only
+// exists here (parse errors carry line 0).
+function reportLiteralRange(ctx: CheckerContext, node: Node): void {
+	const text = (node.data as NumberLiteralData).outOfRangeText;
+	if (text !== "") {
+		addError(ctx, "number out of range: '" + text + "'", node.location.line, node.location.column);
+	}
+}
+
+// A minus directly in front of a number literal belongs to that literal's range
+// rule — Nim folds it onto the token in the lexer (lexer.nim:333). Checked here
+// because the operand on its own is a magnitude and cannot tell the legal
+// -9223372036854775808 from an int64 overflow.
+function checkNegatedIntLiteral(ctx: CheckerContext, lit: Node, target: Type): void {
+	reportLiteralRange(ctx, lit);
+	if (!literalFitsInType(lit, target, true)) {
+		const mag = (lit.data as NumberLiteralData).value;
+		addError(ctx, "cannot convert -" + mag + " to " + typeDisplayName(target), lit.location.line, lit.location.column);
+	}
+	lit.nodeType = target;
 }
 
 // ===== Coercion Protocol — `as<TargetType>` convention =====
