@@ -143,7 +143,7 @@ function foldUnary(node: Node): Node {
 			const od = d.operand.data as NumberLiteralData;
 			const nv = od.value;
 			const result = match (d.unaryOp) {
-				"-" => od.isFloat ? makeNumber(0 - nv, loc) : makeIntNumber(0 - od.intVal, loc),
+				"-" => od.isFloat ? makeNumber(0 - nv, loc) : makeIntNumber((0 - (od.intVal as uint64)) as int64, loc),
 				"+" => od.isFloat ? makeNumber(nv, loc) : makeIntNumber(od.intVal, loc),
 				_ => node,
 			};
