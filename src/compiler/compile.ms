@@ -13,7 +13,7 @@ import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule } from "../codegen/js/jsgen";
-import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson } from "../codegen/js/sourcemap";
+import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
 import { escapeJSString } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
@@ -911,7 +911,9 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		for (let mi = 0; mi < moduleSmaps.length; mi += 1) {
 			appendInfo(combined, moduleSmaps[mi], (headerLines + moduleSmapLines[mi]) as int32);
 		}
-		writeOutput(`${outPath}.map`, toSourceMapJson(combined, basename(outPath), mapDirOf(outPath), readSourceText));
+		const stdRootForMap = config.stdPath;
+		const stdIgnored = ignoredFileIndexes(combined, (p: string): boolean => stdRootForMap !== "" && p.startsWith(stdRootForMap));
+		writeOutput(`${outPath}.map`, toSourceMapJson(combined, basename(outPath), mapDirOf(outPath), readSourceText, stdIgnored));
 		output = `${output}\n//# sourceMappingURL=${mapName}\n`;
 	}
 	writeOutput(outPath, output);
@@ -1893,7 +1895,8 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		ensureDir(dirname(outPath));
 		if (opts.sourcemap) {
 			const mapName = `${basename(outPath)}.map`;
-			writeOutput(`${outPath}.map`, toSourceMapJson(moduleSmaps[ui], basename(outPath), mapDirOf(outPath), readSourceText));
+			const stdIgnored = ignoredFileIndexes(moduleSmaps[ui], (p: string): boolean => stdRoot !== "" && p.startsWith(stdRoot));
+			writeOutput(`${outPath}.map`, toSourceMapJson(moduleSmaps[ui], basename(outPath), mapDirOf(outPath), readSourceText, stdIgnored));
 			code = `${code}\n//# sourceMappingURL=${mapName}\n`;
 		}
 		writeOutput(outPath, code);

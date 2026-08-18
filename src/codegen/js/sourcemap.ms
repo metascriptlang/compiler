@@ -10,6 +10,16 @@ import { relative } from "std/fs/path";
 // Reading the .ms text is the driver's job; this module stays free of I/O.
 export type SourceReader = (path: string) => string;
 
+export type SourceFilter = (path: string) => boolean;
+
+export function ignoredFileIndexes(info: SourceInfo, isIgnored: SourceFilter): int32[] {
+	const out: int32[] = [];
+	for (let i: int32 = 0; i < info.files.length; i += 1) {
+		if (isIgnored(info.files[i])) out.push(i);
+	}
+	return out;
+}
+
 const VLQ_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 // One position in the emitted JS that has a .ms origin. Each carries its own
@@ -193,7 +203,7 @@ function sourcesJson(info: SourceInfo, mapDir: string, read: SourceReader): stri
 
 // Every field is a delta against the previous segment; the generated column is
 // the one exception, resetting per line.
-export function toSourceMapJson(info: SourceInfo, file: string, mapDir: string, read: SourceReader): string {
+export function toSourceMapJson(info: SourceInfo, file: string, mapDir: string, read: SourceReader, ignored: int32[]): string {
 	let prevFile: int32 = 0;
 	let prevLine: int32 = 0;
 	let prevSourceColumn: int32 = 0;
@@ -223,7 +233,16 @@ export function toSourceMapJson(info: SourceInfo, file: string, mapDir: string, 
 		}
 		mappings = mappings + ";";
 	}
-	return `{"version":3,"file":"${jsonEscape(file)}",${sourcesJson(info, mapDir, read)},"names":[${jsonStringArray(info.names)}],"mappings":"${mappings}"}`;
+	let ignoreJson = "";
+	if (ignored.length > 0) {
+		let items = "";
+		for (let i: int32 = 0; i < ignored.length; i += 1) {
+			if (i > 0) { items = items + ","; }
+			items = `${items}${ignored[i]}`;
+		}
+		ignoreJson = `,"x_google_ignoreList":[${items}]`;
+	}
+	return `{"version":3,"file":"${jsonEscape(file)}",${sourcesJson(info, mapDir, read)},"names":[${jsonStringArray(info.names)}],"mappings":"${mappings}"${ignoreJson}}`;
 }
 
 // ===== Tests =====
@@ -301,7 +320,7 @@ test "appending re-indexes sources into the destination" {
 }
 
 test "map json carries version, source list and mappings" {
-	const json = toSourceMapJson(oneSegment("/a.ms", 0 as int32, 0 as int32, 0 as int32, 0 as int32), "out.js", "", noSource);
+	const json = toSourceMapJson(oneSegment("/a.ms", 0 as int32, 0 as int32, 0 as int32, 0 as int32), "out.js", "", noSource, []);
 	assert json.startsWith("{\"version\":3,");
 	assert json.includes("\"file\":\"out.js\"");
 	assert json.includes("\"sources\":[\"/a.ms\"]");
@@ -309,33 +328,33 @@ test "map json carries version, source list and mappings" {
 }
 
 test "a line with no segments is one bare semicolon" {
-	const json = toSourceMapJson(oneSegment("/a.ms", 2 as int32, 0 as int32, 0 as int32, 0 as int32), "out.js", "", noSource);
+	const json = toSourceMapJson(oneSegment("/a.ms", 2 as int32, 0 as int32, 0 as int32, 0 as int32), "out.js", "", noSource, []);
 	assert json.includes("\"mappings\":\";;AAAA;\"");
 }
 
 test "an empty map still parses" {
-	const json = toSourceMapJson(createSourceInfo(), "out.js", "", noSource);
+	const json = toSourceMapJson(createSourceInfo(), "out.js", "", noSource, []);
 	assert json.includes("\"mappings\":\"\"");
 	assert json.includes("\"sources\":[]");
 	assert json.includes("\"sourcesContent\":[]");
 }
 
 test "sources are relative to the map directory" {
-	const json = toSourceMapJson(oneSegment("/p/src/a.ms", 0 as int32, 0 as int32, 0 as int32, 0 as int32), "out.js", "/p/out/js", noSource);
+	const json = toSourceMapJson(oneSegment("/p/src/a.ms", 0 as int32, 0 as int32, 0 as int32, 0 as int32), "out.js", "/p/out/js", noSource, []);
 	assert json.includes("\"sources\":[\"../../src/a.ms\"]");
 }
 
 test "an unreadable source is null, a readable one is inlined" {
 	const info = oneSegment("/a.ms", 0 as int32, 0 as int32, 0 as int32, 0 as int32);
-	assert toSourceMapJson(info, "out.js", "", noSource).includes("\"sourcesContent\":[null]");
-	const withText = toSourceMapJson(info, "out.js", "", (p: string): string => "let a = 1;");
+	assert toSourceMapJson(info, "out.js", "", noSource, []).includes("\"sourcesContent\":[null]");
+	const withText = toSourceMapJson(info, "out.js", "", (p: string): string => "let a = 1;", []);
 	assert withText.includes("\"sourcesContent\":[\"let a = 1;\"]");
 }
 
 test "a named segment encodes its fifth field" {
 	const info = createSourceInfo();
 	recordSegment(info, 0 as int32, 0 as int32, internFile(info, "/a.ms"), 0 as int32, 0 as int32, internName(info, "alpha"));
-	const json = toSourceMapJson(info, "out.js", "", noSource);
+	const json = toSourceMapJson(info, "out.js", "", noSource, []);
 	assert json.includes("\"names\":[\"alpha\"]");
 	assert json.includes("\"mappings\":\"AAAAA;\"");
 }
@@ -353,4 +372,17 @@ test "json escape keeps astral runs intact" {
 	const astral = fromCodePoint(128512);
 	assert jsonEscape(astral) === astral;
 	assert jsonEscape(fromCodePoint(55296)) === "\\" + "ud800";
+}
+
+test "ignored sources land in x_google_ignoreList" {
+	const info = createSourceInfo();
+	recordSegment(info, 0 as int32, 0 as int32, internFile(info, "/std/a.ms"), 0 as int32, 0 as int32, -1 as int32);
+	recordSegment(info, 0 as int32, 4 as int32, internFile(info, "/app/b.ms"), 0 as int32, 0 as int32, -1 as int32);
+	const idx = ignoredFileIndexes(info, (p: string): boolean => p.startsWith("/std/"));
+	assert idx.length === 1;
+	assert idx[0] === 0;
+	const json = toSourceMapJson(info, "out.js", "", noSource, idx);
+	assert json.includes("\"x_google_ignoreList\":[0]");
+	const none = toSourceMapJson(info, "out.js", "", noSource, []);
+	assert !none.includes("x_google_ignoreList");
 }
