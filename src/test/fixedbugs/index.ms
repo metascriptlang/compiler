@@ -122,3 +122,4 @@ import "./bug106LocalDeclRejected";
 import "./bug107MacroArgSourceForm";
 import "./bug108AwaitTopLevelExport";
 import "./bug109AssignmentIsStatement";
+import "./bug110PointerScalarFit";
