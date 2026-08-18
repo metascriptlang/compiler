@@ -227,6 +227,19 @@ export function emitJoinedSafeStrings(gen: JSGenerator, items: string[], sep: st
 	}
 }
 
+// Params carry no own location in the AST, so the declaration's position is
+// the closest honest origin; the name still lets a debugger un-rename them.
+export function emitJoinedSafeParams(gen: JSGenerator, declNode: Node, items: string[], sep: string, safeFn: SafeNameFn): void {
+	if (items.length === 0) return;
+	markNamed(gen, declNode, items[0]);
+	emit(gen, safeFn(items[0]));
+	for (let i = 1; i < items.length; i += 1) {
+		emit(gen, sep);
+		markNamed(gen, declNode, items[i]);
+		emit(gen, safeFn(items[i]));
+	}
+}
+
 export function emitJoinedNodes(gen: JSGenerator, items: Node[], sep: string): void {
 	if (items.length === 0) return;
 	emitNode(gen, items[0]);

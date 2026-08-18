@@ -4,7 +4,7 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitBodyOrEmpty, lookupImportSpec } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
 
 // ===== Function Declaration =====
@@ -23,7 +23,7 @@ function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 	emit(gen, "(");
 	const savedThisName = gen.thisName;
 	if (d.params.length > 0 && d.params[0] === "this") { gen.thisName = "$this"; }
-	emitJoinedSafeStrings(gen, d.params, ", ", receiverSafeJsName);
+	emitJoinedSafeParams(gen, node, d.params, ", ", receiverSafeJsName);
 	emit(gen, ") ");
 	emitBodyOrEmpty(gen, d.fnBody);
 	gen.thisName = savedThisName;
@@ -134,7 +134,7 @@ function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): 
 	};
 	emit(gen, jsSymbolName(gen, member.resolvedSym, className + "_" + d.methodName));
 	emit(gen, "(");
-	emitJoinedSafeStrings(gen, skipThisParams(d.methodParams), ", ", safeJsName);
+	emitJoinedSafeParams(gen, member, skipThisParams(d.methodParams), ", ", safeJsName);
 	emit(gen, ") ");
 	emitBodyOrEmpty(gen, d.methodBody);
 	emitNewline(gen);
@@ -173,7 +173,7 @@ export function emitMethodDecl(gen: JSGenerator, node: Node): void {
 	};
 	emit(gen, d.methodName);
 	emit(gen, "(");
-	emitJoinedSafeStrings(gen, skipThisParams(d.methodParams), ", ", safeJsName);
+	emitJoinedSafeParams(gen, node, skipThisParams(d.methodParams), ", ", safeJsName);
 	emit(gen, ") ");
 	emitBodyOrEmpty(gen, d.methodBody);
 	emitNewline(gen);
@@ -185,7 +185,7 @@ export function emitConstructorDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as ConstructorDeclData;
 	emitIndent(gen);
 	emit(gen, "constructor(");
-	emitJoinedSafeStrings(gen, d.ctorParams, ", ", safeJsName);
+	emitJoinedSafeParams(gen, node, d.ctorParams, ", ", safeJsName);
 	emit(gen, ") ");
 	emitBodyOrEmpty(gen, d.ctorBody);
 	emitNewline(gen);
