@@ -19,10 +19,10 @@
 // before codegen ever runs — folded, `7 / 2` is computed by the compiler's own
 // arithmetic and proves nothing about emission.
 
-// Exit code rides main's return rather than std/process.exit: `@import` with a
-// renaming binding (`platform as _nodePlatform`) does not parse, which takes the
-// whole std/process module down on the JS backend and would turn this program's
-// js cell into a parse error instead of the arithmetic signal it exists to give.
+// Graded by @stdout rather than by exit code: std/process cannot be imported
+// here because `@import` with a renaming binding (`platform as _nodePlatform`)
+// does not parse, which would turn this program's js cell into a parse error
+// instead of the arithmetic signal it exists to give.
 
 let failures: int32 = 0;
 
@@ -99,3 +99,5 @@ function main(): number {
 	console.log("js-integer-model failures=" + failures.toString());
 	return 1;
 }
+
+main();
