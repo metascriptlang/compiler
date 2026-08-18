@@ -122,16 +122,19 @@ export function parseNumberLiteral(s: string): number {
 	return parseFloat(s);
 }
 
-// Exact integer view of the same literal text parseNumberLiteral accepts.
-// Accumulating in int64 instead of a double is the whole point: `parseFloat`
-// and the `result * 16 + d` loops above both round off past 2^53.
-// Callers must only use this when the literal has no fraction/exponent.
-export function parseIntegerLiteral(s: string): int64 {
+type ScannedInteger = { value: int64, fits: boolean, bitPattern: boolean };
+
+// The magnitude is accumulated unsigned: the lexer leaves the sign out of the
+// token, so INT64_MIN arrives as the magnitude 2^63, which is not an int64, and
+// a signed running accumulator traps on the way there. The limit is built from
+// an in-range expression so a compiler generation that still mis-parses the
+// boundary can bootstrap the one that does not.
+function scanInteger(s: string): ScannedInteger {
 	let neg = false;
 	let start = 0;
 	if (s.byteLength > 0 && s.byteAt(0) === "-".code) { neg = true; start = 1; }
 
-	let radix: int64 = 10;
+	let radix: uint64 = 10;
 	if (s.byteLength > start + 2 && s.charAt(start) === "0") {
 		const prefix = s.charAt(start + 1);
 		if (prefix === "x" || prefix === "X") { radix = 16; start = start + 2; }
@@ -139,18 +142,45 @@ export function parseIntegerLiteral(s: string): int64 {
 		else if (prefix === "o" || prefix === "O") { radix = 8; start = start + 2; }
 	}
 
-	let result: int64 = 0;
+	// One envelope for every radix: MetaScript has no literal suffix, so the
+	// parser cannot know whether the target is int64 or uint64. Narrowing to a
+	// signed range is the checker's job (literalFitsInType), which is the only
+	// place the expected type is known.
+	const limit: uint64 = 0 - 1;
+
+	let acc: uint64 = 0;
+	let fits = true;
 	for (let i = start; i < s.byteLength; i = i + 1) {
 		const ch = s.byteAt(i);
 		if (ch === "_".code) { continue; }
-		let digit: int64 = -1;
-		if (ch >= "0".code && ch <= "9".code) { digit = (ch - "0".code) as int64; }
-		else if (ch >= "a".code && ch <= "f".code) { digit = (ch - "a".code + 10) as int64; }
-		else if (ch >= "A".code && ch <= "F".code) { digit = (ch - "A".code + 10) as int64; }
-		if (digit < 0 || digit >= radix) { continue; }
-		result = result * radix + digit;
+		let digit: uint64 = radix;
+		if (ch >= "0".code && ch <= "9".code) { digit = (ch - "0".code) as uint64; }
+		else if (ch >= "a".code && ch <= "f".code) { digit = (ch - "a".code + 10) as uint64; }
+		else if (ch >= "A".code && ch <= "F".code) { digit = (ch - "A".code + 10) as uint64; }
+		if (digit >= radix) { continue; }
+		if (acc > (limit - digit) / radix) { fits = false; break; }
+		acc = acc * radix + digit;
 	}
-	return neg ? -result : result;
+	return { value: (neg ? 0 - acc : acc) as int64, fits, bitPattern: radix !== 10 };
+}
+
+export function parseIntegerLiteral(s: string): int64 {
+	return scanInteger(s).value;
+}
+
+// Whether the literal text denotes a value some 64-bit integer type can hold.
+// Decided on the digits, not on a double: at the boundary 9223372036854775807
+// and 9223372036854775808 are the same double, so `value` cannot separate them.
+export function integerLiteralFits(s: string): boolean {
+	return scanInteger(s).fits;
+}
+
+// Hex/binary/octal literals denote a BIT PATTERN, so they may fill the whole
+// unsigned width of the target and still be legal (0x80 as int8 is -128).
+// Decimal literals get the signed range instead. Nim draws the same line, and
+// says so at lexer.nim:494-497.
+export function integerLiteralIsBitPattern(s: string): boolean {
+	return scanInteger(s).bitPattern;
 }
 
 // Does this decimal digit string fit int64? Compared as text because the value
@@ -218,6 +248,35 @@ test "parseIntegerLiteral binary" { assert parseIntegerLiteral("0b1111") === 15;
 test "parseIntegerLiteral octal" { assert parseIntegerLiteral("0o17") === 15; }
 test "parseIntegerLiteral negative" { assert parseIntegerLiteral("-42") === -42; }
 
+// Compared through int64ToDecimal rather than against a literal: writing the
+// boundary as source text here would ask the bootstrapping generation to parse
+// the very value it may not yet handle.
+test "parseIntegerLiteral reaches int64 min magnitude" {
+	assert int64ToDecimal(parseIntegerLiteral("9223372036854775808")) === "-9223372036854775808";
+}
+test "parseIntegerLiteral bit-pattern radices span the unsigned width" {
+	assert int64ToDecimal(parseIntegerLiteral("0x8000000000000000")) === "-9223372036854775808";
+	assert parseIntegerLiteral("0xFFFFFFFFFFFFFFFF") === -1;
+	assert parseIntegerLiteral("0b1000000000000000000000000000000000000000000000000000000000000000") < 0;
+}
+// The envelope is the widest 64-bit type, not int64: with no literal suffix the
+// parser cannot know whether the target is int64 or uint64, so narrowing to a
+// signed range belongs to literalFitsInType, where the expected type is known.
+test "integerLiteralFits spans the whole 64-bit envelope" {
+	assert integerLiteralFits("9223372036854775807");
+	assert integerLiteralFits("9223372036854775808");
+	assert integerLiteralFits("18446744073709551615");
+	assert integerLiteralFits("9_223_372_036_854_775_807");
+	assert !integerLiteralFits("18446744073709551616");
+	assert !integerLiteralFits("99999999999999999999");
+}
+test "integerLiteralFits on the bit-pattern radices" {
+	assert integerLiteralFits("0xFFFFFFFFFFFFFFFF");
+	assert !integerLiteralFits("0x1FFFFFFFFFFFFFFFF");
+	assert integerLiteralFits("0b1111111111111111111111111111111111111111111111111111111111111111");
+	assert !integerLiteralFits("0b11111111111111111111111111111111111111111111111111111111111111111");
+}
+
 test "parseNumberLiteral hex" { assert parseNumberLiteral("0xFF") === 255; }
 test "parseNumberLiteral binary" { assert parseNumberLiteral("0b1111") === 15; }
 test "parseNumberLiteral octal" { assert parseNumberLiteral("0o17") === 15; }
@@ -266,6 +325,59 @@ export function concatFlag(flags: string, flag: string): string {
 	if (flags !== "") return flags + " " + flag;
 	return flag;
 }
+
+export function optionalizeTypeString(typeStr: string): string {
+	const trimmed = typeStr.trim();
+	if (trimmed === "" || trimmed === "null") return trimmed;
+	if (hasTopLevelNullMember(trimmed)) return trimmed;
+	return "(" + trimmed + ") | null";
+}
+
+function hasTopLevelNullMember(s: string): boolean {
+	let depth = 0;
+	let quote = "";
+	let segStart = 0;
+	for (let i = 0; i < s.length; i += 1) {
+		const ch = s.charAt(i);
+		if (quote !== "") {
+			if (ch === quote) quote = "";
+		} else if (ch === "\"" || ch === "'" || ch === "`") {
+			quote = ch;
+		} else if (ch === "(" || ch === "[" || ch === "{" || ch === "<") {
+			depth += 1;
+		} else if (ch === ")" || ch === "]" || ch === "}") {
+			depth -= 1;
+		} else if (ch === ">") {
+			if (i > 0 && s.charAt(i - 1) === "=") {
+				if (depth === 0) return false;
+			} else {
+				depth -= 1;
+			}
+		} else if (ch === "|" && depth === 0) {
+			if (s.slice(segStart, i).trim() === "null") return true;
+			segStart = i + 1;
+		}
+	}
+	return s.slice(segStart, s.length).trim() === "null";
+}
+
+test "optionalize simple" { assert optionalizeTypeString("number") === "(number) | null"; }
+
+test "optionalize keeps existing top-level null" { assert optionalizeTypeString("NeonView | null") === "NeonView | null"; }
+
+test "optionalize fn type wraps whole" { assert optionalizeTypeString("(x: int32) => int32") === "((x: int32) => int32) | null"; }
+
+test "optionalize fn returning null union still wraps" { assert optionalizeTypeString("(x: int32) => int32 | null") === "((x: int32) => int32 | null) | null"; }
+
+test "optionalize literal union" { assert optionalizeTypeString("\"row\" | \"column\"") === "(\"row\" | \"column\") | null"; }
+
+test "optionalize generic with nested null" { assert optionalizeTypeString("Map<string, T | null>") === "(Map<string, T | null>) | null"; }
+
+test "optionalize parenthesized fn union unchanged" { assert optionalizeTypeString("((x: int32) => int32) | null") === "((x: int32) => int32) | null"; }
+
+test "optionalize bare null" { assert optionalizeTypeString("null") === "null"; }
+
+test "optionalize empty" { assert optionalizeTypeString("") === ""; }
 
 test "startsWith match" { assert "std/testing".startsWith("std/"); }
 
