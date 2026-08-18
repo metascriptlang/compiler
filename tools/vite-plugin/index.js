@@ -38,9 +38,14 @@ export default function metascript(options = {}) {
 		// map only has to exist beside the emitted module.
 		const args = ["build", entry, "--target=js", "--split", `--output=${outDir}`];
 		if (options.sourcemap !== false) args.push("--sourcemap");
-		execFileSync(msc, args, {
-			stdio: options.quiet === false ? "inherit" : "pipe",
-		});
+		try {
+			execFileSync(msc, args, {
+				stdio: options.quiet === false ? "inherit" : "pipe",
+			});
+		} catch (e) {
+			const out = [e.stdout, e.stderr].map((b) => (b ? b.toString() : "")).join("").trim();
+			throw new Error(out ? `msc build failed:\n${out}` : e.message);
+		}
 		const manifest = JSON.parse(readFileSync(join(outDir, "_manifest.json"), "utf8"));
 		const bySource = new Map();
 		for (const m of manifest.modules) bySource.set(canon(m.source), join(outDir, m.out));
