@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData,
 } from "../../ast/node";
-import { emit, emitNode, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName } from "./emit";
+import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner } from "../c/names";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { int64ToDecimal } from "../../utils/string";
@@ -280,12 +280,23 @@ function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symN
 	}
 }
 
+// A MemberExpr's own location is its dot; the callee's first token lives on
+// the leftmost object, which is where a debugger expects the call to start.
+function calleeOriginNode(callee: Node): Node {
+	let origin = callee;
+	while (origin.kind === NodeKind.MemberExpr) {
+		origin = (origin.data as MemberExprData).object;
+	}
+	return origin;
+}
+
 export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as CallExprData;
 
 	if (d.callee.kind === NodeKind.Identifier
 			&& (d.callee.data as IdentifierData).name === "super"
 			&& d.callee.resolvedSym !== null) {
+		mark(gen, d.callee);
 		emit(gen, "super(");
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");
@@ -304,6 +315,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 			patternArgs = [(d.callee.data as MemberExprData).object];
 			for (const a of d.arguments) patternArgs.push(a);
 		}
+		markNamed(gen, calleeOriginNode(d.callee), sym.name);
 		emitNativePattern(gen, sym.nativeName, patternArgs, sym.name);
 		return;
 	}
@@ -315,6 +327,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		&& (d.callee.data as MemberExprData).object.kind === NodeKind.Identifier
 		&& ((d.callee.data as MemberExprData).object.data as IdentifierData).name === "console";
 	if (isMsPrintln || isConsoleLog) {
+		markNamed(gen, calleeOriginNode(d.callee), isMsPrintln ? "msPrintln" : "console.log");
 		emit(gen, "console.log(");
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");
@@ -328,9 +341,11 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		const w = resolveOverloadWinner(sym, d.resolvedOverloadIdx);
 		const ws = w.winnerSym;
 		if (ws !== null && ws.nativeName !== "" && hasNativePattern(ws.nativeName)) {
+			markNamed(gen, d.callee, ws.name);
 			emitNativePattern(gen, ws.nativeName, d.arguments, ws.name);
 			return;
 		}
+		markNamed(gen, d.callee, (d.callee.data as IdentifierData).name);
 		emit(gen, jsSymbolName(gen, ws, (d.callee.data as IdentifierData).name));
 		emit(gen, "(");
 		emitJoinedNodes(gen, d.arguments, ", ");
