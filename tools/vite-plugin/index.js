@@ -25,6 +25,7 @@ export default function metascript(options = {}) {
 	let outDir = options.outDir ? resolve(options.outDir) : join(root, "node_modules/.metascript");
 	let entry = options.entry ? canon(resolve(options.entry)) : null;
 	let emitted = null;
+	let server = null;
 
 	// One emit covers the whole graph, so the first .ms resolve pays for all of
 	// them; later resolves reuse the tree until a source file changes. The
@@ -44,6 +45,9 @@ export default function metascript(options = {}) {
 		const bySource = new Map();
 		for (const m of manifest.modules) bySource.set(canon(m.source), join(outDir, m.out));
 		emitted = { bySource };
+		// Vite only watches inside root, so .ms sources living outside it have
+		// to be registered explicitly or an edit never reaches the handler.
+		if (server) server.watcher.add([...bySource.keys()]);
 	}
 
 	return {
@@ -57,14 +61,17 @@ export default function metascript(options = {}) {
 		},
 
 		configureServer(s) {
+			server = s;
+			if (emitted) s.watcher.add([...emitted.bySource.keys()]);
 			// A .ms edit invalidates the whole emitted tree: cross-module type
 			// information means one edit can change another module's output.
 			s.watcher.on("change", (file) => {
 				if (!MS_RE.test(file)) return;
 				emitted = null;
-				for (const mod of s.moduleGraph.idToModuleMap.values()) {
-					if (mod.id && mod.id.startsWith(outDir + sep)) s.moduleGraph.invalidateModule(mod);
-				}
+				// Importers cache their resolved import paths, so invalidating
+				// only the emitted modules leaves them serving the stale tree
+				// without ever re-entering resolveId (which re-emits).
+				s.moduleGraph.invalidateAll();
 				s.ws.send({ type: "full-reload" });
 			});
 		},
