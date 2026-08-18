@@ -353,8 +353,15 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		return;
 	}
 
-	// Regular function call
-	emitNode(gen, d.callee);
+	// Wrap a function-expression callee: (() => 5)()
+	const wrapCallee = d.callee.kind === NodeKind.ArrowFunction || d.callee.kind === NodeKind.FunctionExpr;
+	if (wrapCallee) {
+		emit(gen, "(");
+		emitNode(gen, d.callee);
+		emit(gen, ")");
+	} else {
+		emitNode(gen, d.callee);
+	}
 	emit(gen, "(");
 	emitJoinedNodes(gen, d.arguments, ", ");
 	emit(gen, ")");
