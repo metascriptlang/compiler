@@ -311,6 +311,7 @@ export function typeKey(t: Type | null): string {
 		},
 		TypeKind.Ref => { return "ref:" + typeKey(t.typeReturn); },
 		TypeKind.Ptr => { return "ptr:" + typeKey(t.typeReturn); },
+		TypeKind.Cursor => { return typeKey(t.typeReturn); },
 		TypeKind.Var => { return "var:" + typeKey(t.typeReturn); },
 		TypeKind.Borrow => { return "borrow:" + typeKey(t.typeReturn); },
 		TypeKind.GenericInstance => {
@@ -789,6 +790,11 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			const ptrType = inner + "*";
 			typeCacheSet(g.typeCache, key, ptrType);
 			return ptrType;
+		},
+		TypeKind.Cursor => {
+			const cursorType = getTypeDesc(g, t.typeReturn);
+			typeCacheSet(g.typeCache, key, cursorType);
+			return cursorType;
 		},
 		TypeKind.Ptr => {
 			const innerType = t.typeReturn;

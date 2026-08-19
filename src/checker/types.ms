@@ -902,7 +902,7 @@ export function peelToStructOrUnion(t: Type | null): Type | null {
 	while (cur !== null && _g < PEEL_MAX_DEPTH) {
 		_g = _g + 1;
 		if (cur.kind === TypeKind.Struct || cur.kind === TypeKind.Union) return cur;
-		if ((cur.kind === TypeKind.Ref || cur.kind === TypeKind.Ptr) && cur.typeReturn !== null) {
+		if ((cur.kind === TypeKind.Ref || cur.kind === TypeKind.Ptr || cur.kind === TypeKind.Cursor) && cur.typeReturn !== null) {
 			cur = cur.typeReturn;
 			continue;
 		}
@@ -1174,6 +1174,18 @@ export function createPtr(inner: Type | null): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Ptr;
 	t.typeReturn = inner;
+	return t;
+}
+
+export function createCursor(inner: Type | null): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Cursor;
+	t.typeReturn = inner;
+	return t;
+}
+
+export function unwrapCursor(t: Type | null): Type | null {
+	if (t !== null && t.kind === TypeKind.Cursor) return t.typeReturn;
 	return t;
 }
 
@@ -1761,6 +1773,7 @@ export function propagateToOwner(parent: Type, child: Type): void {
 export function skipModifier(t: Type | null): Type | null {
 	if (t === null) return t;
 	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent || t.kind === TypeKind.Var) return t.typeReturn;
+	if (t.kind === TypeKind.Cursor) return t.typeReturn;
 	return t;
 }
 

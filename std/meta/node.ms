@@ -37,6 +37,11 @@ export enum TypeKind {
 	// wrapper is transparent: typeChildren[0] holds the user-written array type,
 	// codegen + isAssignable peel it via unwrapVarargs.
 	Varargs,
+	// Non-owning link to a managed T: the pointee is reference-counted but this
+	// slot does not participate — lifecycle hooks skip it. A wrapper type rather
+	// than a declaration annotation because interface fields are parallel string
+	// arrays with no symbol to carry a flag. Transparent: skipModifier peels it.
+	Cursor,
 	Unknown,
 	None,
 	Inferred,
