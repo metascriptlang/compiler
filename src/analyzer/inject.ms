@@ -345,7 +345,7 @@ function processBinary(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 // materialization must incref it like any borrow. Ptr to non-Ref pointees
 // (Ptr<void>, Ptr<struct> from malloc/FFI) stays unmanaged — no header to count.
 function sinkClassify(t: Type | null, ctx: TransformContext): RcInfo {
-	if (t !== null && t.kind === TypeKind.Ptr && t.typeReturn !== null) {
+	if (t !== null && (t.kind === TypeKind.Ptr || t.kind === TypeKind.Cursor) && t.typeReturn !== null) {
 		const inner = classifyType(t.typeReturn, ctx);
 		if (inner.needsCleanup && inner.rcKind === RcKind.Ref) return inner;
 	}
@@ -502,7 +502,7 @@ function isPtrField(objType: Type, fieldIdx: number): boolean {
 	if (fieldIdx >= t.typeChildren.length) return false;
 	const ft = t.typeChildren[fieldIdx];
 	if (ft === null) return false;
-	return ft.kind === TypeKind.Ptr;
+	return ft.kind === TypeKind.Ptr || ft.kind === TypeKind.Cursor;
 }
 
 function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node {
@@ -1825,8 +1825,9 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		// IMPORTANT: skip fallback if LHS is explicitly Ptr<T> — Ptr fields are borrows
 		// and must NOT get RC treatment. The RHS may be Ref<T> (owned) being assigned
 		// to a Ptr<T> (borrowed) field, but the field doesn't own a reference.
-		const lhsIsPtr = bd.left.nodeType !== null && bd.left.nodeType.kind === TypeKind.Ptr;
-		if (!rcInfo.needsCleanup && !lhsIsPtr && bd.right.nodeType !== null) {
+		const lhsIsNonOwning = bd.left.nodeType !== null
+			&& (bd.left.nodeType.kind === TypeKind.Ptr || bd.left.nodeType.kind === TypeKind.Cursor);
+		if (!rcInfo.needsCleanup && !lhsIsNonOwning && bd.right.nodeType !== null) {
 			rcInfo = classifyType(bd.right.nodeType, dctx.ctx);
 		}
 		if (!rcInfo.needsCleanup) return stmt;

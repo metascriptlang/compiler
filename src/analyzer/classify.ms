@@ -248,7 +248,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			}
 			return noRcInfo();
 		},
-		TypeKind.Ptr => {
+		TypeKind.Ptr | TypeKind.Cursor => {
 			// Ptr<T> is always unmanaged — no RC, no lifecycle hooks.
 			// Reference parity: cursor fields skip all RC operations.
 			return noRcInfo();
