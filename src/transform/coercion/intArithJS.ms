@@ -1,37 +1,53 @@
-// Integer division materialization (JS backend) — docs/JS-NUMERIC.md §5.
+// Integer arithmetic materialization (JS backend) — docs/JS-NUMERIC.md §5.
 //
-// MS spells integer and float division with the same `/`, so which one is meant
-// is only knowable from the operand types — see docs/NIM-REF.md, the row on the
-// operator surface. C reads that type and truncates; JS is handed a double and
-// keeps the fraction, so `7 / 2` was 3.5 and a digit loop `n = n / 10` decayed
-// through denormals instead of reaching 0.
+// Two separate defects share this pass, because both are decided by the
+// operand types and both are spelled with the same width table:
 //
-// Truncating is also the FAST path here: measured over 15 interleaved rounds,
-// the bare `a / b` is 1.49x slower than every truncating form, because it
-// accumulates doubles.
+//   division — MS spells integer and float division with one `/`, so only the
+//   type says which is meant. C truncates; JS kept the fraction, and a digit
+//   loop `n = n / 10` decayed through denormals instead of reaching 0.
 //
-// Sibling of intConvJS.ms, which materializes the conversion nodes; both share
-// its width table and both are gated on the JS backend. Tests live in
-// src/test/js/intArith.ms — every decision here reads a resolved type, which a
-// parse-only fixture cannot supply.
+//   uint32 — C wraps mod 2^32, while every JS operator hands back either an
+//   int32 (bitwise, shifts) or an unbounded double (+ - *). uint8/uint16 are
+//   NOT in this pass: MS follows C's integer promotion, so `uint8 200+100` is
+//   300 on both backends already. uint32 is the only width MS actually wraps.
+//
+// Reference parity is deliberate and partial. The reference emits, for uint32,
+// `(a OP b) >>> 0` for the bitwise trio, `~(a) >>> 0`, and — the trick worth
+// copying — `a >>> b` for a right shift, substituting the OPERATOR because no
+// trailing mask can undo an arithmetic shift of the int32 view. It also emits
+// `(a * b) >>> 0` for multiplication, and that one is a defect measured against
+// its own C backend: 4294967295² is 1 in C and 0 in JS. Math.imul is exact, so
+// MS uses it. See docs/NIM-REF.md for the row.
+//
+// Signed overflow is deliberately absent: C-debug traps on it (measured, rc=255
+// with a source location) and C-danger is undefined behaviour that is not even
+// self-consistent — `+` did not wrap while `*` did. There is no value to match,
+// so emitting a wrap here would invent a specification the C backend does not
+// have. It belongs to the check tier.
+//
+// Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
+// a parse-only fixture cannot supply.
 
-import { Node, NodeKind, BinaryExprData, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeIdent, makeMember, makeArrayAccess, makeNumber } from "../util";
+import { makeBinary, makeCall, makeIdent, makeMember, makeArrayAccess, makeNumber } from "../util";
 import { truncateTo, isIntConvKind } from "./intConvJS";
 
 export function lowerIntArithJS(program: Node, ctx: TransformContext): Node {
-	walkNode(program, materializeIntDiv);
+	walkNode(program, materializeIntOp);
 	return program;
 }
 
-function materializeIntDiv(node: Node): Node {
+function materializeIntOp(node: Node): Node {
+	if (node.kind === NodeKind.UnaryExpr) return unaryAsUnsigned(node);
 	if (node.kind !== NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
+	const base = compoundBaseOf(d.operator);
+	if (base !== "") return compoundAsInteger(node, d, base);
 	if (d.operator === "/") return divideAsInteger(node);
-	if (d.operator === "/=") return compoundDivideAsInteger(node, d);
-	return node;
+	return binaryAsUnsigned(node, d);
 }
 
 function divideAsInteger(node: Node): Node {
@@ -40,19 +56,75 @@ function divideAsInteger(node: Node): Node {
 	return truncateTo(node, t.kind, node.location);
 }
 
-// `a /= b` has no expression-level rewrite that stays correct for an arbitrary
+function binaryAsUnsigned(node: Node, d: BinaryExprData): Node {
+	const t = node.nodeType;
+	if (t === null || t.kind !== TypeKind.Uint32) return node;
+	if (d.operator === ">>") {
+		d.operator = ">>>";
+		return node;
+	}
+	if (d.operator === "*") return truncateTo(exactMul(d.left, d.right, node.location), t.kind, node.location);
+	if (!wrapsOnUint32(d.operator)) return node;
+	return truncateTo(node, t.kind, node.location);
+}
+
+function unaryAsUnsigned(node: Node): Node {
+	const t = node.nodeType;
+	if (t === null || t.kind !== TypeKind.Uint32) return node;
+	const d = node.data as UnaryExprData;
+	if (d.unaryOp !== "-" && d.unaryOp !== "~") return node;
+	return truncateTo(node, t.kind, node.location);
+}
+
+// `%` is absent on purpose: a remainder is bounded by its operands, so it never
+// leaves the width. Comparisons and logical operators do not produce integers.
+function wrapsOnUint32(op: string): boolean {
+	return match (op) {
+		"+" | "-" | "<<" => true,
+		"&" | "|" | "^" => true,
+		_ => false,
+	};
+}
+
+// A double multiply of two uint32 operands can reach 2^64, and the low bits are
+// already gone by the time any mask sees the result. Math.imul is an exact
+// 32-bit multiply; it answers signed, so the width mask still follows.
+function exactMul(left: Node, right: Node, loc: SourceLocation): Node {
+	return makeCall(makeMember(makeIdent("Math", loc), "imul", loc), [left, right], loc);
+}
+
+function compoundBaseOf(op: string): string {
+	return match (op) {
+		"/=" => "/",
+		"+=" => "+",
+		"-=" => "-",
+		"*=" => "*",
+		_ => "",
+	};
+}
+
+// `a OP= b` has no expression-level rewrite that stays correct for an arbitrary
 // left side: the value has to be read as well as written, and reading it twice
 // re-runs whatever the lvalue evaluates. Only side-effect-free shapes are
-// rewritten; anything else keeps the untruncated `/=`, which docs/JS-NUMERIC.md
-// records as the one hole left in this phase.
-function compoundDivideAsInteger(node: Node, d: BinaryExprData): Node {
+// rewritten; anything else keeps the raw compound form, which
+// docs/JS-NUMERIC.md records as the one hole left in this phase.
+function compoundAsInteger(node: Node, d: BinaryExprData, base: string): Node {
 	const t = d.left.nodeType;
 	if (t === null || !isIntConvKind(t.kind)) return node;
+	const unsigned = t.kind === TypeKind.Uint32;
+	if (base !== "/" && !unsigned) return node;
 	const readBack = cloneIfPure(d.left);
 	if (readBack === null) return node;
-	const quotient = makeBinary(readBack, "/", d.right, node.location);
-	quotient.nodeType = t;
-	return makeBinary(d.left, "=", truncateTo(quotient, t.kind, node.location), node.location);
+	const widened = base === "*" && unsigned
+		? exactMul(readBack, d.right, node.location)
+		: typedBinary(readBack, base, d.right, node.location, t);
+	return makeBinary(d.left, "=", truncateTo(widened, t.kind, node.location), node.location);
+}
+
+function typedBinary(left: Node, op: string, right: Node, loc: SourceLocation, t: Type): Node {
+	const n = makeBinary(left, op, right, loc);
+	n.nodeType = t;
+	return n;
 }
 
 // A second read of the lvalue is only safe when re-evaluating it cannot call
