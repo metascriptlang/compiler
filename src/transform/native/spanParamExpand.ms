@@ -27,6 +27,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeVarDecl, makeTypedIdent, makeObjectLiteral, makeMember,
+	makeConditional, makeBinary, makeNumber, makeNull,
 } from "../util";
 
 // Track which functions had Span params expanded (by function name → param indices)
@@ -273,9 +274,27 @@ function expandCallSite(node: Node, expandedFuncs: ExpandedFunc[]): void {
 				}
 			}
 
-			// Case 2: Span-typed expression — expand to (arg.data, arg.len)
+			// Case 2: Span-typed expression — expand to (arg.data, arg.len).
+			// An empty Array's payload pointer is NULL (no allocation), so a
+			// direct arg.data dereferences NULL; p != NULL whenever len > 0, so
+			// the len guard hands out null for the empty case. GUARD ONLY
+			// LVALUES (Identifier/MemberExpr): each guard re-evaluates the arg,
+			// and a call-arg would run 3x, with the data pointer dangling after
+			// the middle result is decref'd. Non-lvalue args keep the unguarded
+			// form (empty call results still crash — tracked as upstream #7).
 			const loc = arg.location;
-			newArgs.push(makeMember(arg, "data", loc));
+			if (arg.kind === NodeKind.Identifier || arg.kind === NodeKind.MemberExpr) {
+				const dataArg = makeConditional(
+					makeBinary(makeMember(arg, "len", loc), ">", makeNumber(0, loc), loc),
+					makeMember(arg, "data", loc),
+					makeNull(loc),
+					loc,
+				);
+				dataArg.nodeType = createPtr(ep.elemType);
+				newArgs.push(dataArg);
+			} else {
+				newArgs.push(makeMember(arg, "data", loc));
+			}
 			newArgs.push(makeMember(arg, "len", loc));
 		} else {
 			newArgs.push(oldArgs[ai]);

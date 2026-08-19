@@ -16,6 +16,7 @@ import { walkNode } from "../walker";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary,
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
+	makeConditional, makeNull,
 } from "../util";
 
 export function spanLower(program: Node, ctx: TransformContext): Node {
@@ -47,8 +48,25 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 
 					if (srcType.kind === TypeKind.Array) {
 						// Array -> Span: { data: arr.p->data, len: arr.len }
-						// Note: C backend handles .p->data for Array member access
+						// Note: C backend handles .p->data for Array member access.
+						// An empty array's payload pointer is NULL; guard on len
+						// (p != NULL whenever len > 0) so the empty case hands out
+						// null instead of dereferencing NULL. LVALUE SOURCES ONLY —
+						// a call source would re-evaluate per guard arm and the
+						// data pointer would dangle after the temp is decref'd.
 						const dataExpr = makeMember(d.convExpr, "data", loc);
+						if (d.convExpr.kind === NodeKind.Identifier || d.convExpr.kind === NodeKind.MemberExpr) {
+							const guarded = makeConditional(
+								makeBinary(makeMember(d.convExpr, "length", loc), ">", makeNumber(0, loc), loc),
+								makeMember(d.convExpr, "data", loc),
+								makeNull(loc),
+								loc,
+							);
+							guarded.nodeType = createPtr(spanTarget.typeReturn);
+							dataExpr.nodeType = createPtr(spanTarget.typeReturn);
+							dataExpr.data = guarded.data;
+							dataExpr.kind = guarded.kind;
+						}
 						const lenExpr = makeMember(d.convExpr, "length", loc);
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind === TypeKind.SizedArray) {
