@@ -196,7 +196,7 @@ function retypeEmptyArrayBranch(branch: Node, otherType: Type | null): void {
 // expansions of the same macro would claim one slot and the C would not compile.
 // The call site is what separates them, and it is also where a diagnostic about
 // the hoisted statement should point.
-function stampCallSite(stmt: Node, loc: SourceLocation): void {
+export function stampCallSite(stmt: Node, loc: SourceLocation): void {
 	if (stmt === null || loc === null) return;
 	if (stmt.location !== null && stmt.location.line !== 0) return;
 	stmt.location = loc;

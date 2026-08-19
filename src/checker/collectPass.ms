@@ -135,7 +135,7 @@ function collectExportLocal(ctx: CheckerContext, node: Node): void {
 	}
 }
 
-function collectVariable(ctx: CheckerContext, node: Node): void {
+export function collectVariable(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
 	const mutable = d.declKind !== DeclKind.Const;
 	const sym = makeSymbol(d.declName, SymbolKind.Variable, inferredType(), mutable);
@@ -149,7 +149,7 @@ function collectVariable(ctx: CheckerContext, node: Node): void {
 
 // ===== Decorator Handling =====
 
-function collectDecorated(ctx: CheckerContext, node: Node): void {
+export function collectDecorated(ctx: CheckerContext, node: Node): void {
 	const dd = node.data as DecoratedDeclData;
 	collectDecl(ctx, dd.decoratedNode);
 	const declName = getDeclName(dd.decoratedNode);
@@ -974,7 +974,7 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 	}
 }
 
-function collectExport(ctx: CheckerContext, node: Node): void {
+export function collectExport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ExportDeclData;
 
 	// Re-export case: export { X, Y } from "./mod" — exportedDecl is an ImportDecl

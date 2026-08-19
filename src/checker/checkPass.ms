@@ -1,13 +1,14 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { inferredType, noneType, isUnresolvedType, charType, float64Type, voidType, nullType, createFunction, createClosureType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords } from "./context";
+import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, collectTypeAlias, collectInterface, collectStruct, collectEnumDecl, collectClass, collectActor, collectExtern, collectFunction, collectMacro, defineOrError, registerConverter, getDeclName } from "./collectPass";
@@ -29,7 +30,7 @@ import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference } from "./flow";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
-import { checkExpr, checkEnumExhaustiveness, checkDuplicatePatterns, fitNode, estimateExprEndCol, joinBranchTypes, fitJoinedBranch } from "./checkExprPass";
+import { checkExpr, checkEnumExhaustiveness, checkDuplicatePatterns, fitNode, estimateExprEndCol, joinBranchTypes, fitJoinedBranch, stampCallSite } from "./checkExprPass";
 import { registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { forEachChild } from "../ast/visitor";
@@ -347,6 +348,71 @@ function checkExternFunctionStmt(ctx: CheckerContext, node: Node): void {
 
 // ===== Statement Checker =====
 
+// A macro in statement position that returned SpliceMany: every element is a
+// statement, none is a value. Declarations that appear this way missed the
+// collect pass (it walked the original programStmts before the macro ran), so
+// each element is collected here — without collectVariable + SymbolFlag.Global
+// the use-sites emit unmangled names while the declarations emit mangled ones,
+// and the C does not link. The prefix is then checked and hoisted into the
+// enclosing statement list (pendingHoisted + drainHoisted insert it before the
+// call site); the LAST element replaces the ExprStmt in place. An empty splice
+// is a no-op (an empty block), matching the benign-expression contract.
+function collectSplicedDecl(ctx: CheckerContext, node: Node): void {
+	match (node.kind) {
+		NodeKind.FunctionDecl => collectFunction(ctx, node),
+		NodeKind.ClassDecl => collectClass(ctx, node),
+		NodeKind.ActorDecl => collectActor(ctx, node),
+		NodeKind.InterfaceDecl => collectInterface(ctx, node),
+		NodeKind.StructDecl => collectStruct(ctx, node),
+		NodeKind.EnumDecl => collectEnumDecl(ctx, node),
+		NodeKind.TypeAliasDecl => collectTypeAlias(ctx, node),
+		NodeKind.ExternDecl => collectExtern(ctx, node),
+		NodeKind.MacroDecl => collectMacro(ctx, node),
+		NodeKind.ExportDecl => collectExport(ctx, node),
+		NodeKind.DecoratedDecl => collectDecorated(ctx, node),
+		NodeKind.VariableDecl => {
+			collectVariable(ctx, node);
+			const gSym = lookupLocal(ctx.table, (node.data as VariableDeclData).declName);
+			if (gSym !== null) setFlag(gSym, SymbolFlag.Global);
+		},
+		_ => {},
+	};
+}
+
+function spliceStmtMany(ctx: CheckerContext, node: Node, splice: Node): void {
+	const sd = splice.data as SpliceManyData;
+	if (ctx.condEvalDepth > 0) {
+		addError(ctx, "macro emits statements at a conditionally evaluated position: they would run even when this branch does not — give the call its own statement",
+			node.location.line, node.location.column);
+		return;
+	}
+	if (sd.spliceNodes.length === 0) {
+		node.kind = NodeKind.BlockStmt;
+		node.data = { statements: [] } as BlockStmtData;
+		return;
+	}
+	for (const stmt of sd.spliceNodes) {
+		stampCallSite(stmt, node.location);
+		collectSplicedDecl(ctx, stmt);
+	}
+	const lastIdx = sd.spliceNodes.length - 1;
+	let i = 0;
+	while (i < lastIdx) {
+		const stmt = sd.spliceNodes[i];
+		checkStmt(ctx, stmt);
+		ctx.pendingHoisted.push(stmt);
+		i = i + 1;
+	}
+	const last = sd.spliceNodes[lastIdx];
+	node.kind = last.kind;
+	node.data = last.data;
+	if (last.location !== null) node.location = last.location;
+	node.nodeType = null as unknown as Type;
+	node.resolvedSym = null as unknown as Symbol;
+	node.flags = 0;
+	checkStmt(ctx, node);
+}
+
 export function checkStmt(ctx: CheckerContext, node: Node): void {
 	match (node.kind) {
 		NodeKind.VariableDecl => checkVariableDecl(ctx, node),
@@ -389,6 +455,10 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 			ctx.stmtPosExpr = d.expr;
 			checkExpr(ctx, d.expr, null);
 			ctx.stmtPosExpr = prevStmtPos;
+			if (d.expr.kind === NodeKind.SpliceMany) {
+				spliceStmtMany(ctx, node, d.expr);
+				return;
+			}
 			// PARALOCK Phase 1 R1/E1: a discarded affine Promise (bare spawn(...) expression
 			// with no binding and no await) is a compile error. Borrowed captures would
 			// dangle and the result would be silently dropped. For fire-and-forget,

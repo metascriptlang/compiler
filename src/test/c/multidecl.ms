@@ -81,10 +81,14 @@ function main(): void {}
 // ===== A2 Day 4 — stress tests =====
 
 test "E2E stress: two SpliceMany invocations in same module both flatten" {
+	// Hard-coded names, not macro params: a macro param referenced in the
+	// returned node's fields is dropped by the VM serialize step (upstream
+	// bug #6 in spacetime/docs/ROADMAP.md) — declName would arrive empty and
+	// the second invocation collides on the empty-name symbol.
 	const src = `
 import { Node, NodeKind, DeclKind } from "std/meta";
 
-macro mkConst(name: string, val: number): Node {
+macro mkAlpha(): Node {
 	return {
 		kind: NodeKind.SpliceMany,
 		line: 0,
@@ -94,9 +98,9 @@ macro mkConst(name: string, val: number): Node {
 				kind: NodeKind.VariableDecl,
 				line: 0,
 				column: 0,
-				declName: name,
+				declName: "alpha",
 				declType: "int32",
-				initializer: { kind: NodeKind.NumberLiteral, line: 0, column: 0, value: val, isFloat: false },
+				initializer: { kind: NodeKind.NumberLiteral, line: 0, column: 0, value: 10, isFloat: false },
 				declKind: DeclKind.Const,
 				nameLocation: { line: 0, column: 0 },
 			},
@@ -104,8 +108,28 @@ macro mkConst(name: string, val: number): Node {
 	};
 }
 
-mkConst("alpha", 10);
-mkConst("beta", 20);
+macro mkBeta(): Node {
+	return {
+		kind: NodeKind.SpliceMany,
+		line: 0,
+		column: 0,
+		spliceNodes: [
+			{
+				kind: NodeKind.VariableDecl,
+				line: 0,
+				column: 0,
+				declName: "beta",
+				declType: "int32",
+				initializer: { kind: NodeKind.NumberLiteral, line: 0, column: 0, value: 20, isFloat: false },
+				declKind: DeclKind.Const,
+				nameLocation: { line: 0, column: 0 },
+			},
+		],
+	};
+}
+
+mkAlpha();
+mkBeta();
 
 function main(): void {}
 `;
@@ -173,9 +197,10 @@ function main(): void {}
 	assert c.ok;
 }
 
-test "E2E stress (NEGATIVE): caller cannot reference spliced FunctionDecl in V1" {
-	// Documents the V1 limitation explicitly. When V2 adds re-collect, this
-	// test should be UPDATED to assert ok (positive case).
+test "E2E stress (POSITIVE): caller can reference spliced FunctionDecl (V2 re-collect)" {
+	// V2 landed 2026-08-18: spliceStmtMany collects each spliced declaration
+	// (collectVariable/collectFunction + SymbolFlag.Global) before checking it,
+	// so a caller resolves the spliced fn and the emitted C links.
 	const src = `
 import { Node, NodeKind, DeclKind } from "std/meta";
 
@@ -203,11 +228,11 @@ macro emitFn(): Node {
 emitFn();
 
 function main(): void {
-	spliced();  // V1: undefined — spliced symbol bypassed collectPass
+	spliced();
 }
 `;
 	const c = compileToCWithStd(src);
-	assert !c.ok;  // Expected to fail in V1
+	assert c.ok;
 }
 
 test "E2E stress: SpliceMany inside function body splices BlockStmt.statements" {
