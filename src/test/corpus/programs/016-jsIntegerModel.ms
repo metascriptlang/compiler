@@ -1,9 +1,10 @@
-// @xfail(js): the JS backend has no integer model — integer division emits a
-//   bare `/` (7 / 2 is 3.5) and `as int32` is a no-op (3.9 stays 3.9), so most
-//   checks below read a fraction. Full measured matrix and the phase plan are in
-//   docs/JS-NUMERIC.md; this program IS that document's acceptance gate, so the
-//   XPASS it will eventually report is the signal that a phase landed.
 // @stdout: js-integer-model all-ok
+// This program is the acceptance gate for docs/JS-NUMERIC.md. It was marked
+// known-fail on the js lane until the conversion, division and uint32 phases
+// landed; adding a case for a phase that has NOT landed means marking that lane
+// again, not weakening the check. Keep a directive name out of column one in
+// this header — the runner reads any leading comment line that starts with one
+// as a real directive, prose or not.
 // Oracle program — integer arithmetic must mean the same thing on every backend.
 // C is the specification: `/` on two integer-typed operands truncates toward
 // zero, unsigned types wrap, and a float assigned into an integer slot is
@@ -71,6 +72,32 @@ function main(): number {
 	check("udiv", opaqueU32(7) / opaqueU32(2) === 3);
 	const uwrapExpect: uint32 = 4294967295;
 	check("uwrap", opaqueU32(0) - opaqueU32(1) === uwrapExpect);
+	check("uaddWrap", opaqueU32(4294967295) + opaqueU32(1) === 0);
+
+	// --- unsigned bitwise: every JS bitwise operator yields an int32, so any
+	// result with the high bit set reads back negative unless it goes through
+	// ToUint32. `&` is included even though it cannot overflow: the operand
+	// values already exceed int32, so the RESULT representation is what breaks.
+	const uHighBit: uint32 = 2147483648;
+	const uorExpect: uint32 = 2147483649;
+	const uxorExpect: uint32 = 4294967294;
+	check("uand", (opaqueU32(4294967295) & opaqueU32(4294967295)) === uwrapExpect);
+	check("uor", (opaqueU32(2147483648) | opaqueU32(1)) === uorExpect);
+	check("uxor", (opaqueU32(4294967295) ^ opaqueU32(1)) === uxorExpect);
+	check("unot", (~opaqueU32(0)) === uwrapExpect);
+	check("ushl", (opaqueU32(1) << opaqueU32(31)) === uHighBit);
+
+	// The one case a trailing ToUint32 cannot repair: JS shifts the int32 view
+	// arithmetically, so 0x80000000 >> 1 keeps the sign and masking afterwards
+	// yields 0xC0000000. The operator itself has to become `>>>`.
+	check("ushr", (opaqueU32(2147483648) >> opaqueU32(1)) === 1073741824);
+
+	// Both products exceed 2^53, where a double multiply has already lost the
+	// low bits before any mask can run — these are what force an exact 32-bit
+	// multiply rather than `(a * b) >>> 0`.
+	const umulOddExpect: uint32 = 3906153237;
+	check("umulMax", opaqueU32(4294967295) * opaqueU32(4294967295) === 1);
+	check("umulOdd", opaqueU32(3000000007) * opaqueU32(700000003) === umulOddExpect);
 
 	// --- explicit conversion truncates toward zero at every width ---
 	check("convI32", (opaqueF64(3.9) as int32) === 3);
