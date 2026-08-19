@@ -311,8 +311,8 @@ void msCellSeqPush(msCellSeq* s, msCell cell);
 void msCellSeqClear(msCellSeq* s);
 void msCellSeqFree(msCellSeq* s);
 
-extern msCellSeq msRoots;
-extern int32_t msRootsThreshold;
+extern _Thread_local msCellSeq msRoots;
+extern _Thread_local int32_t msRootsThreshold;
 
 void msRegisterCycle(void* p, const msTypeInfo* type);
 void msUnregisterCycle(void* p);
@@ -368,7 +368,7 @@ static inline int32_t msOrcPrepare(void) { return msRoots.len; }
  * for the whole (possibly nested) teardown, then run one deferred collect on unwind.
  * Mirrors the reference collector's own free-loop guard, extended to ARC scope-exit
  * destroys (which the free-loop threshold hack does not cover). */
-extern int32_t msOrcTeardownDepth;
+extern _Thread_local int32_t msOrcTeardownDepth;
 static inline void msOrcBeginTeardown(void) { msOrcTeardownDepth += 1; }
 static inline void msOrcEndTeardown(void) {
 	msOrcTeardownDepth -= 1;
@@ -390,7 +390,7 @@ typedef struct {
 void msOrcTraceRef(void* child, void* env);
 
 #ifdef MSGC_ORC_STATS
-extern int32_t msFreedCyclicObjects;
+extern _Thread_local int32_t msFreedCyclicObjects;
 #endif
 
 #else /* !MSGC_ORC — plain ARC (--gc=drc) */
