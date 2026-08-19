@@ -615,9 +615,14 @@ Status legend: ✅ done · 🚧 in progress · 🔲 todo
 - [x] ✅ Wired into `lang.ms` + `index.ms`
 
 Current baseline: full native suite green — `msc test src/index.ms` **3411/0**, 168 files (2026-08-05), drc AND orc.
-Corpus **382 pass / 0 fail / 3 xfail** (509/510 json-strict added 2026-08-05, parity all 4 lanes);
+Corpus re-measured 2026-08-15 on a `--danger --cc=clang` candidate: **557 pass / 0 fail /
+6 xfail / 0 xpass** over 130 programs / 450 builds (was 382/0/3 on 2026-08-05); the six
+xfail are `010-nullable`, `243-matchGuardSamePattern`, `252-enumDiscUnion`, `512-jsonInt64`.
+Fixpoint the same day: **emitted-C 0/301 differ** between gen-2 and gen-3. SAN not re-run
+that day — the change under test could not reach the C lane (its emitted C was proven
+byte-identical), so the lane was skipped deliberately rather than silently.
 SAN **92 / 0 / 1 xfail**; nim-guard ALL GREEN (2026-08-04).
-Self-host fixpoint the same day: **emitted-C 0/292 differ** between gen-2 and gen-3,
+Earlier fixpoint (2026-08-05): **emitted-C 0/292 differ** between gen-2 and gen-3,
 and the two binaries differ only inside `LC_CODE_SIGNATURE` (the ad-hoc signature
 embeds the `--output` name; `LC_UUID` matches). Recipe, since nothing scripts it:
 build gen-N+1 with gen-N, `rm -rf out/release/.cache` before each generation so the
@@ -659,6 +664,15 @@ you compare a stale cache against itself.
   byte-compare.   Cluster census (2026-08-04, 85 programs): 0xx=5, 1xx=5,
   2xx=13, 3xx=5, 4xx=13, **5xx=5**, 6xx=31, 7xx=8 — next: 505/506 json,
   507/508 fs.
+  - `016-jsIntegerModel` is the acceptance gate for docs/JS-NUMERIC.md: 28
+    checks over integer division, float→int conversion and uint32 wrap, all
+    four lanes byte-identical since the uint32 phase landed 2026-08-15. It
+    carried `@xfail(js)` through three phases and dropped it on the last.
+    Two authoring lessons paid for in that program: a directive NAME must not
+    start a comment line in the header even inside prose (the runner read
+    `@xfail(js)` out of an explanatory sentence and reported XPASS), and a
+    program graded by `@stdout` still needs its `main()` called explicitly —
+    an uncalled `main` prints nothing and exits 0.
   - `512-jsonInt64` landed 2026-08-05: int64 THROUGH the JSON surface —
     the one C↔JS divergence with no prior coverage (parser.ms parseNumber's
     `parseInt` is strtoll on C, lossy double on JS). Self-grades via delta
