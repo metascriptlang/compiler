@@ -101,7 +101,24 @@ for ms in "$DIR"/*.ms; do
   # // GUARD-JS: the invariant also lives in the node bundle — build for the JS
   # target and run it; pass iff exit 0 AND the probe printed GUARD-OK (values
   # are printed before the checks, so a red run shows what it saw).
-  if [ "$wantjs" != "0" ]; then
+  if [ "$wantjs" != "0" ] && [ -n "$checkfails" ]; then
+    # errorcheck guard on the js target: the silent-accept half. Compiling
+    # clean here means js runs the rejected construct with no diagnostic.
+    jsout="$TMP/$name.mjs.js"
+    if ( cd "$WORK" && "$MSC" build "$ms" --target=js --output="$jsout" ) >"$TMP/$name.js.build" 2>&1; then
+      echo "FAIL $name [js]: compiled clean — a checker rule was dropped"
+      fail=1
+    else
+      ok=1
+      while IFS= read -r want; do
+        [ -z "$want" ] && continue
+        if ! grep -qF "$want" "$TMP/$name.js.build"; then
+          echo "FAIL $name [js]: missing diagnostic: $want"; ok=0; fail=1
+        fi
+      done <<<"$checkfails"
+      [ $ok -eq 1 ] && echo "ok   $name [js]"
+    fi
+  elif [ "$wantjs" != "0" ]; then
     jsout="$TMP/$name.mjs.js"
     if ! ( cd "$WORK" && "$MSC" build "$ms" --target=js --output="$jsout" ) >"$TMP/$name.js.build" 2>&1; then
       echo "FAIL $name [js]: build error"; grep -iE '^error' "$TMP/$name.js.build" | head -3
