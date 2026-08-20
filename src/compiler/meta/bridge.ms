@@ -1328,8 +1328,13 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 	return match (kind) {
 		// === Literals ===
 		NodeKind.NumberLiteral => {
+			// Float-ness is the stored register KIND, not a property of the
+			// magnitude: recomputing it as `value % 1 !== 0` turns a round-tripped
+			// 8.0 into an integer literal, so the wire silently rewrites the node
+			// it was asked to carry.
+			const raw = heapObjectGetField(objHeap, h, "value");
 			const value = readFloat(objHeap, h, "value");
-			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat: value % 1 !== 0, intVal: value as int64 }, loc);
+			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat: raw.kind === RaiserValueKind.Float, intVal: value as int64 }, loc);
 		},
 		NodeKind.StringLiteral => {
 			return createNodeAt(NodeKind.StringLiteral, { value: readStr(objHeap, h, "value") }, loc);
