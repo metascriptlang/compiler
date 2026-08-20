@@ -47,7 +47,7 @@ import {
 } from "../../raiser/hostRegistry";
 import {
 	unboxString, unboxInt,
-	boxString, boxInt,
+	boxString, boxInt, boxFloat, boxBool,
 } from "../../raiser/marshal";
 import { isNodeWireMetaField } from "./wire";
 
@@ -323,6 +323,51 @@ function _bridge_msStringIndexOf(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).indexOf(unboxString(args[1]), start));
 }
 
+function _bridge_msStringCharCodeAt(args: RaiserValue[]): RaiserValue {
+	return boxInt(unboxString(args[0]).charCodeAt(unboxInt(args[1])));
+}
+
+// Literal value accessors. Each one FIXES the representation of its result the
+// way Nim's opcNIntVal/opcNFloatVal do (vm.nim:1867-1881, decodeB(rkInt/rkFloat)):
+// the VM's arithmetic and compare opcodes are typed (AddI64 vs AddF64, BltI64 vs
+// BltF64) and the Raiser picks them from the STATIC type of the expression, so a
+// single accessor declared `: number` that returned Int for one literal and Float
+// for another would have its operands read through the wrong opcode — measured as
+// a value that prints "8" and then compares as 0. One static type, one register
+// kind; ask isFloatLiteral first, exactly as Nim asks the node kind.
+function _bridge_msNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
+	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxBool(false);
+	const objHeapOrNull = activeHostObjectHeap();
+	if (objHeapOrNull === null) return boxBool(false);
+	const objHeap: RaiserObjectHeap = objHeapOrNull;
+	const v = heapObjectGetField(objHeap, args[0].intVal, "value");
+	return boxBool(v.kind === RaiserValueKind.Float);
+}
+
+function _bridge_msNodeIntValue(args: RaiserValue[]): RaiserValue {
+	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxInt(0);
+	const objHeapOrNull = activeHostObjectHeap();
+	if (objHeapOrNull === null) return boxInt(0);
+	const objHeap: RaiserObjectHeap = objHeapOrNull;
+	return boxInt(unboxInt(heapObjectGetField(objHeap, args[0].intVal, "value")));
+}
+
+function _bridge_msNodeFloatValue(args: RaiserValue[]): RaiserValue {
+	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxFloat(0.0);
+	const objHeapOrNull = activeHostObjectHeap();
+	if (objHeapOrNull === null) return boxFloat(0.0);
+	const objHeap: RaiserObjectHeap = objHeapOrNull;
+	return boxFloat(unboxInt(heapObjectGetField(objHeap, args[0].intVal, "value")));
+}
+
+function _bridge_msNodeStringValue(args: RaiserValue[]): RaiserValue {
+	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxString("");
+	const objHeapOrNull = activeHostObjectHeap();
+	if (objHeapOrNull === null) return boxString("");
+	const objHeap: RaiserObjectHeap = objHeapOrNull;
+	return boxString(unboxString(heapObjectGetField(objHeap, args[0].intVal, "value")));
+}
+
 function bridgeMsStringToLower(args: RaiserValue[]): RaiserValue {
 	return boxString(unboxString(args[0]).toLowerCase());
 }
@@ -411,6 +456,11 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringTrimStart",     _bridge_msStringTrimStart);
 	registerHostFn("msStringTrimEnd",       _bridge_msStringTrimEnd);
 	registerHostFn("msStringIndexOf",       _bridge_msStringIndexOf);
+	registerHostFn("msStringCharCodeAt",    _bridge_msStringCharCodeAt);
+	registerHostFn("msNodeIsFloatLiteral", _bridge_msNodeIsFloatLiteral);
+	registerHostFn("msNodeIntValue",        _bridge_msNodeIntValue);
+	registerHostFn("msNodeFloatValue",      _bridge_msNodeFloatValue);
+	registerHostFn("msNodeStringValue",     _bridge_msNodeStringValue);
 	registerHostFn("msStringToLower",       bridgeMsStringToLower);
 	registerHostFn("msStringToUpper",       bridgeMsStringToUpper);
 	registerHostFn("msStringContains",      bridgeMsStringContains);

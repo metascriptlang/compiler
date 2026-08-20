@@ -27,3 +27,18 @@ extern function msNodeChildAt(n: Node, i: number): Node;
 
 export function childCount(n: Node): number { return msNodeChildCount(n); }
 export function childAt(n: Node, i: number): Node { return msNodeChildAt(n, i); }
+
+// Literal values. Split by result type the way Nim splits intVal/floatVal: the
+// Raiser picks typed opcodes (AddI64 vs AddF64) from the static type, so an
+// accessor whose register kind varies with the input silently computes on the
+// wrong field. Ask isFloatLiteral first — it answers what Nim reads off the node
+// kind, which our representation folds into the literal's stored value.
+extern function msNodeIsFloatLiteral(n: Node): boolean;
+extern function msNodeIntValue(n: Node): int64;
+extern function msNodeFloatValue(n: Node): float64;
+extern function msNodeStringValue(n: Node): string;
+
+export function isFloatLiteral(n: Node): boolean { return msNodeIsFloatLiteral(n); }
+export function intValue(n: Node): int64 { return msNodeIntValue(n); }
+export function floatValue(n: Node): float64 { return msNodeFloatValue(n); }
+export function stringValue(n: Node): string { return msNodeStringValue(n); }
