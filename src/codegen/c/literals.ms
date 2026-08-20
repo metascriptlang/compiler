@@ -5,7 +5,7 @@
 
 import { Builder, addLine, createBuilder, extract, StringPool, createStringPool, internString } from "./context";
 import { Type, TypeKind, NumberLiteralData } from "../../ast/node";
-import { int64ToDecimal } from "../../utils/string";
+import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
 
 
 // ===== C String Escaping =====
@@ -103,11 +103,25 @@ export function formatCNumber(value: number, type: Type | null = null): string {
 
 // Literal emission for a NumberLiteral node: integers take the exact int64,
 // floats (and integer literals in float position) keep the double formatter.
-export function formatCNumberLit(d: NumberLiteralData, type: Type | null = null): string {
-	const wantsFloat = type !== null
-		&& (type.kind === TypeKind.Number || type.kind === TypeKind.Float32 || type.kind === TypeKind.Float64);
-	if (d.isFloat || wantsFloat) return formatCNumber(d.value, type);
-	return int64ToDecimal(d.intVal);
+export function formatCNumberLit(d: NumberLiteralData, ty: Type | null = null): string {
+	const wantsFloat = ty !== null
+		&& (ty.kind === TypeKind.Number || ty.kind === TypeKind.Float32 || ty.kind === TypeKind.Float64);
+	const wantsUint64 = ty !== null && ty.kind === TypeKind.Uint64;
+	const wantsInt64 = ty !== null && ty.kind === TypeKind.Int64;
+	if (d.isFloat || wantsFloat) return formatCNumber(d.value, ty);
+	if (wantsUint64) {
+		return formatCUint64(d.intVal as uint64);
+	}
+	if (wantsInt64) {
+		return formatCInt64(d.intVal);
+	}
+	return formatCIntLiteral(d.intVal);
+}
+
+export function formatCIntLiteral(v: int64): string {
+	if (v > -2147483648 && v <= 2147483647) return int64ToDecimal(v);
+	if (v === -2147483648) return "(-2147483647 -1)";
+	return formatCInt64(v);
 }
 
 // Format as int32
@@ -116,8 +130,11 @@ export function formatCInt32(value: number): string {
 }
 
 // Format as int64
-export function formatCInt64(value: number): string {
-	return `${value}LL`;
+const int64MinValue: int64 = -9223372036854775808;
+
+export function formatCInt64(v: int64): string {
+	if (v > int64MinValue) return int64ToDecimal(v) + "LL";
+	return "(-9223372036854775807LL - 1LL)";
 }
 
 // Format as uint32
@@ -126,8 +143,8 @@ export function formatCUint32(value: number): string {
 }
 
 // Format as uint64
-export function formatCUint64(value: number): string {
-	return `${value}ULL`;
+export function formatCUint64(v: uint64): string {
+	return uint64ToDecimal(v) + "ULL";
 }
 
 // Format as float32
@@ -239,9 +256,34 @@ test "integer type still emits plain integer" {
 	assert formatCNumber(42.0, t) === "42";
 }
 
+
 test "int32 suffix" { assert formatCInt32(42) === "42"; }
 
+test "number literal emission dispatches on uint64" {
+	const tu: Type = { kind: TypeKind.Uint64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	const d: NumberLiteralData = { value: 0.0, isFloat: false, intVal: -1, outOfRangeText: "", isBitPattern: true };
+	assert formatCNumberLit(d, tu) === "18446744073709551615ULL";
+}
+
+test "number literal emission dispatches on int64" {
+	const ti: Type = { kind: TypeKind.Int64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	const d: NumberLiteralData = { value: 42.0, isFloat: false, intVal: 42, outOfRangeText: "", isBitPattern: false };
+	assert formatCNumberLit(d, ti) === "42LL";
+}
+
 test "int64 suffix" { assert formatCInt64(42) === "42LL"; }
+
+test "int64 min decomposes" { assert formatCInt64(-9223372036854775808) === "(-9223372036854775807LL - 1LL)"; }
+
+test "int64 max keeps the suffix" { assert formatCInt64(9223372036854775807) === "9223372036854775807LL"; }
+
+test "int literal stays bare inside int32 range" { assert formatCIntLiteral(42) === "42"; }
+
+test "int literal decomposes int32 min" { assert formatCIntLiteral(-2147483648) === "(-2147483647 -1)"; }
+
+test "int literal takes the suffix past int32" { assert formatCIntLiteral(5000000000) === "5000000000LL"; }
+
+test "uint64 max spells the digits" { assert formatCUint64(18446744073709551615) === "18446744073709551615ULL"; }
 
 test "uint32 suffix" { assert formatCUint32(42) === "42U"; }
 
