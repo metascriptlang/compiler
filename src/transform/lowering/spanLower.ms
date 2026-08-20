@@ -9,10 +9,11 @@
 // - Zero-copy slicing: arr[start..end] with Span result → { data: arr.data + start, len: end - start }
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
-import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, VariableDeclData, ExprStmtData, ReturnStmtData, Type, TypeKind } from "../../ast/node";
 import { createSizedArray, createPtr } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
-import { walkNode } from "../walker";
+import { walkNode, walkExpandBlocks, replaceInExpr } from "../walker";
+import { containsConditionalEval } from "./callHoist";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary,
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
@@ -20,6 +21,7 @@ import {
 } from "../util";
 
 export function spanLower(program: Node, ctx: TransformContext): Node {
+	walkExpandBlocks(program, materializeSpanSources, ctx);
 	return walkNode(program, (node: Node): Node => {
 		// Zero-copy slicing: ArrayAccess with range index and Span result type
 		if (node.kind === NodeKind.ArrayAccess) {
@@ -94,6 +96,140 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 
 		return node;
 	});
+}
+
+// ===== Source Materialization =====
+// The (data, len) pair reads its source twice — three times with the empty
+// guard. Reference parity (openArrayLoc, ccgcalls.nim): the argument is
+// evaluated ONCE into a location and every later read repeats that location's
+// NAME, which is free of side effects. Repeating the source EXPRESSION is not:
+// `probe(vary())` emitted `probe(t5.p->data, t6.len)` off two separate calls,
+// handing the callee one object's pointer with another object's length.
+//
+// Bind a non-location source to a temp first, so the reads below always see an
+// identifier. Restricted to statements whose expression runs exactly once when
+// control reaches it — a conditionally-evaluated source (ternary arm, `&&` RHS)
+// would change how often it runs.
+
+function isLocation(n: Node): boolean {
+	if (n === null) return false;
+	if (n.kind === NodeKind.Identifier) return true;
+	if (n.kind === NodeKind.MemberExpr) return isLocation((n.data as { object: Node }).object);
+	return false;
+}
+
+function unconditionalExprOf(stmt: Node): Node {
+	return match (stmt.kind) {
+		NodeKind.VariableDecl => (stmt.data as VariableDeclData).initializer,
+		NodeKind.ExprStmt => (stmt.data as ExprStmtData).expr,
+		NodeKind.ReturnStmt => (stmt.data as ReturnStmtData).argument,
+		_ => null as unknown as Node,
+	};
+}
+
+function spanElementOf(t: Type): Type {
+	if (t === null) return null as unknown as Type;
+	let target = t;
+	if (target.kind === TypeKind.Var || target.kind === TypeKind.Sink || target.kind === TypeKind.Lent) {
+		target = target.typeReturn;
+	}
+	if (target === null || target.kind !== TypeKind.Span) return null as unknown as Type;
+	const elem = target.typeReturn;
+	if (elem === null) return null as unknown as Type;
+	return elem;
+}
+
+function bindToTemp(src: Node, elemType: Type, ctx: TransformContext, hoisted: Node[]): Node {
+	const srcType = src.nodeType;
+	if (srcType === null) return src;
+
+	const loc = src.location;
+	let tempType = srcType;
+	if (src.kind === NodeKind.ArrayLiteral) {
+		const ld = src.data as ArrayLiteralData;
+		if (ld.elements.length === 0) return src;
+		tempType = createSizedArray(elemType, ld.elements.length);
+		src.nodeType = tempType;
+	}
+
+	const sym = freshTempSym(ctx, "spansrc", tempType);
+	const decl = makeVarDecl(sym.name, src, DeclKind.Const, loc);
+	decl.resolvedSym = sym;
+	decl.nodeType = tempType;
+	hoisted.push(decl);
+
+	const ref = makeIdentResolved(sym, loc);
+	ref.nodeType = tempType;
+	return ref;
+}
+
+function calleeFnType(node: Node): Type {
+	if (node.resolvedSym !== null && node.resolvedSym.symbolType !== null) {
+		const t = node.resolvedSym.symbolType;
+		if (t.kind === TypeKind.Function) return t;
+	}
+	const cd = node.data as CallExprData;
+	if (cd.callee !== null && cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
+		return cd.callee.nodeType;
+	}
+	return null as unknown as Type;
+}
+
+function materializeSpanSources(stmt: Node, ctx: TransformContext): Node[] {
+	const root = unconditionalExprOf(stmt);
+	if (root === null) return [stmt];
+	if (containsConditionalEval(root)) return [stmt];
+
+	const hoisted: Node[] = [];
+	replaceInExpr(root, (node: Node): Node => {
+		// A declared coercion (`const s: Span<T> = expr`). Children are visited
+		// first, so a call argument wrapping one of these already holds an
+		// identifier by the time the CallExpr arm below looks at it.
+		if (node.kind === NodeKind.HiddenStdConv || node.kind === NodeKind.HiddenSubConv) {
+			const d = node.data as HiddenStdConvData;
+			const elem = spanElementOf(d.convType);
+			if (elem === null) return node;
+			if (d.convExpr === null || isLocation(d.convExpr)) return node;
+			d.convExpr = bindToTemp(d.convExpr, elem, ctx, hoisted);
+			return node;
+		}
+
+		// A Span PARAMETER position. This is the path call arguments actually
+		// take — spanParamExpand splits the argument into (data, len) without
+		// any conversion node in between.
+		if (node.kind === NodeKind.CallExpr) {
+			const fnType = calleeFnType(node);
+			if (fnType === null) return node;
+			const cd = node.data as CallExprData;
+			let i = 0;
+			while (i < cd.arguments.length) {
+				if (i < fnType.typeChildren.length) {
+					const elem = spanElementOf(fnType.typeChildren[i]);
+					if (elem !== null) {
+						const arg = cd.arguments[i];
+						if (arg !== null && !isLocation(arg)) {
+							if (arg.kind === NodeKind.HiddenStdConv || arg.kind === NodeKind.HiddenSubConv) {
+								const ad = arg.data as HiddenStdConvData;
+								if (ad.convExpr !== null && !isLocation(ad.convExpr)) {
+									ad.convExpr = bindToTemp(ad.convExpr, elem, ctx, hoisted);
+								}
+							} else {
+								cd.arguments[i] = bindToTemp(arg, elem, ctx, hoisted);
+							}
+						}
+					}
+				}
+				i = i + 1;
+			}
+			return node;
+		}
+
+		return node;
+	});
+
+	if (hoisted.length === 0) return [stmt];
+	hoisted.push(stmt);
+	return hoisted;
 }
 
 // ===== Zero-Copy Slicing =====

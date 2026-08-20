@@ -277,12 +277,22 @@ function expandCallSite(node: Node, expandedFuncs: ExpandedFunc[]): void {
 			// Case 2: Span-typed expression — expand to (arg.data, arg.len).
 			// An empty Array's payload pointer is NULL (no allocation), so a
 			// direct arg.data dereferences NULL; p != NULL whenever len > 0, so
-			// the len guard hands out null for the empty case. GUARD ONLY
-			// LVALUES (Identifier/MemberExpr): each guard re-evaluates the arg,
-			// and a call-arg would run 3x, with the data pointer dangling after
-			// the middle result is decref'd. Non-lvalue args keep the unguarded
-			// form (empty call results still crash — tracked as upstream #7).
+			// the len guard hands out null for the empty case. spanLower binds
+			// every non-location source to a temp first, so repeating `arg`
+			// here repeats a NAME, never an evaluation.
 			const loc = arg.location;
+
+			// Reference parity (openArrayLoc, tyArray arm): a fixed-size array
+			// hands over its inline buffer and a STATIC length. It has no `len`
+			// field to read and its buffer is never null, so no guard.
+			const argType = arg.nodeType;
+			if (argType !== null && argType.kind === TypeKind.SizedArray) {
+				newArgs.push(makeMember(arg, "data", loc));
+				newArgs.push(makeNumber(argType.typeFlags, loc));
+				ai = ai + 1;
+				continue;
+			}
+
 			if (arg.kind === NodeKind.Identifier || arg.kind === NodeKind.MemberExpr) {
 				const dataArg = makeConditional(
 					makeBinary(makeMember(arg, "len", loc), ">", makeNumber(0, loc), loc),
