@@ -16,7 +16,7 @@ import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, rec
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallbacks";
-import { findChar, splitTopLevel, fitsInt64Decimal } from "../utils/string";
+import { findChar, splitTopLevel, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 import { markConsumedName, isConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
@@ -347,8 +347,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					node.nodeType = expectedType; return;
 				} else if (isNodeIntLit(node)) {
 					// Reference parity: standard reference's type change diagnostic emits compile-time error for out-of-range literals
-					const v = (node.data as NumberLiteralData).value;
-					addError(ctx, "cannot convert " + v + " to " + typeDisplayName(expectedType), node.location.line, node.location.column);
+					const nd = node.data as NumberLiteralData;
+					const shown = nd.outOfRangeText !== "" ? nd.outOfRangeText : int64ToDecimal(nd.intVal);
+					addError(ctx, "cannot convert " + shown + " to " + typeDisplayName(expectedType), node.location.line, node.location.column);
 					node.nodeType = expectedType; return;
 				} else {
 					node.nodeType = float64Type(); return;
