@@ -228,6 +228,18 @@ export function int64ToDecimal(v: int64): string {
 	return v < 0 ? "-" + out : out;
 }
 
+export function uint64ToDecimal(v: uint64): string {
+	if (v === 0) return "0";
+	let n: uint64 = v;
+	let out = "";
+	while (n !== 0) {
+		const digit: uint64 = n % 10;
+		out = "0123456789".charAt(digit as int32) + out;
+		n = n / 10;
+	}
+	return out;
+}
+
 test "int64ToDecimal past 2^53" {
 	assert int64ToDecimal(parseIntegerLiteral("9007199254740993")) === "9007199254740993";
 }
@@ -235,6 +247,13 @@ test "int64ToDecimal int64 max" {
 	assert int64ToDecimal(parseIntegerLiteral("9223372036854775807")) === "9223372036854775807";
 }
 test "int64ToDecimal zero" { assert int64ToDecimal(0) === "0"; }
+test "uint64ToDecimal above int64 max" {
+	assert uint64ToDecimal(18446744073709551615) === "18446744073709551615";
+}
+test "uint64ToDecimal at the sign bit" {
+	assert uint64ToDecimal(9223372036854775808) === "9223372036854775808";
+}
+test "uint64ToDecimal zero" { assert uint64ToDecimal(0) === "0"; }
 test "int64ToDecimal negative" { assert int64ToDecimal(-42) === "-42"; }
 
 test "parseIntegerLiteral keeps digits past 2^53" {
