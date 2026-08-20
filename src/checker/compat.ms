@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase } from "./types";
 
 
 // ===== Assignability =====
@@ -188,6 +188,13 @@ export function isAssignable(source: Type | null, target: Type | null): boolean 
 }
 
 function isAssignableInner(source: Type | null, target: Type | null): boolean {
+	// allowsNil (sigmatch.nim:730): a cursor link is nilable by design — null is
+	// the end-of-chain state. Checked BEFORE skipModifier because it peels Cursor.
+	// Ref/Ptr stay TS-strict (`T | null` opt-in; see the Null-source arm below).
+	if (source !== null && target !== null
+		&& source.kind === TypeKind.Null && target.kind === TypeKind.Cursor) {
+		return true;
+	}
 	// Reference parity: sink and lent modifiers are transparent ownership modifiers — unwrap before comparing
 	// Standard reference implementation skips these modifiers during type relationship checks.
 	source = skipModifier(source);
@@ -330,6 +337,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// null assignable to legacy nullable kinds (value-struct/array/function/span).
 	// TS-strict shift: Ref/Ptr are NO LONGER auto-nullable — callers must use
 	// `T | null` (handled by the Union-target check above) to opt into nullability.
+	// Cursor<T> is the deliberate exception (allowsNil arm at function entry).
 	// Void target lets callers write `Result.ok(null)` for Result<void, E> (§7.5).
 	if (source.kind === TypeKind.Null) {
 		return match (target.kind) {
@@ -512,6 +520,11 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 	return true;
 }
 
+// A literal bound without an annotation freezes as `__anonN__...` (anonStructName).
+function isAnonLiteralName(name: string): boolean {
+	return name.length > 6 && name.slice(0, 6) === "__anon";
+}
+
 // Object assignability: nominal first, then structural (source has all target properties)
 function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	// Identity: same object → trivially assignable
@@ -521,6 +534,10 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	if (source.typeName !== "" && source.typeName === target.typeName) return true;
 	// Cross-module nominal: types linked via sym identity (both point to same Symbol)
 	if (source.sym !== null && source.sym === target.sym) return true;
+	// A frozen anonymous-literal type never adopts a NAMED struct: no lowering
+	// exists, so C emits two distinct types (clang error) while js runs the
+	// cast silently. Annotating at the literal is the supported path.
+	if (isAnonLiteralName(source.typeName) && target.typeName !== "" && !isAnonLiteralName(target.typeName)) return false;
 	// Pin source/target fields to locals — the binder's flow narrowing on the
 	// `source: Type | null` parameter doesn't always propagate into nested
 	// for-of bodies (each loop iteration walks the narrowing chain anew).
@@ -585,6 +602,10 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 	if (s.kind !== TypeKind.Struct || t.kind !== TypeKind.Struct) return "";
 	if (s.typeName === "" || t.typeName === "") return "";
 	if (s.typeName === t.typeName) return "";
+	if (isAnonLiteralName(s.typeName) && !isAnonLiteralName(t.typeName)) {
+		return " (the literal froze as an anonymous type before reaching '" + t.typeName
+			+ "'; annotate at the literal: `const x: " + t.typeName + " = { ... }`)";
+	}
 	let ti = 0;
 	for (const tProp of t.typeNames) {
 		let foundAt = 0 - 1;
@@ -1372,6 +1393,11 @@ test "mismatched element to span" {
 
 // TS-strict: null is NOT assignable to bare Ptr<T> — must be Union(Ptr<T>, Null).
 test "null rejected by bare ptr" { assert !isAssignable(nullType(), createPtr(numberType())); }
+
+// allowsNil (sigmatch.nim:730): a cursor link is nilable by design.
+test "null accepted by bare cursor" { assert isAssignable(nullType(), createCursor(numberType())); }
+
+test "null still rejected by bare ref" { assert !isAssignable(nullType(), createRef(createStruct("S", [], [], true))); }
 
 test "null accepted by Ptr|Null union" {
 	const u = createUnion([createPtr(numberType()), nullType()]);
