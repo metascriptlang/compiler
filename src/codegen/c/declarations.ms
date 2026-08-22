@@ -8,14 +8,14 @@ import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types"
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, emitStmtsLine, readProcStmts, readProcLocals,
-	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas,
+	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString,
 } from "./context";
 import { genExpr } from "./expressions";
 import { genStmt, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
 import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfoDef, isCompilerGenCName, isNilableValueType } from "./types";
 import { genTestDeclNode } from "./test";
-import { formatCNumber, formatCNumberLit, cBoolLiteral, cStringLiteral } from "./literals";
+import { formatCNumber, formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
@@ -673,6 +673,13 @@ function genGlobalVar(g: CGen, node: Node): void {
 		if (init.kind === NodeKind.BooleanLiteral) {
 			const bd = init.data as BooleanLiteralData;
 			addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = ${cBoolLiteral(bd.boolValue)};`);
+			nameSetAdd(g.declaredGlobals, varName);
+			return;
+		}
+		if (init.kind === NodeKind.StringLiteral && node.nodeType !== null && node.nodeType.kind === TypeKind.String) {
+			const sd = init.data as StringLiteralData;
+			const poolName = internString(g.stringPool, sd.value);
+			addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = ${msStringPoolRef(poolName, cStringByteLen(sd.value))};`);
 			nameSetAdd(g.declaredGlobals, varName);
 			return;
 		}
