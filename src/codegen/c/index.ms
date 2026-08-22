@@ -108,6 +108,14 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 // Generates DatInit000 and Init000 for this module.
 // Non-static so other modules' dispatchers can call them.
 
+let _emptyDatInits = new HashSet<string>();
+let _emptyInits = new HashSet<string>();
+
+function clearInitEmptiness(): void {
+	_emptyDatInits = new HashSet<string>();
+	_emptyInits = new HashSet<string>();
+}
+
 function genModuleInitFns(g: CGen): void {
 	const modName = mangleModuleName(g.modulePath);
 	const datInitName = g.isHcr ? "DatInit000" : `${modName}__DatInit000`;
@@ -115,6 +123,8 @@ function genModuleInitFns(g: CGen): void {
 
 	const datContent = extract(sec(g, CSection.DatInit));
 	const initContent = extract(sec(g, CSection.ModuleInit));
+	if (datContent.length === 0) _emptyDatInits.add(g.modulePath);
+	if (initContent.length === 0) _emptyInits.add(g.modulePath);
 
 	// Clear sections (re-emitted into Procs)
 	sec(g, CSection.DatInit).parts = [];
@@ -178,8 +188,8 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	// Forward declarations for all module init functions
 	for (const mp of modulePaths) {
 		const modName = mangleModuleName(mp);
-		addLine(b, `void ${modName}__DatInit000(void);`);
-		addLine(b, `void ${modName}__Init000(void);`);
+		if (!_emptyDatInits.has(mp)) addLine(b, `void ${modName}__DatInit000(void);`);
+		if (!_emptyInits.has(mp) || mp === entryPath) addLine(b, `void ${modName}__Init000(void);`);
 	}
 	addNewline(b);
 
@@ -194,7 +204,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	addLine(b, "static void MsPreMainInner(void) {");
 	b.indent += 1;
 	for (const mp of modulePaths) {
-		addLine(b, `${mangleModuleName(mp)}__DatInit000();`);
+		if (!_emptyDatInits.has(mp)) addLine(b, `${mangleModuleName(mp)}__DatInit000();`);
 	}
 	b.indent -= 1;
 	addLine(b, "}");
@@ -204,7 +214,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	addLine(b, "static void MsMainInner(void) {");
 	b.indent += 1;
 	for (const mp of modulePaths) {
-		if (mp !== entryPath) {
+		if (mp !== entryPath && !_emptyInits.has(mp)) {
 			addLine(b, `${mangleModuleName(mp)}__Init000();`);
 		}
 	}
@@ -221,6 +231,8 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	addLine(b, "  msOrcCollect();");
 	addLine(b, "}");
 	addNewline(b);
+
+	clearInitEmptiness();
 
 	// Library output: the host owns the entry point and calls MsMain() — emit no
 	// main wrapper, whatever the target OS.
