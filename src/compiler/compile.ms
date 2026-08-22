@@ -936,6 +936,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 		// Desktop: full dispatcher + thread pool + selectors
 		rtFiles = "runtime/promise/dispatchFull.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/pool.c";
+		rtFiles = rtFiles + "\n" + "runtime/io/engineSelect.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/awaitGroup.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorKqueue.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorEpoll.c";
