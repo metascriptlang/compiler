@@ -433,7 +433,10 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 			if (bare.kind === NodeKind.FunctionDecl) {
 				const fd2 = bare.data as FunctionDeclData;
 				const fn = fd2.fnName;
-				if (fn.length > 0 && (fn.slice(0, 1) === "$" || fn.slice(0, 1) === "=")) {
+				if (fn.length > 0 && fn.slice(0, 1) === "$") {
+					continue;
+				}
+				if (fn.length > 0 && fn.slice(0, 1) === "=") {
 					walkBody(bare, modulePath, importMap);
 					continue;
 				}
