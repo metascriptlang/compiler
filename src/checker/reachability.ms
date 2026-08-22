@@ -4,7 +4,7 @@
 // starting from roots (main, top-level stmts, test decls, exported symbols).
 // Cross-module references traced via ImportDecl source paths.
 
-import { Node, NodeKind, ProgramData, FunctionDeclData, ImportDeclData,
+import { Node, NodeKind, TypeKind, ProgramData, FunctionDeclData, ImportDeclData,
 	ExportDeclData, IdentifierData, VariableDeclData, ClassDeclData, ActorDeclData,
 	CallExprData, MemberExprData, NewExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
@@ -503,9 +503,23 @@ function isTopLevelStatement(node: Node): boolean {
 	if (k === NodeKind.ThrowStmt) return true;
 	if (k === NodeKind.BlockStmt) return true;
 	if (k === NodeKind.AssertStmt) return true;
-	// VariableDecl with initializer is also side-effecting
-	if (k === NodeKind.VariableDecl) return true;
+	if (k === NodeKind.VariableDecl) return varDeclNeedsRuntimeInit(node);
 	return false;
+}
+
+function varDeclNeedsRuntimeInit(node: Node): boolean {
+	const d = node.data as VariableDeclData;
+	if (d.initializer === null) return false;
+	const n = d.declName;
+	if (n.length > 8 && n.slice(n.length - 8, n.length) === "TypeInfo") return false;
+	const k = d.initializer.kind;
+	if (k === NodeKind.NumberLiteral) return false;
+	if (k === NodeKind.BooleanLiteral) return false;
+	if (k === NodeKind.StringLiteral) {
+		return !(node.nodeType !== null && node.nodeType.kind === TypeKind.String);
+	}
+	if (k === NodeKind.NullLiteral) return false;
+	return true;
 }
 
 function isExportedDecl(node: Node): boolean {
