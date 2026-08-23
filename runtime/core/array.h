@@ -207,6 +207,8 @@ msString msAsString(msUint8Array* arr);
 /* Push a value onto the array. Grows capacity if needed.
  * Uses a helper macro to avoid comma-in-braced-initializer issues with C preprocessor.
  * Usage: msGenericArrayPush(&arr, value) where value can be a compound literal. */
+#define msArrDataOr0(p_) ((p_) ? (p_)->data : NULL)
+
 #define msGenericArrayPush(arr_ptr, ...) do { \
 	if ((arr_ptr)->p == NULL || (((msArrayPayloadBase*)(arr_ptr)->p)->cap & ~MS_CAP_MASK) != 0 \
 		|| (arr_ptr)->len >= (int64_t)(((msArrayPayloadBase*)(arr_ptr)->p)->cap & MS_CAP_MASK)) { \
