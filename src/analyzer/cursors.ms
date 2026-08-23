@@ -185,6 +185,7 @@ function ufConnect(p: Partitions, aName: string, bName: string): void {
 function potentialMutation(p: Partitions, name: string): void {
 	const id = variableId(p, name);
 	if (id < 0) return;
+	if (p.abstractTime > p.vars[id].aliveEnd) p.vars[id].aliveEnd = p.abstractTime;
 
 	const r = ufRoot(p, id);
 	if (p.vars[r].con.kind === CK_EMPTY_ROOT) {
@@ -334,7 +335,7 @@ function markReassigned(p: Partitions, vid: number): void {
 	}
 }
 
-function liveRanges(p: Partitions, node: Node): void {
+function liveRanges(p: Partitions, node: Node | null): void {
 	if (node === null) return;
 	p.abstractTime += 1;
 
@@ -552,7 +553,7 @@ function deps(p: Partitions, destName: string, src: Node): void {
 	}
 }
 
-function trav(p: Partitions, node: Node): void {
+function trav(p: Partitions, node: Node | null): void {
 	if (node === null) return;
 	p.abstractTime += 1;
 
@@ -884,6 +885,12 @@ test "let variable without reassignment is cursor" {
 	const body = getFuncBody("function f(arr: string[]) { let x = arr[0]; }");
 	const cs = inferCursors(body);
 	assert isCursorVar(cs, "x");
+}
+
+test "index-write through alias is not cursor even when alias is never read" {
+	const body = getFuncBody("function f() { const vn: Vec<number> = [1, 2]; const cn = vn; cn[0] = 7; console.log(vn[0]); }");
+	const cs = inferCursors(body);
+	assert !isCursorVar(cs, "cn");
 }
 
 test "call result is NOT cursor (owns data)" {
