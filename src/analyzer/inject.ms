@@ -266,6 +266,11 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 	if (!rcInfo.needsCleanup) return node;
 	// Capture in temp, register for scope-exit destroy
 	const loc = node.location;
+	for (let ci = 0; ci < dctx.capturedNodes.length; ci += 1) {
+		if (dctx.capturedNodes[ci] === node) {
+			return makeIdentResolved(dctx.capturedSyms[ci], loc);
+		}
+	}
 	const tmpSym = freshTempSym(dctx.ctx, "tmp", exprType);
 	const tmpName = tmpSym.name;
 	const tmpDecl = makeVarDecl(tmpName, node, DeclKind.Const, loc);
@@ -273,6 +278,8 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 	tmpDecl.resolvedSym = tmpSym;
 	addPre(dctx, tmpDecl);
 	registerVar(dctx, tmpName, rcInfo, false, tmpSym);
+	dctx.capturedNodes.push(node);
+	dctx.capturedSyms.push(tmpSym);
 	return makeIdentResolved(tmpSym, loc);
 }
 
@@ -1334,6 +1341,8 @@ function processStmtList(stmts: Node[], dctx: DrcContext, loc: SourceLocation): 
 		buf.push(processed);
 		for (const post of curScope.pendingStmts) { buf.push(post); }
 		curScope.pendingStmts = [];
+		dctx.capturedNodes = [];
+		dctx.capturedSyms = [];
 
 		dctx.currentStmtIdx = savedIdx;
 	}

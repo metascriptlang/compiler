@@ -76,6 +76,8 @@ export interface DrcContext {
 	                                // — retro-hoisted to borrow temps if the var moves later in it
 	inEnsureMove: number;           // depth of explicit `move` arguments being walked — a copy
 	                                // decision under it is errFailedMove (reference parity)
+	capturedNodes: Node[];
+	capturedSyms: Symbol[];
 	skipAwaitableCapture: boolean;  // set ONLY while walking a non-RC binding/cond initializer:
 	                                // ensureDestruction must not capture a future there (the
 	                                // await/spawn lowering's stepper owns it — PARALOCK). The
@@ -100,6 +102,8 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		stmtBorrowReads: [],
 		inEnsureMove: 0,
 		skipAwaitableCapture: false,
+		capturedNodes: [],
+		capturedSyms: [],
 	};
 }
 
