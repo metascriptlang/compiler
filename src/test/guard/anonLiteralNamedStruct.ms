@@ -1,45 +1,37 @@
-// nim-guard: a frozen anonymous-literal type must not adopt a NAMED struct
+// nim-guard: the anonymous-literal adoption BOUNDARY — what must stay rejected
 //
-// INVARIANT (compat.ms isObjectAssignable): an object literal bound without an
-//   annotation freezes as `__anonN__...` (anonStructName); no boundary lowering
-//   exists for it, so admitting it into a slot of a NAMED value struct compiles
-//   on js (types erased, runs silently) and dies at clang on C with two
-//   incompatible struct types. The checker must reject at ALL THREE positions
-//   — call arg, var init, return — with the annotate-at-the-literal hint.
-//   Nim constructs objects nominally (S(a:..)), so this class cannot exist
-//   there; the interface (Ref) target was already rejected loudly.
+// INVARIANT (compat.ms isAnonStructAdoption): an object literal bound without
+//   an annotation freezes as `__anonN__...`. It adopts a NAMED VALUE STRUCT
+//   only on an EXACT field match (see anonStructAdoption.ms for that half).
+//   Two neighbours must stay rejected on BOTH targets:
+//     (a) interface target — a reference type; adopting would copy on C while
+//         js keeps the alias, so `===` and mutation-visibility would split.
+//     (b) extra fields (width subtyping) — the C member-wise copy drops the
+//         extra field that the js identity keeps: a built-in parity split.
+//   Nim never faces this class: object construction is nominal (S(a: ..)), and
+//   its structural world (tuple) has no bridge to the nominal one.
 //
-// WHAT IT CATCHES: a compat.ms refactor dropping the anon-source clause —
-//   the js lane below is the important half: without the clause the js build
-//   compiles CLEAN and runs wrong silently (measured 2026-08-18, v0.2.49).
+// WHAT IT CATCHES: widening the adoption clause (dropping the exact-match or
+//   the interface test). The js lane is the important half — without a checker
+//   rule js compiles CLEAN and runs silently wrong.
 //
-// RED MEANS: isObjectAssignable re-admits `__anon* -> named struct`, or the
-//   diagnostic lost its position coverage / hint text (retag deliberately).
-//
-// NOT COVERED (pre-existing, out of scope): anon literal -> EMPTY-NAME inline
-//   annotation target (`p: { a: int32, b: string }`) — js runs it correctly
-//   today; C fails at clang (naming split __anonN vs msAnon_hash).
+// RED MEANS: isAnonStructAdoption admits a pair outside the boundary, or the
+//   diagnostic lost the annotate-at-the-literal hint (retag deliberately).
 //
 // GUARD-CHECK-FAIL Argument type mismatch
-// GUARD-CHECK-FAIL Return type mismatch
-// GUARD-CHECK-FAIL is not assignable to type
 // GUARD-CHECK-FAIL annotate at the literal
 // GUARD-JS
 
-struct GuardAnonS { a: int32; b: string; }
+interface GuardAnonIface { a: int32; b: string; }
+struct GuardAnonExact { a: int32; b: string; }
 
-function takeGuardAnon(s: GuardAnonS): void { console.log(s.b); }
-
-function giveGuardAnon(): GuardAnonS {
-    const t = { a: 3, b: "y" };
-    return t;
-}
+function takeIface(s: GuardAnonIface): void { console.log(s.b); }
+function takeExact(s: GuardAnonExact): void { console.log(s.b); }
 
 function main(): void {
     const t = { a: 1, b: "x" };
-    takeGuardAnon(t);
-    const u: GuardAnonS = t;
-    console.log(u.b);
-    console.log(giveGuardAnon().b);
+    takeIface(t);
+    const wide = { a: 1, b: "x", c: 9 };
+    takeExact(wide);
 }
 main();
