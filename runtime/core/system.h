@@ -265,6 +265,30 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msArrayUint8Destroy(arr)       msUint8ArrayDestroy(&(arr))
 #define msArrayUint8WasMoved(arr)      msArrayWasMoved(arr)
 #define msArrayUint8Sink(d, s)         do { msArrayDestroy(d); (d) = (s); } while(0)
+/* Alloc by len, never by raw cap: a string byte-view carries flag bits in cap
+ * (see MS_CAP_MASK in msUint8ArrayPush) — reading cap raw mallocs garbage. */
+#define msArrayUint8Copy1(arr) do { \
+	if ((arr).p != NULL && (arr).len > 0) { \
+		msUint8Payload* _auc_newp = (msUint8Payload*)msArrayPayloadNew((arr).len, sizeof(uint8_t)); \
+		memcpy(_auc_newp->data, (arr).p->data, (size_t)(arr).len); \
+		(arr).p = _auc_newp; \
+	} else { \
+		(arr).p = NULL; \
+	} \
+} while(0)
+#define msArrayUint8Copy2(d, s) do { \
+	msUint8Array _auc_src = (s); \
+	if (_auc_src.p != NULL && _auc_src.len > 0) { \
+		msUint8Payload* _auc_newp = (msUint8Payload*)msArrayPayloadNew(_auc_src.len, sizeof(uint8_t)); \
+		memcpy(_auc_newp->data, _auc_src.p->data, (size_t)_auc_src.len); \
+		(d).p = _auc_newp; \
+	} else { \
+		(d).p = NULL; \
+	} \
+	(d).len = _auc_src.len; \
+} while(0)
+#define msArrayUint8Copy_GET(_1, _2, NAME, ...) NAME
+#define msArrayUint8Copy(...) msArrayUint8Copy_GET(__VA_ARGS__, msArrayUint8Copy2, msArrayUint8Copy1)(__VA_ARGS__)
 
 /* Closure array: per-element destroy decrefs env, leaves fn (untracked
  * function pointer) alone. Single helper for ALL closure types — closure
