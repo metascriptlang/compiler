@@ -1517,13 +1517,16 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				return;
 			}
 			const elemExpected = (arrExpected !== null
-				&& (arrExpected.kind === TypeKind.Array || arrExpected.kind === TypeKind.SizedArray)
+				&& (arrExpected.kind === TypeKind.Array || arrExpected.kind === TypeKind.SizedArray
+					|| arrExpected.kind === TypeKind.Span)
 				&& arrExpected.typeReturn !== null)
 				? arrExpected.typeReturn
 				: null;
 			if (d.elements.length === 0) {
 				if (arrExpected !== null && (arrExpected.kind === TypeKind.SizedArray || arrExpected.kind === TypeKind.Array)) {
 					node.nodeType = refArrayWrap !== null ? refArrayWrap : arrExpected; return;
+				} else if (elemExpected !== null) {
+					node.nodeType = createRef(createArray(elemExpected)); return;
 				} else {
 					node.nodeType = createRef(createArray(inferredType())); return;
 				}
