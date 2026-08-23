@@ -68,6 +68,23 @@ function main(): number {
 	}
 	check("divLoopIters", iters === 4);
 
+	// --- compound assignment, including through an array index. The indexed
+	// form is the one an inline test cannot reach: only the project pipeline
+	// wraps the array in a deref, and that shape is what decides whether the
+	// left side can be read back at all.
+	let cd: int32 = opaqueI32(7);
+	cd /= opaqueI32(2);
+	check("cdivIdent", cd === 3);
+
+	const cells: int32[] = [opaqueI32(7), opaqueI32(9)];
+	let ci: int32 = opaqueI32(0);
+	cells[ci] /= opaqueI32(2);
+	check("cdivIndexed", cells[ci] === 3);
+
+	const ucells: uint32[] = [opaqueU32(1), opaqueU32(5)];
+	ucells[ci] -= opaqueU32(3);
+	check("cwrapIndexed", ucells[ci] === 4294967294);
+
 	// --- unsigned division and wrap ---
 	check("udiv", opaqueU32(7) / opaqueU32(2) === 3);
 	const uwrapExpect: uint32 = 4294967295;
