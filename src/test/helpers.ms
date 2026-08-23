@@ -160,6 +160,9 @@ export function compileToJS(source: string): CompileResult {
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 
 	const transformed = transformProgram(pr.value, checkerCtx, true);
+	// Mirrors the drain compile.ms runs after the JS transform: a pass that
+	// refuses a construct reports it here instead of emitting silently-wrong JS.
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
 	return Result.ok(generateJS(transformed, []));
 }
 

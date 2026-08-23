@@ -60,6 +60,41 @@ test "compound divide on a float is left alone" {
 	assert result.value.contains("/=");
 }
 
+// The project pipeline hands this pass `arr[i]` as ArrayAccess over a
+// HiddenDeref, which a single-module compile never produces — measured, and the
+// reason a green suite here still shipped a hard error on every real build.
+// Runtime coverage: corpus/programs/016-jsIntegerModel.ms.
+test "compound divide through an index over identifiers still truncates" {
+	const result = compileToJS("function f(arr: int32[], i: int32, b: int32): int32 { arr[i] /= b; return arr[i]; }");
+	assert result.ok;
+	assert result.value.contains("| 0");
+	assert !result.value.contains("/=");
+}
+
+// A left side that cannot be read twice has no correct expression-level
+// rewrite, and emitting the untruncated compound form would put a fraction in
+// an integer slot on JS while C truncates. Refused by name instead.
+test "compound divide on a call-indexed left side is refused" {
+	const result = compileToJS("function g(): int32 { return 0; } function f(arr: int32[], b: int32): void { arr[g()] /= b; }");
+	assert !result.ok;
+	assert result.error.contains("read twice");
+}
+
+test "compound add on a call-indexed unsigned left side is refused" {
+	const result = compileToJS("function g(): int32 { return 0; } function f(arr: uint32[], b: uint32): void { arr[g()] += b; }");
+	assert !result.ok;
+	assert result.error.contains("read twice");
+}
+
+// The signed widths never had a rewrite to lose: C-debug traps on overflow
+// instead of producing a value, so there is nothing to match and nothing to
+// refuse either.
+test "compound add on a signed call-indexed left side stays untouched" {
+	const result = compileToJS("function g(): int32 { return 0; } function f(arr: int32[], b: int32): void { arr[g()] += b; }");
+	assert result.ok;
+	assert result.value.contains("+=");
+}
+
 // ===== uint32 wrap =====
 //
 // C wraps mod 2^32 at this width and nowhere else — uint8/uint16 follow C's
