@@ -70,6 +70,38 @@ if (literalSum !== 15) {
 	console.log("FAIL literalSum=" + literalSum.toString());
 }
 
+// The source in an if-CONDITION and in a statement that also holds a ternary:
+// the two statement kinds the transform-level materializer (3dafdba) skipped.
+// Single-eval there is owned by the analyzer's shared-node capture memo.
+calls = 0;
+if (describe(vary()) !== "1:11") {
+	ok = false;
+	console.log("FAIL ifcond (data and len came from different evaluations)");
+}
+if (calls !== 1) {
+	ok = false;
+	console.log("FAIL ifcond evaluations=" + calls.toString());
+}
+
+calls = 0;
+let flagM = calls === 0;
+const mixed = describe(vary()) + (flagM ? "-t" : "-f");
+if (mixed !== "1:11-t") {
+	ok = false;
+	console.log("FAIL mixed=" + mixed);
+}
+if (calls !== 1) {
+	ok = false;
+	console.log("FAIL mixed evaluations=" + calls.toString());
+}
+
+// An empty result in if-condition position: the data pointer must come from
+// the null guard, not a raw payload deref.
+if (lengthOf(empty()) !== 0) {
+	ok = false;
+	console.log("FAIL emptyIfCond");
+}
+
 if (ok) {
 	console.log("span-arg all-ok");
 }
