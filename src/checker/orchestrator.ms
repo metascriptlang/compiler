@@ -11,6 +11,7 @@ import {
 import { ScopeKind, openScope, addSymbolToScope, hasFlag, SymbolFlag } from "./symbol";
 import { ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { runThreePasses, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude } from "./checkPass";
+import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { collectTopLevelLocal } from "./collectPass";
 import { registerModuleCtx, registerModuleProgram } from "./instantiate";
 import { lex } from "../lexer/lexer";
@@ -185,6 +186,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		runThreePasses(ctx, pr.value);
 		collectDirectives(ctx, pr.value);
 		stampHeaderPaths(ctx);
+		analyzeParamMutations(ctx, pr.value);
 
 		// Register this module's ctx so cross-module generic instantiation can
 		// re-check cloned bodies in the DEFINING module's scope (resolving
