@@ -17,10 +17,11 @@ import { containsConditionalEval } from "./callHoist";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary,
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
-	makeConditional, makeNull,
+	makeConditional, makeNull, makeHiddenStdConv,
 } from "../util";
 
 export function spanLower(program: Node, ctx: TransformContext): Node {
+	walkNode(program, wrapSpanArgs);
 	walkExpandBlocks(program, materializeSpanSources, ctx);
 	return walkNode(program, (node: Node): Node => {
 		// Zero-copy slicing: ArrayAccess with range index and Span result type
@@ -39,7 +40,8 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 				spanTarget = spanTarget.typeReturn;
 			}
 			if (spanTarget.kind === TypeKind.Span) {
-				const srcType = d.convExpr.nodeType;
+				let srcType = d.convExpr.nodeType;
+				if (srcType !== null && srcType.kind === TypeKind.Ref && srcType.typeReturn !== null) srcType = srcType.typeReturn;
 				if (srcType !== null) {
 					const loc = node.location;
 
@@ -173,6 +175,37 @@ function calleeFnType(node: Node): Type {
 		return cd.callee.nodeType;
 	}
 	return null as unknown as Type;
+}
+
+function isSpanValued(t: Type): boolean {
+	if (t === null) return false;
+	if (t.kind === TypeKind.Span) return true;
+	if ((t.kind === TypeKind.Var || t.kind === TypeKind.Sink || t.kind === TypeKind.Lent) && t.typeReturn !== null) {
+		return t.typeReturn.kind === TypeKind.Span;
+	}
+	return false;
+}
+
+function wrapSpanArgs(node: Node): Node {
+	if (node.kind !== NodeKind.CallExpr) return node;
+	const fnType = calleeFnType(node);
+	if (fnType === null) return node;
+	const cd = node.data as CallExprData;
+	let i = 0;
+	while (i < cd.arguments.length) {
+		if (i < fnType.typeChildren.length) {
+			const formal = fnType.typeChildren[i];
+			if (formal !== null && formal.kind === TypeKind.Span && formal.typeReturn !== null) {
+				const arg = cd.arguments[i];
+				if (arg !== null && arg.kind !== NodeKind.HiddenStdConv && arg.kind !== NodeKind.HiddenSubConv
+						&& arg.nodeType !== null && !isSpanValued(arg.nodeType)) {
+					cd.arguments[i] = makeHiddenStdConv(arg, formal, arg.location);
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return node;
 }
 
 function materializeSpanSources(stmt: Node, ctx: TransformContext): Node[] {

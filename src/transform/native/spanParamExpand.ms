@@ -1,7 +1,11 @@
 // Span Parameter Expansion — openArray calling convention for C backend
 //
-// Expands Span<T> parameters into two C-level parameters: (T* name_data, int64_t name_len).
-// This keeps the C codegen "dumb" — it sees normal scalar params, not Span structs.
+// Expands Span<T> parameters of EXTERN functions into two C-level parameters
+// (T* name_data, int64_t name_len) — the flat FFI ABI the C runtime is written
+// against (e.g. msOsCpus). Non-extern functions keep the Span type end-to-end:
+// codegen derives the by-pointer convention from the type, identically in every
+// module — rewriting signatures here was module-local and split the C signature
+// of one symbol across translation units.
 //
 // Pattern: standard reference expansion pattern for view/span parameters.
 //
@@ -21,7 +25,7 @@
 // V1 limitation: top-level FunctionDecl only. Span in closures/function-pointer types
 // emits a diagnostic.
 
-import { Node, NodeKind, DeclKind, FunctionDeclData, CallExprData, ObjectLiteralData, BlockStmtData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, FunctionDeclData, CallExprData, ObjectLiteralData, ArrayLiteralData, BlockStmtData, Type, TypeKind } from "../../ast/node";
 import { createPtr, createSpan, getSysType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -77,6 +81,7 @@ export function spanParamExpand(program: Node, ctx: TransformContext): Node {
 
 function expandFunctionDecl(node: Node, expandedFuncs: ExpandedFunc[], ctx: TransformContext): void {
 	const d = node.data as FunctionDeclData;
+	if (d.fnFlags.indexOf("extern", 0) < 0) return;
 	const fnType = node.nodeType;
 	if (fnType === null) return;
 	if (fnType.kind !== TypeKind.Function) return;
@@ -281,6 +286,15 @@ function expandCallSite(node: Node, expandedFuncs: ExpandedFunc[]): void {
 			// every non-location source to a temp first, so repeating `arg`
 			// here repeats a NAME, never an evaluation.
 			const loc = arg.location;
+
+			if (arg.kind === NodeKind.ArrayLiteral && (arg.data as ArrayLiteralData).elements.length === 0) {
+				const nullData = makeNull(loc);
+				nullData.nodeType = createPtr(ep.elemType);
+				newArgs.push(nullData);
+				newArgs.push(makeNumber(0, loc));
+				ai = ai + 1;
+				continue;
+			}
 
 			// Reference parity (openArrayLoc, tyArray arm): a fixed-size array
 			// hands over its inline buffer and a STATIC length. It has no `len`
