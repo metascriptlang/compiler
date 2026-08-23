@@ -1,0 +1,11 @@
+const v: Vec<uint8> = [1, 2, 3];
+const c = v;
+c[0] = 9;
+console.log("copy=" + c[0].toString() + "," + c[1].toString() + "," + c[2].toString());
+const e: Vec<uint8> = [];
+const e2 = e;
+console.log("elen=" + e2.length.toString());
+const vn: Vec<number> = [4, 5];
+const cn = vn;
+cn[1] = 6;
+console.log("numcopy=" + cn[0].toString() + "," + cn[1].toString());
