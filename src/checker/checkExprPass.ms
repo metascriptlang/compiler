@@ -1826,7 +1826,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const md = node.data as MacroInvocationData;
 			// reference parity: @emit backtick interpolation (reference emit processing)
 			if (md.macroName === "emit") {
-				processEmitInterpolation(ctx, md, node);
+				processEmitInterpolation(ctx, node);
 			}
 			// @import args are pure syntax (not evaluated) — skip type-checking
 			foldComptimeNodeAliasArgs(ctx, md.macroArgs);
@@ -6317,7 +6317,8 @@ function checkFuncExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 // string literals for raw text, Identifier nodes for resolved symbols.
 
 
-function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, node: Node): void {
+function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
+	const md = node.data as MacroInvocationData;
 	if (md.macroArgs.length !== 1) return;
 	const arg = md.macroArgs[0];
 

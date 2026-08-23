@@ -48,7 +48,7 @@ function materializeIntOp(node: Node, ctx: TransformContext): Node {
 	const base = compoundBaseOf(d.operator);
 	if (base !== "") return compoundAsInteger(node, d, base, ctx);
 	if (d.operator === "/") return divideAsInteger(node);
-	return binaryAsUnsigned(node, d);
+	return binaryAsUnsigned(node);
 }
 
 function divideAsInteger(node: Node): Node {
@@ -57,7 +57,8 @@ function divideAsInteger(node: Node): Node {
 	return truncateTo(node, t.kind, node.location);
 }
 
-function binaryAsUnsigned(node: Node, d: BinaryExprData): Node {
+function binaryAsUnsigned(node: Node): Node {
+	const d = node.data as BinaryExprData;
 	const t = node.nodeType;
 	if (t === null || t.kind !== TypeKind.Uint32) return node;
 	if (d.operator === ">>") {

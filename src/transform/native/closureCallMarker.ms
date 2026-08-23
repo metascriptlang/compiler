@@ -43,7 +43,7 @@ function markCall(node: Node): Node {
 
 	// Reference parity: thunk generation — wrap named functions passed as
 	// closure-typed args into {fn, env:null} thunks. Runs in transform, not checker.
-	wrapFuncArgsAsThunks(cd);
+	wrapFuncArgsAsThunks(node);
 
 	return node;
 }
@@ -52,7 +52,8 @@ function markCall(node: Node): Node {
 // Scans CallExpr arguments: if arg is an Identifier → SymbolKind.Function
 // and the callee's corresponding parameter expects a Function/closure type,
 // wrap it in ObjectLiteral { fn, env } with closure nodeType.
-function wrapFuncArgsAsThunks(cd: CallExprData): void {
+function wrapFuncArgsAsThunks(node: Node): void {
+	const cd = node.data as CallExprData;
 	// Need callee's function type to know parameter types
 	const calleeType = getCalleeType(cd);
 	if (calleeType === null) return;
