@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
-import { Type, TypeKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase } from "./types";
+import { Type, TypeKind, SymbolKind } from "../ast/node";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase, isMaybeType } from "./types";
 
 
 // ===== Assignability =====
@@ -534,9 +534,11 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	if (source.typeName !== "" && source.typeName === target.typeName) return true;
 	// Cross-module nominal: types linked via sym identity (both point to same Symbol)
 	if (source.sym !== null && source.sym === target.sym) return true;
-	// A frozen anonymous-literal type never adopts a NAMED struct: no lowering
-	// exists, so C emits two distinct types (clang error) while js runs the
-	// cast silently. Annotating at the literal is the supported path.
+	// Exact-field anon→named pairs are assignable; fitNode materializes the
+	// member-wise re-construction. Every other anon→named pair stays rejected:
+	// no lowering exists, so C emits two distinct types (clang error) while js
+	// runs the cast silently. Annotating at the literal is the supported path.
+	if (isAnonStructAdoption(source, target)) return true;
 	if (isAnonLiteralName(source.typeName) && target.typeName !== "" && !isAnonLiteralName(target.typeName)) return false;
 	// Pin source/target fields to locals — the binder's flow narrowing on the
 	// `source: Type | null` parameter doesn't always propagate into nested
@@ -626,6 +628,29 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 		ti += 1;
 	}
 	return "";
+}
+
+// Duck-typed adoption boundary: a frozen anonymous-literal value may be
+// re-constructed member-wise into a NAMED value struct when the field lists
+// match EXACTLY. Interface targets keep reference/aliasing semantics and stay
+// rejected; extra-field (prefix) matches stay rejected — the C copy would drop
+// fields the js identity keeps, a built-in parity split.
+export function isAnonStructAdoption(source: Type | null, target: Type | null): boolean {
+	if (source === null || target === null) return false;
+	if (source.kind !== TypeKind.Struct || target.kind !== TypeKind.Struct) return false;
+	if (!isAnonLiteralName(source.typeName)) return false;
+	if (target.typeName === "" || isAnonLiteralName(target.typeName)) return false;
+	if (target.sym !== null && target.sym.symbolKind === SymbolKind.Interface) return false;
+	if (isMaybeType(target)) return false;
+	const sNames = source.typeNames;
+	const tNames = target.typeNames;
+	if (sNames.length !== tNames.length) return false;
+	for (let i = 0; i < tNames.length; i += 1) {
+		if (sNames[i] !== tNames[i]) return false;
+		if (i >= source.typeChildren.length || i >= target.typeChildren.length) return false;
+		if (!sameType(source.typeChildren[i], target.typeChildren[i])) return false;
+	}
+	return true;
 }
 
 // ===== Overload Resolution =====

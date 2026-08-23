@@ -9,7 +9,7 @@ import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, f
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
-	CandidateScore, sameType, explainStructuralPrefix, isObjectShapeMismatch,
+	CandidateScore, sameType, explainStructuralPrefix, isObjectShapeMismatch, isAnonStructAdoption,
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
@@ -2663,6 +2663,42 @@ function narrowUnionToVariant(expr: Node, exprType: Type): Node {
 	return convNode;
 }
 
+// Adoption action for isAnonStructAdoption pairs: re-construct the frozen
+// anonymous value member-wise as the named struct. Identifier sources only —
+// anything else would need single-eval temp machinery. Returns null when the
+// pair does not adopt; callers fall through to their existing reject path.
+export function tryAdoptAnonStruct(expr: Node, formalIn: Type | null, exprTypeIn: Type | null): Node {
+	const formal = skipModifier(formalIn);
+	const exprType = skipModifier(exprTypeIn);
+	if (formal === null || exprType === null) return null as unknown as Node;
+	if (expr.kind !== NodeKind.Identifier) return null as unknown as Node;
+	if (!isAnonStructAdoption(exprType, formal)) return null as unknown as Node;
+	const tok = createToken(TokenKind.Ident, "", expr.location.line);
+	const props: Node[] = [];
+	const keys: string[] = [];
+	const keyLocs: SourceLocation[] = [];
+	const identD = expr.data as IdentifierData;
+	for (let i = 0; i < formal.typeNames.length; i += 1) {
+		const objNode = createNode(NodeKind.Identifier, { name: identD.name } as NodeData, tok);
+		objNode.resolvedSym = expr.resolvedSym;
+		objNode.nodeType = exprType;
+		objNode.flags = objNode.flags | NodeFlag.Sem;
+		objNode.location = expr.location;
+		const mem = createNode(NodeKind.MemberExpr, { object: objNode, property: formal.typeNames[i], isOptional: false } as NodeData, tok);
+		mem.nodeType = formal.typeChildren[i];
+		mem.flags = mem.flags | NodeFlag.Sem;
+		mem.location = expr.location;
+		props.push(mem);
+		keys.push(formal.typeNames[i]);
+		keyLocs.push(expr.location);
+	}
+	const lit = createNode(NodeKind.ObjectLiteral, { properties: props, keys: keys, keyLocations: keyLocs } as NodeData, tok);
+	lit.nodeType = formal;
+	lit.flags = lit.flags | NodeFlag.Sem;
+	lit.location = expr.location;
+	return lit;
+}
+
 export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
 	if (formal === null || exprType === null) return expr;
 	if (formal.kind === TypeKind.Unknown || isUnresolvedType(formal)) {
@@ -2693,6 +2729,8 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		return expr;
 	}
 	if (exprType.kind === TypeKind.Never) return expr;
+	const adopted = tryAdoptAnonStruct(expr, formal, exprType);
+	if (adopted !== null as unknown as Node) return adopted;
 	// Direct function → closure auto-wrap (Reference parity: nkHiddenSubConv → nkClosure).
 	// When a named function (CcDefault) flows into a closure-typed slot (CcClosure),
 	// wrap as `{fn: expr, env: null}` ObjectLiteral with NodeFlag.Closure.
@@ -3685,6 +3723,11 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 					d.arguments[pi] = synthMaybeWrap(d.arguments[pi], paramType, argTypes[pi]);
 					argTypes[pi] = paramType;
 				}
+				const adoptedArg = tryAdoptAnonStruct(d.arguments[pi], paramType, argTypes[pi]);
+				if (adoptedArg !== null as unknown as Node) {
+					d.arguments[pi] = adoptedArg;
+					argTypes[pi] = paramType;
+				}
 				if (paramType.kind === TypeKind.CString
 						&& (argTypes[pi].kind === TypeKind.String || argTypes[pi].kind === TypeKind.StringLiteral)) {
 					d.arguments[pi] = synthCStringConv(d.arguments[pi], paramType);
@@ -3992,6 +4035,8 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 				const uw = widenVariantToUnion(arg, formal, arg.nodeType);
 				if (uw !== null as unknown as Node) cd.arguments[ai] = uw;
 			}
+			const adoptedGen = tryAdoptAnonStruct(arg, formal, arg.nodeType);
+			if (adoptedGen !== null as unknown as Node) cd.arguments[ai] = adoptedGen;
 		}
 	}
 	// Eagerly instantiate body for concrete GenericInstance — mirrors
