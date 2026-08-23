@@ -853,6 +853,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
 		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
+		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.source);
 
 		// Build per-module import specifier → module ID mapping
 		const localMapKeys: string[] = [];
@@ -1836,6 +1837,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		const ctx = unitCtxs[ui];
 		const mod = findModule(graph, modPath);
 		const transformed = transformProgram(unitPrograms[ui], ctx, true);
+		exitOnCheckerErrors(ctx, modPath, mod !== null ? mod.source : "");
 
 		const fromRel = lookupOutRel(outRelKeys, outRelVals, modPath);
 		const importSpecKeys: string[] = [];
