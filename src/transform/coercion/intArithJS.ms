@@ -29,23 +29,24 @@
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, SourceLocation, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
+import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, makeIdent, makeMember, makeArrayAccess, makeNumber } from "../util";
+import { makeBinary, makeCall, makeIdent, makeMember, makeArrayAccess, makeNumber, makeHiddenDeref, makeHiddenAddr } from "../util";
 import { truncateTo, isIntConvKind } from "./intConvJS";
 
 export function lowerIntArithJS(program: Node, ctx: TransformContext): Node {
-	walkNode(program, materializeIntOp);
+	walkNode(program, (node: Node): Node => materializeIntOp(node, ctx));
 	return program;
 }
 
-function materializeIntOp(node: Node): Node {
+function materializeIntOp(node: Node, ctx: TransformContext): Node {
 	if (node.kind === NodeKind.UnaryExpr) return unaryAsUnsigned(node);
 	if (node.kind !== NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	const base = compoundBaseOf(d.operator);
-	if (base !== "") return compoundAsInteger(node, d, base);
+	if (base !== "") return compoundAsInteger(node, d, base, ctx);
 	if (d.operator === "/") return divideAsInteger(node);
 	return binaryAsUnsigned(node, d);
 }
@@ -106,25 +107,26 @@ function compoundBaseOf(op: string): string {
 // `a OP= b` has no expression-level rewrite that stays correct for an arbitrary
 // left side: the value has to be read as well as written, and reading it twice
 // re-runs whatever the lvalue evaluates. Only side-effect-free shapes are
-// rewritten; anything else keeps the raw compound form, which
-// docs/JS-NUMERIC.md records as the one hole left in this phase.
-function compoundAsInteger(node: Node, d: BinaryExprData, base: string): Node {
+// rewritten; anything else would silently keep C's value and JS's, so it is
+// refused by name instead.
+function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: TransformContext): Node {
 	const t = d.left.nodeType;
 	if (t === null || !isIntConvKind(t.kind)) return node;
 	const unsigned = t.kind === TypeKind.Uint32;
 	if (base !== "/" && !unsigned) return node;
 	const readBack = cloneIfPure(d.left);
-	if (readBack === null) return node;
+	if (readBack === null) {
+		if (ctx.checkerCtx !== null) {
+			addError(ctx.checkerCtx, "integer '" + base + "=' needs a left side that can be read twice; hoist the receiver or index into a local first", node.location.line, node.location.column);
+		}
+		return node;
+	}
+	// makeBinary carries the left operand's type onto the result, which is what
+	// keeps this synthesized node visible to the width table above.
 	const widened = base === "*" && unsigned
 		? exactMul(readBack, d.right, node.location)
-		: typedBinary(readBack, base, d.right, node.location, t);
+		: makeBinary(readBack, base, d.right, node.location);
 	return makeBinary(d.left, "=", truncateTo(widened, t.kind, node.location), node.location);
-}
-
-function typedBinary(left: Node, op: string, right: Node, loc: SourceLocation, t: Type): Node {
-	const n = makeBinary(left, op, right, loc);
-	n.nodeType = t;
-	return n;
 }
 
 // A second read of the lvalue is only safe when re-evaluating it cannot call
@@ -160,6 +162,17 @@ function cloneIfPure(node: Node): Node | null {
 	if (node.kind === NodeKind.NumberLiteral) {
 		const d = node.data as NumberLiteralData;
 		const c = makeNumber(d.value, node.location);
+		c.nodeType = node.nodeType;
+		return c;
+	}
+	// A deref/addr wrapper evaluates nothing of its own, so re-reading it costs
+	// exactly what re-reading its operand costs. conditionalExprLower walks the
+	// same pair transparently when it hoists assignment-target effects.
+	if (node.kind === NodeKind.HiddenDeref || node.kind === NodeKind.HiddenAddr) {
+		const d = node.data as HiddenDerefData;
+		const inner = cloneIfPure(d.expr);
+		if (inner === null) return null;
+		const c = node.kind === NodeKind.HiddenDeref ? makeHiddenDeref(inner, node.location) : makeHiddenAddr(inner, node.location);
 		c.nodeType = node.nodeType;
 		return c;
 	}
