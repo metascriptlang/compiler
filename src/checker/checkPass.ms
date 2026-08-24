@@ -806,12 +806,15 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	// If return type was unknown (no annotation), use inferred type
 	if (sym.symbolType.kind === TypeKind.Function
 		&& sym.symbolType.typeReturn !== null
-		&& isUnresolvedType(sym.symbolType.typeReturn)
-		&& ctx.inferredReturn.kind !== TypeKind.Inferred) {
-		sym.symbolType.typeReturn = ctx.inferredReturn;
-		for (const rs of ctx.inferredReturnStmts) {
-			const rsd = rs.data as ReturnStmtData;
-			if (rsd.argument !== null) rsd.argument = fitJoinedBranch(ctx, rsd.argument, ctx.inferredReturn);
+		&& isUnresolvedType(sym.symbolType.typeReturn)) {
+		if (ctx.inferredReturn.kind !== TypeKind.Inferred) {
+			sym.symbolType.typeReturn = ctx.inferredReturn;
+			for (const rs of ctx.inferredReturnStmts) {
+				const rsd = rs.data as ReturnStmtData;
+				if (rsd.argument !== null) rsd.argument = fitJoinedBranch(ctx, rsd.argument, ctx.inferredReturn);
+			}
+		} else {
+			sym.symbolType.typeReturn = voidType();
 		}
 	}
 
@@ -2829,11 +2832,11 @@ test "boolean return inferred" {
 	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Boolean;
 }
 
-test "no return stays unknown" {
+test "no return infers void" {
 	const ctx = checkSource("function noop() { const x = 1; }");
 	const sym = lookupSymbol(ctx.table, "noop");
 	assert sym !== null;
-	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Inferred;
+	assert sym.symbolType.typeReturn !== null && sym.symbolType.typeReturn.kind === TypeKind.Void;
 }
 
 test "return type mismatch detected" { assert !checkOk("function foo(): number { return \"hello\"; }"); }
