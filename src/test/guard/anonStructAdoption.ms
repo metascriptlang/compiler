@@ -21,9 +21,10 @@
 //   is heap-built, so a missing incref shows up as a double-destroy abort and
 //   a missing decref as ledger imbalance).
 //
-// NOT COVERED (known residual, loud on C): a context-free generic call
-//   (`const r = Result.ok(t)`) freezes Result<__anonN>; a later meeting with
-//   Result<S,E> has no rewriter for the nested literal and fails at clang.
+// COVERED ELSEWHERE (previously misattributed to anon literals): a
+//   context-free generic call (`const r = Result.ok(t)`) leaves E unbound —
+//   that is the unbound-param check's territory (genericUnboundParam.ms),
+//   independent of anon-ness: a fully annotated source failed identically.
 //
 // RED MEANS: one position stopped adopting (build error naming that line), or
 //   the copy's DRC hooks drifted.
