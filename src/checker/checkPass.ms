@@ -867,6 +867,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	const genericStr = getGenericDecl(d.className);
 	const hasGenerics = genericStr !== "";
 	if (hasGenerics) {
+		ctx.inGenericContext += 1;
 		openScope(ctx.table, ScopeKind.Block);
 		const genericNames = splitTopLevel(genericStr, ",");
 		for (const gp of genericNames) {
@@ -877,7 +878,10 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	for (const member of d.classBody) {
 		checkClassMember(ctx, member, d.className, sym.symbolType);
 	}
-	if (hasGenerics) closeScope(ctx.table);
+	if (hasGenerics) {
+		ctx.inGenericContext -= 1;
+		closeScope(ctx.table);
+	}
 	closeScope(ctx.table);
 
 	sym.state = SymbolState.Checked;

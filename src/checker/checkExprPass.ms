@@ -3568,7 +3568,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			const newCalleeType = tryInstantiateGenericCallee(ctx, node, calleeType, argTypes, methodFlags, expectedType);
 			if (newCalleeType !== null) {
 				calleeType = newCalleeType;
-				return inferGenericReturn(calleeType, argTypes, expectedType, node);
+				return inferGenericReturn(ctx, calleeType, argTypes, expectedType, node);
 			}
 		}
 		// Explicit type arg resolution for generic methods (e.g. JSON.parse<Person>)
@@ -3588,7 +3588,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				checkActorArgSendable(ctx, d.arguments[pi], pi);
 			}
 		}
-		return inferGenericReturn(calleeType, argTypes, expectedType, node);
+		return inferGenericReturn(ctx, calleeType, argTypes, expectedType, node);
 	}
 	// Multi-overload extension — needs argTypes for scoring
 	if (extMultiFiltered.length > 1) {
@@ -3858,7 +3858,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				&& calleeType.typeExtra.typeName.slice(0, 8) === "asserts:") {
 			applyAssertionNarrowing(calleeType, d.arguments);
 		}
-		return inferGenericReturn(calleeType, argTypes, expectedType, node);
+		return inferGenericReturn(ctx, calleeType, argTypes, expectedType, node);
 	}
 	return getReturnType(calleeType);
 }
@@ -3869,7 +3869,7 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 	if (returnType === null) return inferredType();
 	// Resolve the explicit type arg to an actual type
 	const resolvedSym = lookupSymbol(ctx.table, explicitArg);
-	if (resolvedSym === null) return inferGenericReturn(fnType, argTypes, expectedType, node);
+	if (resolvedSym === null) return inferGenericReturn(ctx, fnType, argTypes, expectedType, node);
 	ensureShaped(resolvedSym, ctx);
 	const concreteType = resolvedSym.symbolType;
 	// Record the type arg as a symbol reference for LSP hover/goto-def
@@ -3894,6 +3894,11 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 			const declParams = getGenericDecl(returnType.typeName);
 			instantiateGenericBody(returnType, declParams);
 		}
+	}
+	if (ctx.inGenericContext === 0 && hasGenericParams(returnType)) {
+		const unbound = findFirstGenericParamName(returnType);
+		addError(ctx, "cannot instantiate: '" + unbound + "' — annotate the destination type or pass an explicit type argument", node.location.line, node.location.column);
+		return errorType();
 	}
 	return returnType;
 }
@@ -3964,7 +3969,7 @@ function applyAssertionNarrowing(calleeType: Type, args: Node[]): void {
 	argSym.symbolType = targetType;
 }
 
-export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType: Type | null, callNode: Node | null): Type {
+export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: Type[], expectedType: Type | null, callNode: Node | null): Type {
 	let returnType = fnType.typeReturn;
 	if (returnType === null) return inferredType();
 
@@ -4050,6 +4055,13 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 		if (declParams !== "") {
 			instantiateGenericBody(returnType, declParams);
 		}
+	}
+	if (ctx.inGenericContext === 0 && hasGenericParams(returnType)) {
+		const unbound = findFirstGenericParamName(returnType);
+		const errLine = callNode !== null ? callNode.location.line : 0;
+		const errCol = callNode !== null ? callNode.location.column : 0;
+		addError(ctx, "cannot instantiate: '" + unbound + "' — annotate the destination type or pass an explicit type argument", errLine, errCol);
+		return errorType();
 	}
 	return returnType;
 }
@@ -4661,7 +4673,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	if (winnerType.kind === TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
 		fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0);
 	}
-	return inferGenericReturn(winnerType, argTypes, null, callNode);
+	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
 }
 
 // Resolve extension method overloads: multiple extensions match same receiver+method.
@@ -4780,7 +4792,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		const ovDefaultOffset = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
 	}
-	return inferGenericReturn(winnerType, argTypes, null, callNode);
+	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
 }
 
 function formatCandidateSig(name: string, fnType: Type): string {
