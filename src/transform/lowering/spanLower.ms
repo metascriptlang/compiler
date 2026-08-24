@@ -9,7 +9,7 @@
 // - Zero-copy slicing: arr[start..end] with Span result → { data: arr.data + start, len: end - start }
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
-import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, VariableDeclData, Type, TypeKind } from "../../ast/node";
 import { createSizedArray, createPtr } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
@@ -20,7 +20,7 @@ import {
 } from "../util";
 
 export function spanLower(program: Node, ctx: TransformContext): Node {
-	walkNode(program, wrapSpanArgs);
+	walkNode(program, wrapSpanCoercions);
 	return walkNode(program, (node: Node): Node => {
 		// Zero-copy slicing: ArrayAccess with range index and Span result type
 		if (node.kind === NodeKind.ArrayAccess) {
@@ -101,7 +101,9 @@ function isSpanValued(t: Type): boolean {
 	return false;
 }
 
-function wrapSpanArgs(node: Node): Node {
+function wrapSpanCoercions(node: Node): Node {
+	if (node.kind === NodeKind.VariableDecl) return wrapSpanDeclInit(node);
+	if (node.kind === NodeKind.BinaryExpr) return wrapSpanAssign(node);
 	if (node.kind !== NodeKind.CallExpr) return node;
 	const fnType = calleeFnType(node);
 	if (fnType === null) return node;
@@ -119,6 +121,31 @@ function wrapSpanArgs(node: Node): Node {
 			}
 		}
 		i = i + 1;
+	}
+	return node;
+}
+
+function wrapSpanAssign(node: Node): Node {
+	const bd = node.data as BinaryExprData;
+	if (bd.operator !== "=") return node;
+	if (bd.left.nodeType === null || bd.left.nodeType.kind !== TypeKind.Span || bd.left.nodeType.typeReturn === null) return node;
+	const rhs = bd.right;
+	if (rhs !== null && rhs.kind !== NodeKind.HiddenStdConv && rhs.kind !== NodeKind.HiddenSubConv
+			&& rhs.nodeType !== null && !isSpanValued(rhs.nodeType)) {
+		bd.right = makeHiddenStdConv(rhs, bd.left.nodeType, rhs.location);
+	}
+	return node;
+}
+
+function wrapSpanDeclInit(node: Node): Node {
+	let declType = node.nodeType;
+	if (declType === null && node.resolvedSym !== null) declType = node.resolvedSym.symbolType;
+	if (declType === null || declType.kind !== TypeKind.Span || declType.typeReturn === null) return node;
+	const vd = node.data as VariableDeclData;
+	const init = vd.initializer;
+	if (init !== null && init.kind !== NodeKind.HiddenStdConv && init.kind !== NodeKind.HiddenSubConv
+			&& init.nodeType !== null && !isSpanValued(init.nodeType)) {
+		vd.initializer = makeHiddenStdConv(init, declType, init.location);
 	}
 	return node;
 }
