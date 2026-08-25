@@ -32,8 +32,9 @@ function isGeneratedMsArrayHook(name: string): boolean {
 	const base = name.slice(0, name.length - suffix.length);
 	// Runtime ms* array hooks are all single-level (msArray, msNumberArray, msStringArray,
 	// msRefArray, msUint8Array, msClosureArray); a generated nested value-array walker is
-	// array-OF-array, so its base ends in "ArrayArray". That alone discriminates — no denylist.
-	return base.endsWith("ArrayArray");
+	// array-OF-array ("ArrayArray") and a ref-array-element walker ends "star_Array"
+	// (elemIsRefArray per-type struct). Either ending discriminates — no denylist.
+	return base.endsWith("ArrayArray") || base.endsWith("star_Array");
 }
 
 // Generated tuple hook (msTuple_<hash>{Destroy,Copy,Sink,WasMoved}) for a structural tuple.
@@ -63,6 +64,9 @@ export function isDrcLifecycleName(name: string): boolean {
 	// array-OF-array → base ends "ArrayArray". Always a DRC hook, regardless of prefix/case.
 	const drcBase = name.slice(0, name.length - suffix.length);
 	if (drcBase.endsWith("ArrayArray")) return true;
+	// Ref-array element walker (msUint8Arraystar_Array, int32_tArraystar_Array, …) —
+	// the elemIsRefArray per-type struct family; same landmine as the nested walkers.
+	if (drcBase.endsWith("star_Array")) return true;
 	// Generated tuple hooks are DRC hooks despite the ms prefix; without this the blanket
 	// ms→false below would DCE them, leaving an undefined symbol at link.
 	if (drcBase.length > 8 && drcBase.slice(0, 8) === "msTuple_") return true;
