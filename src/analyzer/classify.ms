@@ -116,6 +116,12 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		if (elem.sym !== null && elem.sym.symbolKind === SymbolKind.Actor) {
 			return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 		}
+		// Ref-array elements keep their per-type struct (codegen elemIsRefArray, types.ms:1270)
+		// instead of collapsing to msRefArray, so the hooks must match that name.
+		if (elem.kind === TypeKind.Ref && elem.typeReturn !== null && elem.typeReturn.kind === TypeKind.Array) {
+			const n = arrayCTypeName(t);
+			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
+		}
 		return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
 	}
 	// Closure element (function type) — msClosureArray stores msClosure structs
