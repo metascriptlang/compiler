@@ -135,5 +135,22 @@ for ms in "$DIR"/*.ms; do
   fi
 done
 
+# DCE emit-clean guard: a hello-world build must carry no websocket/crypto
+# symbols in its emitted C — dead-module pruning + edge-based hook aliveness
+# (NIM-REF "Module/symbol DCE" tier 2). Proven-red on any pre-tier-2 compiler:
+# name-based hook exemptions keep those modules alive in every program.
+emitname="helloEmitClean"
+printf 'console.log("hi");\n' > "$TMP/hello_emit.ms"
+if ! ( cd "$TMP" && "$MSC" build hello_emit.ms --gc=drc --output="$TMP/hello_emit_bin" ) >"$TMP/$emitname.build" 2>&1; then
+  echo "FAIL $emitname: build error"; fail=1
+else
+  hits=$(nm "$TMP/hello_emit_bin" 2>/dev/null | grep -ci "websocket\|mbedtls\|psa_")
+  if [ "$hits" -gt 0 ]; then
+    echo "FAIL $emitname: $hits dead websocket/crypto symbols in hello binary"; fail=1
+  else
+    echo "ok   $emitname"
+  fi
+fi
+
 [ $fail -eq 0 ] && echo "nim-guard: ALL GREEN" || echo "nim-guard: FAILURES ABOVE"
 exit $fail
