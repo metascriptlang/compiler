@@ -11,6 +11,8 @@ import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
 import { AliveSet, createAliveSet, aliveSetAdd } from "../codegen/c/context";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
+import { SymbolKind, Type } from "../ast/node";
+import { mangleMonoName } from "../monomorphize/registry";
 
 // ===== Module Index =====
 // Maps module path to its program AST for cross-module tracing.
@@ -155,6 +157,13 @@ let _modIdx: ModuleIndex = { paths: [], programs: [] };
 // Walk a node recursively, marking any referenced declarations alive.
 function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 	if (node === null) return;
+	if (node.nodeType !== null) {
+		let ut = node.nodeType;
+		if ((ut.kind === TypeKind.Ref || ut.kind === TypeKind.Ptr) && ut.typeReturn !== null) ut = ut.typeReturn;
+		if (ut.kind === TypeKind.Union) {
+			markUnionHookEdges(ut);
+		}
+	}
 	const k = node.kind;
 
 	// Identifier — mark its declaration alive
@@ -213,7 +222,23 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 			const initName = initFnName(className);
 			const ctorMod = classSym.modulePath !== "" ? classSym.modulePath : modulePath;
 			markAndWalk(ctorMod, initName);
+			let gi = node.nodeType;
+			if (gi !== null && (gi.kind === TypeKind.Ref || gi.kind === TypeKind.Ptr) && gi.typeReturn !== null) gi = gi.typeReturn;
+			if (gi !== null && gi.kind === TypeKind.GenericInstance && gi.typeName !== "" && gi.typeChildren.length > 0) {
+				const monoName = mangleMonoName(gi.typeName, gi.typeChildren);
+				markAndWalk(ctorMod, monoName);
+				markAndWalk(ctorMod, initFnName(monoName));
+			}
 		}
+		markTypeInfoEdge(node, modulePath);
+		return;
+	}
+
+	// ObjectLiteral — allocation site: the emitted C references <T>TypeInfo,
+	// whose initializer references <T>Destroy/<T>Trace (TypeInfo→hook edge).
+	if (k === NodeKind.ObjectLiteral) {
+		markTypeInfoEdge(node, modulePath);
+		walkChildrenGeneric(node, modulePath, importMap);
 		return;
 	}
 
@@ -247,6 +272,82 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 	// NOTE: forEachChild uses a callback — we pass module-level state
 	// instead of closure-captured value-type arrays to avoid use-after-free
 	walkChildrenGeneric(node, modulePath, importMap);
+}
+
+// Allocation site → <T>TypeInfo edge. The emitted allocation references the
+// type's TypeInfo global, whose initializer references <T>Destroy/<T>Trace —
+// the only AST path to ref-type hooks (msDecref dispatches through TypeInfo
+// at runtime, so no direct call site exists). Mirrors codegen's on-demand
+// TypeInfo emission: mark only when the TypeInfo decl really exists.
+// Array sequence hooks (msStringArray*/msRefArray*/…ArrayDestroy etc.) are
+// per-module static helpers whose demand arises inside codegen (cell TypeInfos
+// name them directly, no AST edge exists). Keep them rooted; the linker strips
+// unreferenced static functions, so dead ones cost nothing. Mirror of
+// isArraySeqHook in codegen/c/declarations.ms — keep in lock-step.
+function isArraySeqHookName(name: string): boolean {
+	if (name === "msStringArrayDestroy" || name === "msRefArrayDestroy" || name === "msNumberArrayDestroy") return false;
+	return name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
+		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved");
+}
+
+// Union narrow/project sites make codegen emit variant Copy/Destroy calls by
+// name with no AST edge — any walked node typed Union pins its variants' hooks.
+function markUnionHookEdges(t: Type): void {
+	for (const vt of t.typeChildren) {
+		if (vt === null) continue;
+		let vbase = vt;
+		if ((vt.kind === TypeKind.Ref || vt.kind === TypeKind.Ptr) && vt.typeReturn !== null) vbase = vt.typeReturn;
+		const vn = vbase.typeName;
+		if (vn.length === 0) continue;
+		for (const hn of [vn + "Copy", vn + "Destroy", vn + "Trace"]) {
+			const h = nameIndexLookup(hn);
+			if (h !== "") {
+				markAndWalk(h, hn);
+			}
+		}
+	}
+	if (t.typeName.length > 0) {
+		for (const uhn of [t.typeName + "Copy", t.typeName + "Sink", t.typeName + "WasMoved"]) {
+			const uh = nameIndexLookup(uhn);
+			if (uh !== "") {
+				markAndWalk(uh, uhn);
+			}
+		}
+	}
+}
+
+function markTypeInfoEdge(node: Node, modulePath: string): void {
+	let t = node.nodeType;
+	if (t === null) return;
+	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
+		if (t.typeReturn !== null) {
+			t = t.typeReturn;
+		} else if (t.typeChildren.length > 0 && t.typeChildren[0] !== null) {
+			t = t.typeChildren[0];
+		} else {
+			return;
+		}
+	}
+	if (t.kind !== TypeKind.Struct && t.kind !== TypeKind.TypeReference && t.kind !== TypeKind.GenericInstance && t.kind !== TypeKind.Union) return;
+	if (t.kind === TypeKind.GenericInstance && t.typeName !== "" && t.typeChildren.length > 0) {
+		const mono = mangleMonoName(t.typeName, t.typeChildren);
+		for (const hn of [mono + "TypeInfo", mono + "Destroy", mono + "Trace"]) {
+			const h = nameIndexLookup(hn);
+			if (h !== "") {
+				markAndWalk(h, hn);
+			}
+		}
+	}
+	if (t.kind === TypeKind.Union) {
+		markUnionHookEdges(t);
+	}
+	const tn = t.typeName;
+	if (tn.length === 0) return;
+	const tiName = tn + "TypeInfo";
+	const home = nameIndexLookup(tiName);
+	if (home !== "") {
+		markAndWalk(home, tiName);
+	}
 }
 
 // Walk all children of a node generically via shared forEachChild
@@ -291,6 +392,18 @@ function markAndWalk(modulePath: string, name: string): void {
 				// chained alive too. Without recursion, A → B → C inheritance
 				// chains stop at the leaf and parent `_init`s drop out.
 				markAndWalk(modulePath, initFnName(name));
+			}
+			// Actors: actorLower erased the NewExpr before this walk runs, so
+			// no allocation-site edge fires — but a spawned actor's TypeInfo
+			// is always demanded. Marking it walks its initializer, which
+			// marks Destroy/Trace via the Identifier fallback.
+			const isActorOrigin = found.kind === NodeKind.ActorDecl
+				|| (found.kind === NodeKind.ClassDecl && found.resolvedSym !== null
+					&& found.resolvedSym.symbolKind === SymbolKind.Actor);
+			if (isActorOrigin) {
+				markAndWalk(modulePath, name + "TypeInfo");
+				markAndWalk(modulePath, name + "Destroy");
+				markAndWalk(modulePath, name + "Trace");
 			}
 		}
 	}
@@ -434,22 +547,19 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 				const fd2 = bare.data as FunctionDeclData;
 				const fn = fd2.fnName;
 				if (fn.length > 0 && fn.slice(0, 1) === "$") {
+					const isLifted = (fn.length >= 8 && fn.slice(0, 8) === "$lifted_")
+						|| (fn.length >= 4 && fn.slice(0, 4) === "$fn_");
+					if (!isLifted) {
+						walkBody(bare, modulePath, importMap);
+					}
 					continue;
 				}
-				if (fn.length > 0 && fn.slice(0, 1) === "=") {
+				if (isArraySeqHookName(fn)) {
 					walkBody(bare, modulePath, importMap);
 					continue;
 				}
-				if (fn.length > 1 && fn.slice(0, 2) === "__") {
-					walkBody(bare, modulePath, importMap);
-					continue;
-				}
-				// Generic instantiations: name contains __ after position 0 (e.g., hash__number)
-				if (fn.indexOf("__", 0) > 0) {
-					markAndWalk(modulePath, fn);
-					walkBody(bare, modulePath, importMap);
-					continue;
-				}
+
+
 			}
 
 			// Root 3: TestDecl nodes — in test mode (all modules) or entry module (build mode).
