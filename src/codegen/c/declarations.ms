@@ -8,7 +8,7 @@ import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types"
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, emitStmtsLine, readProcStmts, readProcLocals,
-	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString,
+	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString, markTypeInfoSkipped,
 } from "./context";
 import { genExpr } from "./expressions";
 import { genStmt, resolveEmitArgs } from "./statements";
@@ -61,12 +61,10 @@ function isDeclAlive(g: CGen, node: Node): boolean {
 		|| (name.length >= 4 && name.slice(0, 4) === "$fn_");
 	if (isLiftedClosure) return aliveSetHas(g.aliveSet, g.modulePath, name);
 	if (name.length > 0 && name.slice(0, 1) === "$") return true;
-	if (name.length > 0 && name.slice(0, 1) === "=") return true;
-	if (name.length > 1 && name.slice(0, 2) === "__") return true;
-	if (isDrcLifecycleName(name)) return true;
-	// On-demand instantiated generic functions (e.g., set__string_string): always alive.
-	// These are generated during type checking and injected into the program.
-	if (node.resolvedSym !== null && node.resolvedSym.name.indexOf("__", 0) > 0) return true;
+	const isSeqHookSuffix = name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
+		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved");
+	const isRuntimeArrayHook = name === "msStringArrayDestroy" || name === "msRefArrayDestroy" || name === "msNumberArrayDestroy";
+	if (isSeqHookSuffix && !isRuntimeArrayHook) return true;
 	return aliveSetHas(g.aliveSet, g.modulePath, name);
 }
 
@@ -643,6 +641,13 @@ function genGlobalVar(g: CGen, node: Node): void {
 	if (isTypeInfo) {
 		// TypeInfo is DRC metadata — skip under --gc=manual (write-only, never read)
 		if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) return;
+		if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) {
+			const skipBase = d.declName.slice(0, nameLen - 8);
+			markTypeInfoSkipped(skipBase);
+			const skipCBase = typeCacheGet(g.typeCache, "cname:" + skipBase);
+			if (skipCBase !== "") markTypeInfoSkipped(skipCBase);
+			return;
+		}
 		genTypeInfoVar(g, d, varName);
 		return;
 	}

@@ -11,7 +11,7 @@ import { monoTypeKey } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet } from "./context";
+import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, isTypeInfoSkipped } from "./context";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { mangle, mangledTypeName, mangleQualified, mangleModuleName, mangleFieldName, safeName } from "./names";
 import { getGlobalTypeOwner, getGlobalTypeOwnerByShape } from "../../checker/context";
@@ -626,6 +626,10 @@ export function isCompilerGenCName(g: CGen, cn: string): boolean {
 export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | null): void {
 	// TypeInfo is DRC metadata — unused under --gc=manual (write-only in manual.h).
 	if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) return;
+	if (isTypeInfoSkipped(className)) {
+		addError(g.checkerCtx, "internal: TypeInfo '" + className + "' demanded in " + g.modulePath + " but reachability marked it dead — missing edge in markTypeInfoEdge (src/checker/reachability.ms)", 0, 0);
+		return;
+	}
 	const defKey = "typeInfoDef:" + className;
 	if (typeCacheHas(g.forwTypeCache, defKey)) return;
 	typeCacheSet(g.forwTypeCache, defKey, className);
