@@ -11,7 +11,7 @@ import { TransformContext, createTransformContext, NameSet, createNameSet, nameS
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { canFormAcycle } from "../transform/cycles";
 import { mangleMonoName } from "../monomorphize/registry";
-import { anonTypeName, isAnonTypeName } from "../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName } from "../codegen/c/types";
 
 // ===== RC Classification Kind =====
 
@@ -73,10 +73,10 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		return makeRcInfo(RcKind.Named, "", "msArrayStringDestroy", "msArrayStringCopy", "msArrayStringWasMoved", "msArrayStringSink", true);
 	}
 	// Nested array elements (e.g. string[][]) — inner arrays are value-type structs.
-	// Reference: forallElements recursively calls fillBody per element. We use generic array ops
-	// as safe default (frees outer payload). Follow-up: per-type hooks in destructorLifting.
+	// Reference: forallElements recursively calls fillBody per element.
 	if (elem.kind === TypeKind.Array) {
-		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
+		const n = arrayCTypeName(t);
+		return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
 	}
 	// Named struct/union elements — use hasAsgnFlag to decide if per-type hooks
 	// are needed. Reference parity: fillBody checks tfHasAsgn regardless of
