@@ -20,7 +20,7 @@ import { createContext as createRaiserContext, load as raiserLoad, execute as ra
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
 import { mangleModuleName } from "../codegen/c/names";
 import { resetEmittedInstances } from "../codegen/c/declarations";
-import { aliveSetHasModule } from "../codegen/c/context";
+import { aliveSetHasModule, clearSkippedTypeInfos } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
@@ -1243,6 +1243,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Phase C: Codegen + compile each module
 	// Reset generic instance deduplication (first module to codegen wins).
 	resetEmittedInstances();
+	clearSkippedTypeInfos();
 	let codegenTime = 0;
 	let clangTime = 0;
 	let compiled = 0;
@@ -1602,6 +1603,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// GATHER → DISPATCH → COLLECT, same shape as cmdBuildC. Test dispatcher
 	// joins the batch; any failure exits after the batch is fully collected.
 	resetEmittedInstances();
+	clearSkippedTypeInfos();
 	let compiled = 0;
 	const tcd = cacheDir();
 	const oSlots: string[] = [];

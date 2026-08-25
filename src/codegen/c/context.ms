@@ -558,6 +558,23 @@ export function aliveSetHasModule(aliveSet: AliveSet, modulePath: string): boole
 	return aliveSet._modules.has(modulePath);
 }
 
+// TypeInfos gated out by DCE, recorded so a later codegen demand fails loud
+// instead of falling back to ensureTypeInfoDef's 2-field copy. Global (not
+// per-CGen): the demand can come from a different module than the declarer.
+let _skippedTypeInfos = new HashSet<string>();
+
+export function markTypeInfoSkipped(name: string): void {
+	_skippedTypeInfos.add(name);
+}
+
+export function isTypeInfoSkipped(name: string): boolean {
+	return _skippedTypeInfos.has(name);
+}
+
+export function clearSkippedTypeInfos(): void {
+	_skippedTypeInfos = new HashSet<string>();
+}
+
 // ===== CGen — module-level state (Standard reference parity) =====
 
 export class CGen {
