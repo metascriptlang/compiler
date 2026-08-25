@@ -385,6 +385,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 	const isActorElem = elem !== null && (elem.kind === TypeKind.Ref || elem.kind === TypeKind.Ptr)
 		&& elem.sym !== null && elem.sym.symbolKind === SymbolKind.Actor;
 	const needsElemLoop = elem !== null && !isPrimitiveKind(elem.kind) && !isActorElem;
+	const isU8Elem = elem !== null && elem.kind === TypeKind.Uint8;
 	// Unwrap GenericInstance element so it enters the Struct branch below.
 	// Mirrors codegen (types.ms:582-620): monomorphized struct is addressable by its
 	// mangled typeName (e.g., `OrderedMapEntry__int32_ref_Symbol`).
@@ -399,7 +400,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 	match (hook) {
 		"destroy" => {
 			if (needsElemLoop) { genArrayLoop("destroy", elem, xf, yf, lctx, buf, loc); }
-			genCall("msArrayDestroy", hook, xf, yf, buf, loc);
+			genCall(isU8Elem ? "msArrayUint8Destroy" : "msArrayDestroy", hook, xf, yf, buf, loc);
 		},
 		"copy" => {
 			if (needsElemLoop && elem !== null && elem.kind === TypeKind.String) {
@@ -411,7 +412,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 				genCall("msArraySetLen", hook, xf, yf, buf, loc);
 				genArrayLoop("copy", elem, xf, yf, lctx, buf, loc);
 			} else {
-				genCall("msArrayCopy", hook, xf, yf, buf, loc);
+				genCall(isU8Elem ? "msArrayUint8Copy" : "msArrayCopy", hook, xf, yf, buf, loc);
 			}
 		},
 		"sink" => {
@@ -423,7 +424,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 				loc
 			);
 			const destroyBuf = newBuf();
-			genCall("msArrayDestroy", "destroy", clonePath(xf, loc), yf, destroyBuf, loc);
+			genCall(isU8Elem ? "msArrayUint8Destroy" : "msArrayDestroy", "destroy", clonePath(xf, loc), yf, destroyBuf, loc);
 			buf.items.push(makeIf(guardCond, makeBlock(destroyBuf.items, loc), null as unknown as Node, loc));
 			buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
 		},
