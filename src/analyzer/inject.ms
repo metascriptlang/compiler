@@ -853,8 +853,8 @@ function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: Sour
 		const destArg = needsDestAddr(rcInfo)
 			? makeHiddenAddr(destRef, loc)
 			: destRef;
-		// src: value for seqLike, pointer for non-seqLike Named
-		const srcArg = rcInfo.seqLike ? srcExpr : makeHiddenAddr(srcExpr, loc);
+		// src: value for seqLike runtime macros, pointer for generated hooks and Named structs
+		const srcArg = isCopySrcByValue(rcInfo) ? srcExpr : makeHiddenAddr(srcExpr, loc);
 		return makeExprStmt(
 			makeCall(makeIdent(rcInfo.sinkFn, loc), [destArg, srcArg], loc), loc);
 	}
@@ -1039,15 +1039,15 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 				// Argument shapes differ for sink vs copy:
 				//   copyFn (msStringCopy):    (&dest, srcValue)       — both per needsDestAddr/isCopySrcByValue
 				//   sinkFn for String:        (destLvalue, srcValue)   — both by value
-				//   sinkFn for Named seqLike: (destLvalue or &, srcValue)
-				//   sinkFn for Named !seqLike: (&dest, &src)
+				//   sinkFn for Named seqLike macro: (destLvalue, srcValue)
+				//   sinkFn for Named generated hook: (&dest, &src)
 				// Mirror makeSinkCall (line ~637) for sink path.
 				let destArg: Node;
 				let srcArg: Node;
 				if (useSink) {
 					if (rcInfo.rcKind === RcKind.Named) {
 						destArg = needsDestAddr(rcInfo) ? makeHiddenAddr(lhsExpr, loc) : lhsExpr;
-						srcArg = rcInfo.seqLike ? callTmpRef : makeHiddenAddr(callTmpRef, loc);
+						srcArg = isCopySrcByValue(rcInfo) ? callTmpRef : makeHiddenAddr(callTmpRef, loc);
 					} else {
 						destArg = lhsExpr;
 						srcArg = callTmpRef;
