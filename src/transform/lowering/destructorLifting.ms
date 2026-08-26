@@ -1214,11 +1214,14 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 // Emit a minimal msTypeInfo for a class/interface with no RC fields. Needed so
 // `msAllocTyped(sizeof(T), &TTypeInfo)` links; destroyFn / traceFn are null.
 function emitMinimalTypeInfo(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
-	const obj = makeObjectLiteral(
-		["name", "isCyclic", "traceFn", "destroyFn"],
-		[makeString(typeName, loc), makeBool(false, loc), makeNull(loc), makeNull(loc)],
-		loc,
-	);
+	const keys = ["name", "isCyclic", "traceFn", "destroyFn"];
+	const vals = [makeString(typeName, loc), makeBool(false, loc), makeNull(loc), makeNull(loc)];
+	const baseTypeName = getBaseClass(typeName, lctx);
+	if (baseTypeName !== "") {
+		keys.push("base");
+		vals.push(makeString(baseTypeName, loc));
+	}
+	const obj = makeObjectLiteral(keys, vals, loc);
 	lctx.collector.push(makeVarDecl(typeName + "TypeInfo", obj, DeclKind.Const, loc));
 }
 
@@ -1226,11 +1229,14 @@ function emitMinimalTypeInfo(typeName: string, lctx: LiftCtx, loc: SourceLocatio
 // points to the generated <T>Destroy; traceFn points to <T>Trace iff cyclic.
 function emitFullTypeInfo(typeName: string, hasCycles: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	const traceFn = hasCycles ? makeIdent(typeName + "Trace", loc) : makeNull(loc);
-	const obj = makeObjectLiteral(
-		["name", "isCyclic", "traceFn", "destroyFn"],
-		[makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, makeIdent(typeName + "Destroy", loc)],
-		loc,
-	);
+	const keys = ["name", "isCyclic", "traceFn", "destroyFn"];
+	const vals = [makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, makeIdent(typeName + "Destroy", loc)];
+	const baseTypeName = getBaseClass(typeName, lctx);
+	if (baseTypeName !== "") {
+		keys.push("base");
+		vals.push(makeString(baseTypeName, loc));
+	}
+	const obj = makeObjectLiteral(keys, vals, loc);
 	lctx.collector.push(makeVarDecl(typeName + "TypeInfo", obj, DeclKind.Const, loc));
 }
 

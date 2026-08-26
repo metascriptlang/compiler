@@ -13,7 +13,7 @@ import {
 import { genExpr } from "./expressions";
 import { genStmt, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfoDef, isCompilerGenCName, isNilableValueType } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, isCompilerGenCName, isNilableValueType } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -817,6 +817,16 @@ function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
 					addLine(datInit, `  ${infoName}.traceFn = NULL;`);
 				} else {
 					addLine(datInit, `  ${infoName}.traceFn = (msTraceProc)${val};`);
+				}
+			} else if (key === "base") {
+				const bn = od.properties[i];
+				let rawBase = "";
+				if (bn.kind === NodeKind.StringLiteral) rawBase = (bn.data as StringLiteralData).value;
+				if (rawBase !== "") {
+					const cParent = typeCacheGet(g.typeCache, "cname:" + rawBase);
+					const parentName = (cParent !== "") ? cParent : rawBase;
+					ensureTypeInfo(g, parentName);
+					addLine(datInit, `  ${infoName}.base = &${parentName}TypeInfo;`);
 				}
 			} else {
 				// isCyclic: use genExpr directly
