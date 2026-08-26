@@ -1311,6 +1311,25 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`pow(${left}, ${finalRight})`);
 			return;
 		}
+		if (d.operator === "instanceof") {
+			if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) {
+				addError(g.checkerCtx, "instanceof requires RTTI, unavailable under --gc=manual", 0, 0);
+				ctx.results.push("false");
+				return;
+			}
+			let target: Type | null = d.right.resolvedSym !== null ? d.right.resolvedSym.symbolType : d.right.nodeType;
+			if (target !== null && target.kind === TypeKind.Ref && target.typeReturn !== null) target = target.typeReturn;
+			if (target === null || target.kind !== TypeKind.Struct) {
+				const pn = g.currentProc !== null ? g.currentProc.name : "<toplevel>";
+				addError(g.checkerCtx, "internal: instanceof RHS did not resolve to a class type in " + g.modulePath + " proc " + pn, 0, 0);
+				ctx.results.push("false");
+				return;
+			}
+			const cName = getTypeDesc(g, target);
+			ensureTypeInfoDef(g, cName, target);
+			ctx.results.push(`msIsInstance(${left}, &${cName}TypeInfo)`);
+			return;
+		}
 		const cOp = mapBinaryOp(g, d.operator);
 		ctx.results.push(`(${left} ${cOp} ${finalRight})`);
 		return;
