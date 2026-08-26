@@ -558,7 +558,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.nodeType = sym.symbolType;
 				node.nodeType = sym.symbolType; return;
 			}
-			node.nodeType = getFlowTypeOfReference(node, sym.symbolType); return;
+			// Var (out/ref) params auto-deref on reads (reference parity: tyVar use).
+			let readType = sym.symbolType;
+			if (readType !== null && readType.kind === TypeKind.Var && readType.typeReturn !== null) {
+				readType = readType.typeReturn;
+			}
+			node.nodeType = getFlowTypeOfReference(node, readType); return;
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
@@ -1788,7 +1793,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
 			checkExpr(ctx, d.outArg, null);
-			node.nodeType = inferredType(); return;
+			node.nodeType = d.outArg.nodeType; return;
 		},
 		NodeKind.SizeofExpr => {
 			const d = node.data as SizeofExprData;
@@ -3754,7 +3759,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 				}
 				// Reference parity: var/out params require lvalue argument
 				if (paramType.kind === TypeKind.Var && pi < d.arguments.length) {
-					const argKind = d.arguments[pi].kind;
+					let lvArg = d.arguments[pi];
+					if (lvArg.kind === NodeKind.OutExpr) { lvArg = (lvArg.data as OutExprData).outArg; }
+					const argKind = lvArg.kind;
 					if (argKind !== NodeKind.Identifier && argKind !== NodeKind.MemberExpr && argKind !== NodeKind.ArrayAccess) {
 						const calleeName = getCalleeName(d.callee);
 						addError(ctx, "'" + calleeName + "' arg " + String(pi) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
