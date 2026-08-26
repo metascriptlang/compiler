@@ -12,7 +12,7 @@ import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
-	emitProcLocalsLine, lookupLocalName, typeCacheGet,
+	emitProcLocalsLine, lookupLocalName, typeCacheGet, typeCacheHas, typeCacheSet,
 } from "./context";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey } from "./types";
@@ -21,7 +21,7 @@ import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto, isDrcLifecycleName } from "./forward";
 import { useHeader } from "./context";
-import { GcMode, addError } from "../../checker/context";
+import { GcMode, addError, dispatchEntryForLiftedName, dispatchOverridesFor } from "../../checker/context";
 import { lookupCtorDefaults } from "../../checker/instantiate";
 
 // Constructor parameter types for a class symbol, reachable cross-module.
@@ -766,10 +766,24 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		} else if (idSym !== null && idSym.symbolKind === SymbolKind.Function) {
 			// Ensure cross-module function has a forward declaration (needed for function
 			// pointers in closure literals — direct calls go through ensureCrossModuleProto)
+			const calleeName = mangledFunctionName(idSym, d.name, idSym.overloadIdx);
 			if (idSym.symbolType !== null && idSym.modulePath !== null && idSym.modulePath !== "" && idSym.modulePath !== g.modulePath) {
-				ensureCrossModuleProto(g, mangledFunctionName(idSym, d.name, idSym.overloadIdx), idSym.symbolType, idSym);
+				ensureCrossModuleProto(g, calleeName, idSym.symbolType, idSym);
 			}
-			ctx.results.push(mangledFunctionName(idSym, d.name, idSym.overloadIdx));
+			let emitted = calleeName;
+			if (g.checkerCtx !== null && g.checkerCtx.gcMode !== GcMode.Manual) {
+				const de = dispatchEntryForLiftedName(idSym.name);
+				if (de !== null && !de.overloaded) {
+					const ovs = dispatchOverridesFor(de.className, de.methodName);
+					if (ovs.length > 0) {
+						const ovSyms: Symbol[] = [];
+						for (const oe of ovs) { ovSyms.push(oe.sym); }
+						const dn = ensureMethodDispatcher(g, idSym, calleeName, ovSyms);
+						if (dn !== "") emitted = dn;
+					}
+				}
+			}
+			ctx.results.push(emitted);
 		} else {
 			// Reference parity (sym.loc.snippet): symbol-based resolution first.
 			// localNameMap fallback for DRC cleanup identifiers with noSym (avoids cascade).
@@ -2714,6 +2728,61 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 export function genExprAssign(g: CGen, p: CProc, node: Node, destSnippet: string): void {
 	const snippet = genExpr(g, p, node);
 	addLine(pStmts(p), `${destSnippet} = ${snippet};`);
+}
+
+// ===== Method Dispatcher (Nim cgmeth genIfDispatcher analog) =====
+// One static per-TU dispatcher per overridden instance method: msIsInstance
+// if-chain, most-derived-first, falling through to the base implementation.
+// C emission is whole-program-fresh every build, so the chain always reflects
+// the complete override set even across modules.
+function ensureMethodDispatcher(g: CGen, baseSym: Symbol, calleeName: string, overrides: Symbol[]): string {
+	const ft = baseSym.symbolType;
+	if (ft === null || ft.kind !== TypeKind.Function || ft.typeChildren.length === 0) return "";
+	const dispName = "msDisp_" + calleeName;
+	const key = "disp:" + dispName;
+	if (typeCacheHas(g.forwTypeCache, key)) return dispName;
+	typeCacheSet(g.forwTypeCache, key, dispName);
+	const retC = ft.typeReturn !== null && ft.typeReturn.kind !== TypeKind.Void ? getTypeDesc(g, ft.typeReturn) : "void";
+	let params = "";
+	let fwdArgs = "";
+	let i = 0;
+	while (i < ft.typeChildren.length) {
+		const pC = getTypeDesc(g, ft.typeChildren[i]);
+		const pN = "p" + i.toString();
+		params = params === "" ? pC + " " + pN : params + ", " + pC + " " + pN;
+		if (i > 0) fwdArgs = fwdArgs === "" ? pN : fwdArgs + ", " + pN;
+		i += 1;
+	}
+	addLine(sec(g, CSection.ProcHeaders), `static ${retC} ${dispName}(${params});`);
+	const s = sec(g, CSection.GlobalVars);
+	addLine(s, `static ${retC} ${dispName}(${params}) {`);
+	for (const ov of overrides) {
+		if (ov.symbolType === null || ov.symbolType.typeChildren.length === 0) continue;
+		const ovName = mangledFunctionName(ov, ov.name, ov.overloadIdx);
+		if (ov.modulePath !== null && ov.modulePath !== "" && ov.modulePath !== g.modulePath) {
+			ensureCrossModuleProto(g, ovName, ov.symbolType, ov);
+		}
+		let recvInner = ov.symbolType.typeChildren[0];
+		const castC = getTypeDesc(g, recvInner);
+		if (recvInner.kind === TypeKind.Ref && recvInner.typeReturn !== null) recvInner = recvInner.typeReturn;
+		const cInner = getTypeDesc(g, recvInner);
+		ensureTypeInfo(g, cInner);
+		const callArgs = fwdArgs === "" ? `(${castC})p0` : `(${castC})p0, ${fwdArgs}`;
+		const callStr = `${ovName}(${callArgs})`;
+		if (retC === "void") {
+			addLine(s, `  if (msIsInstance(p0, &${cInner}TypeInfo)) { ${callStr}; return; }`);
+		} else {
+			addLine(s, `  if (msIsInstance(p0, &${cInner}TypeInfo)) return ${callStr};`);
+		}
+	}
+	const baseArgs = fwdArgs === "" ? "p0" : "p0, " + fwdArgs;
+	if (retC === "void") {
+		addLine(s, `  ${calleeName}(${baseArgs});`);
+	} else {
+		addLine(s, `  return ${calleeName}(${baseArgs});`);
+	}
+	addLine(s, `}`);
+	return dispName;
 }
 
 // ===== Binary helpers =====
