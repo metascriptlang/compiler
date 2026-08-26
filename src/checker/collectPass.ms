@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner } from "./context";
+import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -270,6 +270,7 @@ export function collectClass(ctx: CheckerContext, node: Node): void {
 	const innerType = createStruct(d.className, memberNames, memberTypes, true);
 	if (d.classExtends !== "") {
 		innerType.typeExtra = createTypeRef(d.classExtends);
+		dispatchRecordParent(d.className, d.classExtends);
 	}
 	const classType = createRef(innerType);
 	const sym = makeSymbol(d.className, SymbolKind.Class, classType, false);
@@ -428,6 +429,9 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 		methodSym.defaultParams = md.methodDefaults;
 	}
 	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, className, "", fnType, md.methodIsStatic, methodSym, 1));
+	if (!md.methodIsStatic && !isExternClass && builtinKind === "") {
+		dispatchRecordMethod(className, md.methodName, methodSym);
+	}
 }
 
 function collectStructLike(ctx: CheckerContext, node: Node, kind: SymbolKind, isRef: boolean): void {

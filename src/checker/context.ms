@@ -675,23 +675,144 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 
 export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type | null): ExtensionMethod[] {
 	const results: ExtensionMethod[] = [];
-	let i = 0;
-	while (i < exts.length) {
-		if (isReceiverMatch(exts[i], objType)) {
-			results.push(exts[i]);
+	let cur: Type | null = objType;
+	let depth = 0;
+	while (depth < 64) {
+		let i = 0;
+		while (i < exts.length) {
+			if (isReceiverMatch(exts[i], cur)) {
+				results.push(exts[i]);
+			}
+			i = i + 1;
 		}
-		i = i + 1;
+		if (results.length > 0 || cur === null) return results;
+		cur = classBaseStruct(cur);
+		if (cur === null) return results;
+		depth += 1;
 	}
 	return results;
 }
 
 export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
-	let i = 0;
-	while (i < exts.length) {
-		if (isReceiverMatch(exts[i], objType)) return exts[i];
-		i = i + 1;
+	let cur: Type | null = objType;
+	let depth = 0;
+	while (cur !== null && depth < 64) {
+		let i = 0;
+		while (i < exts.length) {
+			if (isReceiverMatch(exts[i], cur)) return exts[i];
+			i = i + 1;
+		}
+		cur = classBaseStruct(cur);
+		depth += 1;
 	}
 	return null as unknown as ExtensionMethod;
+}
+
+function classBaseStruct(t: Type): Type | null {
+	let s = t;
+	if (s.kind === TypeKind.Ref && s.typeReturn !== null) s = s.typeReturn;
+	if (s.kind !== TypeKind.Struct || s.typeExtra === null) return null;
+	let inner = s.typeExtra;
+	if (inner.kind === TypeKind.Ref && inner.typeReturn !== null) inner = inner.typeReturn;
+	if (inner.kind === TypeKind.Struct) return inner;
+	if (inner.sym !== null && inner.sym.symbolType !== null) {
+		let bs = inner.sym.symbolType;
+		if (bs.kind === TypeKind.Ref && bs.typeReturn !== null) bs = bs.typeReturn;
+		if (bs.kind === TypeKind.Struct) return bs;
+	}
+	return null;
+}
+
+// ===== Method Dispatch Registry (Nim cgmeth methodDef/g.methods analog) =====
+// Populated by collectPass for every class (parent edge) and every instance
+// method (lifted `<Class>_<method>` sym). Whole-program by construction:
+// collect runs for all modules before any transform/codegen. Codegen consults
+// it at identifier-callee emission to route overridden methods through a
+// msDisp_* if-chain dispatcher. A name declared twice on one class (overload)
+// disables dispatch for that method name — conservative direct call.
+
+export interface DispMethodEntry {
+	className: string;
+	methodName: string;
+	sym: Symbol;
+	overloaded: boolean;
+}
+
+let _dispParent: HashMap<string, string> = new HashMap<string, string>();
+let _dispEntries: DispMethodEntry[] = [];
+let _dispByLifted: HashMap<string, DispMethodEntry> = new HashMap<string, DispMethodEntry>();
+
+export function dispatchRecordParent(className: string, baseName: string): void {
+	if (className === "" || baseName === "") return;
+	_dispParent.set(className, baseName);
+}
+
+export function dispatchRecordMethod(className: string, methodName: string, sym: Symbol): void {
+	const lifted = sym.name;
+	const prev = _dispByLifted.get(lifted);
+	if (prev !== null) {
+		const samePlace = prev.sym.modulePath === sym.modulePath
+			&& prev.sym.location.line === sym.location.line
+			&& prev.sym.location.column === sym.location.column;
+		if (samePlace) {
+			prev.sym = sym;
+		} else {
+			prev.overloaded = true;
+		}
+		return;
+	}
+	const e: DispMethodEntry = { className: className, methodName: methodName, sym: sym, overloaded: false };
+	_dispEntries.push(e);
+	_dispByLifted.set(lifted, e);
+}
+
+export function resetDispatchRegistry(): void {
+	_dispParent = new HashMap<string, string>();
+	_dispEntries = [];
+	_dispByLifted = new HashMap<string, DispMethodEntry>();
+}
+
+export function dispatchEntryForLiftedName(liftedName: string): DispMethodEntry | null {
+	if (!_dispByLifted.has(liftedName)) return null;
+	return _dispByLifted.get(liftedName);
+}
+
+function dispDepthBelow(className: string, root: string): int32 {
+	let cur = className;
+	let d = 0;
+	while (d < 64) {
+		if (cur === root) return d;
+		const nxt = _dispParent.get(cur);
+		if (nxt === null) return -1;
+		cur = nxt;
+		d += 1;
+	}
+	return -1;
+}
+
+export function dispatchOverridesFor(className: string, methodName: string): DispMethodEntry[] {
+	const ents: DispMethodEntry[] = [];
+	const depths: int32[] = [];
+	for (const e of _dispEntries) {
+		if (e.methodName !== methodName) continue;
+		if (e.overloaded) return [];
+		if (e.className === className) continue;
+		const dd = dispDepthBelow(e.className, className);
+		if (dd <= 0) continue;
+		ents.push(e);
+		depths.push(dd);
+	}
+	let i = 1;
+	while (i < ents.length) {
+		let j = i;
+		while (j > 0 && depths[j - 1] < depths[j]) {
+			const td = depths[j - 1]; depths[j - 1] = depths[j]; depths[j] = td;
+			const ts = ents[j - 1]; ents[j - 1] = ents[j]; ents[j] = ts;
+			j -= 1;
+		}
+		i += 1;
+	}
+	return ents;
 }
 
 // ===== Extension Flag Helpers =====
