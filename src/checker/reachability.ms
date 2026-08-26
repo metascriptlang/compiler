@@ -4,8 +4,8 @@
 // starting from roots (main, top-level stmts, test decls, exported symbols).
 // Cross-module references traced via ImportDecl source paths.
 
-import { Node, NodeKind, TypeKind, ProgramData, FunctionDeclData, ImportDeclData,
-	ExportDeclData, IdentifierData, VariableDeclData, ClassDeclData, ActorDeclData,
+import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, ImportDeclData,
+	ExportDeclData, IdentifierData, VariableDeclData, ObjectLiteralData, ClassDeclData, ActorDeclData,
 	CallExprData, MemberExprData, NewExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
@@ -632,6 +632,28 @@ function varDeclNeedsRuntimeInit(node: Node): boolean {
 		return !(node.nodeType !== null && node.nodeType.kind === TypeKind.String);
 	}
 	if (k === NodeKind.NullLiteral) return false;
+	if (k === NodeKind.ObjectLiteral) return !isBakeableAggregateConst(node);
+	return true;
+}
+
+export function isBakeableAggregateConst(node: Node): boolean {
+	const d = node.data as VariableDeclData;
+	if (d.declKind !== DeclKind.Const) return false;
+	if (d.initializer === null) return false;
+	const init = d.initializer;
+	if (init.kind !== NodeKind.ObjectLiteral) return false;
+	if ((init.flags & NodeFlag.Closure) !== 0) return false;
+	const od = init.data as ObjectLiteralData;
+	if (od.properties.length === 0) return false;
+	for (const prop of od.properties) {
+		if (prop === null) return false;
+		const bakeable = match (prop.kind) {
+			NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral => true,
+			NodeKind.ObjectLiteral => (prop.flags & NodeFlag.Closure) !== 0,
+			_ => false,
+		};
+		if (!bakeable) return false;
+	}
 	return true;
 }
 
