@@ -13,6 +13,7 @@ import { AliveSet, createAliveSet, aliveSetAdd } from "../codegen/c/context";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
 import { SymbolKind, Type } from "../ast/node";
 import { mangleMonoName } from "../monomorphize/registry";
+import { dispatchEntryForLiftedName, dispatchOverridesFor } from "./context";
 
 // ===== Module Index =====
 // Maps module path to its program AST for cross-module tracing.
@@ -348,6 +349,21 @@ function markTypeInfoEdge(node: Node, modulePath: string): void {
 	if (home !== "") {
 		markAndWalk(home, tiName);
 	}
+	if (t.kind !== TypeKind.Struct) return;
+	let bt = t.typeExtra;
+	let depth = 0;
+	while (bt !== null && depth < 64) {
+		let inner = bt;
+		if (inner.kind === TypeKind.Ref && inner.typeReturn !== null) inner = inner.typeReturn;
+		if (inner.kind !== TypeKind.Struct || inner.typeName === "") break;
+		const btiName = inner.typeName + "TypeInfo";
+		const bHome = nameIndexLookup(btiName);
+		if (bHome !== "") {
+			markAndWalk(bHome, btiName);
+		}
+		bt = inner.typeExtra;
+		depth += 1;
+	}
 }
 
 // Walk all children of a node generically via shared forEachChild
@@ -364,6 +380,24 @@ function markAndWalk(modulePath: string, name: string): void {
 	if (visitedHas(key)) return;
 	visitedAdd(key);
 	aliveSetAdd(_aliveSet, modulePath, name);
+
+	// Dispatch bucket edge (Nim cgmeth: a reachable base method makes every
+	// override + its class TypeInfo reachable — the msDisp_* if-chain
+	// references them all regardless of static call sites).
+	const dde = dispatchEntryForLiftedName(name);
+	if (dde !== null && !dde.overloaded) {
+		for (const ov of dispatchOverridesFor(dde.className, dde.methodName)) {
+			const ovHome = nameIndexLookup(ov.sym.name);
+			if (ovHome !== "") {
+				markAndWalk(ovHome, ov.sym.name);
+			}
+			const tiName = ov.className + "TypeInfo";
+			const tiHome = nameIndexLookup(tiName);
+			if (tiHome !== "") {
+				markAndWalk(tiHome, tiName);
+			}
+		}
+	}
 
 	// Find ALL declarations with this name (handles overloaded functions)
 	const program = findProgram(_modIdx, modulePath);
