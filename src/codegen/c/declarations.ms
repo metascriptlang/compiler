@@ -18,6 +18,7 @@ import { genTestDeclNode } from "./test";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { isBakeableAggregateConst } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 // genGenericTypeInsts lives in index.ms for the same reason.
 
@@ -688,6 +689,9 @@ function genGlobalVar(g: CGen, node: Node): void {
 			nameSetAdd(g.declaredGlobals, varName);
 			return;
 		}
+		if (init.kind === NodeKind.ObjectLiteral && node.nodeType !== null && isBakeableAggregateConst(node)) {
+			if (genBakedConstCell(g, node, varName, staticPfx, cType)) return;
+		}
 	}
 	// Always emit uninitialized declaration to GlobalVars
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName};`);
@@ -732,6 +736,35 @@ function genGlobalVar(g: CGen, node: Node): void {
 		}
 		addLine(sec(g, CSection.ModuleInit), `  ${varName} = ${initSnippet};`);
 	}
+}
+
+function genBakedConstCell(g: CGen, node: Node, varName: string, staticPfx: string, cType: string): boolean {
+	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) !== "*") return false;
+	const d = node.data as VariableDeclData;
+	if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) return true;
+	const body = cType.slice(0, cType.length - 1);
+	const od = d.initializer.data as ObjectLiteralData;
+	const p = g.initProc;
+	let braced = "";
+	let closuresOk = true;
+	let i = 0;
+	for (const prop of od.properties) {
+		const snippet = genExpr(g, p, prop);
+		if (prop.kind === NodeKind.ObjectLiteral && !snippet.endsWith(".env = NULL }")) closuresOk = false;
+		if (braced.length > 0) braced = braced + ", ";
+		braced = braced + "." + mangleFieldName(od.keys[i]) + " = " + snippet;
+		i = i + 1;
+	}
+	const bakeLocals = readProcLocals(p);
+	const bakeStmts = readProcStmts(p);
+	clearProcBuffers(p);
+	if (!closuresOk || bakeLocals.length > 0 || bakeStmts.length > 0) return false;
+	addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${body}TypeInfo;`);
+	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${body} b; } ${varName}_konst_ = { { 1 << 30, -1, &${body}TypeInfo, 0 }, { ${braced} } };`);
+	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
+	nameSetAdd(g.declaredGlobals, varName);
+	ensureTypeInfoDef(g, body, node.nodeType);
+	return true;
 }
 
 // ===== TypeInfo Variable (from destructorLifting) =====
