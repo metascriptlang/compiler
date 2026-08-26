@@ -18,12 +18,13 @@ typedef void (*msDestroyProc)(void*);
  * Second arg is the visitor callback context (opaque). */
 typedef void (*msTraceProc)(void*, void*);
 
-typedef struct {
+typedef struct msTypeInfo {
 	const char* name;        /* Class name for diagnostics */
 	bool isCyclic;           /* True if type can form reference cycles */
 	msTraceProc traceFn;     /* TypeName_trace function (NULL if acyclic) */
 	msDestroyProc destroyFn; /* TypeName_destroy function (NULL if no RC fields) */
 	uint8_t flags;           /* Amendment H: MS_TYPE_FLAG_FUTURE — defer decref to dispatcher */
+	const struct msTypeInfo* base; /* superclass chain for msIsInstance (NULL at root) */
 } msTypeInfo;
 
 #define MS_ACYCLIC_FLAG false

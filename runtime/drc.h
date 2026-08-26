@@ -52,6 +52,17 @@ static inline msRefHeader* msHeader(void* p) {
 	return (msRefHeader*)((char*)p - sizeof(msRefHeader));
 }
 
+/* Runtime subtype test: walks the msTypeInfo.base chain (Nim `of` analog). */
+static inline bool msIsInstance(void* p, const msTypeInfo* target) {
+	if (p == NULL) return false;
+	const msTypeInfo* t = msHeader(p)->type;
+	while (t != NULL) {
+		if (t == target) return true;
+		t = t->base;
+	}
+	return false;
+}
+
 /* ===== DRC Ledger (test-only lifecycle guard) ===== */
 /* Built with -DMS_DRC_LEDGER (off by default → zero cost in normal builds).
  * Records alloc/destroy events to catch double-destroy (abort on the 2nd
