@@ -83,14 +83,24 @@ static int msLedgerNameIdx(const char* n) {
 	}
 	return -1;
 }
+/* TOTAL prints even at zero counts: the SAN corpus runner treats "no LEDGER
+ * line at all" as instrumentation loss, and a program whose only allocations
+ * were baked into static const cells makes no ledger entries. */
 static void msLedgerDump(void) {
 	pthread_mutex_lock(&gLedgerMutex);
+	long totalA = 0, totalD = 0;
 	for (int i = 0; i < gLedgerNameCount; i++) {
 		fprintf(stderr, "LEDGER %s alloc=%ld destroy=%ld\n",
 			gLedgerName[i], gLedgerAllocN[i], gLedgerDestroyN[i]);
+		totalA += gLedgerAllocN[i];
+		totalD += gLedgerDestroyN[i];
 	}
+	fprintf(stderr, "LEDGER TOTAL alloc=%ld destroy=%ld\n", totalA, totalD);
 	fflush(stderr);
 	pthread_mutex_unlock(&gLedgerMutex);
+}
+__attribute__((constructor)) static void msLedgerRegisterDump(void) {
+	if (!gLedgerAtexit) { gLedgerAtexit = 1; atexit(msLedgerDump); }
 }
 void msLedgerAlloc(void* p, const msTypeInfo* type) {
 	if (p == NULL) return;
