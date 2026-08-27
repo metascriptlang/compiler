@@ -117,7 +117,7 @@ function scanNestedFunctions(node: Node, ctx: CheckerContext): void {
 // Value aggregates are the kinds whose params are C by-pointer views without RC:
 // interior writes would reach the caller's storage. Interfaces arrive as Ref
 // (collectStructLike wraps them), Span is a view by design, Union covers Ref|null.
-function isValueAggregateParam(t: Type | null): boolean {
+export function isValueAggregateParam(t: Type | null): boolean {
 	if (t === null) return false;
 	return match (t.kind) {
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Tuple | TypeKind.Struct => true,
@@ -142,7 +142,7 @@ function getRootName(node: Node): string {
 
 // Find the source location of the first mutation of paramName in the subtree.
 // Used for readonly error reporting — points to the actual mutation site.
-function findMutationLocation(node: Node | null, paramName: string, interiorOnly: boolean): SourceLocation {
+export function findMutationLocation(node: Node | null, paramName: string, interiorOnly: boolean): SourceLocation {
 	if (node === null) return makeLoc(0, 0);
 	if (node.kind === NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
@@ -255,7 +255,7 @@ function findMutationLocation(node: Node | null, paramName: string, interiorOnly
 }
 
 // Returns true if paramName is mutated anywhere in the subtree
-function scanForMutation(node: Node | null, paramName: string, interiorOnly: boolean): boolean {
+export function scanForMutation(node: Node | null, paramName: string, interiorOnly: boolean): boolean {
 	if (node === null) return false;
 
 	return match (node.kind) {
