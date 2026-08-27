@@ -1437,63 +1437,63 @@ export function genClFullCastNrvo(g: CGen, t: Type, nrvoType: string): string { 
 // in combinator.h, msString in system.h) short-circuit — caller skips.
 // Returns true if handled (either emitted now or pre-instantiated),
 // false if innerType is an unsupported shape (void, nested array).
-export function ensurePromiseAllInstance(g: CGen, innerType: Type): boolean {
-	if (innerType === null || innerType.kind === TypeKind.Void) return false;
+export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
+	if (innerType === null || innerType.kind === TypeKind.Void) return "";
 	const innerDesc = getTypeDesc(g, innerType);
 
-	// Pre-instantiated in runtime (combinator.h / system.h) — no emission needed.
+	// Pre-instantiated in runtime (combinator.h / system.h) — no emission needed,
+	// and the transform's dispatch name already matches.
 	if (innerDesc === "double" || innerDesc === "bool" || innerDesc === "MS_BOOL"
 		|| innerDesc === "msString" || innerDesc.endsWith("*")) {
-		return true;
+		return "";
 	}
 
 	// int32 / int64 — array types are custom (int32_tArray / int64_tArray). Force-emit
 	// the array typedef so the payload struct is complete for sizeof() inside the macro.
 	if (innerDesc === "int32_t") {
 		genArrayType(g, createArray(innerType));
-		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME");
-		return true;
+		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy");
+		return "msPromiseAllFor_msFuture_int32";
 	}
 	if (innerDesc === "int64_t") {
 		genArrayType(g, createArray(innerType));
-		emitPromiseAllInstance(g, "msFuture_int64", "int64_t", "int64_t", "int64_tArray", "int64_tArray__Content", "MS_COPY_SAME");
-		return true;
+		emitPromiseAllInstance(g, "msFuture_int64", "int64_t", "int64_t", "int64_tArray", "int64_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy");
+		return "msPromiseAllFor_msFuture_int64";
 	}
 
 	// Arrays-of-arrays: Promise<T[]>[] → Promise<T[][]> — not a common use case.
 	// Caller falls back to generic msPromiseAll.
-	if (innerDesc.endsWith("Array")) return false;
+	if (innerDesc.endsWith("Array")) return "";
 
-	// Structs and other named value types. When the struct has RC fields (signaled
-	// by `hasAsgnFlag`), use its generated `<T>Copy` hook for a DRC-correct deep
-	// copy — a shallow memcpy would silently duplicate RC pointers and cause leaks
-	// or double-frees. `<T>Copy` is defined in CSection.Procs by destructorLifting;
-	// emit a forward decl in ProcHeaders so the static-inline macro body (emitted
-	// into GlobalVars, which renders before Procs) can reference it.
+	// Structs and other named value types. A struct-like Promise<T> value is BOXED
+	// (generic future, heap box in the void* slot — asyncBridge/spawnLower emit
+	// msSinkBoxStruct), so collect is MS_COPY_BOXED_MOVE: move the bits out of the
+	// box, free the shell — refs transfer to the slot, no per-type Copy hook.
 	genArrayType(g, createArray(innerType));
+	// Array typedefs and DRC hooks are emitted under the BARE struct name
+	// (UserArray / UserArrayDestroy), while the future struct + instance symbol
+	// carry the module-mangled name — mixing them up references types that no TU defines.
+	const bareBase = typeCacheGet(g.typeCache, "bare:" + innerDesc);
+	const baseDesc = bareBase !== "" ? bareBase : innerDesc;
 	const futName = "msFuture_" + mangle(innerDesc);
-	const arrName = getArrayTypeName(innerDesc);
+	const arrName = getArrayTypeName(baseDesc);
 	const payloadName = getArrayContentType(arrName);
-	let copyStmt = "MS_COPY_SAME";
-	// destructorLifting generates `<typeName>Copy` only for named structs with
-	// RC fields (`hasAsgnFlag`). Anonymous structs (typeName === "") are skipped
-	// by destructorLifting at `lookupSymbol(...) === null`, so using the hook
-	// there would produce an undefined reference at link. Match its filter.
+	// The result array cell's destroyFn releases collected slots. destructorLifting
+	// generates `<typeName>ArrayDestroy` only for named structs with RC fields
+	// (`hasAsgnFlag`); anonymous structs are skipped there, so they get the
+	// free-only fallback. Emit a forward decl in ProcHeaders so the static TI
+	// initializer (GlobalVars, renders before Procs) can reference the walker.
+	let destroyFn = "msNumberArrayDestroy";
 	if (innerType.kind === TypeKind.Struct && innerType.typeName !== "" && hasAsgnFlag(innerType)) {
-		const bareInner = typeCacheGet(g.typeCache, "bare:" + innerDesc);
-		const hookName = (bareInner !== "" ? bareInner : innerDesc) + "Copy";
-		// Dedup the forward decl across repeat calls for the same T — multiple
-		// Promise.all sites in the same module otherwise emit N copies. Harmless
-		// in C but noisy; cache via g.forwTypeCache.
-		const fwdKey = "copyhookfwd:" + hookName;
+		destroyFn = baseDesc + "ArrayDestroy";
+		const fwdKey = "arrdestroyfwd:" + destroyFn;
 		if (!typeCacheHas(g.forwTypeCache, fwdKey)) {
-			typeCacheSet(g.forwTypeCache, fwdKey, hookName);
-			addLine(sec(g, CSection.ProcHeaders), "void " + hookName + "(" + innerDesc + "* dest, " + innerDesc + "* src);");
+			typeCacheSet(g.forwTypeCache, fwdKey, destroyFn);
+			addLine(sec(g, CSection.ProcHeaders), "void " + destroyFn + "(" + arrName + "* self);");
 		}
-		copyStmt = hookName;
 	}
-	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, copyStmt);
-	return true;
+	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, "MS_COPY_BOXED_MOVE", destroyFn);
+	return "msPromiseAllFor_" + futName;
 }
 
 // Emit an MS_PROMISE_ALL_FOR instance for element-future-type `futName` whose
@@ -1501,7 +1501,7 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): boolean {
 // storage element `dstElem`). Guarded by #ifndef — idempotent across modules.
 // Pre-instantiated types (msFuture_double / msFuture_bool / msFuture_ptr in
 // combinator.h, msFuture_msString in system.h) are skipped at call sites.
-function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem: string, arrName: string, payloadName: string, copyStmt: string): void {
+function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem: string, arrName: string, payloadName: string, copyStmt: string, destroyFn: string): void {
 	const guard = "msPromiseAllFor_" + futName + "_DEFINED";
 	// Emit into GlobalVars (runs after Types + SeqTypes) so the array payload's
 	// full struct definition is visible to sizeof(payloadType) inside the macro
@@ -1509,7 +1509,7 @@ function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem:
 	const b = sec(g, CSection.GlobalVars);
 	addLine(b, "#ifndef " + guard);
 	addLine(b, "#define " + guard);
-	addLine(b, "MS_PROMISE_ALL_FOR(" + srcT + ", " + futName + ", " + dstElem + ", " + arrName + ", " + payloadName + ", " + copyStmt + ");");
+	addLine(b, "MS_PROMISE_ALL_FOR(" + srcT + ", " + futName + ", " + dstElem + ", " + arrName + ", " + payloadName + ", " + copyStmt + ", " + destroyFn + ");");
 	addLine(b, "#endif");
 	addNewline(b);
 }

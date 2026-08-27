@@ -2676,17 +2676,22 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// dedups across repeat calls. The element type T is recovered from the argument's
 	// nodeType (`Promise<T>[]`) via its `typeReturn` (the element Promise<T>) and
 	// awaitedType.
+	let finalCallee = callee;
 	if (cd.arguments.length >= 1 && cd.arguments[0].nodeType !== null
 		&& callee.startsWith("msPromiseAllFor_msFuture_")) {
-		const argArrType = cd.arguments[0].nodeType;
+		let argArrType = cd.arguments[0].nodeType!;
+		if (argArrType.kind === TypeKind.Ref && argArrType.typeReturn !== null) argArrType = argArrType.typeReturn;
 		const elementPromise = argArrType.typeReturn;
 		if (elementPromise !== null) {
 			const innerT = awaitedType(elementPromise);
-			if (innerT !== null) ensurePromiseAllInstance(g, innerT);
+			if (innerT !== null) {
+				const typedName = ensurePromiseAllInstance(g, innerT);
+				if (typedName !== "") finalCallee = typedName;
+			}
 		}
 	}
 
-	emitNrvoOrValueCall(g, p, ctx, callee, argsStr, getCalleeReturnType(node), getCalleeFuncType(node));
+	emitNrvoOrValueCall(g, p, ctx, finalCallee, argsStr, getCalleeReturnType(node), getCalleeFuncType(node));
 }
 // ===== genExprAssign — evaluate expression and assign to dest =====
 // For statement-level: `dest = expr;`
