@@ -23,7 +23,7 @@
 // of them would create a circular import.
 
 import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind } from "../../ast/node";
-import { isAwaitable, awaitedType } from "../../checker/types";
+import { isAwaitable, awaitedType, unwrapRef } from "../../checker/types";
 import { TransformContext } from "../context";
 import { makeIdent, makeCall, makeNumber, makeNull, inlineInFuture, unboxVoidPtrToTyped } from "../util";
 
@@ -213,8 +213,9 @@ function lowerPromiseSpawn(node: Node, loc: SourceLocation): Node {
 function lowerPromiseAll(node: Node, loc: SourceLocation): Node {
 	const cd = node.data as CallExprData;
 	if (cd.arguments.length < 1 || cd.arguments[0].nodeType === null) return node;
-	const argArrType = cd.arguments[0].nodeType;
-	// argArrType is Array<Promise<T>>; typeReturn is Promise<T>; awaitedType is T.
+	const argArrType = unwrapRef(cd.arguments[0].nodeType!);
+	// argArrType peels Ref<Array<Promise<T>>> to Array<Promise<T>>;
+	// typeReturn is Promise<T>; awaitedType is T.
 	const elementPromise = argArrType.typeReturn;
 	const innerT = elementPromise !== null ? awaitedType(elementPromise) : null;
 	const typedFn = promiseAllFnForInner(innerT);
