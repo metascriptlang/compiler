@@ -3510,6 +3510,20 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 					}
 				}
 			}
+			// Non-empty array/object literal under a still-generic formal:
+			// drop the expected type so the literal infers bottom-up and the
+			// forward unify below can bind T (a pushed GenericParam contaminates
+			// the literal's type instead). Empty literals keep it — nothing to
+			// infer from, the unbound-T gate must stay loud.
+			if (_isGenericCall && hasGenericParams(paramExpected)) {
+				const nonEmptyArrayLit = d.arguments[ai].kind === NodeKind.ArrayLiteral
+					&& (d.arguments[ai].data as ArrayLiteralData).elements.length > 0;
+				const nonEmptyObjectLit = d.arguments[ai].kind === NodeKind.ObjectLiteral
+					&& (d.arguments[ai].data as ObjectLiteralData).properties.length > 0;
+				if (nonEmptyArrayLit || nonEmptyObjectLit) {
+					paramExpected = null;
+				}
+			}
 		}
 		checkExpr(ctx, d.arguments[ai], paramExpected);
 		let argType = d.arguments[ai].nodeType;
@@ -4078,6 +4092,24 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 		const declParams = getGenericDecl(returnType.typeName);
 		if (declParams !== "") {
 			instantiateGenericBody(returnType, declParams);
+		}
+	}
+	// A formal that received an argument yet still carries a GenericParam after
+	// binding would mono into a call with no emitted body — fail loud here, not
+	// at C-compile. Return-type-only checking misses param-only T.
+	if (ctx.inGenericContext === 0) {
+		const chkLim = argTypes.length < fnType.typeChildren.length ? argTypes.length : fnType.typeChildren.length;
+		for (let fi = 0; fi < chkLim; fi += 1) {
+			const fFormal = fnType.typeChildren[fi];
+			if (fFormal === null || !hasGenericParams(fFormal)) continue;
+			const fSub = applySubstitutions(fFormal, argBindings);
+			if (hasGenericParams(fSub)) {
+				const unboundP = findFirstGenericParamName(fSub);
+				const pLine = callNode !== null ? callNode.location.line : 0;
+				const pCol = callNode !== null ? callNode.location.column : 0;
+				addError(ctx, "cannot instantiate: '" + unboundP + "' — annotate the destination type or pass an explicit type argument", pLine, pCol);
+				return errorType();
+			}
 		}
 	}
 	if (ctx.inGenericContext === 0 && hasGenericParams(returnType)) {
