@@ -10,13 +10,13 @@ import {
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, emitStmtsLine, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString, markTypeInfoSkipped,
 } from "./context";
-import { genExpr } from "./expressions";
+import { genExpr, refArrayDestroyFn, refArrayCellName } from "./expressions";
 import { genStmt, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, isCompilerGenCName, isNilableValueType } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isCompilerGenCName, isNilableValueType } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
-import { isDrcLifecycleName } from "./forward";
+import { isDrcLifecycleName, ensureDrcProto } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
@@ -692,6 +692,9 @@ function genGlobalVar(g: CGen, node: Node): void {
 		if (init.kind === NodeKind.ObjectLiteral && node.nodeType !== null && isBakeableAggregateConst(node)) {
 			if (genBakedConstCell(g, node, varName, staticPfx, cType)) return;
 		}
+		if ((init.kind === NodeKind.ArrayLiteral || init.kind === NodeKind.CallExpr) && node.nodeType !== null && isBakeableAggregateConst(node)) {
+			if (genBakedConstArrayCell(g, node, varName, staticPfx, cType)) return;
+		}
 	}
 	// Always emit uninitialized declaration to GlobalVars
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName};`);
@@ -764,6 +767,25 @@ function genBakedConstCell(g: CGen, node: Node, varName: string, staticPfx: stri
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);
 	ensureTypeInfoDef(g, body, node.nodeType);
+	return true;
+}
+
+function genBakedConstArrayCell(g: CGen, node: Node, varName: string, staticPfx: string, cType: string): boolean {
+	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) !== "*") return false;
+	const t0 = node.nodeType;
+	if (t0 === null) return false;
+	const arrT = t0.kind === TypeKind.Ref ? t0.typeReturn : t0;
+	if (arrT === null || arrT.kind !== TypeKind.Array) return false;
+	const d = node.data as VariableDeclData;
+	if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) return true;
+	const arrCType = cType.slice(0, cType.length - 1);
+	const destroyFn = refArrayDestroyFn(arrT.typeReturn, arrCType);
+	const cellName = refArrayCellName(destroyFn, arrCType);
+	ensureDrcProto(g, destroyFn);
+	ensureRefArrayCellTypeInfo(g, cellName, destroyFn);
+	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { 1 << 30, -1, &${cellName}TypeInfo, 0 }, { 0, NULL } };`);
+	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
+	nameSetAdd(g.declaredGlobals, varName);
 	return true;
 }
 
