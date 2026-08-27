@@ -193,6 +193,13 @@ export function resolveLocal(s: RaiserCompState, name: string): number {
 	return -1;
 }
 
+export function regIsFixedLocal(s: RaiserCompState, reg: number): boolean {
+	for (const local of s.locals.items) {
+		if (local.reg === reg) return true;
+	}
+	return false;
+}
+
 // --- Condition helpers ---
 
 export function emitBranchIfFalsy(s: RaiserCompState, condReg: number): number {

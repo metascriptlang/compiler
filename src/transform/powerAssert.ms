@@ -23,7 +23,7 @@ import { createNode } from "../ast/node";
 
 // ===== Type-based __paValue dispatch =====
 
-function paValueFnForType(t: Type): string {
+function paValueFnForType(t: Type | null): string {
 	if (t === null) return "__paValueNum";
 	if (t.kind === TypeKind.String) return "__paValueStr";
 	if (t.kind === TypeKind.Boolean) return "__paValueBool";

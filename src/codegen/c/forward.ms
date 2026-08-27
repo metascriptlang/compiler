@@ -133,7 +133,7 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 
 // On-demand cross-module function prototype emission.
 // Called from genCallExpr when a cross-module function is referenced.
-export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type, sym: Symbol): void {
+export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type, sym: Symbol | null): void {
 	// Recovery path: re-exported symbols imported via a hub module (e.g.,
 	// `export { X } from "./source"`) can end up with Unknown symbolType in the
 	// caller's scope when the hub's collectExport runs before the source module's

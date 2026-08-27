@@ -116,10 +116,10 @@ function rewriteResultCall(node: Node): Node {
 	const prop = md.property;
 
 	if (prop === "ok") {
-		return makeResultOk(cd.arguments, node.nodeType, loc);
+		return makeResultOk(cd.arguments, node.nodeType!, loc);
 	}
 	if (prop === "err" && cd.arguments.length === 1) {
-		return makeResultErr(cd.arguments[0], node.nodeType, loc);
+		return makeResultErr(cd.arguments[0], node.nodeType!, loc);
 	}
 	return node;
 }
@@ -218,7 +218,7 @@ function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node 
 		}
 
 		// if (!$result.ok) { return { ok: false, error: $result.error }; }
-		hoisted.push(makeErrorCheck(sym, resType, loc, ctx));
+		hoisted.push(makeErrorCheck(sym, resType!, loc, ctx));
 
 		// Replace TryExpr with $result.value. For `Result<void, E>` the v0
 		// variant has no `value` field — synthesize a void placeholder

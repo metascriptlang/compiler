@@ -28,7 +28,7 @@ export function isStructLikeType(t: Type | null): boolean {
 // Single source of truth for "this discriminant may become a real C switch" —
 // C requires an integer controlling expression (Number is double, NOT valid).
 // Shared by matchLower and switchLower so the two dispatches never drift.
-export function isCSwitchableType(t: Type): boolean {
+export function isCSwitchableType(t: Type | null): boolean {
 	if (t === null) return false;
 	const k = t.kind;
 	return k === TypeKind.Enum || k === TypeKind.Int8 || k === TypeKind.Int16
@@ -171,7 +171,7 @@ export function makeIntNumber(val: int64, loc: SourceLocation): Node {
 // Reference parity (resetLoc): produce type-appropriate default/zero value.
 // Primitives → 0, booleans → false, refs/closures → null, strings → "".
 // Used by async/generator transforms to initialize state vars correctly.
-export function makeDefaultValue(t: Type, loc: SourceLocation): Node {
+export function makeDefaultValue(t: Type | null, loc: SourceLocation): Node {
 	if (t === null) return makeNull(loc);
 	const k = t.kind;
 	// Numeric types → 0

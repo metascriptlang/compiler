@@ -113,7 +113,7 @@ export function typedFutureReadFn(t: Type): string {
 // Build a call to `fnName(args...)` and tag it with the requested result type.
 // Consolidates the "makeCall + nodeType + return" pattern used by builtin
 // replacements.
-function mkTypedCall(fnName: string, args: Node[], nodeType: Type, loc: SourceLocation): Node {
+function mkTypedCall(fnName: string, args: Node[], nodeType: Type | null, loc: SourceLocation): Node {
 	const call = makeCall(makeIdent(fnName, loc), args, loc);
 	call.nodeType = nodeType;
 	return call;

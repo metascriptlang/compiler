@@ -293,7 +293,7 @@ function hasTailCall(body: Node, fnName: string, fnSym: Symbol | null): boolean 
 
 // Check if an expression is a call to fnName. Symbol identity when both sides
 // carry one (rules out shadowing and overload sets); name match as fallback.
-function isTailCallExpr(expr: Node, fnName: string, fnSym: Symbol | null): boolean {
+function isTailCallExpr(expr: Node | null, fnName: string, fnSym: Symbol | null): boolean {
 	if (expr === null) return false;
 	if (expr.kind !== NodeKind.CallExpr) return false;
 	const cd = expr.data as CallExprData;
@@ -326,7 +326,7 @@ function transformStmt(stmt: Node, fnName: string, fnSym: Symbol | null, params:
 		NodeKind.ReturnStmt => {
 			const rd = stmt.data as ReturnStmtData;
 			if (isTailCallExpr(rd.argument, fnName, fnSym)) {
-				return buildTailCallReplacement(rd.argument, params, localSyms, stmt.location, ctx);
+				return buildTailCallReplacement(rd.argument!, params, localSyms, stmt.location, ctx);
 			}
 			return stmt;
 		},

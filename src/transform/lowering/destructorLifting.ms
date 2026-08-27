@@ -816,10 +816,10 @@ function userHookMethodName(hook: string): string {
 	};
 }
 
-function getUserDefinedHookSym(typeName: string, hook: string, lctx: LiftCtx): Symbol {
+function getUserDefinedHookSym(typeName: string, hook: string, lctx: LiftCtx): Symbol | null {
 	const methodName = userHookMethodName(hook);
-	if (methodName === "") return null as unknown as Symbol;
-	if (lctx.checkerCtx === null || lctx.checkerCtx.extensionRegistry === null) return null as unknown as Symbol;
+	if (methodName === "") return null;
+	if (lctx.checkerCtx === null || lctx.checkerCtx.extensionRegistry === null) return null;
 	// A type may carry duplicate registry entries reached through different import
 	// paths — distinct Symbol instances whose modulePath differs only by spelling
 	// (e.g. `crypto/index` vs `crypto/tls/../index`), each mangling to a different
@@ -829,7 +829,7 @@ function getUserDefinedHookSym(typeName: string, hook: string, lctx: LiftCtx): S
 	let typeModulePath = "";
 	const typeSym = lookupSymbol(lctx.checkerCtx.table, typeName);
 	if (typeSym !== null) typeModulePath = typeSym.modulePath;
-	let fallback: Symbol = null as unknown as Symbol;
+	let fallback: Symbol | null = null;
 	for (const m of lctx.checkerCtx.extensionRegistry.methods) {
 		if (m.receiverTypeName !== typeName || m.methodName !== methodName || m.isStatic) continue;
 		if (m.sym === null) continue;
@@ -1112,7 +1112,7 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 		// base classes are always declared so always reach ensureHooks.
 		const baseTypeName = getBaseClass(typeName, lctx);
 		if (baseTypeName !== "") {
-			ensureHooksByName(baseTypeName, lctx, loc, null as unknown as Symbol);
+			ensureHooksByName(baseTypeName, lctx, loc, null);
 		}
 
 		// Ref types: HiddenDeref unwraps Ref<Struct> → Struct for field access.
@@ -2022,7 +2022,7 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 // Look up the declared type's sym and dispatch to `ensureHooks`. Pulled out of
 // processDecl's match arms so all three decl kinds share one resolve+dispatch.
 // processDecl is the DEFINING-module path — passes emitTypeInfo=true.
-function ensureHooksByName(typeName: string, lctx: LiftCtx, loc: SourceLocation, declSym: Symbol): void {
+function ensureHooksByName(typeName: string, lctx: LiftCtx, loc: SourceLocation, declSym: Symbol | null): void {
 	if (typeName === "") return;
 	if (lctx.checkerCtx === null) return;
 	// Local (block-scoped) type decls are invisible to a module-scope name

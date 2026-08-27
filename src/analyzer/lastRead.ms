@@ -26,7 +26,7 @@ function anyChildReferences(nodes: Node[], targetSym: Symbol): boolean {
 	return false;
 }
 
-export function nodeReferencesVar(node: Node, targetSym: Symbol): boolean {
+export function nodeReferencesVar(node: Node | null, targetSym: Symbol): boolean {
 	if (node === null || targetSym === null) return false;
 
 	return match (node.kind) {

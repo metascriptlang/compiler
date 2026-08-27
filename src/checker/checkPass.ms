@@ -73,7 +73,7 @@ function formatTypeBrief(t: Type | null): string {
 // Lives here (not in spawnAffinity.ms) to avoid a cycle with context.ms:
 // spawnAffinity stays pure data/logic; the checker-facing glue belongs in
 // the pass that owns the scope lifecycle.
-function checkAffineConsumption(ctx: CheckerContext, scope: Ptr<Scope>, tracker: AffineTracker): void {
+function checkAffineConsumption(ctx: CheckerContext, scope: Cursor<Scope>, tracker: AffineTracker): void {
 	for (const sym of scope.symbols.values()) {
 		if (sym !== null && sym.symbolType !== null && isAffineAwaitable(sym.symbolType)) {
 			const key = symbolConsumeKey(sym);
@@ -103,7 +103,7 @@ function checkAffineConsumption(ctx: CheckerContext, scope: Ptr<Scope>, tracker:
 // affine-Promise binding. Used by loop reuse detection to identify handles declared
 // OUTSIDE a loop body — consuming such a handle inside the body would reuse an
 // already-awaited value on iteration N+1.
-function collectVisibleSpawnKeys(scope: Ptr<Scope>): string[] {
+function collectVisibleSpawnKeys(scope: Cursor<Scope>): string[] {
 	const result: string[] = [];
 	let s = scope;
 	while (s !== null) {
@@ -408,7 +408,7 @@ function spliceStmtMany(ctx: CheckerContext, node: Node, splice: Node): void {
 	node.data = last.data;
 	if (last.location !== null) node.location = last.location;
 	node.nodeType = null as unknown as Type;
-	node.resolvedSym = null as unknown as Symbol;
+	node.resolvedSym = null;
 	node.flags = 0;
 	checkStmt(ctx, node);
 }
@@ -555,7 +555,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth - 1;
 		const aliasType = noneType();
 		node.nodeType = aliasType;
-		let sym: Symbol = null as unknown as Symbol;
+		let sym: Symbol | null = null;
 		const existing = lookupLocal(ctx.table, d.declName);
 		if (existing !== null) {
 			existing.symbolType = aliasType;
@@ -586,7 +586,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	// one, otherwise from the routine's own signature (reference parity:
 	// semProcAux sets s.typ from semParamList before the body is analysed).
 	// Restricted to ArrowFunction/FunctionExpr so `const x = x + 1` keeps TDZ.
-	let preRegisteredSelfRefSym: Symbol = null as unknown as Symbol;
+	let preRegisteredSelfRefSym: Symbol | null = null;
 	if (d.initializer !== null
 			&& (d.initializer.kind === NodeKind.ArrowFunction
 				|| d.initializer.kind === NodeKind.FunctionExpr)) {
@@ -801,7 +801,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	const savedReturnStmts = ctx.inferredReturnStmts;
 	ctx.inferredReturnStmts = [];
 
-	checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations);
+	checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations!);
 
 	// If return type was unknown (no annotation), use inferred type
 	if (sym.symbolType.kind === TypeKind.Function
@@ -994,7 +994,7 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			// Skip body check for extern (no body) and generic methods (body re-checked
 			// per instantiation, like top-level generic fns at checkFunctionDecl:358).
 			if (d.methodFlags !== "extern" && !isGenericFn(d.methodFlags)) {
-				checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations);
+				checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!);
 			} else if (isGenericFn(d.methodFlags)) {
 				markBodyIdentifiersUsed(ctx, d.methodBody);
 			}
@@ -1225,7 +1225,7 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
-function iterableElemType(t: Type): Type {
+function iterableElemType(t: Type | null): Type {
 	if (t === null) return inferredType();
 	// reference array: see through Ref<Array> to the value array's element type so
 	// for..of takes the direct array-iteration path, not the implicit toItems iterator.
@@ -1719,7 +1719,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 	mergeConsumeBranches(ctx.affineTracker, oldAffine, branchConsumes, branchBreaks, isExhaustive);
 	if (discType.kind === TypeKind.Enum && !hasWildcard) {
 		const discEnd = estimateExprEndCol(d.matchStmtDisc) + 1;
-		checkEnumExhaustiveness(ctx, discType, coveredMembers, node.location.line, node.location.column, discEnd);
+		checkEnumExhaustiveness(ctx, discType!, coveredMembers, node.location.line, node.location.column, discEnd);
 	}
 	// Tier 2: report missing string DU variants
 	if (narrowIsStringDU && narrowUnion !== null && !hasWildcard) {
@@ -3433,7 +3433,7 @@ test "index sig in function parameter" {
 
 // Walk function body's statements looking for the first Identifier matching
 // `targetName` whose `flowNode` is non-null. Skips declaration sites.
-function findFlowRef(root: Node, targetName: string): Node {
+function findFlowRef(root: Node | null, targetName: string): Node {
 	if (root === null) return null as unknown as Node;
 	// Quick structural check: is this the identifier we want?
 	if (root.kind === NodeKind.Identifier) {

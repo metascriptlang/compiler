@@ -10,7 +10,6 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt, jsTypedArrayName, escapeJSString } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
-import { emitCopyOnRead } from "./valueCopy";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // A failing assert must abandon the rest of its test body — the C harness does
@@ -92,9 +91,9 @@ function emitVariableDeclCore(gen: JSGenerator, node: Node): void {
 	emit(gen, jsSymbolName(gen, node.resolvedSym, d.declName));
 	if (d.initializer !== null) {
 		emit(gen, " = ");
-		emitCopyOnRead(gen, d.initializer);
+		emitNode(gen, d.initializer);
 	} else {
-		emitDefaultInit(gen, node.nodeType);
+		emitDefaultInit(gen, node.nodeType!);
 	}
 }
 
@@ -110,7 +109,7 @@ function emitStaticStorageDecl(gen: JSGenerator, node: Node): void {
 	if (d.declKind !== DeclKind.Const) {
 		emitIndent(gen);
 		emit(gen, slot + " = ");
-		emitCopyOnRead(gen, d.initializer);
+		emitNode(gen, d.initializer);
 		emit(gen, ";\n");
 		return;
 	}
@@ -228,7 +227,7 @@ export function emitReturnStmt(gen: JSGenerator, node: Node): void {
 	emitIndent(gen);
 	if (d.argument !== null) {
 		emit(gen, "return ");
-		emitCopyOnRead(gen, d.argument);
+		emitNode(gen, d.argument);
 		emit(gen, ";\n");
 	} else {
 		emit(gen, "return;\n");

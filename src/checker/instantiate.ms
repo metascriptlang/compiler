@@ -344,7 +344,7 @@ function clearCheckerState(node: Node): void {
 	// See NIM-REF.md §1 "Enum member repr & generic-instantiation survival".
 	const keepBound = (node.flags & NodeFlag.BoundSym) !== 0 && node.resolvedSym !== null;
 	if (!keepBound && (node.resolvedSym === null || node.resolvedSym.symbolKind !== SymbolKind.EnumMember)) {
-		node.resolvedSym = null as unknown as Symbol;
+		node.resolvedSym = null;
 	}
 	node.flags = node.flags & NodeFlag.BoundSym;
 	forEachChild(node, (child: Node): void => { clearCheckerState(child); });
@@ -683,7 +683,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 
 	// Store constructor type + defaults for cross-module default-fill lookup.
 	// Can't use symbol table (each module has its own). Use shared _ctorRegistry instead.
-	registerCtorDefaults(ctorFnName, ctorDeclNode.nodeType, fnDefaults);
+	registerCtorDefaults(ctorFnName, ctorDeclNode.nodeType!, fnDefaults);
 
 	// Emit ClassDecl with just the constructor (struct already emitted by monoEmitTypeInstNodes).
 	// Set classNode.nodeType to the concrete (instantiated) class type so the

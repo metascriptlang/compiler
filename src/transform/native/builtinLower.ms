@@ -276,9 +276,9 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 	if (resType === null || !isResult(resType)) {
 		if (cd.arguments.length > 0 && cd.arguments[0].nodeType !== null) {
 			if (isOk) {
-				resType = createResult(cd.arguments[0].nodeType, stringType());
+				resType = createResult(cd.arguments[0].nodeType!, stringType());
 			} else {
-				resType = createResult(inferredType(), cd.arguments[0].nodeType);
+				resType = createResult(inferredType(), cd.arguments[0].nodeType!);
 			}
 			node.nodeType = resType;
 		}

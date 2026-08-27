@@ -142,7 +142,7 @@ function getRootName(node: Node): string {
 
 // Find the source location of the first mutation of paramName in the subtree.
 // Used for readonly error reporting — points to the actual mutation site.
-function findMutationLocation(node: Node, paramName: string, interiorOnly: boolean): SourceLocation {
+function findMutationLocation(node: Node | null, paramName: string, interiorOnly: boolean): SourceLocation {
 	if (node === null) return makeLoc(0, 0);
 	if (node.kind === NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;

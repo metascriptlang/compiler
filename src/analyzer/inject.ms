@@ -435,7 +435,7 @@ function retroHoistStmtReads(srcName: string, fallbackType: Type, dctx: DrcConte
 		const loc = r.readNode.location;
 		const readType = r.readNode.nodeType !== null ? r.readNode.nodeType : fallbackType;
 		const bSym = freshTempSym(dctx.ctx, "pborrow", readType);
-		const init = makeIdentResolved(r.readNode.resolvedSym, loc);
+		const init = makeIdentResolved(r.readNode.resolvedSym!, loc);
 		init.nodeType = readType;
 		const decl = makeVarDecl(bSym.name, init, DeclKind.Const, loc);
 		decl.nodeType = readType;
@@ -453,7 +453,7 @@ function retroHoistStmtReads(srcName: string, fallbackType: Type, dctx: DrcConte
 function destructiveMoveVar(srcExpr: Node, rcInfo: RcInfo, dctx: DrcContext): Node {
 	const loc = srcExpr.location;
 	const srcName = (srcExpr.data as IdentifierData).name;
-	retroHoistStmtReads(srcName, srcExpr.nodeType, dctx);
+	retroHoistStmtReads(srcName, srcExpr.nodeType!, dctx);
 	const tmpSym = freshTempSym(dctx.ctx, "move", srcExpr.nodeType);
 	setFlag(tmpSym, SymbolFlag.SinkTemp);
 	const tmpName = tmpSym.name;
@@ -499,7 +499,7 @@ function processArrayAccess(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	return node;
 }
 
-function isPtrField(objType: Type, fieldIdx: number): boolean {
+function isPtrField(objType: Type | null, fieldIdx: number): boolean {
 	if (objType === null) return false;
 	let t = objType;
 	if (t.kind === TypeKind.Ref && t.typeReturn !== null) {
@@ -642,10 +642,10 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	markUninitialized(dctx, tmpName);
 	// Reference parity: push/pop scope for each branch isolates preStmts/pendingStmts
 	pushScope(dctx, false, false);
-	const thenProcessed = processBranchAssign(tmpName, tmpSym, resultType, cd.ternaryConsequent, dctx, loc);
+	const thenProcessed = processBranchAssign(tmpName, tmpSym, resultType!, cd.ternaryConsequent, dctx, loc);
 	popScope(dctx);
 	pushScope(dctx, false, false);
-	const elseProcessed = processBranchAssign(tmpName, tmpSym, resultType, cd.ternaryAlternate, dctx, loc);
+	const elseProcessed = processBranchAssign(tmpName, tmpSym, resultType!, cd.ternaryAlternate, dctx, loc);
 	popScope(dctx);
 	addPre(dctx, makeIf(cd.ternaryCondition, makeBlock(thenProcessed, loc), makeBlock(elseProcessed, loc), loc));
 	// $cond is single-use, consumed by the enclosing expression in SinkArg/Consumed mode.
@@ -752,7 +752,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 // Reference parity: identifiers in DRC-generated RC ops carry resolvedSym so codegen
 // can look up the unique C name. When sym is available,
 // use makeIdentResolved; otherwise fall back to makeIdent for DRC temps.
-function makeVarRef(name: string, sym: Symbol, loc: SourceLocation): Node {
+function makeVarRef(name: string, sym: Symbol | null, loc: SourceLocation): Node {
 	if (sym !== null) return makeIdentResolved(sym, loc);
 	return makeIdent(name, loc);
 }
@@ -781,7 +781,7 @@ function needsDestAddr(rcInfo: RcInfo): boolean {
 	return true;
 }
 
-function makeRcCallStmt(fnName: string, varName: string, sym: Symbol, loc: SourceLocation): Node {
+function makeRcCallStmt(fnName: string, varName: string, sym: Symbol | null, loc: SourceLocation): Node {
 	if (fnName === "") return makeExprStmt(makeNull(loc), loc);
 	return makeExprStmt(
 		makeCall(makeIdent(fnName, loc), [makeVarRef(varName, sym, loc)], loc), loc);
@@ -789,7 +789,7 @@ function makeRcCallStmt(fnName: string, varName: string, sym: Symbol, loc: Sourc
 
 // Reference parity: all hooks take var T (pointer).
 // Runtime macros (empty typeName) still take by value — they're C macros, not generated hooks.
-function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, sym: Symbol): Node {
+function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, sym: Symbol | null): Node {
 	if (rcInfo.destroyFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named) {
 		if (!needsDestAddr(rcInfo)) {
@@ -801,7 +801,7 @@ function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, s
 	return makeRcCallStmt(rcInfo.destroyFn, varName, sym, loc);
 }
 
-function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, sym: Symbol): Node {
+function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, sym: Symbol | null): Node {
 	if (rcInfo.wasMovedFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named) {
 		// Runtime macros (msArrayStringWasMoved etc.): value args
@@ -816,7 +816,7 @@ function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, 
 }
 
 // Reference parity: =copy(&dest, src) for Named and String types; unary incref for Ref/Closure.
-function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation, srcName: string, destSym: Symbol, srcSym: Symbol): Node {
+function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation, srcName: string, destSym: Symbol | null, srcSym: Symbol | null): Node {
 	if (rcInfo.copyFn === "") return makeExprStmt(makeNull(loc), loc);
 	// 2-arg copy: Named types and String (=copy(&dest, src))
 	if (isBinaryCopy(rcInfo)) {
@@ -846,7 +846,7 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 }
 
 // Sink call: sinkFn(dest, src) — atomic destroy-old + assign-new
-function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: SourceLocation, sym: Symbol): Node {
+function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: SourceLocation, sym: Symbol | null): Node {
 	if (rcInfo.sinkFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named) {
 		const destRef = makeVarRef(destName, sym, loc);
@@ -916,7 +916,7 @@ function emitSaveAssignDestroySimple(stmt: Node, saveExpr: Node, rcInfo: RcInfo,
 
 // genSink: ownership transfer — fresh/last-read values moved without copy.
 // Reference: genSink in injectdestructors
-function genSink(stmt: Node, dest: Node, destName: string, destSym: Symbol, rhs: Node, rcInfo: RcInfo,
+function genSink(stmt: Node, dest: Node, destName: string, destSym: Symbol | null, rhs: Node, rcInfo: RcInfo,
 		flags: int32, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	// IsDecl / IsReturn: no old value to destroy — raw assign (Reference: nkFastAsgn optimization)
 	if ((flags & MOC_IS_DECL) !== 0 || (flags & MOC_IS_RETURN) !== 0) {
@@ -941,7 +941,7 @@ function genSink(stmt: Node, dest: Node, destName: string, destSym: Symbol, rhs:
 }
 
 // Resolve the LHS expression for RC ops: field access uses dest node directly, identifiers make fresh ident.
-function resolveLhs(flags: int32, dest: Node, destName: string, destSym: Symbol, loc: SourceLocation): Node {
+function resolveLhs(flags: int32, dest: Node, destName: string, destSym: Symbol | null, loc: SourceLocation): Node {
 	if ((flags & MOC_IS_FIELD) !== 0) return dest;
 	if (destName !== "") return makeVarRef(destName, destSym, loc);
 	return dest;
@@ -949,7 +949,7 @@ function resolveLhs(flags: int32, dest: Node, destName: string, destSym: Symbol,
 
 // genCopy: shared reference — source still live, must duplicate.
 // Reference: genCopy + genCopyNoCheck in injectdestructors
-function genCopy(stmt: Node, dest: Node, destName: string, destSym: Symbol, rhs: Node, rcInfo: RcInfo,
+function genCopy(stmt: Node, dest: Node, destName: string, destSym: Symbol | null, rhs: Node, rcInfo: RcInfo,
 		flags: int32, dctx: DrcContext, loc: SourceLocation): Node {
 	reportFailedMove(rhs, dctx);
 	// Binary copy (Named/String): =copy(&dest, src) handles old-value atomically
@@ -1605,7 +1605,7 @@ function isGeneratorBody(body: Node): boolean {
 
 // Process a function body with sink param registration.
 // Looks up the function's type to get resolved param types.
-function processFuncBodyWithParams(body: Node, ownerSym: Symbol, fnName: string, paramNames: string[], dctx: DrcContext, loc: SourceLocation, funcNodeType: Type): Node {
+function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: string, paramNames: string[], dctx: DrcContext, loc: SourceLocation, funcNodeType: Type): Node {
 	if (body === null) return body;
 	if (body.kind !== NodeKind.BlockStmt) return body;
 	const bd = body.data as BlockStmtData;
@@ -2166,21 +2166,21 @@ function processFuncDecl(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 	// concrete instances, with the `gen:` flag stripped). RC-injecting the template is meaningless
 	// — its members are untyped — so skip it; only real instances get DRC.
 	if (d.fnFlags.indexOf("gen:") >= 0) return stmt;
-	d.fnBody = processFuncBodyWithParams(d.fnBody, stmt.resolvedSym, d.fnName, d.params, dctx, loc, stmt.nodeType);
+	d.fnBody = processFuncBodyWithParams(d.fnBody, stmt.resolvedSym, d.fnName, d.params, dctx, loc, stmt.nodeType!);
 	return stmt;
 }
 
 function processArrow(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as ArrowFunctionData;
 	if (d.arrowBody === null) return stmt;
-	d.arrowBody = processFuncBodyWithParams(d.arrowBody, noSym, "", d.arrowParams, dctx, loc, stmt.nodeType);
+	d.arrowBody = processFuncBodyWithParams(d.arrowBody, noSym, "", d.arrowParams, dctx, loc, stmt.nodeType!);
 	return stmt;
 }
 
 function processFuncExpr(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as FunctionExprData;
 	if (d.funcExprBody === null) return stmt;
-	d.funcExprBody = processFuncBodyWithParams(d.funcExprBody, noSym, "", d.funcExprParams, dctx, loc, stmt.nodeType);
+	d.funcExprBody = processFuncBodyWithParams(d.funcExprBody, noSym, "", d.funcExprParams, dctx, loc, stmt.nodeType!);
 	return stmt;
 }
 
@@ -2291,7 +2291,7 @@ function processExport(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 function processMethodMember(member: Node, dctx: DrcContext, loc: SourceLocation): void {
 	const md = member.data as MethodDeclData;
 	if (md.methodBody !== null) {
-		md.methodBody = processFuncBodyWithParams(md.methodBody, member.resolvedSym, md.methodName, md.methodParams, dctx, loc, member.nodeType);
+		md.methodBody = processFuncBodyWithParams(md.methodBody, member.resolvedSym, md.methodName, md.methodParams, dctx, loc, member.nodeType!);
 	}
 }
 
@@ -2303,9 +2303,9 @@ function processCtorMember(member: Node, dctx: DrcContext, loc: SourceLocation):
 		const ctorType = member.nodeType;
 		if (ctorType !== null && ctorType.kind === TypeKind.Function) {
 			const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorType, false);
-			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, ctorSym, "constructor", cd.ctorParams, dctx, loc, member.nodeType);
+			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, ctorSym, "constructor", cd.ctorParams, dctx, loc, member.nodeType!);
 		} else {
-			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "", cd.ctorParams, dctx, loc, member.nodeType);
+			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "", cd.ctorParams, dctx, loc, member.nodeType!);
 		}
 	}
 }

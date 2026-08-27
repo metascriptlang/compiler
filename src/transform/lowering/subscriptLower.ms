@@ -110,7 +110,7 @@ function makeGetterExt(receiverType: string): ExtensionMethod {
 		sourcePath: "",
 		fnType: createFunction([inferredType()], ["index"], inferredType()),
 		isStatic: false,
-		sym: null as unknown as Symbol,
+		sym: null,
 	};
 	return ext;
 }
@@ -122,7 +122,7 @@ function makeSetterExt(receiverType: string): ExtensionMethod {
 		sourcePath: "",
 		fnType: createFunction([inferredType(), inferredType()], ["index", "value"], inferredType()),
 		isStatic: false,
-		sym: null as unknown as Symbol,
+		sym: null,
 	};
 	return ext;
 }

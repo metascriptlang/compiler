@@ -351,7 +351,7 @@ export type NodeData =
 	| { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node } // ForInStmt
 	| { statements: Node[] }                                       // BlockStmt
 	| { expr: Node }                                               // ExprStmt
-	| { argument: Node }                                           // ReturnStmt
+	| { argument: Node | null }                                    // ReturnStmt
 	| { breakLabel: string }                                       // BreakStmt
 	| { continueLabel: string }                                    // ContinueStmt
 	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // FunctionDecl
@@ -499,13 +499,13 @@ export class Node {
 	// from mapTypeToAst), so the engine checker types `node.nodeType` as Node
 	// and flat reads (.typExprFieldNames, .discFieldName, ...) resolve per the
 	// NodeData unique-field-name rule (checkExprPass engine virtual props).
-	nodeType: Type;
-	resolvedSym: Symbol;
+	nodeType: Type | null;
+	resolvedSym: Symbol | null;
 	flags: int32;
 	comments: Token[]; // Added for comment preservation
-	typeExpr: Node;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
-	typeExprs: (Node | null)[]; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
-	paramLocations: SourceLocation[]; // Per-param source locations for DEF recording
+	typeExpr: Node | null;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
+	typeExprs: (Node | null)[] | null; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
+	paramLocations: SourceLocation[] | null; // Per-param source locations for DEF recording
 	typeArg: string; // Explicit generic type arg string (e.g. "Person" from parse<Person>()) — stored on AST, not side-channel
 	flowNode: FlowNode; // Flow graph node for narrowing queries. Null until binder runs; null for non-reference nodes.
 	// Compiler-side round-trip slot mirrored here for wire parity: the compiler's
@@ -574,7 +574,7 @@ export type ForOfStmtData = { forOfBinding: string, forOfIsConst: boolean, forOf
 export type ForInStmtData = { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node };
 export type BlockStmtData = { statements: Node[] };
 export type ExprStmtData = { expr: Node };
-export type ReturnStmtData = { argument: Node };
+export type ReturnStmtData = { argument: Node | null };
 export type BreakStmtData = { breakLabel: string };
 export type ContinueStmtData = { continueLabel: string };
 export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: Node[], nativeName: string, nameLocation: SourceLocation };
@@ -649,7 +649,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	n.data = data;
 	n.location = makeLoc(token.line, token.column);
 	n.nodeType = null;
-	n.resolvedSym = null as unknown as Symbol;
+	n.resolvedSym = null;
 	n.flags = 0;
 	n.comments = [];
 	n.typeExpr = null;
@@ -785,7 +785,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	n.data = data;
 	n.location = loc;
 	n.nodeType = null;
-	n.resolvedSym = null as unknown as Symbol;
+	n.resolvedSym = null;
 	n.flags = 0;
 	n.comments = [];
 	n.typeExpr = null;

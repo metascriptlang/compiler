@@ -121,8 +121,8 @@ function paramIndex(node: Node, paramNames: string[]): int32 {
 
 // Try to substitute a child node. If it's a param reference, replace with
 // cloned arg. Otherwise recurse. Returns the (possibly replaced) node.
-function trySubstitute(child: Node, paramNames: string[], args: Node[], gsuffix: string): Node {
-	if (child === null) return child;
+function trySubstitute(child: Node | null, paramNames: string[], args: Node[], gsuffix: string): Node {
+	if (child === null) return null as unknown as Node;
 	const pidx = paramIndex(child, paramNames);
 	if (pidx >= 0) return cloneNodeForCheck(args[pidx]);
 	substituteInNode(child, paramNames, args, gsuffix);

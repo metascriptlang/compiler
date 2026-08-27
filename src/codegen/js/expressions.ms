@@ -14,7 +14,6 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner } from "../c/names";
-import { emitCopyOnRead } from "./valueCopy";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { int64ToDecimal } from "../../utils/string";
 
@@ -116,7 +115,7 @@ export function safeJsName(name: string): string {
 // they agree by construction. Uniqueness is required within the EMITTED scope:
 // the bundle is one flat scope (mangle everything), while non-bundle emits one
 // ES module per file where the import/export pair binds public names.
-export function jsSymbolName(gen: JSGenerator, sym: Symbol, name: string): string {
+export function jsSymbolName(gen: JSGenerator, sym: Symbol | null, name: string): string {
 	if (sym === null) return safeJsName(name);
 	if (sym.nativeName !== null && sym.nativeName !== "") return safeJsName(name);
 	if (gen.multiFile) return jsMultiFileName(gen, sym, name);
@@ -187,7 +186,7 @@ export function emitBinaryExpr(gen: JSGenerator, node: Node): void {
 	if (d.operator === "=") {
 		emitNode(gen, d.left);
 		emit(gen, " = ");
-		emitCopyOnRead(gen, d.right);
+		emitNode(gen, d.right);
 	} else if (d.operator === "+=" || d.operator === "-=" || d.operator === "*=" || d.operator === "/=" || d.operator === "%=") {
 		emitNode(gen, d.left);
 		emit(gen, " ");
@@ -412,7 +411,7 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 		emit(gen, d.keys[i]);
 		emit(gen, ": ");
 		if (i < d.properties.length) {
-			emitCopyOnRead(gen, d.properties[i]);
+			emitNode(gen, d.properties[i]);
 		}
 	}
 	emit(gen, " }");
@@ -429,10 +428,7 @@ export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 	}
 	if (typedName !== "") emit(gen, "new " + typedName + "(");
 	emit(gen, "[");
-	for (let i = 0; i < d.elements.length; i += 1) {
-		if (i > 0) emit(gen, ", ");
-		emitCopyOnRead(gen, d.elements[i]);
-	}
+	emitJoinedNodes(gen, d.elements, ", ");
 	emit(gen, "]");
 	if (typedName !== "") emit(gen, ")");
 }

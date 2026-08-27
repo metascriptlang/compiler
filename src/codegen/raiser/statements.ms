@@ -13,7 +13,7 @@ import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { raiserNil, raiserInt } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
-	declareLocal, declareLocalStr,
+	declareLocal, declareLocalStr, regIsFixedLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
 	pushLoop, currentLoop, hasLoop, patchLoopBreaks, patchLoopContinues,
 	resolveBuiltin, registerFunc, resolveFunc, emitClosurePair
@@ -114,6 +114,12 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 		}
 		const isStr = exprIsString(s, d.initializer);
 		const reg = compileExpr(s, d.initializer);
+		if (regIsFixedLocal(s, reg)) {
+			const slot = allocReg(s);
+			emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
+			declareLocalStr(s, d.declName, slot, isStr);
+			return;
+		}
 		declareLocalStr(s, d.declName, reg, isStr);
 	} else {
 		const reg = allocReg(s);

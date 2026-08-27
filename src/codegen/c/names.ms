@@ -225,7 +225,7 @@ export function staticFieldCName(qualifiedName: string): string {
 // from `from "c_name"` clause) and ImportC symbols (runtime/C FFI) use their
 // raw C name directly. Returns "" to signal the caller should fall through
 // to its own rule (proc vs global vs type).
-function symExternOrImportName(sym: Symbol, name: string): string {
+function symExternOrImportName(sym: Symbol | null, name: string): string {
 	if (sym !== null && sym.nativeName !== "") return sym.nativeName;
 	if (sym !== null && hasFlag(sym, SymbolFlag.ImportC)) return safeName(name);
 	return "";
@@ -235,7 +235,7 @@ function symExternOrImportName(sym: Symbol, name: string): string {
 // Single source of truth for function C names. Reads sym.modulePath.
 // extern functions use nativeName. main() stays main_. Others get module-qualified.
 
-export function mangledFunctionName(sym: Symbol, name: string, overloadIdx: number): string {
+export function mangledFunctionName(sym: Symbol | null, name: string, overloadIdx: number): string {
 	if (name === "main") return safeName(name);
 	const early = symExternOrImportName(sym, name);
 	if (early !== "") return early;
@@ -295,7 +295,7 @@ export function resolveOverloadWinner(sym: Symbol, rawIdx: number): OverloadWinn
 // Criteria: Symbol is a Variable, has Global flag (set by collectPass on module-level
 // declarations), and has a known defining module.
 
-export function isModuleGlobalVar(sym: Symbol): boolean {
+export function isModuleGlobalVar(sym: Symbol | null): boolean {
 	if (sym === null) return false;
 	if (sym.symbolKind !== SymbolKind.Variable) return false;
 	// Flag set in two places: (1) collectPass for own-module top-level VariableDecl,
@@ -314,7 +314,7 @@ export function isModuleGlobalVar(sym: Symbol): boolean {
 // early-exit as functions; same module-qualifier pattern minus the overload ID
 // (module globals have no overloads).
 
-export function mangledGlobalName(sym: Symbol, name: string): string {
+export function mangledGlobalName(sym: Symbol | null, name: string): string {
 	const early = symExternOrImportName(sym, name);
 	if (early !== "") return early;
 	const baseName = (sym !== null && sym.originalName !== "") ? sym.originalName : name;
@@ -411,7 +411,7 @@ test "mangleProcName" { assert mangleProcName("myFunc", "mymod", 42) === "myFunc
 test "mangleProcName with special" { assert mangleProcName("a+b", "ops", 1) === "aplusb___ops_u1"; }
 
 test "mangledGlobalName no sym falls through to safeName" {
-	assert mangledGlobalName(null as unknown as Symbol, "FOO") === "FOO";
+	assert mangledGlobalName(null, "FOO") === "FOO";
 }
 
 test "mangledGlobalName no modulePath falls through to safeName" {
@@ -440,11 +440,11 @@ test "mangledGlobalName prefers originalName over import alias" {
 }
 
 test "mangledFunctionName main stays safe" {
-	assert mangledFunctionName(null as unknown as Symbol, "main", 0) === "main_";
+	assert mangledFunctionName(null, "main", 0) === "main_";
 }
 
 test "mangledFunctionName plain name no sym" {
-	assert mangledFunctionName(null as unknown as Symbol, "foo", 0) === "foo";
+	assert mangledFunctionName(null, "foo", 0) === "foo";
 }
 
 test "mangledFunctionName module-qualified" {
@@ -482,7 +482,7 @@ test "mangledFunctionName prefers originalName over import alias" {
 }
 
 test "mangledFunctionName no modulePath with overloadIdx" {
-	assert mangledFunctionName(null as unknown as Symbol, "foo", 3) === "foo__3";
+	assert mangledFunctionName(null, "foo", 3) === "foo__3";
 }
 
 test "normal field" {

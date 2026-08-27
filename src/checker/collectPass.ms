@@ -881,7 +881,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				// Reference parity: sym is the single source of truth for the type.
 				// When sym is available, fnType = noneType() to avoid double-decref.
 				if (exportInfo.extReceiverType !== "" && ctx.extensionRegistry !== null) {
-					registerExtension(ctx.extensionRegistry, createExtMethod(localAlias, exportInfo.extReceiverType, sourcePath, exportInfo.symType, exportInfo.extIsStatic, primarySym !== null ? primarySym : null as unknown as Symbol, 1));
+					registerExtension(ctx.extensionRegistry, createExtMethod(localAlias, exportInfo.extReceiverType, sourcePath, exportInfo.symType, exportInfo.extIsStatic, primarySym, 1));
 				}
 			} else {
 				// Name not found in source module's exports
@@ -1062,7 +1062,7 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 							// shared helper. Same path used by collectImport's primary
 							// reg, named re-export, and star re-export.
 							const primaryNamed = lookupLocal(ctx.table, alias);
-							propagateImportedExtensions(ctx, alias, exportInfo, sourcePath, primaryNamed !== null ? primaryNamed : (null as unknown as Symbol));
+							propagateImportedExtensions(ctx, alias, exportInfo, sourcePath, primaryNamed);
 						} else {
 							const isCirc = ctx.moduleGraph !== null
 								&& ctx.currentModule !== null

@@ -197,7 +197,8 @@ function isGeneratorFlag(flags: string): boolean {
 
 // ===== Yield Detection =====
 
-export function containsYield(node: Node): boolean {
+export function containsYield(node: Node | null): boolean {
+	if (node === null) return false;
 	return match (node.kind) {
 		NodeKind.YieldExpr => true,
 		// Stop at nested function boundaries
@@ -439,14 +440,14 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 
 // Rewrite every Identifier named `oldName` in `node`'s subtree to `newName`,
 // stamping `typ` so member access (e.g. `$curExc.message`) resolves post-check.
-function renameIdentInSubtree(node: Node, oldName: string, newName: string, typ: Type): void {
+function renameIdentInSubtree(node: Node, oldName: string, newName: string, typ: Type | null): void {
 	if (node === null) return;
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		if (d.name === oldName) {
 			d.name = newName;
 			if (typ !== null) node.nodeType = typ;
-			node.resolvedSym = null as unknown as Symbol;
+			node.resolvedSym = null;
 		}
 		return;
 	}
@@ -560,7 +561,7 @@ function rewriteReturns(stmts: Node[], loc: SourceLocation, resultType: Type | n
 			// Replace with block: { $state = -1; return { value: val, done: true }; }
 			const block = makeBlock([
 				makeStateAssign(-1, loc),
-				makeReturn(makeIterResult(rd.argument, true, loc, resultType), loc),
+				makeReturn(makeIterResult(rd.argument!, true, loc, resultType), loc),
 			], loc);
 			stmts[i] = block;
 		}

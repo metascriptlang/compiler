@@ -450,12 +450,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 				const colonIdx = findChar(field, ":");
 				if (colonIdx > 0) {
 					let fname = field.slice(0, colonIdx).trim();
-					// Optional field `name?: T` — strip the marker, parity with the
-					// interface TOKEN path (parseInterfaceLikeDecl discards the `?` token).
+					let fieldIsOptional = false;
 					if (fname.endsWith("?")) {
 						fname = fname.slice(0, fname.length - 1).trim();
+						fieldIsOptional = true;
 					}
-					const ftypeStr = field.slice(colonIdx + 1, field.length).trim();
+					let ftypeStr = field.slice(colonIdx + 1, field.length).trim();
+					if (fieldIsOptional) ftypeStr = optionalizeTypeString(ftypeStr);
 					names.push(fname);
 					types.push(resolveAnnotation(ftypeStr, ctx, line, col));
 				}
@@ -754,7 +755,7 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: number, 
 // Does NOT resolve types — resolveAnnotation still handles that via string path.
 // This is purely additive: records symbol positions for LSP hover/goto-def.
 
-export function resolveTypeExpr(node: Node, ctx: CheckerContext): void {
+export function resolveTypeExpr(node: Node | null, ctx: CheckerContext): void {
 	if (node === null) return;
 	match (node.kind) {
 		NodeKind.Identifier => {
@@ -840,7 +841,7 @@ export function resolveTypeExpr(node: Node, ctx: CheckerContext): void {
 
 // Resolve all TypeExpr nodes in a type annotation array (params, fields).
 // Null-safe: skips null arrays and null entries.
-export function resolveTypeExprs(exprs: (Node | null)[], ctx: CheckerContext): void {
+export function resolveTypeExprs(exprs: (Node | null)[] | null, ctx: CheckerContext): void {
 	if (exprs === null) return;
 	for (const te of exprs) {
 		if (te === null) continue;

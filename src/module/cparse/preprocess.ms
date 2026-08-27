@@ -69,7 +69,7 @@ interface PPContext {
 
 function copyToken(ctx: PPContext, tok: CToken): CToken {
 	const c: CToken = {
-		kind: tok.kind, next: null as unknown as Ptr<CToken>,
+		kind: tok.kind, next: null,
 		intVal: tok.intVal, floatVal: tok.floatVal, litKind: tok.litKind,
 		stringVal: tok.stringVal, file: tok.file, line: tok.line, col: tok.col,
 		byteOffset: tok.byteOffset, byteLength: tok.byteLength,

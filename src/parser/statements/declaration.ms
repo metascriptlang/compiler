@@ -4,7 +4,7 @@
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
-import { splitTopLevel } from "../../utils/string";
+import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike, isPropertyName } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
@@ -798,11 +798,17 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		fields.push(field.value);
 		fieldLocations.push(makeLocFromToken(field));
 		advance(state);
+		let fieldIsOptional = false;
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+			if (nodeKind === NodeKind.StructDecl) {
+				return Result.err(`Optional field '${field.value}?' in struct at line ${field.line}: '?' means '| null' and a struct field is a value type — write the nullable union type explicitly`);
+			}
+			fieldIsOptional = true;
 			advance(state);
 		}
 
-		fieldTypes.push(captureOptionalType(state));
+		const fieldTypeStr = captureOptionalType(state);
+		fieldTypes.push(fieldIsOptional ? optionalizeTypeString(fieldTypeStr) : fieldTypeStr);
 		fieldTypeExprs.push(getLastTypeExpr());
 
 		if (!isAtEnd(state) && (current(state).kind === TokenKind.Semicolon || current(state).kind === TokenKind.Comma)) {
@@ -1146,18 +1152,23 @@ function parseClassMember(state: ParserState): NodeResult {
 	}
 	advance(state);
 
-	// Optional question mark
+	let memberIsOptional = false;
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+		memberIsOptional = true;
 		advance(state);
 	}
 
 	// Method — early return (LParen for regular, Lt for generic like parse<T>(...))
 	if (!isAtEnd(state) && (current(state).kind === TokenKind.LParen || current(state).kind === TokenKind.Lt)) {
+		if (memberIsOptional) {
+			return Result.err(`Optional method '${nameToken.value}?' at line ${nameToken.line}: declare a property with a nullable function type instead`);
+		}
 		return parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags, memberVisibility);
 	}
 
 	// Property — capture type and optional initializer
-	const propType = captureOptionalType(state);
+	const propTypeRaw = captureOptionalType(state);
+	const propType = memberIsOptional ? optionalizeTypeString(propTypeRaw) : propTypeRaw;
 	const propTypeExpr = getLastTypeExpr();
 	let propInit: Node = null as unknown as Node;
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
@@ -1917,6 +1928,12 @@ test "enum with values" { assert programOk("enum Status { Active = 1, Inactive =
 test "interface" { assert programOk("interface Point { x: number; y: number; }"); }
 
 test "interface optional" { assert programOk("interface Opt { value?: number; }"); }
+
+test "interface optional fn field" { assert programOk("interface Opt { cb?: (x: int32) => int32; }"); }
+
+test "struct optional field rejected" { assert !programOk("struct S { x?: number; }"); }
+
+test "class optional method rejected" { assert !programOk("class C { m?(): void {} }"); }
 
 test "interface extends" { assert programOk("interface Dog extends Animal { breed: string; }"); }
 

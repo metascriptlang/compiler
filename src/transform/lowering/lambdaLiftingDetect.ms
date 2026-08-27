@@ -144,7 +144,7 @@ export function detectAllCaptures(body: Node, ss: ScopeStack): DetectResult {
 	return result;
 }
 
-function detectAllWalk(node: Node): void {
+function detectAllWalk(node: Node | null): void {
 	if (node === null) return;
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;

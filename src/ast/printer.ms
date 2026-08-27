@@ -33,7 +33,8 @@ function indent(level: number): string {
 
 // ===== Unified Node Printer =====
 
-export function printNode(node: Node, level: number): void {
+export function printNode(node: Node | null, level: number): void {
+	if (node === null) return;
 	const pad = indent(level);
 
 	match (node.kind) {

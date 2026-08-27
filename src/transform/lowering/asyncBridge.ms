@@ -117,7 +117,7 @@ function zeroValueForType(t: Type, loc: SourceLocation): Node {
 
 // Check if this function body contains any yield (from asyncDesugar converting await→yield).
 // If no yield, the async function is synchronous and can use the simple wrapper pattern.
-function hasYieldInBody(node: Node): boolean {
+function hasYieldInBody(node: Node | null): boolean {
 	if (node === null) return false;
 	return match (node.kind) {
 		NodeKind.YieldExpr => true,
@@ -154,7 +154,7 @@ function hasYieldInBody(node: Node): boolean {
 // return val → msFutureComplete($retFut, val); return;
 // Build the msFutureCompleteT or msFutureCompleteVoid statement(s) for a return value.
 // Returns an array of statements (usually 1, but 2 for arrays due to msSinkBoxStruct expansion).
-function makeFutureCompleteStmts(valueExpr: Node, isVoid: boolean, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation): Node[] {
+function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation): Node[] {
 	if (isVoid || valueExpr === null) {
 		return [makeExprStmt(makeCall(
 			makeIdent("msFutureCompleteVoid", loc),
@@ -737,7 +737,7 @@ function rewriteAsyncFnBody(body: Node, fnReturnInner: Type | null): Node {
 }
 
 // Walk expressions to find async FunctionExpr/ArrowFunction nodes
-function walkBridgeExpr(node: Node): void {
+function walkBridgeExpr(node: Node | null): void {
 	if (node === null) return;
 	match (node.kind) {
 		NodeKind.FunctionExpr => {

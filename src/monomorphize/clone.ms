@@ -135,7 +135,7 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 	return dst;
 }
 
-function cloneNodeImpl(node: Node): Node {
+function cloneNodeImpl(node: Node | null): Node {
 	if (node === null) return null as unknown as Node;
 	const loc = makeLoc(node.location.line, node.location.column);
 	const kind = node.kind;

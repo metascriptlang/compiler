@@ -1569,8 +1569,9 @@ function sgCheckTypeExprAt(node: Node, line: number, col: number): boolean {
 	}
 	// Check typeExprs (per-param type annotations)
 	if (node.typeExprs !== null) {
-		for (let i = 0; i < node.typeExprs.length; i = i + 1) {
-			const te = node.typeExprs[i];
+		const tes = node.typeExprs!;
+		for (let i = 0; i < tes.length; i = i + 1) {
+			const te = tes[i];
 			if (te !== null && te.location.line === line && te.location.column <= col) {
 				return true;
 			}
@@ -2053,7 +2054,7 @@ function sgBuildSignatureInfo(name: string, fnType: Type): SgSignatureInfo {
 	return info;
 }
 
-export function sgFormatSignature(sym: Symbol): SgSignatureInfo[] {
+export function sgFormatSignature(sym: Symbol | null): SgSignatureInfo[] {
 	const result: SgSignatureInfo[] = [];
 	if (sym === null) return result;
 	if (sym.symbolType === null || sym.symbolType.kind !== TypeKind.Function) return result;
@@ -3314,7 +3315,7 @@ test "function no params" {
 }
 
 test "null symbol returns empty" {
-	const nullSym = null as unknown as Symbol;
+	const nullSym: Symbol | null = null;
 	const sigs = sgFormatSignature(nullSym);
 	assert sigs.length === 0;
 }

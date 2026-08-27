@@ -88,7 +88,7 @@ function isPunct(ch: number): boolean {
 function newToken(s: ScanState, kind: CTokenKind, start: number, startLine: number, startCol: number): CToken {
 	const tok: CToken = {
 		kind,
-		next: null as unknown as Ptr<CToken>,
+		next: null,
 		intVal: 0 as int64,
 		floatVal: 0.0,
 		litKind: LitKind.None,
@@ -101,7 +101,7 @@ function newToken(s: ScanState, kind: CTokenKind, start: number, startLine: numb
 		atBol: s.atBol,
 		hasSpace: s.hasSpace,
 		hideset: [],
-		origin: null as unknown as Ptr<CToken>,
+		origin: null,
 	};
 	s.arena.push(tok);
 	s.atBol = false;

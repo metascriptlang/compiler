@@ -137,13 +137,13 @@ export class Scope {
 	// Ordered Map keyed by nameId — insertion order preserved, O(1) lookup.
 	symbols: Map<int32, Symbol>;
 	scopeKind: ScopeKind;
-	parent: Ptr<Scope>;   // borrowed — allScopes owns all scopes
+	parent: Cursor<Scope>;   // borrowed — allScopes owns all scopes
 }
 
 // ===== Symbol Table =====
 
 export class SymbolTable {
-	current: Ptr<Scope>;  // borrowed — allScopes owns all scopes
+	current: Cursor<Scope>;  // borrowed — allScopes owns all scopes
 	allScopes: Scope[];
 	identCache: IdentCache;
 }
@@ -151,7 +151,7 @@ export class SymbolTable {
 // ===== Constructors =====
 
 export function createSymbolTable(): SymbolTable {
-	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null as unknown as Scope };
+	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null };
 	return { current: global, allScopes: [global], identCache: createIdentCache() };
 }
 
@@ -159,7 +159,7 @@ export function createSymbolTable(): SymbolTable {
 // All contexts sharing a cache get identical nameIds for the same string,
 // eliminating cross-context nameId mismatch during generic instantiation.
 export function createSymbolTableWithCache(cache: IdentCache): SymbolTable {
-	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null as unknown as Scope };
+	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null };
 	return { current: global, allScopes: [global], identCache: cache };
 }
 

@@ -15,7 +15,7 @@
 // }
 
 import {
-	Node, NodeKind, DeclKind, Symbol, SymbolKind, TypeKind,
+	Node, NodeKind, DeclKind, Symbol, SymbolKind,
 	FunctionDeclData, MethodDeclData, ConstructorDeclData,
 	ArrowFunctionData, FunctionExprData,
 	BinaryExprData, UpdateExprData, IdentifierData,
@@ -103,9 +103,6 @@ function recordTarget(target: Node, params: string[], out: Symbol[]): void {
 	if (target === null || target.kind !== NodeKind.Identifier) return;
 	if (target.resolvedSym === null) return;
 	if (target.resolvedSym.symbolKind !== SymbolKind.Parameter) return;
-	// out/ref params (TypeKind.Var) write through the caller's slot — shadowing
-	// them into an owned local silently drops the write-back.
-	if (target.resolvedSym.symbolType !== null && target.resolvedSym.symbolType.kind === TypeKind.Var) return;
 	const id = target.data as IdentifierData;
 	let inParams = false;
 	for (const p of params) {

@@ -866,7 +866,7 @@ function hasAnyMacro(nodes: Node[], ctx: CheckerContext): boolean {
 	return false;
 }
 
-function hasUserMacroInvocation(node: Node, ctx: CheckerContext): boolean {
+function hasUserMacroInvocation(node: Node | null, ctx: CheckerContext): boolean {
 	if (node === null) return false;
 	const k = node.kind;
 
@@ -1411,7 +1411,7 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 				// Mutate in place: CallExpr → MacroInvocation. Read the bound sym
 				// BEFORE replacing node.data — the old CallExprData (and its
 				// callee) is destroyed by the assignment.
-				const boundSym = calleeBound ? cd.callee.resolvedSym : null as unknown as Symbol;
+				const boundSym = calleeBound ? cd.callee.resolvedSym : null;
 				node.kind = NodeKind.MacroInvocation;
 				node.data = { macroName: calleeName, macroArgs: cd.arguments };
 				if (boundSym !== null) {
@@ -1887,8 +1887,8 @@ function walkExpandArray(arr: Node[], ctx: CheckerContext, depth: int32): void {
 // macro expansion pass owns the AST at this point — earlier passes have already
 // produced it, and later passes consume it. Avoids the field-name explosion of
 // rebuilding via createNode for every NodeKind.
-function walkExpand(node: Node, ctx: CheckerContext, depth: int32): Node {
-	if (node === null) return node;
+function walkExpand(node: Node | null, ctx: CheckerContext, depth: int32): Node {
+	if (node === null) return null as unknown as Node;
 
 	return match (node.kind) {
 		NodeKind.MacroInvocation => expandMacroInvocation(node, ctx, depth),

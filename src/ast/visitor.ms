@@ -192,7 +192,7 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 		},
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			cb(d.argument);
+			cb(d.argument!);
 		},
 		NodeKind.ThrowStmt => {
 			const d = node.data as ThrowStmtData;

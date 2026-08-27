@@ -46,7 +46,7 @@ interface LoopInfo {
 interface BuildCtx {
 	cfg: CfgInstr[];
 	vn: string;              // variable name for name-based matching (backwards compat)
-	rootSym: Symbol;         // root symbol for identity-based matching (field-level tracking)
+	rootSym: Symbol | null;         // root symbol for identity-based matching (field-level tracking)
 	loops: LoopInfo[];
 }
 
@@ -118,7 +118,7 @@ function matchesName(node: Node, ctx: BuildCtx): boolean {
 // When rootSym is set, emits full path nodes (x.f, x[i]) for alias-aware BFS.
 // When rootSym is null (name-based), behaves like the original name-only tracking.
 
-function walkExpr(node: Node, ctx: BuildCtx): void {
+function walkExpr(node: Node | null, ctx: BuildCtx): void {
 	if (node === null) return;
 
 	match (node.kind) {
@@ -428,7 +428,7 @@ export function buildCfg(body: Node, vn: string): Cfg {
 	const ctx: BuildCtx = {
 		cfg: [],
 		vn,
-		rootSym: null as unknown as Symbol,
+		rootSym: null,
 		loops: [],
 	};
 	walkStmt(body, ctx);

@@ -161,7 +161,7 @@ export function anonStructName(fieldNames: string[], fieldTypes: Type[]): string
 	return name;
 }
 
-export function createArray(element: Type): Type {
+export function createArray(element: Type | null): Type {
 	return {
 		kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [],
 		typeReturn: element, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
@@ -470,7 +470,7 @@ export function isAwaitable(t: Type | null): boolean {
 
 // awaitedType — the T inside an Awaitable<T>. Returns null for non-awaitables
 // or shape-degenerate awaitables (e.g. typeChildren empty).
-export function awaitedType(t: Type): Type | null {
+export function awaitedType(t: Type | null): Type | null {
 	if (t === null) return null;
 	const p = peelThrough(t, PEEL_ALIAS);
 	if (p === null || !isAwaitable(p)) return null;
@@ -718,6 +718,15 @@ export function findFieldInVariant(variant: Type, fieldName: string): Type | nul
 		i = i + 1;
 	}
 	return null;
+}
+
+export function unionVariantHasProperty(t: Type | null, name: string): boolean {
+	if (t === null || t.kind !== TypeKind.Union || t.typeChildren === null) return false;
+	for (const variant of t.typeChildren) {
+		if (variant === null) continue;
+		if (findFieldInVariant(variant, name) !== null) return true;
+	}
+	return false;
 }
 
 // Check if a union type is a discriminated union (has discriminant metadata).

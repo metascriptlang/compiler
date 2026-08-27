@@ -550,7 +550,7 @@ function rewriteNode(
 			if (!envHasField(envStructType, d.name)) {
 				const idx = chainIndexOf(chainTypes, d.name);
 				if (idx >= 0) {
-					return chainWalkAccess(d.name, envTypeName, envStructType, chainNames, chainTypes, idx, node.nodeType, node.location);
+					return chainWalkAccess(d.name, envTypeName, envStructType, chainNames, chainTypes, idx, node.nodeType!, node.location);
 				}
 			}
 			// Implementation parity: env param is void*, cast+deref to typed pointer for field access
@@ -598,7 +598,7 @@ function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 				if (idx >= 0) {
 					const baseIdent = makeIdent(rewrite.envVarName, node.location);
 					baseIdent.nodeType = createRef(rewrite.envStructType);
-					return chainWalkFrom(baseIdent, rewrite.envStructType, d.name, rewrite.chainNames, rewrite.chainTypes, idx, node.nodeType, node.location);
+					return chainWalkFrom(baseIdent, rewrite.envStructType, d.name, rewrite.chainNames, rewrite.chainTypes, idx, node.nodeType!, node.location);
 				}
 			}
 			// Rewrite: x → _envN->field (env is Ref<Struct>, pointer in C)
@@ -781,12 +781,12 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 
 function liftArrow(node: Node, captures: NameSet, state: LiftState, preEnv: PreCreatedEnv): Node {
 	const d = node.data as ArrowFunctionData;
-	return liftClosure(d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, captures, state, node.location, node.nodeType, preEnv);
+	return liftClosure(d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, captures, state, node.location, node.nodeType!, preEnv);
 }
 
 function liftFuncExpr(node: Node, captures: NameSet, state: LiftState, preEnv: PreCreatedEnv): Node {
 	const d = node.data as FunctionExprData;
-	return liftClosure(d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, captures, state, node.location, node.nodeType, preEnv);
+	return liftClosure(d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, captures, state, node.location, node.nodeType!, preEnv);
 }
 
 // Non-capturing lift: module-level FunctionDecl + closure pair with env=null.
@@ -960,7 +960,7 @@ function createSnapshotPairEnv(captures: NameSet, capturedIdents: Node[], state:
 	}
 	const envDecl = makeInterfaceDeclFromTypes(envName, envFields, envFieldTypes, envResolvedTypes, loc);
 	state.envStructs.push(envDecl);
-	return { envName, envVarName, envStructType: envDecl.nodeType, fields: captures, fieldIdents: capturedIdents };
+	return { envName, envVarName, envStructType: envDecl.nodeType!, fields: captures, fieldIdents: capturedIdents };
 }
 
 // ===== Shared Env Setup (reference parity: getEnvTypeForOwner + rawClosureCreation) =====
@@ -1089,7 +1089,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 	for (const name of allCaptures.items) {
 		const isParam = nameSetContains(state.currentParams, name);
 		const orig = findCapturedIdent(name, state.sharedEnvCapturedIdents);
-		const symOrig = (orig !== null) ? orig.resolvedSym : null as unknown as Symbol;
+		const symOrig = (orig !== null) ? orig.resolvedSym : null;
 		const isModLevel = (symOrig !== null
 				&& (symOrig.symbolKind === SymbolKind.Variable || symOrig.symbolKind === SymbolKind.Parameter))
 			? hasFlag(symOrig, SymbolFlag.Global)
@@ -1620,7 +1620,7 @@ function walkLiftBody(body: Node, state: LiftState, preWalk: () => void = noopPr
 
 // Walk a node, lifting closures if it's an ArrowFunction/FunctionExpr with captures.
 // Returns the (possibly replaced) node.
-function walkOrLift(node: Node, state: LiftState): Node {
+function walkOrLift(node: Node | null, state: LiftState): Node {
 	if (node === null) return null as unknown as Node;
 	if (node.kind === NodeKind.ArrowFunction || node.kind === NodeKind.FunctionExpr) {
 		return tryLiftClosure(node, state);
@@ -1754,7 +1754,7 @@ function liftCapturingClosureBody(
 		computeLastUseCapturesForState(captures, state);
 		return lifter(node, captures, state, preEnv);
 	}
-	return liftNonCapturing(body, params, paramTypes, flags, returnType, state, loc, node.nodeType);
+	return liftNonCapturing(body, params, paramTypes, flags, returnType, state, loc, node.nodeType!);
 }
 
 // Try to lift a closure. Returns the original node if no captures, or a closure pair if lifted.

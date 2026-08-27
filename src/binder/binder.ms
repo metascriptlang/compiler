@@ -913,7 +913,7 @@ function bindSource(input: string): Node {
 }
 
 // Walk AST and return the first Identifier with the given name, or null.
-function findIdent(node: Node, name: string): Node {
+function findIdent(node: Node | null, name: string): Node {
 	if (node === null) return null as unknown as Node;
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;

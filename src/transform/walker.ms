@@ -216,7 +216,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 		},
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			d.argument = f(d.argument);
+			d.argument = f(d.argument!);
 		},
 		NodeKind.ThrowStmt => {
 			const d = node.data as ThrowStmtData;

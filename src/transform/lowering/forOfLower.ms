@@ -32,7 +32,7 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 		const bindingSym = node.resolvedSym;
 		// Detach symbol from ForOfStmt before it's orphaned — prevents DRC double-free
 		// (the lowered VarDecl takes ownership of the symbol reference)
-		node.resolvedSym = null as unknown as Symbol;
+		node.resolvedSym = null;
 
 		// Iterator<T>: while + next() pattern (for function* generators)
 		const iterType = d.forOfIterable.nodeType;
@@ -56,7 +56,7 @@ function makeNextCallSym(iterSym: Symbol, resultType: Type | null, loc: SourceLo
 	return call;
 }
 
-function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol): Node {
+function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol | null): Node {
 	const iterType = d.forOfIterable.nodeType;
 	const iterSym = freshTempSym(ctx, "iter", iterType !== null ? iterType : noneType());
 	const nextFnType = getIteratorNextFnType(d.forOfIterable.nodeType);
@@ -93,7 +93,7 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 
 // ===== Array/String For-Of =====
 
-function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol): Node {
+function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol | null): Node {
 	const idxSym = freshTempSym(ctx, "idx", int32Type());
 	const lenSym = freshTempSym(ctx, "len", int32Type());
 	const iterType = d.forOfIterable.nodeType;

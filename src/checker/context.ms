@@ -343,13 +343,14 @@ export function collectExports(ctx: CheckerContext, modulePath: string): Exporte
 	}
 	if (ctx.extensionRegistry !== null) {
 		for (const ext of ctx.extensionRegistry.methods) {
-			if (ext.sym !== null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+			const extSym = ext.sym;
+			if (extSym !== null && hasFlag(extSym, SymbolFlag.Exported)) {
 				let alreadyExported = false;
 				for (const e of exports) {
-					if (e.name === ext.sym.name) { alreadyExported = true; break; }
+					if (e.name === extSym.name) { alreadyExported = true; break; }
 				}
 				if (!alreadyExported) {
-					exports.push(buildExportInfo(ext.sym, ctx.extensionRegistry, modulePath, ctx));
+					exports.push(buildExportInfo(extSym, ctx.extensionRegistry, modulePath, ctx));
 				}
 			}
 		}
@@ -376,7 +377,7 @@ export class ExtensionMethod {
 	sourcePath: string;
 	fnType: Type;           // fallback only — use getExtFnType(ext), never read directly
 	isStatic: boolean;
-	sym: Symbol;            // authoritative type source (sym.symbolType)
+	sym: Symbol | null;            // authoritative type source (sym.symbolType)
 	scopeDepth: number;     // 0 = imported/prelude, 1 = current module (for overload resolution)
 }
 
@@ -1072,7 +1073,7 @@ export class CheckerContext {
 	targetOs: string;              // Target OS. Always set; defaults to host platform.
 	                               // Values: "linux"|"macos"|"windows"|"freebsd"|"bare"|"solana"|"wasm"|"emcc".
 	                               // Cross-compile detected via `targetOs !== platform`.
-	currentFunction: Symbol;   // innermost function (for return type validation)
+	currentFunction: Symbol | null;   // innermost function (for return type validation)
 	currentActorName: string;  // non-empty when inside an actor body (isolation checking)
 	inLoop: boolean;           // break/continue validation
 	inTestBlock: boolean;      // assert validation — only allowed inside test blocks
@@ -1128,7 +1129,7 @@ export function createContext(): CheckerContext {
 		errors: [],
 		gcMode: GcMode.Orc,
 		targetOs: platform,
-		currentFunction: null as unknown as Symbol,
+		currentFunction: null,
 		currentActorName: "",
 		inLoop: false,
 		inTestBlock: false,
@@ -1386,7 +1387,7 @@ test "create empty" {
 
 test "register and find" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null as unknown as Symbol };
+	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, m);
 	const found = findExtension(r, "string", "trim");
 	assert found !== null;
@@ -1407,7 +1408,7 @@ test "no attached ops" {
 
 test "detect onDestroy" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null as unknown as Symbol };
+	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, m);
 	const ops = findAttachedOps(r, "Foo");
 	assert hasAttachedOps(ops);
@@ -1417,11 +1418,11 @@ test "detect onDestroy" {
 
 test "detect all lifecycle hooks" {
 	const r = createExtensionRegistry();
-	const d: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null as unknown as Symbol };
+	const d: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, d);
-	const c: ExtensionMethod = { methodName: "onCopy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null as unknown as Symbol };
+	const c: ExtensionMethod = { methodName: "onCopy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, c);
-	const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null as unknown as Symbol };
+	const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, mv);
 	const ops = findAttachedOps(r, "Bar");
 	assert hasAttachedOps(ops);
@@ -1432,7 +1433,7 @@ test "detect all lifecycle hooks" {
 
 test "wrong type no match" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null as unknown as Symbol };
+	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, m);
 	const ops = findAttachedOps(r, "Bar");
 	assert !hasAttachedOps(ops);
@@ -1545,7 +1546,7 @@ test "getStaticExtTypeName" {
 
 test "static extension in registry" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: noneType(), isStatic: true, sym: null as unknown as Symbol };
+	const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: noneType(), isStatic: true, sym: null };
 	registerExtension(r, m);
 	const found = findExtension(r, "Math", "floor");
 	assert found !== null;
@@ -1554,7 +1555,7 @@ test "static extension in registry" {
 
 test "instance extension isStatic false" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: noneType(), isStatic: false, sym: null as unknown as Symbol };
+	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, m);
 	const found = findExtension(r, "string", "trim");
 	assert found !== null;

@@ -243,7 +243,7 @@ function printStructLikeDecl(node: Node, keyword: string): Doc {
 	// Comments that don't match any field's line are kept on node.comments and
 	// rendered as standalone lines (between fields, after the body) by the
 	// dedicated standalone-comment loop below.
-	const fieldLocs = node.paramLocations;
+	const fieldLocs = node.paramLocations!;
 	const inline: Token[] = [];
 	const remaining: Token[] = [];
 	const standalone: Token[] = [];

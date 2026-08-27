@@ -17,13 +17,13 @@ import { TransformContext, NameSet, createTransformContext, createNameSet } from
 import { makeExprStmt, makeNull } from "../transform/util";
 
 // Null symbol constant — used when DRC-generated temps have no checker symbol.
-export const noSym: Symbol = null as unknown as Symbol;
+export const noSym: Symbol | null = null;
 
 // ===== Variable Info =====
 
 export interface VarInfo {
 	varName: string;
-	sym: Symbol;          // resolved symbol — used by codegen for unique naming
+	sym: Symbol | null;          // resolved symbol — used by codegen for unique naming
 	rcInfo: RcInfo;
 	isCursor: boolean;    // borrowed ref — never destroyed
 	isInitialized: boolean; // first-write optimization: skip destroy on first assignment
@@ -140,7 +140,7 @@ export function scopeDepth(dctx: DrcContext): number {
 
 // ===== Variable Registration =====
 
-export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, isCursor: boolean, sym: Symbol): void {
+export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, isCursor: boolean, sym: Symbol | null): void {
 	if (isCursor) {
 		// Cursors are borrowed — never cleaned up, but MUST be registered so
 		// field accesses (d.field) are recognized as borrows by isLastReadFieldSafe.

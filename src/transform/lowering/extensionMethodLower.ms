@@ -113,7 +113,7 @@ function makeTrimExt(): ExtensionMethod {
 		sourcePath: "",
 		fnType: createFunction([], [], inferredType()),
 		isStatic: false,
-		sym: null as unknown as Symbol,
+		sym: null,
 	};
 	return ext;
 }
@@ -125,7 +125,7 @@ function makePushExt(): ExtensionMethod {
 		sourcePath: "",
 		fnType: createFunction([inferredType()], ["x"], inferredType()),
 		isStatic: false,
-		sym: null as unknown as Symbol,
+		sym: null,
 	};
 	return ext;
 }
@@ -197,7 +197,7 @@ test "static extension no receiver prepend" {
 		sourcePath: "",
 		fnType: createFunction([inferredType()], ["x"], inferredType()),
 		isStatic: true,
-		sym: null as unknown as Symbol,
+		sym: null,
 	};
 	registerExtension(cc.extensionRegistry, ext);
 	const fnSym = makeSymbol("floor", SymbolKind.Function, ext.fnType, false);

@@ -316,7 +316,7 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 // an AwaitExpr (directly or nested). Returns expanded stmts + replacement node,
 // or null if no await was found. Caller sets the replacement back on the stmt's
 // data field and appends the stmt. (P9 DRY — 3 match arms share this pattern.)
-function tryExpandAwaitExpr(expr: Node, stmt: Node, ctx: TransformContext): { stmts: Node[], replacement: Node } {
+function tryExpandAwaitExpr(expr: Node | null, stmt: Node, ctx: TransformContext): { stmts: Node[], replacement: Node } {
 	const noResult: { stmts: Node[], replacement: Node } = { stmts: null as unknown as Node[], replacement: null as unknown as Node };
 	if (expr === null) return noResult;
 	// Direct: expr IS the AwaitExpr

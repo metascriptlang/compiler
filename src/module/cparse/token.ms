@@ -37,11 +37,11 @@ export enum LitKind {
 // during macro expansion.
 export interface CToken {
 	kind: CTokenKind;
-	// Links are non-owning (Ptr): every token is owned by its pipeline arena
+	// Links are non-owning (Cursor): every token is owned by its pipeline arena
 	// (TokenizeResult.arena / PreprocessResult.arena), so dropping a stream is a
 	// flat array destroy — an owning `next` would recurse destroy per node and
-	// overflow the stack on long streams. See docs/NIM-REF.md §4.
-	next: Ptr<CToken>;       // next token; null at end
+	// overflow the stack on long streams. See docs/NIM-REF.md §4-§5.
+	next: Cursor<CToken>;    // next token; null at end
 	// Numeric payload (valid when kind === Num)
 	intVal: int64;
 	floatVal: float64;
@@ -65,7 +65,7 @@ export interface CToken {
 	// macro, `origin` points at the token that triggered expansion. Used for
 	// diagnostic messages ("in expansion of macro FOO at ...") and for detecting
 	// redundant re-expansion. null for non-macro tokens. Non-owning like `next`.
-	origin: Ptr<CToken>;
+	origin: Cursor<CToken>;
 }
 
 // Sentinel "null token" we use instead of MetaScript null to avoid null checks
@@ -73,7 +73,7 @@ export interface CToken {
 export function makeEofToken(file: string): CToken {
 	return {
 		kind: CTokenKind.Eof,
-		next: null as unknown as Ptr<CToken>,
+		next: null,
 		intVal: 0 as int64,
 		floatVal: 0.0,
 		litKind: LitKind.None,
@@ -86,7 +86,7 @@ export function makeEofToken(file: string): CToken {
 		atBol: true,
 		hasSpace: false,
 		hideset: [],
-		origin: null as unknown as Ptr<CToken>,
+		origin: null,
 	};
 }
 

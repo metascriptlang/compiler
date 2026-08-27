@@ -116,7 +116,7 @@ function futureChainFn(mk: string): string {
 	};
 }
 
-function futureChainFnForReturn(retType: Type): string {
+function futureChainFnForReturn(retType: Type | null): string {
 	if (retType === null) return "msFutureChain";
 	const inner = retType.typeReturn !== null ? retType.typeReturn : retType;
 	return futureChainFn(typeMsgKind(inner));
@@ -327,7 +327,7 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 		// to avoid emitNativeCall path which skips ccgIntroducedPtr promotion.
 		const implIdent = implSym !== null ? makeIdentResolved(implSym, loc) : makeIdent(implName, loc);
 		const handlerCall = makeCall(implIdent, handlerArgs, loc);
-		handlerCall.resolvedSym = null as unknown as Symbol;
+		handlerCall.resolvedSym = null;
 		let body: Node;
 		const isSuspending = md.methodFlags === "async_actor";
 		if (isSuspending) {
@@ -839,9 +839,9 @@ function findWireInfo(infos: ActorWireInfo[], actorName: string): ActorWireInfo 
 
 // ===== Generate actor pid wiring statements for a variable =====
 
-function generateActorWiring(varName: string, varSym: Symbol, actorName: string, dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], loc: SourceLocation, newExprNode: Node): Node[] {
+function generateActorWiring(varName: string, varSym: Symbol | null, actorName: string, dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], loc: SourceLocation, newExprNode: Node): Node[] {
 	const result: Node[] = [];
-	let dSym: Symbol = null as unknown as Symbol;
+	let dSym: Symbol | null = null;
 	for (let di = 0; di < dispatchNames.length; di = di + 1) {
 		if (dispatchNames[di] === actorName) { dSym = dispatchSyms[di]; }
 	}

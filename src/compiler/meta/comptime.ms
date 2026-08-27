@@ -114,7 +114,7 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 
 // --- First pass: check if AST contains any ComptimeBlock nodes ---
 
-function hasComptimeBlock(node: Node): boolean {
+function hasComptimeBlock(node: Node | null): boolean {
 	if (node === null) return false;
 	return match (node.kind) {
 		NodeKind.ComptimeBlock => true,
@@ -158,7 +158,8 @@ function hasComptimeBlock(node: Node): boolean {
 
 // --- AST walker — find and replace ComptimeBlock nodes ---
 
-function walkNode(node: Node): Node {
+function walkNode(node: Node | null): Node {
+	if (node === null) return null as unknown as Node;
 	return match (node.kind) {
 		NodeKind.ComptimeBlock => evalComptimeBlock(node, null as unknown as CheckerContext),
 		NodeKind.VariableDecl => {

@@ -80,7 +80,7 @@ function hoistMatchExpr(node: Node, hoisted: Node[], ctx: TransformContext): Nod
 	hoisted.push(letDecl);
 
 	// if-chain assigning to $matchres_N
-	hoisted.push(buildIfChain(matchData.matchCases, matchSym.name, discType, loc, "assign", resultSym.name, resultSym, ctx));
+	hoisted.push(buildIfChain(matchData.matchCases, matchSym.name, discType!, loc, "assign", resultSym.name, resultSym, ctx));
 
 	// Replace MatchExpr with $matchres_N
 	return makeIdentResolved(resultSym, loc);
@@ -203,7 +203,7 @@ export function lowerMatchStmt(matchNode: Node, ctx: TransformContext): Node[] {
 	const discType = d.matchStmtDisc.nodeType;
 
 	// Build if-else chain from cases
-	const ifChain = buildIfChain(d.matchStmtCases, tempName, discType, loc, "stmt", "", null, ctx);
+	const ifChain = buildIfChain(d.matchStmtCases, tempName, discType!, loc, "stmt", "", null, ctx);
 	result.push(ifChain);
 
 	return result;
@@ -221,7 +221,7 @@ function lowerMatchExprAsStmt(matchNode: Node, ctx: TransformContext): Node[] {
 	matchDecl.resolvedSym = matchSym;
 	result.push(matchDecl);
 	const discType = d.matchDisc.nodeType;
-	const ifChain = buildIfChain(d.matchCases, tempName, discType, loc, "stmt", "", null, ctx);
+	const ifChain = buildIfChain(d.matchCases, tempName, discType!, loc, "stmt", "", null, ctx);
 	result.push(ifChain);
 	return result;
 }
@@ -250,7 +250,7 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 	}
 	result.push(letDecl);
 	// if-chain with assignment: x = armValue
-	const ifChain = buildIfChain(matchData.matchCases, tempName, discType, loc, "assign", varData.declName, stmt.resolvedSym, ctx);
+	const ifChain = buildIfChain(matchData.matchCases, tempName, discType!, loc, "assign", varData.declName, stmt.resolvedSym, ctx);
 	result.push(ifChain);
 
 	return result;
@@ -272,7 +272,7 @@ function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
 	result.push(matchDecl);
 	const discType = matchData.matchDisc.nodeType;
 	// if-chain with return: return armValue
-	const ifChain = buildIfChain(matchData.matchCases, tempName, discType, loc, "return", "", null, ctx);
+	const ifChain = buildIfChain(matchData.matchCases, tempName, discType!, loc, "return", "", null, ctx);
 	result.push(ifChain);
 
 	return result;

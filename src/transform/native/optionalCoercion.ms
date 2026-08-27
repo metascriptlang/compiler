@@ -54,7 +54,7 @@ function transformReturnsInBody(body: Node, maybeType: Type): void {
 			const rd = body.data as ReturnStmtData;
 			// Canonical Maybe coercion. Handles all three cases internally:
 			// already-Maybe passthrough, null retype, non-null wrap.
-			rd.argument = wrapMaybeValue(rd.argument, maybeType, body.location);
+			rd.argument = wrapMaybeValue(rd.argument!, maybeType, body.location);
 		},
 		NodeKind.BlockStmt => {
 			const bd = body.data as BlockStmtData;

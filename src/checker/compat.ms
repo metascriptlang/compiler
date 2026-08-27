@@ -632,9 +632,10 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 
 // Duck-typed adoption boundary: a frozen anonymous-literal value may be
 // re-constructed member-wise into a NAMED value struct when the field lists
-// match EXACTLY. Interface targets keep reference/aliasing semantics and stay
-// rejected; extra-field (prefix) matches stay rejected — the C copy would drop
-// fields the js identity keeps, a built-in parity split.
+// match EXACTLY (same names, order, and per-field type identity). Interface
+// targets keep reference/aliasing semantics and stay rejected; extra-field
+// (prefix) matches stay rejected — the C copy would drop fields the js
+// identity keeps, a built-in parity split.
 export function isAnonStructAdoption(source: Type | null, target: Type | null): boolean {
 	if (source === null || target === null) return false;
 	if (source.kind !== TypeKind.Struct || target.kind !== TypeKind.Struct) return false;

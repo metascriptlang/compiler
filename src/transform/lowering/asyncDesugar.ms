@@ -191,7 +191,7 @@ function walkAsync(node: Node): void {
 }
 
 // Check function expressions and arrows for async flag
-function walkCheckExpr(node: Node): void {
+function walkCheckExpr(node: Node | null): void {
 	if (node === null) return;
 	match (node.kind) {
 		NodeKind.FunctionExpr => {

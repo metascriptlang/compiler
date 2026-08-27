@@ -450,7 +450,7 @@ function makeOpExt(receiverType: string, opName: string): ExtensionMethod {
 		sourcePath: "",
 		fnType: createFunction([inferredType(), inferredType()], ["a", "b"], inferredType()),
 		isStatic: false,
-		sym: null as unknown as Symbol,
+		sym: null,
 	};
 }
 
