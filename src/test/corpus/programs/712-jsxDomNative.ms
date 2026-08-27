@@ -1,4 +1,3 @@
-// @ledger-slack(msRefArrayRefCell): 1
 // @maxrss: 30
 // @stdout: jsxdom-native PASS
 // @skip-js: migrated from native/ — JS-lane audit pending

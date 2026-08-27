@@ -1,4 +1,3 @@
-// @ledger-slack(msRefArrayRefCell): 1
 // ^ the universal std/meta/node nodeCache module-global survivor — see the
 // head of 252-enumDiscUnion for the full attribution.
 // note: cross-module union ALIAS through JSON.parse<T> (bug097). The defining

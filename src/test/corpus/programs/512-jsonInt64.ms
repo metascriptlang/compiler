@@ -1,4 +1,3 @@
-// @ledger-slack(msRefArrayRefCell): 1
 // @xfail(js): int64 IS a double on the JS backend — the BigInt representation
 //   is gated off there (jsBigInt64, codegen/js) because the operator half of
 //   the mapping is unwritten, so every int64 site on that backend is a Number

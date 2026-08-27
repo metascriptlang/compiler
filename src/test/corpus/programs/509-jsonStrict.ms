@@ -1,4 +1,3 @@
-// @ledger-slack(msRefArrayRefCell): 1
 // Parity program — the strict typed-decode contract: JSON.parse<T> fails
 // loud instead of fabricating defaults. Every failing case here returned
 // `ok` with zero-valued fields before the req* accessors landed, so this

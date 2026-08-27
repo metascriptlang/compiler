@@ -1,4 +1,3 @@
-// @ledger-slack(msRefArrayRefCell): 1
 // Parity program — envs that outlive their creators: returned, stored in
 // fields and arrays, invoked long after the frame is gone. DRC must keep the
 // captured payloads alive exactly as long as the closure.

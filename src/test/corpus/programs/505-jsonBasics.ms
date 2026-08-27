@@ -1,4 +1,3 @@
-// @ledger-slack(msRefArrayRefCell): 1
 // Parity program — std json floor: parse → dynamic access → stringify roundtrip.
 // Facade lives at std/core/json (prelude, auto-loaded); codec is pure MS in
 // std/serialize/json/ — this program is the contract for the whole chain.

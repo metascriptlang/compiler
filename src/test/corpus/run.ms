@@ -352,7 +352,10 @@ function firstLineContaining(text: string, needle: string): string {
 	return "";
 }
 
-// LEDGER <Type> ... alloc=N ... destroy=M (stderr, one line per type).
+// LEDGER <Type> ... alloc=N ... destroy=M (stderr, one line per type), then a
+// final "LEDGER TOTAL" line that always prints — liveness marker only (sums
+// include per-type imbalances excused by destroy==0 or slack, so TOTAL is
+// exempt from the balance rule).
 // Balance rule: fail iff destroy > 0 and (alloc - destroy) differs from the
 // program's declared @ledger-slack for that type (default 0). Slack is
 // EXACT-match: values still alive at exit (module-level globals are not
@@ -380,6 +383,7 @@ function parseLedgerFailure(err: string, spec: Spec): string {
 			if (tok.indexOf("destroy=") === 0) { destroy = tok.slice(8, tok.length).parseInt() as int32; }
 			i = i + 1;
 		}
+		if (typeName == "TOTAL") { continue; }
 		if (destroy <= 0) { continue; }
 		const slack = ledgerSlackFor(spec, typeName);
 		const diff = alloc - destroy;

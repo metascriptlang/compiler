@@ -1,4 +1,3 @@
-// @ledger-slack(msRefArrayRefCell): 1
 // Prelude init RefCell array never destroyed at exit — TESTGAP T6 (probed:
 // a bare console.log program shows 1/0; same global 302/410/505/506 slack).
 // Parity program — std fs pure-string surface, ALL lanes incl. js: path

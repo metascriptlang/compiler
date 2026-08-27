@@ -1,4 +1,3 @@
-// @ledger-slack(msRefArrayRefCell): 1
 // @maxrss: 30
 // @stdout: leak-ref-array-evict done
 // @skip-js: migrated from native/ — JS-lane audit pending

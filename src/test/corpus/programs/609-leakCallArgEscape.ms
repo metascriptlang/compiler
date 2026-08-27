@@ -1,4 +1,3 @@
-// @ledger-slack(msRefArrayRefCell): 1
 // @maxrss: 40
 // @stdout: leak-callarg-escape acc=
 // @skip-js: migrated from native/ — JS-lane audit pending

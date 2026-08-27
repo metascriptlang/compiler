@@ -1,4 +1,3 @@
-// @ledger-slack(msRefArrayRefCell): 1
 // ^ the prelude std/meta/node `nodeCache` module-global box: module-level RC
 // values are never destroyed at exit (open compiler-side question, test
 // CLAUDE.md §3.6). Every native binary carries this survivor; the ledger only
