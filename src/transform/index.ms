@@ -48,6 +48,7 @@ import { eraseBrandTypes } from "./coercion/brandErase";
 import { lowerDestructuring } from "./desugar/destructuringLower";
 import { lowerSpread } from "./desugar/spreadExpand";
 import { lowerObjectSpread } from "./desugar/objectSpreadLower";
+import { lowerArraySpread } from "./desugar/arraySpreadLower";
 import { lowerArrayMethodInline } from "./desugar/arrayMethodInline";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
@@ -96,6 +97,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
 	result = lowerObjectSpread(result, ctx);
+	result = ctx.jsBackend ? result : lowerArraySpread(result, ctx);
 	if (ctx.jsBackend) {
 		result = lowerObjectLiteralComplete(result, ctx);
 	}
