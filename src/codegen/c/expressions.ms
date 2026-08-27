@@ -2562,43 +2562,9 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	if (callee === "msBoxRefArray" && cd.arguments.length >= 1 && cd.arguments[0].nodeType !== null && node.nodeType !== null) {
 		const arrCType = getTypeDesc(g, cd.arguments[0].nodeType);
 		const cellCType = getTypeDesc(g, node.nodeType);
-		let destroyFn = "msNumberArrayDestroy";
 		const elemT = cd.arguments[0].nodeType.typeReturn;
-		if (elemT !== null) {
-			// Two destroyer families. Pointer-payload elements (string / void*-ref / closure)
-			// share a GENERIC runtime destroyer regardless of the typed arrCType — e.g.
-			// string[][]'s element is a typed ref-to-array whose arrCType (msStringArraystar_Array)
-			// has no per-type walker, so it must use msRefArrayDestroy.
-			destroyFn = match (elemT.kind) {
-				TypeKind.String => "msStringArrayDestroy",
-				// Actor-handle elements are DRC-exempt (classify.ms classifyArray) — free the
-				// pointer buffer only, never per-element decref, else shared actors double-free.
-				TypeKind.Ref | TypeKind.Ptr => (elemT.sym !== null && elemT.sym.symbolKind === SymbolKind.Actor)
-					? "msNumberArrayDestroy"
-					: "msRefArrayDestroy",
-				TypeKind.Function => "msClosureArrayDestroy",
-				// Managed VALUE element (struct / union / generic-instance / distinct-over-those):
-				// the array TYPE's per-type <Name>ArrayDestroy walker (NIM-REF §2), selected once
-				// via arrayElementNeedsCleanup — the whole value-struct family in ONE place, no
-				// per-kind enumeration. Else (primitive / nested-array / tuple / Unknown) free-only,
-				// with the msRefArray fallback for void*-collapsed payloads.
-				// User-`unknown` element (Nim seq[pointer]): entries carry no rc share —
-				// free-only, never msRefArrayDestroy (net −1/death → UAF). Mirrors Actor arm;
-				// must agree with classifyArray's inert arm. Peel `unknown|null` (bare void*).
-				_ => (isUnknownType(elemT.kind === TypeKind.Union ? unwrapRefNullUnion(elemT) : elemT))
-					? "msNumberArrayDestroy"
-					: (arrayElementNeedsCleanup(elemT)
-						? arrCType + "Destroy"
-						: (arrCType === "msRefArray" ? "msRefArrayDestroy" : "msNumberArrayDestroy")),
-			};
-		}
-		// Free-only msRefArray cells (unknown / actor elements) get their OWN weak TypeInfo
-		// symbol: "msRefArrayRefCell" is ONE weak symbol program-wide, but destroyFn was
-		// per-module first-ensure-wins + cross-module last-DatInit-wins — a module mixing
-		// counted and inert element families scrambled the shared cell's destroyer.
-		const cellName = (destroyFn === "msNumberArrayDestroy" && arrCType === "msRefArray")
-			? "msPtrArrayRefCell"
-			: arrCType + "RefCell";
+		const destroyFn = refArrayDestroyFn(elemT, arrCType);
+		const cellName = refArrayCellName(destroyFn, arrCType);
 		ensureDrcProto(g, destroyFn);
 		ensureRefArrayCellTypeInfo(g, cellName, destroyFn);
 		const tiArg = (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
@@ -2925,6 +2891,46 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[], sym
 //   number[]  → ms_array_number_from(count, (double)e1, ...)
 //   string[]  → ms_string_array_new_with(count, e1, ...)
 //   other[]   → temp + ms_array_push_ref pattern
+
+// Two destroyer families. Pointer-payload elements (string / void*-ref / closure)
+// share a GENERIC runtime destroyer regardless of the typed arrCType — e.g.
+// string[][]'s element is a typed ref-to-array whose arrCType (msStringArraystar_Array)
+// has no per-type walker, so it must use msRefArrayDestroy.
+export function refArrayDestroyFn(elemT: Type | null, arrCType: string): string {
+	if (elemT === null) return "msNumberArrayDestroy";
+	return match (elemT.kind) {
+		TypeKind.String => "msStringArrayDestroy",
+		// Actor-handle elements are DRC-exempt (classify.ms classifyArray) — free the
+		// pointer buffer only, never per-element decref, else shared actors double-free.
+		TypeKind.Ref | TypeKind.Ptr => (elemT.sym !== null && elemT.sym.symbolKind === SymbolKind.Actor)
+			? "msNumberArrayDestroy"
+			: "msRefArrayDestroy",
+		TypeKind.Function => "msClosureArrayDestroy",
+		// Managed VALUE element (struct / union / generic-instance / distinct-over-those):
+		// the array TYPE's per-type <Name>ArrayDestroy walker (NIM-REF §2), selected once
+		// via arrayElementNeedsCleanup — the whole value-struct family in ONE place, no
+		// per-kind enumeration. Else (primitive / nested-array / tuple / Unknown) free-only,
+		// with the msRefArray fallback for void*-collapsed payloads.
+		// User-`unknown` element (Nim seq[pointer]): entries carry no rc share —
+		// free-only, never msRefArrayDestroy (net −1/death → UAF). Mirrors Actor arm;
+		// must agree with classifyArray's inert arm. Peel `unknown|null` (bare void*).
+		_ => (isUnknownType(elemT.kind === TypeKind.Union ? unwrapRefNullUnion(elemT) : elemT))
+			? "msNumberArrayDestroy"
+			: (arrayElementNeedsCleanup(elemT)
+				? arrCType + "Destroy"
+				: (arrCType === "msRefArray" ? "msRefArrayDestroy" : "msNumberArrayDestroy")),
+	};
+}
+
+// Free-only msRefArray cells (unknown / actor elements) get their OWN weak TypeInfo
+// symbol: "msRefArrayRefCell" is ONE weak symbol program-wide, but destroyFn was
+// per-module first-ensure-wins + cross-module last-DatInit-wins — a module mixing
+// counted and inert element families scrambled the shared cell's destroyer.
+export function refArrayCellName(destroyFn: string, arrCType: string): string {
+	return (destroyFn === "msNumberArrayDestroy" && arrCType === "msRefArray")
+		? "msPtrArrayRefCell"
+		: arrCType + "RefCell";
+}
 
 function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 	const d = node.data as ArrayLiteralData;
