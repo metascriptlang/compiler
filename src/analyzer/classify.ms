@@ -108,7 +108,11 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 			const n = elemName + "Array";
 			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
 		}
-		return noRcInfo();
+		// POD elements: no per-element hooks, but the seq payload is still owned —
+		// Nim lifts =destroy/=copy for every tySequence regardless of element
+		// triviality (liftdestructors fillSeqOp). The generic macros size the
+		// stride from the per-type C array (sizeof data[0]), so they are exact.
+		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
 	// Ref/Ptr elements (class arrays) — msRefArray (all pointers are void*)
 	// Actor elements are exempt from DRC (managed by actor runtime).
