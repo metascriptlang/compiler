@@ -1,5 +1,4 @@
 // @stdout: vec-of-ref-arrays done
-// @xfail(js): value-type assignment does not copy on JS (item 6)
 
 // Vec<T[]> is a VALUE seq of REF-array handles (same shape as Vec<SomeClass>):
 // copying the Vec copies slots + increfs each handle, so mutation THROUGH a handle

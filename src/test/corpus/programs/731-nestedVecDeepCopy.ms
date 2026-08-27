@@ -1,5 +1,4 @@
 // @stdout: nested-vec-deep-copy done
-// @xfail(js): value-type assignment does not copy on JS (item 6)
 
 // Vec<Vec<T>> assignment must deep-copy: classify routes nested-array elements to the
 // per-type walker named by arrayCTypeName (the single naming source, see 624), not the
