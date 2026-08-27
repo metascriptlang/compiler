@@ -5,7 +5,7 @@
 // Cross-module references traced via ImportDecl source paths.
 
 import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, ImportDeclData,
-	ExportDeclData, IdentifierData, VariableDeclData, ObjectLiteralData, ClassDeclData, ActorDeclData,
+	ExportDeclData, IdentifierData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
 	CallExprData, MemberExprData, NewExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
@@ -667,7 +667,27 @@ function varDeclNeedsRuntimeInit(node: Node): boolean {
 	}
 	if (k === NodeKind.NullLiteral) return false;
 	if (k === NodeKind.ObjectLiteral) return !isBakeableAggregateConst(node);
+	if (k === NodeKind.ArrayLiteral || k === NodeKind.CallExpr) return !isBakeableAggregateConst(node);
 	return true;
+}
+
+// Empty array only: a non-empty bake would place the element buffer in static
+// memory, and any later push/realloc on that buffer is UB. Empty = { len 0,
+// p NULL }, a state the runtime already grows from (msArrayPrepareAdd).
+// nativeLower wraps top-level array initializers in msBoxRefArray(lit) before
+// computeAliveSet runs, so the literal is peeled out of that call here.
+function bakeableEmptyArrayLiteral(init: Node): boolean {
+	if (init.kind === NodeKind.ArrayLiteral) {
+		const ad = init.data as ArrayLiteralData;
+		return ad.elements.length === 0;
+	}
+	if (init.kind !== NodeKind.CallExpr) return false;
+	const cd = init.data as CallExprData;
+	if (cd.callee.kind !== NodeKind.Identifier) return false;
+	const id = cd.callee.data as IdentifierData;
+	if (id.name !== "msBoxRefArray") return false;
+	if (cd.arguments.length !== 1) return false;
+	return bakeableEmptyArrayLiteral(cd.arguments[0]);
 }
 
 export function isBakeableAggregateConst(node: Node): boolean {
@@ -675,6 +695,9 @@ export function isBakeableAggregateConst(node: Node): boolean {
 	if (d.declKind !== DeclKind.Const) return false;
 	if (d.initializer === null) return false;
 	const init = d.initializer;
+	if (init.kind === NodeKind.ArrayLiteral || init.kind === NodeKind.CallExpr) {
+		return bakeableEmptyArrayLiteral(init);
+	}
 	if (init.kind !== NodeKind.ObjectLiteral) return false;
 	if ((init.flags & NodeFlag.Closure) !== 0) return false;
 	const od = init.data as ObjectLiteralData;
