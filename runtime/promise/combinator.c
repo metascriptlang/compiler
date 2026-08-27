@@ -15,8 +15,8 @@ static void msPromiseAllCb(void* env) {
 	free(e);
 
 	/* Record result or failure */
+	msFuture* f = s->inputs[idx];
 	if (!s->failed) {
-		msFuture* f = s->inputs[idx];
 		if (f->base.failed || f->base.cancelled) {
 			s->failed = true;
 			msFutureFail(s->result, f->base.error);
@@ -24,6 +24,7 @@ static void msPromiseAllCb(void* env) {
 			s->values[idx] = f->value;
 		}
 	}
+	msDecref(f);
 
 	/* Always decrement. Last callback frees state. */
 	s->remaining--;
@@ -39,9 +40,9 @@ static void msPromiseAllCb(void* env) {
 	}
 }
 
-void* msPromiseAll(msRefArray arr) {
-	int count = (int)arr.len;
-	msFuture** futures = (arr.p != NULL) ? (msFuture**)arr.p->data : NULL;
+void* msPromiseAll(msRefArray* arr) {
+	int count = (arr != NULL) ? (int)arr->len : 0;
+	msFuture** futures = (arr != NULL && arr->p != NULL) ? (msFuture**)arr->p->data : NULL;
 	msFuture* result = (msFuture*)msFutureCreate();
 
 	if (count == 0 || futures == NULL) {
@@ -51,7 +52,7 @@ void* msPromiseAll(msRefArray arr) {
 
 	/* Copy futures array — caller may free original */
 	msFuture** inputsCopy = (msFuture**)malloc(count * sizeof(msFuture*));
-	for (int i = 0; i < count; i++) inputsCopy[i] = futures[i];
+	for (int i = 0; i < count; i++) { inputsCopy[i] = futures[i]; msIncref(inputsCopy[i]); }
 
 	msPromiseAllState* state = (msPromiseAllState*)calloc(1, sizeof(msPromiseAllState));
 	state->result = result;
@@ -90,14 +91,16 @@ static void msPromiseRaceCb(void* env) {
 		}
 	}
 
+	msDecref(f);
+
 	/* Last callback frees state */
 	s->remaining--;
 	if (s->remaining == 0) free(s);
 }
 
-void* msPromiseRace(msRefArray arr) {
-	int count = (int)arr.len;
-	msFuture** futures = (arr.p != NULL) ? (msFuture**)arr.p->data : NULL;
+void* msPromiseRace(msRefArray* arr) {
+	int count = (arr != NULL) ? (int)arr->len : 0;
+	msFuture** futures = (arr != NULL && arr->p != NULL) ? (msFuture**)arr->p->data : NULL;
 	msFuture* result = (msFuture*)msFutureCreate();
 
 	if (count == 0 || futures == NULL) return result;  /* never settles — ECMAScript spec */
@@ -110,6 +113,7 @@ void* msPromiseRace(msRefArray arr) {
 		msPromiseRaceCbEnv* env = (msPromiseRaceCbEnv*)malloc(sizeof(msPromiseRaceCbEnv));
 		env->state = state;
 		env->input = futures[i];
+		msIncref(futures[i]);
 		msFutureAddCallback(futures[i], (msClosure){
 			.fn = (msClosureFn)msPromiseRaceCb,
 			.env = env
@@ -123,7 +127,9 @@ void* msPromiseRace(msRefArray arr) {
 static void msPromiseAllSettledCb(void* env) {
 	msPromiseAllSettledCbEnv* e = (msPromiseAllSettledCbEnv*)env;
 	msPromiseAllSettledState* s = e->state;
+	int idx = e->index;
 	free(e);
+	msDecref(s->inputs[idx]);
 
 	/* Always decrement. Last callback completes (never fails). */
 	s->remaining--;
@@ -134,9 +140,9 @@ static void msPromiseAllSettledCb(void* env) {
 	}
 }
 
-void* msPromiseAllSettled(msRefArray arr) {
-	int count = (int)arr.len;
-	msFuture** futures = (arr.p != NULL) ? (msFuture**)arr.p->data : NULL;
+void* msPromiseAllSettled(msRefArray* arr) {
+	int count = (arr != NULL) ? (int)arr->len : 0;
+	msFuture** futures = (arr != NULL && arr->p != NULL) ? (msFuture**)arr->p->data : NULL;
 	msFuture* result = (msFuture*)msFutureCreate();
 
 	if (count == 0 || futures == NULL) {
@@ -146,7 +152,7 @@ void* msPromiseAllSettled(msRefArray arr) {
 
 	/* Copy futures array — caller may free original */
 	msFuture** inputsCopy = (msFuture**)malloc(count * sizeof(msFuture*));
-	for (int i = 0; i < count; i++) inputsCopy[i] = futures[i];
+	for (int i = 0; i < count; i++) { inputsCopy[i] = futures[i]; msIncref(inputsCopy[i]); }
 
 	msPromiseAllSettledState* state = (msPromiseAllSettledState*)calloc(1, sizeof(msPromiseAllSettledState));
 	state->result = result;
@@ -187,14 +193,16 @@ static void msPromiseAnyCb(void* env) {
 		}
 	}
 
+	msDecref(f);
+
 	/* Last callback frees state */
 	s->remaining--;
 	if (s->remaining == 0) free(s);
 }
 
-void* msPromiseAny(msRefArray arr) {
-	int count = (int)arr.len;
-	msFuture** futures = (arr.p != NULL) ? (msFuture**)arr.p->data : NULL;
+void* msPromiseAny(msRefArray* arr) {
+	int count = (arr != NULL) ? (int)arr->len : 0;
+	msFuture** futures = (arr != NULL && arr->p != NULL) ? (msFuture**)arr->p->data : NULL;
 	msFuture* result = (msFuture*)msFutureCreate();
 
 	if (count == 0 || futures == NULL) {
@@ -211,6 +219,7 @@ void* msPromiseAny(msRefArray arr) {
 		msPromiseAnyCbEnv* env = (msPromiseAnyCbEnv*)malloc(sizeof(msPromiseAnyCbEnv));
 		env->state = state;
 		env->input = futures[i];
+		msIncref(futures[i]);
 		msFutureAddCallback(futures[i], (msClosure){
 			.fn = (msClosureFn)msPromiseAnyCb,
 			.env = env
