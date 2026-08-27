@@ -18,6 +18,8 @@
 
 import { exit } from "std/process";
 
+struct Pod { val: int32; }
+
 function main(): void {
     const v: Vec<uint8> = [1, 2, 3];
     const c = v;
@@ -27,10 +29,15 @@ function main(): void {
     const e: Vec<uint8> = [];
     const e2 = e;
     if (e2.length !== 0) { exit(3); }
-    const vn: Vec<number> = [1, 2];
-    const cn = vn;
-    cn[0] = 7;
-    if (vn[0] !== 1) { exit(4); }
-    console.log("vecValueCopyDetach ok");
+	const vn: Vec<number> = [1, 2];
+	const cn = vn;
+	cn[0] = 7;
+	if (vn[0] !== 1) { exit(4); }
+	const vp: Vec<Pod> = [{ val: 1 }];
+	const cp = vp;
+	cp[0].val = 9;
+	if (vp[0].val !== 1) { exit(5); }
+	if (cp[0].val !== 9) { exit(6); }
+	console.log("vecValueCopyDetach ok");
 }
 main();
