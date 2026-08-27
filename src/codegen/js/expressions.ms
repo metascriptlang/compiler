@@ -14,6 +14,7 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner } from "../c/names";
+import { emitCopyOnRead } from "./valueCopy";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { int64ToDecimal } from "../../utils/string";
 
@@ -186,7 +187,7 @@ export function emitBinaryExpr(gen: JSGenerator, node: Node): void {
 	if (d.operator === "=") {
 		emitNode(gen, d.left);
 		emit(gen, " = ");
-		emitNode(gen, d.right);
+		emitCopyOnRead(gen, d.right);
 	} else if (d.operator === "+=" || d.operator === "-=" || d.operator === "*=" || d.operator === "/=" || d.operator === "%=") {
 		emitNode(gen, d.left);
 		emit(gen, " ");
@@ -411,7 +412,7 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 		emit(gen, d.keys[i]);
 		emit(gen, ": ");
 		if (i < d.properties.length) {
-			emitNode(gen, d.properties[i]);
+			emitCopyOnRead(gen, d.properties[i]);
 		}
 	}
 	emit(gen, " }");
@@ -428,7 +429,10 @@ export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 	}
 	if (typedName !== "") emit(gen, "new " + typedName + "(");
 	emit(gen, "[");
-	emitJoinedNodes(gen, d.elements, ", ");
+	for (let i = 0; i < d.elements.length; i += 1) {
+		if (i > 0) emit(gen, ", ");
+		emitCopyOnRead(gen, d.elements[i]);
+	}
 	emit(gen, "]");
 	if (typedName !== "") emit(gen, ")");
 }

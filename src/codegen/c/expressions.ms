@@ -6,7 +6,7 @@
 // Follows standard reference implementation pattern for destination carriers.
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
-import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag } from "../../checker/types";
 import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
 import {
@@ -314,6 +314,7 @@ function isArrayAccessCall(node: Node): boolean {
 // Everything else (calls, literals, conditionals, casts) needs hoisting to a temp.
 function isLvalueNode(node: Node): boolean {
 	if (node === null) return false;
+	if (node.kind === NodeKind.OutExpr) return isLvalueNode((node.data as OutExprData).outArg);
 	return node.kind === NodeKind.Identifier
 		|| node.kind === NodeKind.MemberExpr
 		|| node.kind === NodeKind.ArrayAccess
@@ -839,6 +840,14 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	if (kind === NodeKind.MoveExpr) {
 		const d = node.data as MoveExprData;
 		ctx.workStack.push({ node: d.moveArg, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// OutExpr — passthrough like MoveExpr; the callee's Var param type already
+	// drives the &arg call convention.
+	if (kind === NodeKind.OutExpr) {
+		const d = node.data as OutExprData;
+		ctx.workStack.push({ node: d.outArg, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
