@@ -29,8 +29,8 @@ interface OwnRing { tag: string; next: OwnRing | null; }
 function main(): void {
 	let i = 0;
 	while (i < 5000) {
-		const a: CurRing = { tag: "a", next: null as unknown as CurRing };
-		const b: CurRing = { tag: "b", next: null as unknown as CurRing };
+		const a: CurRing = { tag: "a", next: null };
+		const b: CurRing = { tag: "b", next: null };
 		a.next = b;
 		b.next = a;
 
