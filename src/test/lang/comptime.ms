@@ -174,3 +174,33 @@ const ORD: string = @comptime {
 test "comptime: string ordering compares text, not handles" {
 	assert ORD === "101010111111";
 }
+
+const LOCAL_SLOT: string = @comptime {
+	let out = "";
+
+	const s0 = "keep";
+	let s1 = s0;
+	s1 = "changed";
+	out = out + s0 + "/" + s1;
+
+	const n0: int32 = 7;
+	let n1 = n0;
+	n1 = 9;
+	out = out + "|" + n0 + "/" + n1;
+
+	const b0: boolean = true;
+	let b1 = b0;
+	b1 = false;
+	out = out + "|" + b0 + "/" + b1;
+
+	const c0 = "base";
+	let c1 = c0;
+	c1 = c1 + "!";
+	out = out + "|" + c0 + "/" + c1;
+
+	return out;
+};
+
+test "comptime: a declared local owns its register, never aliases its initializer" {
+	assert LOCAL_SLOT === "keep/changed|7/9|true/false|base/base!";
+}
