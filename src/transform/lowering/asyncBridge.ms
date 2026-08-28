@@ -20,6 +20,7 @@
 // Both cases clear fnFlags so generatorLower skips these functions.
 
 import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, ExprStmtData, IfStmtData, WhileStmtData, TryCatchStmtData, CallExprData, BinaryExprData, Type, TypeKind } from "../../ast/node";
+import { mapChildren } from "../walker";
 import { TransformContext } from "../context";
 import {
 	makeIdent, makeTypedIdent, makeVarDecl, makeExprStmt, makeReturn,
@@ -154,11 +155,13 @@ function hasYieldInBody(node: Node | null): boolean {
 // return val → msFutureComplete($retFut, val); return;
 // Build the msFutureCompleteT or msFutureCompleteVoid statement(s) for a return value.
 // Returns an array of statements (usually 1, but 2 for arrays due to msSinkBoxStruct expansion).
-function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation): Node[] {
+let asyncNameCounter = 0;
+
+function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutName: string): Node[] {
 	if (isVoid || valueExpr === null) {
 		return [makeExprStmt(makeCall(
 			makeIdent("msFutureCompleteVoid", loc),
-			[makeTypedIdent("$retFut", promiseType, loc)],
+			[makeTypedIdent(retFutName, promiseType, loc)],
 			loc,
 		), loc)];
 	}
@@ -169,23 +172,23 @@ function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promis
 		const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
 		const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [valueExpr], loc);
 		boxCall.nodeType = voidPtrType;
-		const boxDecl = makeVarDecl("$boxed", boxCall, DeclKind.Const, loc);
+		const boxDecl = makeVarDecl(retFutName + "_b", boxCall, DeclKind.Const, loc);
 		boxDecl.nodeType = voidPtrType;  // variable holds void* (the boxed pointer)
 		const completeStmt = makeExprStmt(makeCall(
 			makeIdent("msFutureComplete", loc),
-			[makeTypedIdent("$retFut", promiseType, loc), makeIdent("$boxed", loc)],
+			[makeTypedIdent(retFutName, promiseType, loc), makeIdent(retFutName + "_b", loc)],
 			loc,
 		), loc);
 		return [boxDecl, completeStmt];
 	}
 	return [makeExprStmt(makeCall(
 		makeIdent("msFutureCompleteT", loc),
-		[makeTypedIdent("$retFut", promiseType, loc), valueExpr],
+		[makeTypedIdent(retFutName, promiseType, loc), valueExpr],
 		loc,
 	), loc)];
 }
 
-function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation): void {
+function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutName: string): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt === null) continue;
@@ -194,7 +197,7 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 				const rd = stmt.data as ReturnStmtData;
 				const isVoidReturn = fnReturnInner === null || fnReturnInner.kind === TypeKind.Void;
 
-				const completeStmts = makeFutureCompleteStmts(rd.argument, isVoidReturn, promiseType, fnReturnInner, loc);
+				const completeStmts = makeFutureCompleteStmts(rd.argument, isVoidReturn, promiseType, fnReturnInner, loc, retFutName);
 				const blockStmts: Node[] = [makeStateAssign(-1, loc)];
 				for (const cs of completeStmts) blockStmts.push(cs);
 				blockStmts.push(makeReturn(makeNull(loc), loc));
@@ -203,30 +206,30 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 			},
 			NodeKind.BlockStmt => {
 				const bd = stmt.data as BlockStmtData;
-				rewriteAsyncReturns(bd.statements, promiseType, fnReturnInner, loc);
+				rewriteAsyncReturns(bd.statements, promiseType, fnReturnInner, loc, retFutName);
 			},
 			NodeKind.IfStmt => {
 				const id = stmt.data as IfStmtData;
 				if (id.consequent !== null && id.consequent.kind === NodeKind.BlockStmt) {
-					rewriteAsyncReturns((id.consequent.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
+					rewriteAsyncReturns((id.consequent.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName);
 				}
 				if (id.alternate !== null && id.alternate.kind === NodeKind.BlockStmt) {
-					rewriteAsyncReturns((id.alternate.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
+					rewriteAsyncReturns((id.alternate.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName);
 				}
 			},
 			NodeKind.WhileStmt => {
 				const wd = stmt.data as WhileStmtData;
 				if (wd.whileBody !== null && wd.whileBody.kind === NodeKind.BlockStmt) {
-					rewriteAsyncReturns((wd.whileBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
+					rewriteAsyncReturns((wd.whileBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName);
 				}
 			},
 			NodeKind.TryCatchStmt => {
 				const td = stmt.data as TryCatchStmtData;
 				if (td.tryBody !== null && td.tryBody.kind === NodeKind.BlockStmt) {
-					rewriteAsyncReturns((td.tryBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
+					rewriteAsyncReturns((td.tryBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName);
 				}
 				if (td.catchBody !== null && td.catchBody.kind === NodeKind.BlockStmt) {
-					rewriteAsyncReturns((td.catchBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
+					rewriteAsyncReturns((td.catchBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName);
 				}
 			},
 			_ => {},
@@ -448,6 +451,8 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	if (body.kind !== NodeKind.BlockStmt) return body;
 
 	const loc = body.location;
+	asyncNameCounter += 1;
+	const retFutName = "$retFut" + asyncNameCounter;
 	// retFutType: actual typed Promise for $retFut (Promise<number> → msFuture_double*)
 	const retFutType = promiseTypeFor(fnReturnInner);
 	const promiseVoidType = createPromise(voidType());
@@ -466,12 +471,12 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	collectDeclNames(body, nc, false);
 
 	// 3. Rewrite returns: return val → msFutureComplete($retFut, val); return null;
-	rewriteAsyncReturns(bodyStmts, retFutType, fnReturnInner, loc);
+	rewriteAsyncReturns(bodyStmts, retFutType, fnReturnInner, loc, retFutName);
 
 	// 3b. Implicit void completion at body end
 	bodyStmts.push(makeExprStmt(makeCall(
 		makeIdent("msFutureCompleteVoid", loc),
-		[makeTypedIdent("$retFut", retFutType, loc)],
+		[makeTypedIdent(retFutName, retFutType, loc)],
 		loc,
 	), loc));
 	bodyStmts.push(makeReturn(makeNull(loc), loc));
@@ -523,7 +528,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	const failCall = makeExprStmt(
 		makeCall(
 			makeIdent("msFutureFail", loc),
-			[makeTypedIdent("$retFut", retFutType, loc), makeIdent("$e", loc)],
+			[makeTypedIdent(retFutName, retFutType, loc), makeIdent("$e", loc)],
 			loc,
 		),
 		loc,
@@ -550,7 +555,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// larger than 16 bytes need typed-sized allocation via msFutureCreateInline.
 	const retFutInit = makeRetFutAlloc(fnReturnInner, loc);
 	if (!isStructLikeType(fnReturnInner)) retFutInit.nodeType = retFutType;
-	const retFutDecl = makeVarDecl("$retFut", retFutInit, DeclKind.Const, loc);
+	const retFutDecl = makeVarDecl(retFutName, retFutInit, DeclKind.Const, loc);
 	retFutDecl.nodeType = retFutType;
 	outerStmts.push(retFutDecl);
 
@@ -586,13 +591,13 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// msAsyncStart($retFut, $stepper) — createCb pattern: C callback drives the stepper
 	const kickoffCall = makeCall(
 		makeIdent("msAsyncStart", loc),
-		[makeTypedIdent("$retFut", retFutType, loc), makeTypedIdent("$stepper", closureType, loc)],
+		[makeTypedIdent(retFutName, retFutType, loc), makeTypedIdent("$stepper", closureType, loc)],
 		loc,
 	);
 	outerStmts.push(makeExprStmt(kickoffCall, loc));
 
 	// return $retFut;
-	const returnFut = makeReturn(makeTypedIdent("$retFut", retFutType, loc), loc);
+	const returnFut = makeReturn(makeTypedIdent(retFutName, retFutType, loc), loc);
 	outerStmts.push(returnFut);
 
 	return makeBlock(outerStmts, loc);
@@ -601,7 +606,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 
 // Recursively rewrite all ReturnStmt nodes to msFutureComplete + return $retFut.
 // Stops at nested function boundaries (each function has its own return semantics).
-function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Type | null): void {
+function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Type | null, retFutName: string): void {
 	if (node === null) return;
 	match (node.kind) {
 		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction => {},
@@ -616,26 +621,26 @@ function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Typ
 					let completeCall: Node | null = null;
 					if (isVoid || rd.argument === null) {
 						completeCall = makeCall(makeIdent("msFutureCompleteVoid", loc),
-							[makeTypedIdent("$retFut", promiseType, loc)], loc);
+							[makeTypedIdent(retFutName, promiseType, loc)], loc);
 					} else if (boxedInFuture(fnReturnInner)) {
 						// Boxed types: msSinkBoxStruct is a multi-statement expansion (nesting it
 						// corrupts the result stack), so box via a separate VarDecl.
 						const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
 						const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [rd.argument], loc);
 						boxCall.nodeType = voidPtrType;
-						const boxDecl = makeVarDecl("$boxed", boxCall, DeclKind.Const, loc);
+						const boxDecl = makeVarDecl(retFutName + "_b", boxCall, DeclKind.Const, loc);
 						boxDecl.nodeType = voidPtrType;
 						newStmts.push(boxDecl);
 						completeCall = makeCall(makeIdent("msFutureComplete", loc),
-							[makeTypedIdent("$retFut", promiseType, loc), makeIdent("$boxed", loc)], loc);
+							[makeTypedIdent(retFutName, promiseType, loc), makeIdent(retFutName + "_b", loc)], loc);
 					} else {
 						completeCall = makeCall(makeIdent("msFutureCompleteT", loc),
-							[makeTypedIdent("$retFut", promiseType, loc), rd.argument], loc);
+							[makeTypedIdent(retFutName, promiseType, loc), rd.argument], loc);
 					}
 					newStmts.push(makeExprStmt(completeCall, loc));
-					newStmts.push(makeReturn(makeTypedIdent("$retFut", promiseType, loc), loc));
+					newStmts.push(makeReturn(makeTypedIdent(retFutName, promiseType, loc), loc));
 				} else {
-					rewriteReturns(stmt, promiseType, fnReturnInner);
+					rewriteReturns(stmt, promiseType, fnReturnInner, retFutName);
 					newStmts.push(stmt);
 				}
 			}
@@ -643,15 +648,15 @@ function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Typ
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			rewriteReturns(d.consequent, promiseType, fnReturnInner);
-			rewriteReturns(d.alternate, promiseType, fnReturnInner);
+			rewriteReturns(d.consequent, promiseType, fnReturnInner, retFutName);
+			rewriteReturns(d.alternate, promiseType, fnReturnInner, retFutName);
 		},
-		NodeKind.WhileStmt => { rewriteReturns((node.data as WhileStmtData).whileBody, promiseType, fnReturnInner); },
+		NodeKind.WhileStmt => { rewriteReturns((node.data as WhileStmtData).whileBody, promiseType, fnReturnInner, retFutName); },
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
-			rewriteReturns(d.tryBody, promiseType, fnReturnInner);
-			rewriteReturns(d.catchBody, promiseType, fnReturnInner);
-			rewriteReturns(d.finallyBody, promiseType, fnReturnInner);
+			rewriteReturns(d.tryBody, promiseType, fnReturnInner, retFutName);
+			rewriteReturns(d.catchBody, promiseType, fnReturnInner, retFutName);
+			rewriteReturns(d.finallyBody, promiseType, fnReturnInner, retFutName);
 		},
 		_ => {},
 	};
@@ -664,6 +669,8 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 
 	const bd = body.data as BlockStmtData;
 	const loc = body.location;
+	asyncNameCounter += 1;
+	const retFutName = "$retFut" + asyncNameCounter;
 
 	const retFutType = promiseTypeFor(fnReturnInner);
 	const promiseVoidType = createPromise(voidType());
@@ -671,11 +678,11 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// const $retFut = msFutureCreate[Inline]();  (see makeRetFutAlloc)
 	const retFutInit = makeRetFutAlloc(fnReturnInner, loc);
 	if (!isStructLikeType(fnReturnInner)) retFutInit.nodeType = retFutType;
-	const retFutDecl = makeVarDecl("$retFut", retFutInit, DeclKind.Const, loc);
+	const retFutDecl = makeVarDecl(retFutName, retFutInit, DeclKind.Const, loc);
 	retFutDecl.nodeType = retFutType;
 
 	// Rewrite all return statements recursively (handles if/else, while, try/catch)
-	rewriteReturns(body, retFutType, fnReturnInner);
+	rewriteReturns(body, retFutType, fnReturnInner, retFutName);
 
 	// Read bd.statements AFTER rewriteReturns (it mutates the array).
 	const rewrittenStmts = bd.statements;
@@ -690,11 +697,11 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	if (rewrittenStmts.length === 0 || rewrittenStmts[rewrittenStmts.length - 1].kind !== NodeKind.ReturnStmt) {
 		const completeCall = makeCall(
 			makeIdent("msFutureCompleteVoid", loc),
-			[makeTypedIdent("$retFut", retFutType, loc)],
+			[makeTypedIdent(retFutName, retFutType, loc)],
 			loc,
 		);
 		tryStmts.push(makeExprStmt(completeCall, loc));
-		tryStmts.push(makeReturn(makeTypedIdent("$retFut", retFutType, loc), loc));
+		tryStmts.push(makeReturn(makeTypedIdent(retFutName, retFutType, loc), loc));
 	}
 
 	// A throw in the body must FAIL $retFut and return it — otherwise the throw
@@ -703,12 +710,12 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	const failCall = makeExprStmt(
 		makeCall(
 			makeIdent("msFutureFail", loc),
-			[makeTypedIdent("$retFut", retFutType, loc), makeIdent("$e", loc)],
+			[makeTypedIdent(retFutName, retFutType, loc), makeIdent("$e", loc)],
 			loc,
 		),
 		loc,
 	);
-	const catchBody = makeBlock([failCall, makeReturn(makeTypedIdent("$retFut", retFutType, loc), loc)], loc);
+	const catchBody = makeBlock([failCall, makeReturn(makeTypedIdent(retFutName, retFutType, loc), loc)], loc);
 	const tryCatch = makeTryCatch(makeBlock(tryStmts, loc), "$e", catchBody, makeBlock([], loc), loc);
 
 	return makeBlock([retFutDecl, tryCatch], loc);
@@ -730,6 +737,9 @@ function getFnReturnInner(fnNode: Node): Type | null {
 }
 
 function rewriteAsyncFnBody(body: Node, fnReturnInner: Type | null): Node {
+	if (body !== null && body.kind !== NodeKind.BlockStmt) {
+		throw "internal: async fn body reached asyncBridge un-normalized (expected BlockStmt)";
+	}
 	if (!hasYieldInBody(body)) {
 		return rewriteSimpleAsyncBody(body, fnReturnInner);
 	}
@@ -750,17 +760,12 @@ function walkBridgeExpr(node: Node | null): void {
 			walkBridge(d.arrowBody);
 			if (isWasAsync(node)) { d.arrowBody = rewriteAsyncFnBody(d.arrowBody, getFnReturnInner(node)); d.arrowFlags = ""; }
 		},
-		NodeKind.CallExpr => {
-			const d = node.data as CallExprData;
-			walkBridgeExpr(d.callee);
-			for (const arg of d.arguments) { walkBridgeExpr(arg); }
+		_ => {
+			mapChildren(node, (child: Node) => {
+				walkBridgeExpr(child);
+				return child;
+			});
 		},
-		NodeKind.BinaryExpr => {
-			const d = node.data as BinaryExprData;
-			walkBridgeExpr(d.left);
-			walkBridgeExpr(d.right);
-		},
-		_ => {},
 	};
 }
 
