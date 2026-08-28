@@ -206,6 +206,11 @@ function walkCheckExpr(node: Node | null): void {
 		},
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
+			if ((d.arrowFlags === "async" || d.arrowFlags === "async_generator")
+				&& d.arrowBody !== null && d.arrowBody.kind !== NodeKind.BlockStmt) {
+				const ret = makeReturn(d.arrowBody, node.location);
+				d.arrowBody = createNode(NodeKind.BlockStmt, { statements: [ret] }, syntheticToken(node.location));
+			}
 			walkAsync(d.arrowBody);
 			if (d.arrowFlags === "async" || d.arrowFlags === "async_generator") {
 				node.flags = node.flags | NodeFlag.WasAsync;
@@ -214,17 +219,12 @@ function walkCheckExpr(node: Node | null): void {
 				d.arrowFlags = "generator";
 			}
 		},
-		NodeKind.CallExpr => {
-			const d = node.data as CallExprData;
-			walkCheckExpr(d.callee);
-			for (const arg of d.arguments) { walkCheckExpr(arg); }
+		_ => {
+			mapChildren(node, (child: Node) => {
+				walkCheckExpr(child);
+				return child;
+			});
 		},
-		NodeKind.BinaryExpr => {
-			const d = node.data as BinaryExprData;
-			walkCheckExpr(d.left);
-			walkCheckExpr(d.right);
-		},
-		_ => {},
 	};
 }
 
