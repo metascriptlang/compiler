@@ -513,7 +513,7 @@ export class Node {
 	// reconstructed type-AST in nodeTypeAst and nodeToASTLiteral falls back to it
 	// for nested re-expansion. Macro bodies should read nodeType (above) — in the
 	// VM heap that key always carries the type-AST Node.
-	nodeTypeAst: Node;
+	nodeTypeAst: Node | null;
 }
 
 export type Expression = Node;
@@ -657,7 +657,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	n.paramLocations = null;
 	n.typeArg = "";
 	n.flowNode = null;
-	n.nodeTypeAst = null as unknown as Node;
+	n.nodeTypeAst = null;
 	return n;
 }
 
@@ -793,7 +793,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	n.paramLocations = null;
 	n.typeArg = "";
 	n.flowNode = null;
-	n.nodeTypeAst = null as unknown as Node;
+	n.nodeTypeAst = null;
 	return n;
 }
 
