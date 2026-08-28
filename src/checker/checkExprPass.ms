@@ -6202,7 +6202,8 @@ export function checkDuplicatePatterns(ctx: CheckerContext, cases: Node[]): void
 
 // ===== Anonymous Functions =====
 
-export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[], returnTypeAnnotation: string, expectedType: Type | null): Type {
+export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[], returnTypeAnnotation: string, expectedType: Type | null, fnFlags: string): Type {
+	const isAsync = fnFlags === "async" || fnFlags === "async_generator" || (fnFlags !== "" && fnFlags.indexOf("async") >= 0);
 	const savedReturn = ctx.inferredReturn;
 	ctx.inferredReturn = inferredType();
 	const savedReturnStmts = ctx.inferredReturnStmts;
@@ -6274,6 +6275,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// statements can use it as expectedType (semProcAux parity: annotation propagates)
 	const fnSymType = explicitReturnType !== null ? createFunction([], [], explicitReturnType) : inferredType();
 	const sym = makeSymbol(name, SymbolKind.Function, fnSymType, false);
+	if (isAsync) setFlag(sym, SymbolFlag.Async);
 	ctx.currentFunction = sym;
 	openScope(ctx.table, ScopeKind.Function);
 	let pi = 0;
@@ -6300,7 +6302,12 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	if (body.kind === NodeKind.BlockStmt) {
 		callCheckStmt(ctx, body);
 	} else {
-		checkExpr(ctx, body, explicitReturnType);
+		let bodyExpected = explicitReturnType;
+		if (isAsync && bodyExpected !== null) {
+			const unwrapped = awaitedType(bodyExpected);
+			if (unwrapped !== null) bodyExpected = unwrapped;
+		}
+		checkExpr(ctx, body, bodyExpected);
 		const exprType = body.nodeType;
 		if (ctx.inferredReturn.kind === TypeKind.Inferred) {
 			ctx.inferredReturn = exprType;
@@ -6346,22 +6353,31 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// auto-wrap only fires for Identifier callees with SymbolKind.Function,
 	// so it doesn't catch this case for inline expression-form functions.
 	if (explicitReturnType !== null) {
+		if (isAsync && returnTypeAnnotation !== "" && explicitReturnType.kind !== TypeKind.Void
+			&& !isAwaitable(explicitReturnType)) {
+			const got = typeDisplayName(explicitReturnType);
+			addError(ctx,
+				"async " + name + " must declare return type as Promise<" + got
+					+ ">, not bare '" + got + "'",
+				body.location.line, body.location.column);
+		}
 		return createClosureType(types, params, explicitReturnType);
 	}
 	if (returnTypeAnnotation === "void") {
-		return createClosureType(types, params, voidType());
+		return createClosureType(types, params, isAsync ? createPromise(voidType()) : voidType());
 	}
 	if (!isUnresolvedType(inferredRet)) {
-		return createClosureType(types, params, inferredRet);
+		const retT = isAsync && !isAwaitable(inferredRet) ? createPromise(inferredRet) : inferredRet;
+		return createClosureType(types, params, retT);
 	}
-	return createClosureType(types, params, voidType());
+	return createClosureType(types, params, isAsync ? createPromise(voidType()) : voidType());
 }
 
 function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as ArrowFunctionData;
 	resolveTypeExpr(node.typeExpr, ctx);
 	resolveTypeExprs(node.typeExprs, ctx);
-	const fnType = checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody, node.paramLocations!, d.arrowReturnType, expectedType);
+	const fnType = checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody, node.paramLocations!, d.arrowReturnType, expectedType, d.arrowFlags);
 	// The implicit return of an expression body is a fit position like any
 	// ReturnStmt (checkReturnStmt:1229) — reseat the body through fitNode so
 	// no coercion (Maybe wrap, closure wrap) is forgotten.
@@ -6381,7 +6397,7 @@ function checkFuncExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 	const d = node.data as FunctionExprData;
 	resolveTypeExpr(node.typeExpr, ctx);
 	resolveTypeExprs(node.typeExprs, ctx);
-	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprParamTypes, d.funcExprBody, node.paramLocations!, d.funcExprReturnType, expectedType);
+	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprParamTypes, d.funcExprBody, node.paramLocations!, d.funcExprReturnType, expectedType, d.funcExprFlags);
 }
 
 // ===== @emit Backtick Interpolation (reference emit processing parity) =====
