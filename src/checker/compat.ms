@@ -55,6 +55,10 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 	}
 	if ((isPointerShapedRepr(source) && isScalarRepr(target))
 		|| (isScalarRepr(source) && isPointerShapedRepr(target))) return true;
+	if (source.kind === TypeKind.Array && target.kind === TypeKind.Ref
+		&& target.typeReturn !== null && target.typeReturn.kind === TypeKind.Array) return true;
+	if (source.kind === TypeKind.Ref && source.typeReturn !== null
+		&& source.typeReturn.kind === TypeKind.Array && target.kind === TypeKind.Array) return true;
 	if (source.kind !== target.kind) return false;
 	if (source.kind === TypeKind.Array || source.kind === TypeKind.Span
 		|| source.kind === TypeKind.Ptr || source.kind === TypeKind.SizedArray) {
@@ -372,6 +376,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// but passing them to functions expecting T should work transparently.
 	// Arc<T> does NOT auto-unwrap — sharing the pointee unguarded defeats the atomic rc.
 	if (source.kind === TypeKind.Ref && !isAtomicRef(source) && source.typeReturn !== null) {
+		if (source.typeReturn.kind === TypeKind.Array && target.kind === TypeKind.Array) return false;
 		return isAssignable(source.typeReturn, target);
 	}
 
