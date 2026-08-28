@@ -28,13 +28,13 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 	// below. Mirrors JSON decode B-2.3 shape.
 	if (tt.kind === NodeKind.TypeUnion) {
 		let nonNullCount: int32 = 0;
-		let firstNonNull: Node = null as unknown as Node;
+		let firstNonNull: Node | null = null;
 		for (const m of tt.typExprMembers) {
 			if (m.kind === NodeKind.Identifier && m.name === "null") continue;
 			if (firstNonNull === null) firstNonNull = m;
 			nonNullCount = nonNullCount + 1;
 		}
-		if (nonNullCount === 1) {
+		if (nonNullCount === 1 && firstNonNull !== null) {
 			tt = firstNonNull;
 		}
 		// nonNullCount >= 2: leave tt as TypeUnion → DU branch below

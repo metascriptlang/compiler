@@ -29,13 +29,13 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 	// that silently dropped variant 2+ for `A | B | null` cases.
 	if (tt.kind === NodeKind.TypeUnion) {
 		let nonNullCount: int32 = 0;
-		let firstNonNull: Node = null as unknown as Node;
+		let firstNonNull: Node | null = null;
 		for (const m of tt.typExprMembers) {
 			if (m.kind === NodeKind.Identifier && m.name === "null") continue;
 			if (firstNonNull === null) firstNonNull = m;
 			nonNullCount = nonNullCount + 1;
 		}
-		if (nonNullCount === 1) {
+		if (nonNullCount === 1 && firstNonNull !== null) {
 			tt = firstNonNull;
 		}
 		// nonNullCount >= 2: leave tt as TypeUnion → DU branch below
@@ -251,14 +251,14 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 		// macro; lenient contract: null/missing → null, present → as* read).
 		if (ftype.kind === NodeKind.TypeUnion) {
 			let optCount: int32 = 0;
-			let optMember: Node = null as unknown as Node;
+			let optMember: Node | null = null;
 			let optSawNull: boolean = false;
 			for (const m of ftype.typExprMembers) {
 				if (m.kind === NodeKind.Identifier && m.name === "null") { optSawNull = true; continue; }
 				if (optMember === null) optMember = m;
 				optCount = optCount + 1;
 			}
-			if (optSawNull && optCount === 1 && optMember.kind === NodeKind.Identifier) {
+			if (optSawNull && optCount === 1 && optMember !== null && optMember.kind === NodeKind.Identifier) {
 				const a = pickAtomicAccessor(optMember.name);
 				const optFnameLit: Node = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname };
 				const optIsNull: Node = {
@@ -520,13 +520,13 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 	let tt = witness.nodeType;
 	if (tt.kind === NodeKind.TypeUnion) {
 		let nonNullCount: int32 = 0;
-		let firstNonNull: Node = null as unknown as Node;
+		let firstNonNull: Node | null = null;
 		for (const m of tt.typExprMembers) {
 			if (m.kind === NodeKind.Identifier && m.name === "null") continue;
 			if (firstNonNull === null) firstNonNull = m;
 			nonNullCount = nonNullCount + 1;
 		}
-		if (nonNullCount === 1) {
+		if (nonNullCount === 1 && firstNonNull !== null) {
 			tt = firstNonNull;
 		}
 	}
@@ -712,14 +712,14 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		// Only atomic X for now: ref-typed X (interface/array) errors loud.
 		if (fcore.kind === NodeKind.TypeUnion) {
 			let optCount: int32 = 0;
-			let optMember: Node = null as unknown as Node;
+			let optMember: Node | null = null;
 			let optSawNull: boolean = false;
 			for (const m of fcore.typExprMembers) {
 				if (m.kind === NodeKind.Identifier && m.name === "null") { optSawNull = true; continue; }
 				if (optMember === null) optMember = m;
 				optCount = optCount + 1;
 			}
-			if (optSawNull && optCount === 1 && optMember.kind === NodeKind.Identifier) {
+			if (optSawNull && optCount === 1 && optMember !== null && optMember.kind === NodeKind.Identifier) {
 				const a = pickAtomicAccessor(optMember.name);
 				let reqName: string = "reqInt64";
 				if (a.methodName === "asString") reqName = "reqString";
@@ -765,20 +765,17 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 
 		// Array detection FIRST — the struct branch would otherwise swallow
 		// a TypeGeneric("Array", [Elem]).
-		let isArrayField: boolean = false;
-		let elemType: Node = null as unknown as Node;
+		let elemType: Node | null = null;
 		if (fcore.kind === NodeKind.TypeArray) {
-			isArrayField = true;
 			elemType = fcore.typExprElement;
 		} else if (fcore.kind === NodeKind.TypeGeneric) {
 			const base: Node = fcore.typExprBase;
 			if (base.kind === NodeKind.Identifier && base.name === "Array") {
-				isArrayField = true;
 				elemType = fcore.typExprArgs[0];
 			}
 		}
 
-		if (isArrayField) {
+		if (elemType !== null) {
 			let ec: Node = elemType;
 			let epeeling: boolean = true;
 			while (epeeling) {

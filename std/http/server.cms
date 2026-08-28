@@ -382,7 +382,7 @@ export function hasHeader(this res: ServerResponse, name: string): boolean {
 }
 
 // Set status + merge headers, no body sent yet.
-export function writeHead(this res: ServerResponse, status: int32, headers: HttpHeaders = null as unknown as HttpHeaders): void {
+export function writeHead(this res: ServerResponse, status: int32, headers: HttpHeaders | null = null): void {
 	res.status = status;
 	if (headers !== null) {
 		let i = 0;
