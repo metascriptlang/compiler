@@ -28,6 +28,13 @@ import { splitTopLevel, parseIntStr } from "../utils/string";
 
 // ===== Public Entry Point =====
 
+function isMutatingArrayMethod(method: string): boolean {
+	return method === "push" || method === "pop" || method === "shift" || method === "unshift"
+		|| method === "splice" || method === "reverse" || method === "sort" || method === "fill"
+		|| method === "copyWithin" || method === "append" || method === "setLength"
+		|| method === "setSlice" || method === "stripInPlace" || method === "setLen";
+}
+
 export function analyzeParamMutations(ctx: CheckerContext, program: Node): void {
 	if (program === null || program.kind !== NodeKind.Program) return;
 	const pd = program.data as ProgramData;
@@ -184,6 +191,12 @@ export function findMutationLocation(node: Node | null, paramName: string, inter
 	}
 	if (node.kind === NodeKind.CallExpr) {
 		const d = node.data as CallExprData;
+		if (interiorOnly && d.callee.kind === NodeKind.MemberExpr) {
+			const md = d.callee.data as MemberExprData;
+			const ot = md.object.nodeType;
+			if (getRootName(md.object) === paramName && isMutatingArrayMethod(md.property)
+				&& ot !== null && (ot.kind === TypeKind.Array || ot.kind === TypeKind.SizedArray)) return node.location;
+		}
 		const cloc = findMutationLocation(d.callee, paramName, interiorOnly);
 		if (cloc.line > 0) return cloc;
 		for (const arg of d.arguments) {
@@ -346,6 +359,12 @@ export function scanForMutation(node: Node | null, paramName: string, interiorOn
 		NodeKind.VariableDecl => scanForMutation((node.data as VariableDeclData).initializer, paramName, interiorOnly),
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
+			if (interiorOnly && d.callee.kind === NodeKind.MemberExpr) {
+				const md = d.callee.data as MemberExprData;
+				const ot = md.object.nodeType;
+				if (getRootName(md.object) === paramName && isMutatingArrayMethod(md.property)
+					&& ot !== null && (ot.kind === TypeKind.Array || ot.kind === TypeKind.SizedArray)) return true;
+			}
 			if (scanForMutation(d.callee, paramName, interiorOnly)) return true;
 			for (const arg of d.arguments) {
 				if (scanForMutation(arg, paramName, interiorOnly)) return true;
