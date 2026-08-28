@@ -229,10 +229,10 @@ function nodeBool(node: Node): number {
 // Handles: `const config = { ... }; export default config;`
 // and:     `export default { ... };`
 // and:     `export default defineConfig({ ... });`
-function findConfigObject(program: Node): Node {
-	if (program === null || program.kind !== NodeKind.Program) return null as unknown as Node;
+function findConfigObject(program: Node): Node | null {
+	if (program === null || program.kind !== NodeKind.Program) return null;
 	const pd = program.data as ProgramData;
-	let configObj: Node = null as unknown as Node;
+	let configObj: Node | null = null;
 
 	// First pass: find top-level VariableDecl with ObjectLiteral init
 	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
@@ -436,14 +436,14 @@ export interface BuildWarning {
 }
 
 // Parse build.ms source and return the config ObjectLiteral node, or null.
-function parseBuildSource(source: string): Node {
-	if (source.length === 0) return null as unknown as Node;
+function parseBuildSource(source: string): Node | null {
+	if (source.length === 0) return null;
 	if (!_parsersRegistered) {
 		registerCoreParsers();
 		_parsersRegistered = true;
 	}
 	const parseResult = parseSource(source);
-	if (!parseResult.ok) return null as unknown as Node;
+	if (!parseResult.ok) return null;
 	return findConfigObject(parseResult.value);
 }
 

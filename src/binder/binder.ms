@@ -914,13 +914,13 @@ function bindSource(input: string): Node {
 }
 
 // Walk AST and return the first Identifier with the given name, or null.
-function findIdent(node: Node | null, name: string): Node {
-	if (node === null) return null as unknown as Node;
+function findIdent(node: Node | null, name: string): Node | null {
+	if (node === null) return null;
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		if (d.name === name) return node;
 	}
-	let found: Node = null as unknown as Node;
+	let found: Node | null = null;
 	match (node.kind) {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;

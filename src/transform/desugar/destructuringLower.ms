@@ -92,7 +92,7 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 
 	// Simple RHS (identifier/member/access) → skip temp
-	let baseExpr: Node = null as unknown as Node;
+	let baseExpr: Node | null = null;
 	const initKind = d.destrInit.kind;
 	if (initKind === NodeKind.Identifier || initKind === NodeKind.MemberExpr || initKind === NodeKind.ArrayAccess) {
 		baseExpr = d.destrInit;

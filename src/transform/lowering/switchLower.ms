@@ -29,7 +29,7 @@ function expandSwitchStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const nullGuard = null as unknown as Node;
 
 	const cases: Node[] = [];
-	let defaultCase: Node = null as unknown as Node;
+	let defaultCase: Node | null = null;
 	for (const caseNode of d.switchCases) {
 		const cd = caseNode.data as SwitchCaseData;
 		const body = makeBlock(cd.caseStmts, loc);

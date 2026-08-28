@@ -116,21 +116,21 @@ function lspFindObjectLiteralTypeAST(program: Node, line: number, col: number, c
 // If nested `{ fmt: { | } }`, returns the outer `{ }`.
 // Uses findEnclosingObjectLiteral (from suggest.ms) which has subtree-touch validation,
 // then walks up to find the outermost ancestor ObjectLiteral.
-function lspFindRootObjectLiteral(root: Node, line: number, col: number): Node {
+function lspFindRootObjectLiteral(root: Node, line: number, col: number): Node | null {
 	// Find the innermost ObjectLiteral first (validated by subtree check)
 	const innermost = findEnclosingObjectLiteral(root, line, col);
-	if (innermost === null) return null as unknown as Node;
+	if (innermost === null) return null;
 	// Walk from root to find the outermost ObjectLiteral that is an ancestor of innermost
 	const outermost = lspFindOutermostObjLitAncestor(root, innermost);
 	return outermost !== null ? outermost : innermost;
 }
 
 // Find the outermost ObjectLiteral node that is an ancestor of target.
-function lspFindOutermostObjLitAncestor(root: Node, target: Node): Node {
-	if (root === null) return null as unknown as Node;
-	if (root === target) return null as unknown as Node;
+function lspFindOutermostObjLitAncestor(root: Node, target: Node): Node | null {
+	if (root === null) return null;
+	if (root === target) return null;
 	let isAncestor = false;
-	let childResult = null as unknown as Node;
+	let childResult: Node = null as unknown as Node;
 	forEachChild(root, (child: Node): void => {
 		if (!isAncestor) {
 			if (child === target) {
@@ -166,15 +166,15 @@ function sgNodeContains(node: Node, target: Node): boolean {
 }
 
 // Find the VariableDecl AST node that contains a given ObjectLiteral node.
-function lspFindParentVarDecl(root: Node, target: Node): Node {
-	if (root === null) return null as unknown as Node;
+function lspFindParentVarDecl(root: Node, target: Node): Node | null {
+	if (root === null) return null;
 	if (root.kind === NodeKind.VariableDecl) {
 		const vd = root.data as VariableDeclData;
 		if (vd.initializer === target) {
 			return root;
 		}
 	}
-	let found = null as unknown as Node;
+	let found: Node = null as unknown as Node;
 	forEachChild(root, (child: Node): void => {
 		if (found === null) {
 			const r = lspFindParentVarDecl(child, target);

@@ -576,16 +576,16 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	// importer re-resolve member types in its own scope and pollute the type registry).
 	// Ask the DEFINING module for the real declaration through the same module-ctx
 	// registry this function already uses to re-check the constructor body below.
-	let classDeclNode = classSym.declNode;
+	let classDeclNode: Node | null = classSym.declNode;
 	if (classDeclNode === null || classDeclNode.kind !== NodeKind.ClassDecl) {
 		const declCtx = pickBodyCtx(classSym.modulePath, ctx);
 		const declName = classSym.originalName !== "" ? classSym.originalName : classSym.name;
 		const declSym = lookupSymbol(declCtx.table, declName);
-		classDeclNode = declSym !== null ? declSym.declNode : (null as unknown as Node);
+		classDeclNode = declSym !== null ? declSym.declNode : null;
 	}
 	if (classDeclNode === null || classDeclNode.kind !== NodeKind.ClassDecl) return;
 	const classData = classDeclNode.data as ClassDeclData;
-	let ctorNode: Node = null as unknown as Node;
+	let ctorNode: Node | null = null;
 	for (const member of classData.classBody) {
 		if (member.kind === NodeKind.ConstructorDecl) { ctorNode = member; }
 	}

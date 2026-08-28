@@ -130,7 +130,7 @@ function ensureImplicitSuper(classNode: Node, cd: ClassDeclData, ctorNode: Node)
 
 function lowerClassNode(classNode: Node): void {
 	const cd = classNode.data as ClassDeclData;
-	let ctorNode = null as unknown as Node;
+	let ctorNode: Node | null = null;
 	for (const member of cd.classBody) {
 		if (member.kind === NodeKind.ConstructorDecl) {
 			ctorNode = member;

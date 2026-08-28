@@ -1119,7 +1119,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		if (instNode.resolvedSym !== null && instNode.resolvedSym.modulePath !== "") {
 			owner = instNode.resolvedSym.modulePath;
 		}
-		let targetProgram: Node = null as unknown as Node;
+		let targetProgram: Node | null = null;
 		if (owner !== "" && programByPath.has(owner)) {
 			targetProgram = programByPath.get(owner);
 		} else if (programByPath.has(entryPath)) {
@@ -1531,7 +1531,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		if (instNode.resolvedSym !== null && instNode.resolvedSym.modulePath !== "") {
 			owner = instNode.resolvedSym.modulePath;
 		}
-		let targetProgram: Node = null as unknown as Node;
+		let targetProgram: Node | null = null;
 		if (owner !== "" && programByPath.has(owner)) {
 			targetProgram = programByPath.get(owner);
 		} else if (programByPath.has(filePath)) {

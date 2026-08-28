@@ -32,7 +32,7 @@ function lowerForNode(node: Node): Node {
 	}
 
 	// 2. Condition (default to true for infinite loop)
-	let cond: Node = null as unknown as Node;
+	let cond: Node | null = null;
 	if (d.forCondition !== null) {
 		cond = d.forCondition;
 	} else {

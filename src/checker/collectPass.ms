@@ -350,7 +350,7 @@ export function collectActor(ctx: CheckerContext, node: Node): void {
 
 function collectClassMethod(ctx: CheckerContext, className: string, classGenerics: string, member: Node, isExternClass: boolean): void {
 	let builtinKind = "";
-	let methodNode: Node = null as unknown as Node;
+	let methodNode: Node | null = null;
 	if (member.kind === NodeKind.MethodDecl) {
 		methodNode = member;
 	} else if (member.kind === NodeKind.DecoratedDecl) {

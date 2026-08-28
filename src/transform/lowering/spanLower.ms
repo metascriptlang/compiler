@@ -173,7 +173,7 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 	const endExpr = bd.right;
 
 	// Build data pointer: arr.data + start (pointer arithmetic in C)
-	let dataBase: Node = null as unknown as Node;
+	let dataBase: Node | null = null;
 	if (arrType.kind === TypeKind.Array) {
 		// Heap array: arr.p->data + start (nativeLower rewrites .data to .p->data for Arrays)
 		dataBase = makeMember(d.array, "data", loc);

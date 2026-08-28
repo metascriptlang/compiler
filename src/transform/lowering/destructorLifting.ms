@@ -940,7 +940,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, p1:
 				if (!nameSetContains(lctx.generated, helperName)) {
 					nameSetAdd(lctx.generated, helperName);
 					const isTrace = hook === "trace";
-					let helperFn: Node = null as unknown as Node;
+					let helperFn: Node | null = null;
 					if (isTrace) {
 						// Trace: (self, callback) — self is union type, callback is void*
 						helperFn = makeFnDecl(helperName, [p1, p2], [typeName, "void*"], makeBlock(armBuf.items, loc), "", "void", loc);
@@ -1169,7 +1169,7 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 
 	const suffix = hookSuffix(hook);
 
-	let fnNode: Node = null as unknown as Node;
+	let fnNode: Node | null = null;
 	if (isTrace) {
 		fnNode = makeFnDecl(typeName + suffix, [p1, p2], [typeName, "void*"], makeBlock(buf.items, loc), "", "void", loc);
 	} else if (isUnary) {
@@ -1737,7 +1737,7 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 
 	const suffix = hookSuffix(hook);
 
-	let fnNode: Node = null as unknown as Node;
+	let fnNode: Node | null = null;
 	if (isUnary) {
 		fnNode = makeFnDecl(seqName + suffix, [p1], [seqName], makeBlock(buf.items, loc), "", "void", loc);
 	} else {

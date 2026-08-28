@@ -331,7 +331,7 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 			if (varType !== null && isAwaitable(varType)) varType = awaitedType(varType);
 			const prevYfType = promiseTypeFor(varType);
 			const readFn = readFnForAwait(varType);
-			let readExpr: Node = null as unknown as Node;
+			let readExpr: Node | null = null;
 			if (readFn !== "") {
 				readExpr = makeCall(makeIdent(readFn, loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
 				readExpr.nodeType = varType;
@@ -613,7 +613,7 @@ function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Typ
 					const rd = stmt.data as ReturnStmtData;
 					const loc = stmt.location;
 					const isVoid = fnReturnInner === null || fnReturnInner.kind === TypeKind.Void;
-					let completeCall: Node = null as unknown as Node;
+					let completeCall: Node | null = null;
 					if (isVoid || rd.argument === null) {
 						completeCall = makeCall(makeIdent("msFutureCompleteVoid", loc),
 							[makeTypedIdent("$retFut", promiseType, loc)], loc);
