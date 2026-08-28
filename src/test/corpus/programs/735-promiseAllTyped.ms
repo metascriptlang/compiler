@@ -1,6 +1,3 @@
-// @xfail(js): `Promise` as a VALUE is undefined on the js target (native
-// Promise.all passthrough has no prelude symbol) — js-target gap, not PARALOCK.
-
 async function fd(x: float64): Promise<float64> { return x * 2.0; }
 async function fi(x: int32): Promise<int32> { return x + 10; }
 async function fs(n: string): Promise<string> { return n + "@x"; }
