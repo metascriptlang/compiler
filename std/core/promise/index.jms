@@ -1,0 +1,17 @@
+// MetaScript Promise Prelude — JavaScript Backend
+//
+// Binds the `Promise` VALUE to the native JS global (reference parity: Nim's
+// importjs). The checker's builtin Promise<T> TYPE already covers async/await
+// typing on js; this twin only supplies the static-combinator surface so
+// `Promise.all([...])` reaches the native global untouched. `extern class`
+// suppresses codegen; MS name === JS name binds without a `from` clause
+// (same convention as `console` in core/system/index.jms).
+
+export extern class Promise<T> {
+	static extern all<T>(promises: Promise<T>[]): Promise<T[]>;
+	static extern race<T>(promises: Promise<T>[]): Promise<T>;
+	static extern allSettled<T>(promises: Promise<T>[]): Promise<T[]>;
+	static extern any<T>(promises: Promise<T>[]): Promise<T>;
+	static extern resolve(value: T): Promise<T>;
+	static extern reject(error: string): Promise<void>;
+}
