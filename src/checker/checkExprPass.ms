@@ -2519,9 +2519,11 @@ function deriveCallBindings(
 // at each level so `number[][]` reads back as `number[][]`.
 function arrayDisplay(t: Type | null): string {
 	let inner = skipModifier(t);
-	if (inner !== null && inner.kind === TypeKind.Ref) inner = inner.typeReturn;
+	let peeledRef = false;
+	if (inner !== null && inner.kind === TypeKind.Ref) { inner = inner.typeReturn; peeledRef = true; }
 	if (inner !== null && (inner.kind === TypeKind.Array || inner.kind === TypeKind.Span
 			|| inner.kind === TypeKind.Ptr || inner.kind === TypeKind.SizedArray)) {
+		if (inner.kind === TypeKind.Array && !peeledRef) return "Vec<" + arrayDisplay(inner.typeReturn) + ">";
 		return arrayDisplay(inner.typeReturn) + "[]";
 	}
 	return typeDisplayName(t);

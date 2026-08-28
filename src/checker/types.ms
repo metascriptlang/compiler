@@ -2559,6 +2559,10 @@ export function typeDisplayName(t: Type | null): string {
 		for (let i = 0; i < depth; i += 1) { out = "Ptr<" + out + ">"; }
 		return out;
 	}
+	if (t.kind === TypeKind.Ref && t.typeReturn !== null && t.typeReturn.kind === TypeKind.Array) {
+		const refElem = t.typeReturn.typeReturn;
+		if (refElem !== null) return typeDisplayName(refElem) + "[]";
+	}
 	if (name !== "") return name;
 	return match (t.kind) {
 		TypeKind.Null => "null",
