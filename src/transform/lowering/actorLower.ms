@@ -930,11 +930,11 @@ function extractActorNewExprs(stmt: Node, names: string[], dispatchSyms: Symbol[
 	}
 	// Get the expression(s) from the statement. containsExprKind/replaceInExpr
 	// use mapExprChildren which only traverses expression nodes, not statement wrappers.
-	const targetExpr: Node = match (stmt.kind) {
+	const targetExpr: Node | null = match (stmt.kind) {
 		NodeKind.ExprStmt => (stmt.data as ExprStmtData).expr,
 		NodeKind.VariableDecl => (stmt.data as VariableDeclData).initializer,
 		NodeKind.ReturnStmt => (stmt.data as ReturnStmtData).argument,
-		_ => null as unknown as Node,
+		_ => null,
 	};
 	if (targetExpr === null) return [];
 	if (!containsExprKind(targetExpr, NodeKind.NewExpr)) return [];

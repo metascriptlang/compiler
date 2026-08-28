@@ -92,7 +92,7 @@ export function getMacroDeclModulePath(): string {
 // established workaround in this codebase (mirrors `registerMacroEvaluator`).
 
 export interface ComptimeOuterCtx {
-	program: Node;                    // surrounding Program AST (single-file mode minimum)
+	program: Node | null;             // surrounding Program AST (single-file mode minimum)
 	registry: ExportRegistry;         // null in single-file mode
 	graph: ModuleGraph;               // null in single-file mode
 	module: Module;                   // null in single-file mode
@@ -137,7 +137,7 @@ export function setOuterCheckContext(
 ): void {
 	if (_comptimeOuter === null) {
 		_comptimeOuter = {
-			program: null as unknown as Node,
+			program: null,
 			registry,
 			graph,
 			module: mod,

@@ -71,7 +71,7 @@ function transformForEngine(program: Node): Node {
 	// registry must be populated first (same as @comptime via evalComptimeBlock).
 	ensureHostTableLoaded();
 	const outer = getComptimeOuterCtx();
-	const savedOuterProgram = outer !== null ? outer.program : null as unknown as Node;
+	const savedOuterProgram = outer !== null ? outer.program : null;
 	const savedOuterPrelude = outer !== null ? outer.preludeCtx : null as unknown as CheckerContext;
 	const hasFullOuterCtx = outer !== null
 		&& outer.registry !== null

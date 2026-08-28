@@ -32,7 +32,7 @@ registerCoreParsers();
 
 // --- Unwrap ExportDecl / DecoratedDecl to find inner declaration of a given kind ---
 
-function unwrapToKind(node: Node, targetKind: NodeKind): Node {
+function unwrapToKind(node: Node, targetKind: NodeKind): Node | null {
 	if (node.kind === targetKind) return node;
 	return match (node.kind) {
 		NodeKind.ExportDecl => {
@@ -43,19 +43,19 @@ function unwrapToKind(node: Node, targetKind: NodeKind): Node {
 			const d = node.data as DecoratedDeclData;
 			return unwrapToKind(d.decoratedNode, targetKind);
 		},
-		_ => null as unknown as Node,
+		_ => null,
 	};
 }
 
-export function unwrapToFuncDecl(node: Node): Node {
+export function unwrapToFuncDecl(node: Node): Node | null {
 	return unwrapToKind(node, NodeKind.FunctionDecl);
 }
 
-export function unwrapToEnumDecl(node: Node): Node {
+export function unwrapToEnumDecl(node: Node): Node | null {
 	return unwrapToKind(node, NodeKind.EnumDecl);
 }
 
-export function unwrapToClassDecl(node: Node): Node {
+export function unwrapToClassDecl(node: Node): Node | null {
 	return unwrapToKind(node, NodeKind.ClassDecl);
 }
 
@@ -131,7 +131,7 @@ export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, 
 function compileClassConstructor(
 	funcMap: RaiserFuncMap, enumMap: RaiserFuncMap,
 	className: string, classBody: Node[],
-	ctorParams: string[], ctorBody: Node
+	ctorParams: string[], ctorBody: Node | null
 ): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
@@ -369,7 +369,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 				}
 				if (!hasCtor) {
 					const noParams: string[] = [];
-					const func = compileClassConstructor(globalFuncMap, globalEnumMap, cd.className, cd.classBody, noParams, null as unknown as Node);
+					const func = compileClassConstructor(globalFuncMap, globalEnumMap, cd.className, cd.classBody, noParams, null);
 					functions.push(func);
 				}
 			}

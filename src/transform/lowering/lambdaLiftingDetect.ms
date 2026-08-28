@@ -297,7 +297,7 @@ function detectAllWalk(node: Node | null): void {
 export function detectPass(program: Node): DetectionState {
 	const state = createDetectionState();
 	// Top-level walk: no enclosing fn yet (module scope).
-	detectPassWalk(program, state, createScopeStack(), null as unknown as Node);
+	detectPassWalk(program, state, createScopeStack(), null);
 	return state;
 }
 
@@ -318,7 +318,7 @@ function recordFnCaptures(node: Node, body: Node, params: string[], state: Detec
 
 // Recursive walker. `enclosingFn` is the nearest containing FunctionDecl /
 // MethodDecl / ConstructorDecl, or null at module scope.
-function detectPassWalk(node: Node, state: DetectionState, ss: ScopeStack, enclosingFn: Node): void {
+function detectPassWalk(node: Node, state: DetectionState, ss: ScopeStack, enclosingFn: Node | null): void {
 	if (node === null) return;
 	if (node.kind === NodeKind.FunctionDecl) {
 		const d = node.data as FunctionDeclData;

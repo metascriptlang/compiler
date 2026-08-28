@@ -1278,13 +1278,13 @@ function tryRewriteCompileError(node: Node): Node {
 	// 2-arg form: error("msg", astNode) — location from the input AST node.
 	// astNode.line and astNode.column carry the original source position.
 	const hasLoc = cd.arguments.length === 2;
-	const locNode = hasLoc ? cd.arguments[1] : null as unknown as Node;
+	const locNode = hasLoc ? cd.arguments[1] : null;
 	if (name === "error") {
 		// error("msg") → return { __compileError: 1, message: "msg" }
 		// error("msg", node) → return { ..., line, column, endLine, endColumn }
 		const keys: string[] = ["__compileError", "message"];
 		const props: Node[] = [mkNumber(1, loc), msgArg];
-		if (hasLoc) {
+		if (locNode !== null) {
 			keys.push("line");
 			props.push(mkMember(locNode, "line", loc));
 			keys.push("column");
@@ -1305,7 +1305,7 @@ function tryRewriteCompileError(node: Node): Node {
 	let warnPayload: Node = createNodeAt(NodeKind.BinaryExpr, {
 		operator: "+", left: mkString("__MACRO_WARN__:", loc), right: msgArg,
 	}, loc);
-	if (hasLoc) {
+	if (locNode !== null) {
 		// Append "\t" + line + "\t" + column for location extraction
 		warnPayload = createNodeAt(NodeKind.BinaryExpr, {
 			operator: "+", left: warnPayload, right: mkString("\t", loc),
