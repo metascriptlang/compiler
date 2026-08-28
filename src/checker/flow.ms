@@ -261,10 +261,10 @@ export function isDefinitelyNonNullAt(refNode: Node): boolean {
 
 // Walks back from `flow` looking for a dominating `ref !== null` TrueCondition
 // (or equivalent). Returns true iff such a condition exists on the path.
-function walkForNonNullCheck(state: FlowState, flow: FlowNode, refNode: Node): boolean {
+function walkForNonNullCheck(state: FlowState, flow: FlowNode | null, refNode: Node): boolean {
 	if (state.depth === 2000) return false;
 	state.depth = state.depth + 1;
-	let current: FlowNode = flow;
+	let current: FlowNode | null = flow;
 	let result = false;
 	while (true) {
 		if (current === null) { result = false; break; }
@@ -282,7 +282,7 @@ function walkForNonNullCheck(state: FlowState, flow: FlowNode, refNode: Node): b
 		}
 		if ((flags & FlowFlags.BranchLabel) !== 0) {
 			// All antecedents must prove non-null for the join to be non-null.
-			let list: FlowList = current.antecedents;
+			let list: FlowList | null = current.antecedents;
 			let allNonNull = list !== null;
 			while (list !== null) {
 				if (!walkForNonNullCheck(state, list.flow, refNode)) {
@@ -310,7 +310,7 @@ function walkForNonNullCheck(state: FlowState, flow: FlowNode, refNode: Node): b
 // Check whether `expr` is `ref !== null` (when assumeTrue) or `ref === null`
 // (when !assumeTrue). Handles symmetric left/right orderings. Recognizes
 // `!` negation and `&&` decomposition.
-function isNonNullCheckForRef(expr: Node, refNode: Node, assumeTrue: boolean): boolean {
+function isNonNullCheckForRef(expr: Node | null, refNode: Node, assumeTrue: boolean): boolean {
 	if (expr === null) return false;
 	if (expr.kind === NodeKind.UnaryExpr) {
 		const d = expr.data as UnaryExprData;
@@ -347,15 +347,15 @@ function isNonNullCheckForRef(expr: Node, refNode: Node, assumeTrue: boolean): b
 // Depth cap matches the reference: pathological inputs stop
 // analysis and fall back to the declared type rather than stack-overflow.
 
-function getTypeAtFlowNode(state: FlowState, flow: FlowNode): FlowType {
+function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 	if (state.depth === 2000) return flowType(state.declaredType, false);
 	state.depth = state.depth + 1;
-	let current: FlowNode = flow;
+	let current: FlowNode | null = flow;
 	let result: FlowType = flowType(state.declaredType, false);
 	// Track a pending Shared-flow node: if we detect one on entry, cache the
 	// final result under its key on exit. This memoizes expensive sub-walks
 	// within a single query.
-	let sharedFlow: FlowNode = null as unknown as FlowNode;
+	let sharedFlow: FlowNode | null = null;
 	// Linear condition narrowings collected while walking the antecedent chain,
 	// applied post-order after the loop. Converts a deep if/else/&&/|| spine from
 	// O(n) call-stack (the old getTypeAtFlowCondition recursion) to O(n) heap.
@@ -429,8 +429,9 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode): FlowType {
 			// it iteratively (mirrors TS getTypeAtFlowNode) so a long chain of
 			// sequential `if`s doesn't grow the call stack. Real merges (2+
 			// antecedents) still recurse into getTypeAtBranchLabel.
-			if (current.antecedents !== null && current.antecedents.next === null) {
-				current = current.antecedents.flow;
+			const ants = current.antecedents;
+			if (ants !== null && ants.next === null) {
+				current = ants.flow;
 				continue;
 			}
 			result = getTypeAtBranchLabel(state, current);
@@ -439,8 +440,9 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode): FlowType {
 		if ((flags & FlowFlags.LoopLabel) !== 0) {
 			// Single-antecedent loop label (no back-edge) is likewise a
 			// pass-through — iterate instead of entering the fixed-point.
-			if (current.antecedents !== null && current.antecedents.next === null) {
-				current = current.antecedents.flow;
+			const ants = current.antecedents;
+			if (ants !== null && ants.next === null) {
+				current = ants.flow;
 				continue;
 			}
 			// Phase 3: fixed-point via per-query loop stack.
@@ -574,7 +576,7 @@ function getTypeAtSwitchClause(state: FlowState, flow: FlowNode): FlowType {
 function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 	const antecedents: Type[] = [];
 	let anyIncomplete = false;
-	let list: FlowList = flow.antecedents;
+	let list: FlowList | null = flow.antecedents;
 	while (list !== null) {
 		// Skip Unreachable antecedents — they represent dead-code paths
 		// (e.g. the then-branch of `if (x === null) return;`) and contribute
@@ -677,7 +679,7 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 	let firstAnteType: FlowType = null as unknown as FlowType;
 	let widened = false;
 	const reversed: FlowNode[] = [];
-	let cursor: FlowList = flow.antecedents;
+	let cursor: FlowList | null = flow.antecedents;
 	while (cursor !== null) {
 		reversed.push(cursor.flow);
 		cursor = cursor.next;
@@ -759,7 +761,7 @@ export function unionOfTypes(types: Type[], parent: Type | null): Type {
 let _narrowDepth: int32 = 0;
 const NARROW_DEPTH_LIMIT: int32 = 20;
 
-export function narrowType(t: Type | null, expr: Node, refNode: Node, assumeTrue: boolean): Type | null {
+export function narrowType(t: Type | null, expr: Node | null, refNode: Node, assumeTrue: boolean): Type | null {
 	if (t === null || expr === null || refNode === null) return t;
 	if (_narrowDepth >= NARROW_DEPTH_LIMIT) return t;
 	_narrowDepth = _narrowDepth + 1;
@@ -1046,7 +1048,7 @@ function skipHiddenConv(n: Node): Node {
 	return walk;
 }
 
-function narrowByAssignment(node: Node, refNode: Node, declared: Type): Type | null {
+function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): Type | null {
 	if (node === null) return null;
 	if (node.kind === NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;

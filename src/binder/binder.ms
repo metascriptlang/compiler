@@ -38,11 +38,11 @@ import {
 function createFlowNode(flags: int32): FlowNode {
 	const f = new FlowNode();
 	f.flags = flags;
-	f.node = null as unknown as Node;
-	f.antecedent = null as unknown as FlowNode;
-	f.antecedents = null as unknown as FlowList;
-	f.switchClauseData = null as unknown as FlowSwitchClauseData;
-	f.reduceLabelData = null as unknown as FlowReduceLabelData;
+	f.node = null;
+	f.antecedent = null;
+	f.antecedents = null;
+	f.switchClauseData = null;
+	f.reduceLabelData = null;
 	return f;
 }
 
@@ -101,7 +101,8 @@ function createFlowSwitchClause(antecedent: FlowNode, switchStmt: Node, clauseSt
 	return f;
 }
 
-function addAntecedent(label: FlowNode, ante: FlowNode): void {
+function addAntecedent(label: FlowNode | null, ante: FlowNode | null): void {
+	if (label === null) return;
 	if (ante === null) return;
 	if ((ante.flags & FlowFlags.Unreachable) !== 0) return;
 	// Dedup by pointer equality
@@ -123,7 +124,7 @@ function finishFlowLabel(label: FlowNode): FlowNode {
 	return label;
 }
 
-function setFlowNodeReferenced(flow: FlowNode): void {
+function setFlowNodeReferenced(flow: FlowNode | null): void {
 	if (flow === null) return;
 	if ((flow.flags & FlowFlags.Referenced) === 0) {
 		flow.flags = flow.flags | FlowFlags.Referenced;
@@ -132,7 +133,7 @@ function setFlowNodeReferenced(flow: FlowNode): void {
 	}
 }
 
-function isReachable(flow: FlowNode): boolean {
+function isReachable(flow: FlowNode | null): boolean {
 	if (flow === null) return false;
 	return (flow.flags & FlowFlags.Unreachable) === 0;
 }
@@ -146,10 +147,10 @@ function isReachable(flow: FlowNode): boolean {
 
 export class BinderState {
 	currentFlow: FlowNode;
-	currentBreakTarget: FlowNode;     // break targets this label
-	currentContinueTarget: FlowNode;  // continue targets this label
-	currentReturnTarget: FlowNode;    // return targets this label (function-level)
-	currentExceptionTarget: FlowNode; // throw adds antecedent to this
+	currentBreakTarget: FlowNode | null;     // break targets this label
+	currentContinueTarget: FlowNode | null;  // continue targets this label
+	currentReturnTarget: FlowNode | null;    // return targets this label (function-level)
+	currentExceptionTarget: FlowNode | null; // throw adds antecedent to this
 	unreachableFlow: FlowNode;
 }
 
@@ -157,10 +158,10 @@ function createBinderState(): BinderState {
 	const s = new BinderState();
 	s.unreachableFlow = createUnreachableFlow();
 	s.currentFlow = s.unreachableFlow;
-	s.currentBreakTarget = null as unknown as FlowNode;
-	s.currentContinueTarget = null as unknown as FlowNode;
-	s.currentReturnTarget = null as unknown as FlowNode;
-	s.currentExceptionTarget = null as unknown as FlowNode;
+	s.currentBreakTarget = null;
+	s.currentContinueTarget = null;
+	s.currentReturnTarget = null;
+	s.currentExceptionTarget = null;
 	return s;
 }
 
@@ -196,10 +197,10 @@ function bindContainer(state: BinderState, container: Node, body: Node): void {
 	const savedException = state.currentExceptionTarget;
 
 	state.currentFlow = createStartFlow(container);
-	state.currentBreakTarget = null as unknown as FlowNode;
-	state.currentContinueTarget = null as unknown as FlowNode;
+	state.currentBreakTarget = null;
+	state.currentContinueTarget = null;
 	state.currentReturnTarget = createBranchLabel();
-	state.currentExceptionTarget = null as unknown as FlowNode;
+	state.currentExceptionTarget = null;
 
 	if (body !== null) bindStatement(state, body);
 

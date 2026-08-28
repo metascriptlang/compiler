@@ -457,7 +457,7 @@ export enum FlowFlags {
 // Duplicates are dropped at `addAntecedent` time (pointer-equality walk).
 export class FlowList {
 	flow: FlowNode;
-	next: FlowList;
+	next: FlowList | null;
 }
 
 // Synthetic node stored in FlowNode.node when Flags contains SwitchClause.
@@ -479,12 +479,12 @@ export class FlowReduceLabelData {
 
 export class FlowNode {
 	flags: int32;            // FlowFlags bitset
-	node: Node;              // associated AST node (variant-dependent meaning; may be synthetic FlowSwitchClauseData / FlowReduceLabelData holder)
-	antecedent: FlowNode;    // single parent (non-Label variants)
-	antecedents: FlowList;   // list of parents (BranchLabel / LoopLabel only)
+	node: Node | null;       // associated AST node (variant-dependent meaning; may be synthetic FlowSwitchClauseData / FlowReduceLabelData holder)
+	antecedent: FlowNode | null;    // single parent (non-Label variants)
+	antecedents: FlowList | null;   // list of parents (BranchLabel / LoopLabel only)
 	// Synthetic variant holders (null unless Flags has SwitchClause / ReduceLabel)
-	switchClauseData: FlowSwitchClauseData;
-	reduceLabelData: FlowReduceLabelData;
+	switchClauseData: FlowSwitchClauseData | null;
+	reduceLabelData: FlowReduceLabelData | null;
 }
 
 // ===== Node Interface =====
@@ -507,7 +507,7 @@ export class Node {
 	typeExprs: (Node | null)[] | null; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
 	paramLocations: SourceLocation[] | null; // Per-param source locations for DEF recording
 	typeArg: string; // Explicit generic type arg string (e.g. "Person" from parse<Person>()) — stored on AST, not side-channel
-	flowNode: FlowNode; // Flow graph node for narrowing queries. Null until binder runs; null for non-reference nodes.
+	flowNode: FlowNode | null; // Flow graph node for narrowing queries. Null until binder runs; null for non-reference nodes.
 	// Compiler-side round-trip slot mirrored here for wire parity: the compiler's
 	// internal Node keeps nodeType as a checker Type, so valueToNode stores the
 	// reconstructed type-AST in nodeTypeAst and nodeToASTLiteral falls back to it
@@ -656,7 +656,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	n.typeExprs = null;
 	n.paramLocations = null;
 	n.typeArg = "";
-	n.flowNode = null as unknown as FlowNode;
+	n.flowNode = null;
 	n.nodeTypeAst = null as unknown as Node;
 	return n;
 }
@@ -792,7 +792,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	n.typeExprs = null;
 	n.paramLocations = null;
 	n.typeArg = "";
-	n.flowNode = null as unknown as FlowNode;
+	n.flowNode = null;
 	n.nodeTypeAst = null as unknown as Node;
 	return n;
 }
