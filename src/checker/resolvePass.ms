@@ -77,7 +77,7 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: number, co
 	if (afterParen.charAt(0) !== "=" || afterParen.charAt(1) !== ">") return inferredType();
 	const retStr = afterParen.slice(2, afterParen.length).trim();
 
-	const returnType = (retStr !== "") ? resolveAnnotation(retStr, ctx, line, col) : voidType();
+	const returnType = (retStr !== "") ? resolveReturnAnnotation(retStr, ctx, line, col) : voidType();
 
 	// Standard reference parity: procedure type literals default to closure calling convention
 	if (paramsStr === "") return createClosureType([], [], returnType);
@@ -198,6 +198,15 @@ function warnOncePerLine(ctx: CheckerContext, msg: string, line: number, col: nu
 		if (e.line === line && e.message === msg) return;
 	}
 	addWarning(ctx, msg, line, col);
+}
+
+export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line: number, col: number): Type {
+	const t = resolveAnnotation(text, ctx, line, col);
+	if (t.kind === TypeKind.Span) {
+		const elem = t.typeReturn !== null ? typeDisplayName(t.typeReturn) : "T";
+		addError(ctx, "cannot return Span<" + elem + ">: a Span borrows memory owned by its source; return the owning container (Vec<" + elem + "> or " + elem + "[]) instead", line, col);
+	}
+	return t;
 }
 
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: number, col: number): Type {
@@ -1187,7 +1196,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 			predicateSentinel.typeName = isAssertion ? `asserts:${paramName}` : paramName;
 			predicateSentinel.typeReturn = targetType;
 		} else {
-			returnType = resolveAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column);
+			returnType = resolveReturnAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column);
 		}
 	} else {
 		returnType = inferredType();
@@ -1760,7 +1769,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			}
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
 			resolveTypeExprs(member.typeExprs, ctx);
-			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
+			const returnType = (md.methodReturnType !== "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);
@@ -1976,7 +1985,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 			}
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
 			resolveTypeExprs(member.typeExprs, ctx);
-			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
+			const returnType = (md.methodReturnType !== "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);

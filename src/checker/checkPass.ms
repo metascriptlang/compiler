@@ -22,7 +22,7 @@ import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/me
 import { isAssignable, explainStructuralPrefix, isObjectShapeMismatch } from "./compat";
 import { setConditionalAssignFn } from "./types";
 setConditionalAssignFn(isAssignable);
-import { resolveDeclarations, resolveAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
+import { resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { registerModuleCtx } from "./instantiate";
 import { getGenericDecl } from "../parser/context";
 import { splitTopLevel } from "../utils/string";
@@ -543,7 +543,7 @@ function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Ty
 		if (paramTypeStrs[i] === "") return null;
 		paramTypes.push(resolveAnnotation(paramTypeStrs[i], ctx, loc.line, loc.column));
 	}
-	return createClosureType(paramTypes, paramNames, resolveAnnotation(returnTypeStr, ctx, loc.line, loc.column));
+	return createClosureType(paramTypes, paramNames, resolveReturnAnnotation(returnTypeStr, ctx, loc.line, loc.column));
 }
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
@@ -808,6 +808,9 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 		&& sym.symbolType.typeReturn !== null
 		&& isUnresolvedType(sym.symbolType.typeReturn)) {
 		if (ctx.inferredReturn.kind !== TypeKind.Inferred) {
+			if (ctx.inferredReturn.kind === TypeKind.Span) {
+				addError(ctx, "function '" + d.fnName + "' cannot return " + formatTypeBrief(ctx.inferredReturn) + ": a Span borrows memory owned by its source; return the owning container instead", d.nameLocation.line, d.nameLocation.column);
+			}
 			sym.symbolType.typeReturn = ctx.inferredReturn;
 			for (const rs of ctx.inferredReturnStmts) {
 				const rsd = rs.data as ReturnStmtData;
