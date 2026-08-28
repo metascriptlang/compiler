@@ -9,8 +9,8 @@
 // - Zero-copy slicing: arr[start..end] with Span result → { data: arr.data + start, len: end - start }
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
-import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, VariableDeclData, Type, TypeKind } from "../../ast/node";
-import { createSizedArray, createPtr } from "../../checker/types";
+import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, Type, TypeKind } from "../../ast/node";
+import { createSizedArray, createPtr, peelToStructOrUnion } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
 import {
@@ -104,6 +104,7 @@ function isSpanValued(t: Type): boolean {
 function wrapSpanCoercions(node: Node): Node {
 	if (node.kind === NodeKind.VariableDecl) return wrapSpanDeclInit(node);
 	if (node.kind === NodeKind.BinaryExpr) return wrapSpanAssign(node);
+	if (node.kind === NodeKind.ObjectLiteral) return wrapSpanObjectFields(node);
 	if (node.kind !== NodeKind.CallExpr) return node;
 	const fnType = calleeFnType(node);
 	if (fnType === null) return node;
@@ -146,6 +147,41 @@ function wrapSpanDeclInit(node: Node): Node {
 	if (init !== null && init.kind !== NodeKind.HiddenStdConv && init.kind !== NodeKind.HiddenSubConv
 			&& init.nodeType !== null && !isSpanValued(init.nodeType)) {
 		vd.initializer = makeHiddenStdConv(init, declType, init.location);
+	}
+	return node;
+}
+
+function wrapSpanObjectFields(node: Node): Node {
+	if (node.nodeType !== null && node.nodeType.kind === TypeKind.Span) return node;
+	const t = peelToStructOrUnion(node.nodeType);
+	if (t === null || t.kind !== TypeKind.Struct) return node;
+	const names = t.typeNames;
+	const children = t.typeChildren;
+	if (names === null || children === null) return node;
+	const d = node.data as ObjectLiteralData;
+	let i = 0;
+	while (i < d.properties.length) {
+		const keyName = i < d.keys.length ? d.keys[i] : "";
+		if (keyName !== "" && keyName !== "..." && keyName !== "__computed__") {
+			let ni = 0;
+			while (ni < names.length) {
+				if (names[ni] === keyName) {
+					if (ni < children.length) {
+						const fieldType = children[ni];
+						if (fieldType !== null && fieldType.kind === TypeKind.Span && fieldType.typeReturn !== null) {
+							const prop = d.properties[i];
+							if (prop !== null && prop.kind !== NodeKind.HiddenStdConv && prop.kind !== NodeKind.HiddenSubConv
+									&& prop.nodeType !== null && !isSpanValued(prop.nodeType)) {
+								d.properties[i] = makeHiddenStdConv(prop, fieldType, prop.location);
+							}
+						}
+					}
+					break;
+				}
+				ni = ni + 1;
+			}
+		}
+		i = i + 1;
 	}
 	return node;
 }
