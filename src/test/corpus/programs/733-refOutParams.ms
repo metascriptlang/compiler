@@ -1,5 +1,4 @@
 // @stdout: ref-out-params done
-// @skip-js: Var params need a JS write-back strategy (no address-of on JS)
 
 // out/ref params lower to TypeKind.Var → T* in C. The chain that had to agree:
 // checkExprPass types OutExpr as its inner arg (not the Inferred sentinel), the

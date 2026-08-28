@@ -57,6 +57,7 @@ import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
 import { lowerTailCall } from "./lowering/tailCallLower";
 import { lowerParamReassign } from "./lowering/paramReassignLower";
+import { lowerJsVarParam } from "./lowering/jsVarParamLower";
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
@@ -114,6 +115,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerForOf(result, ctx); }
 	result = lowerTryExpr(result, ctx);
 	if (jsBackend) { result = lowerResultConstructors(result); }
+	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = lowerTailCall(result, ctx);
