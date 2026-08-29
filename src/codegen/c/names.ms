@@ -358,6 +358,7 @@ function isCStdlibName(name: string): boolean {
 		"read" | "write" | "open" | "close" | "stat" | "fstat" | "lstat" => true,
 		"getenv" | "setenv" | "system" | "remove" | "rename" => true,
 		"isdigit" | "isalpha" | "isalnum" | "isspace" | "toupper" | "tolower" => true,
+		"stdin" | "stdout" | "stderr" => true,
 		_ => false,
 	};
 }
