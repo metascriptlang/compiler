@@ -19,18 +19,18 @@ export extern function endsWith(this s: string, suffix: string): boolean from "m
 export extern function contains(this s: string, sub: string): boolean from "msStringContains";
 
 // ===== Search =====
-export extern function indexOf(this s: string, sub: string, start: int64 = 0): int64 from "msStringIndexOf";
-export extern function lastIndexOf(this s: string, sub: string, startIdx: int64 = -1): int64 from "msStringLastIndexOf";
-export extern function count(this s: string, sub: string): int64 from "msStringCount";
+export extern function indexOf(this s: string, sub: string, start: int32 = 0): int32 from "msStringIndexOf";
+export extern function lastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 from "msStringLastIndexOf";
+export extern function count(this s: string, sub: string): int32 from "msStringCount";
 
 // ===== Extraction =====
-export extern function charAt(this s: string, idx: int64): string from "msStringCharAt";
-export extern function charCodeAt(this s: string, idx: int64): int32 from "msStringCharCodeAt";
-export extern function byteLength(this s: string): int64 from "msStringByteLength";
-export extern function byteAt(this s: string, idx: int64): int32 from "msStringByteAt";
-export extern function byteSlice(this s: string, start: int64, end: int64): string from "msStringByteSlice";
-export extern function slice(this s: string, start: int64, end: int64): string from "msStringSlice";
-export extern function substring(this s: string, start: int64, end: int64): string from "msStringSubstring";
+export extern function charAt(this s: string, idx: int32): string from "msStringCharAt";
+export extern function charCodeAt(this s: string, idx: int32): int32 from "msStringCharCodeAt";
+export extern function byteLength(this s: string): int32 from "msStringByteLength";
+export extern function byteAt(this s: string, idx: int32): int32 from "msStringByteAt";
+export extern function byteSlice(this s: string, start: int32, end: int32): string from "msStringByteSlice";
+export extern function slice(this s: string, start: int32, end: int32): string from "msStringSlice";
+export extern function substring(this s: string, start: int32, end: int32): string from "msStringSubstring";
 
 // ===== Transformation =====
 export extern function toLowerCase(this s: string): string from "msStringToLower";
@@ -42,8 +42,8 @@ export extern function repeat(this s: string, count: int32): string from "msStri
 export extern function replace(this s: string, search: string, replacement: string): string from "msStringReplace";
 export extern function replaceAll(this s: string, search: string, replacement: string): string from "msStringReplaceAll";
 export extern function reverse(this s: string): string from "msStringReverse";
-export extern function padStart(this s: string, targetLen: int64, pad: string): string from "msStringPadStart";
-export extern function padEnd(this s: string, targetLen: int64, pad: string): string from "msStringPadEnd";
+export extern function padStart(this s: string, targetLen: int32, pad: string): string from "msStringPadStart";
+export extern function padEnd(this s: string, targetLen: int32, pad: string): string from "msStringPadEnd";
 
 // ===== Splitting =====
 export extern function split(this s: string, delimiter: string): string[] from "msStringSplit";

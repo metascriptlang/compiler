@@ -45,17 +45,17 @@ export function asString(this arr: uint8[]): string {
 	unreachable;
 }
 
-export function byteLength(this s: string): int64 {
-	return wtf8Cached(s).length as int64;
+export function byteLength(this s: string): int32 {
+	return wtf8Cached(s).length;
 }
 
-export function byteAt(this s: string, idx: int64): int32 {
+export function byteAt(this s: string, idx: int32): int32 {
 	const b = wtf8Cached(s);
 	if (idx < 0 || idx >= b.length) return -1;
 	return b[idx] as int32;
 }
 
-export function byteSlice(this s: string, start: int64, end: int64): string {
+export function byteSlice(this s: string, start: int32, end: int32): string {
 	const b = wtf8Cached(s);
 	const sub: uint8[] = [];
 	for (let i = start < 0 ? 0 : start; i < end && i < b.length; i += 1) {
@@ -91,27 +91,27 @@ export function msStringEquals(a: string, b: string): boolean {
 
 // ===== String Extension Methods (after lowering: s.method(args) → method(s, args)) =====
 
-export function charAt(this s: string, idx: int64): string {
+export function charAt(this s: string, idx: int32): string {
 	@emit(`return (${idx} < 0 || ${idx} >= ${s}.length) ? "" : ${s}.charAt(${idx});`);
 	unreachable;
 }
 
-export function charCodeAt(this s: string, idx: int64): int32 {
+export function charCodeAt(this s: string, idx: int32): int32 {
 	@emit(`return (${idx} < 0 || ${idx} >= ${s}.length) ? -1 : ${s}.charCodeAt(${idx});`);
 	unreachable;
 }
 
-export function indexOf(this s: string, sub: string, start: int64 = 0): int64 {
+export function indexOf(this s: string, sub: string, start: int32 = 0): int32 {
 	@emit(`return ${s}.indexOf(${sub}, ${start});`);
 	unreachable;
 }
 
-export function lastIndexOf(this s: string, sub: string, startIdx: int64 = -1): int64 {
+export function lastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 {
 	@emit(`return ${startIdx} < 0 ? ${s}.lastIndexOf(${sub}) : ${s}.lastIndexOf(${sub}, ${startIdx});`);
 	unreachable;
 }
 
-export function slice(this s: string, start: int64, end: int64): string {
+export function slice(this s: string, start: int32, end: int32): string {
 	@emit(`return ${s}.slice(${start}, ${end});`);
 	unreachable;
 }
@@ -120,16 +120,16 @@ export function equals(this s: string, other: string): boolean {
 	return msStringEquals(s, other);
 }
 
-export function substring(this s: string, start: int64, end: int64): string {
+export function substring(this s: string, start: int32, end: int32): string {
 	return s.slice(start, end);
 }
 
-export function padStart(this s: string, targetLen: int64, pad: string): string {
+export function padStart(this s: string, targetLen: int32, pad: string): string {
 	@emit(`return ${s}.padStart(${targetLen}, ${pad});`);
 	unreachable;
 }
 
-export function padEnd(this s: string, targetLen: int64, pad: string): string {
+export function padEnd(this s: string, targetLen: int32, pad: string): string {
 	@emit(`return ${s}.padEnd(${targetLen}, ${pad});`);
 	unreachable;
 }
@@ -146,7 +146,7 @@ export function parseInt(this s: string): int64 {
 }
 
 // Native strings carry no separate allocation — capacity is the byte length.
-export function capacity(this s: string): int64 {
+export function capacity(this s: string): int32 {
 	return s.byteLength();
 }
 
@@ -207,7 +207,7 @@ export function msStringHash(s: string): int32 {
 }
 
 // .length on string → UTF-16 code units (LANG.md Index-Space Contract) = native.
-export function msStringLength(s: string): int64 {
+export function msStringLength(s: string): int32 {
 	@emit(`return ${s}.length;`);
 	unreachable;
 }

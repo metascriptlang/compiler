@@ -27,13 +27,13 @@ export extern function equals(this s: string, other: string): boolean from "msSt
  * @param sub The substring to search for in the string.
  * @param start The index at which to begin searching the String object. If omitted, search starts at the beginning of the string.
  */
-export extern function indexOf(this s: string, sub: string, start: int64 = 0): int64 from "msStringIndexOf";
+export extern function indexOf(this s: string, sub: string, start: int32 = 0): int32 from "msStringIndexOf";
 
 /**
  * Returns the last occurrence of a substring in the string.
  * @param sub The substring to search for.
  */
-export extern function lastIndexOf(this s: string, sub: string, startIdx: int64 = -1): int64 from "msStringLastIndexOf";
+export extern function lastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 from "msStringLastIndexOf";
 
 // ===== Extraction =====
 
@@ -41,27 +41,27 @@ export extern function lastIndexOf(this s: string, sub: string, startIdx: int64 
  * Returns the character at the specified index.
  * @param idx The zero-based index of the desired character.
  */
-export extern function charAt(this s: string, idx: int64): string from "msStringCharAt";
+export extern function charAt(this s: string, idx: int32): string from "msStringCharAt";
 
 /**
  * Returns the Unicode value of the character at the specified location.
  * @param idx The zero-based index of the desired character. If there is no character at the specified index, NaN is returned.
  */
-export extern function charCodeAt(this s: string, idx: int64): int32 from "msStringCharCodeAt";
+export extern function charCodeAt(this s: string, idx: int32): int32 from "msStringCharCodeAt";
 
 /**
  * Returns a section of a string.
  * @param start The index to the beginning of the specified portion of stringObj.
  * @param end The index to the end of the specified portion of stringObj. The substring includes the characters up to, but not including, the character indicated by end.
  */
-export extern function slice(this s: string, start: int64, end: int64): string from "msStringSlice";
+export extern function slice(this s: string, start: int32, end: int32): string from "msStringSlice";
 
 /**
  * Returns the substring at the specified location within a String object.
  * @param start The zero-based index number indicating the beginning of the substring.
  * @param end Zero-based index number indicating the end of the substring. The substring includes the characters up to, but not including, the character indicated by end.
  */
-export extern function substring(this s: string, start: int64, end: int64): string from "msStringSubstring";
+export extern function substring(this s: string, start: int32, end: int32): string from "msStringSubstring";
 
 // ===== Transformation =====
 
@@ -71,7 +71,7 @@ export extern function substring(this s: string, start: int64, end: int64): stri
  * @param targetLen The length of the resulting string once the current string has been padded.
  * @param pad The string to pad the current string with.
  */
-export extern function padStart(this s: string, targetLen: int64, pad: string): string from "msStringPadStart";
+export extern function padStart(this s: string, targetLen: int32, pad: string): string from "msStringPadStart";
 
 /**
  * Pads the current string with a given string (possibly repeated) so that the resulting string reaches a given length.
@@ -79,7 +79,7 @@ export extern function padStart(this s: string, targetLen: int64, pad: string): 
  * @param targetLen The length of the resulting string once the current string has been padded.
  * @param pad The string to pad the current string with.
  */
-export extern function padEnd(this s: string, targetLen: int64, pad: string): string from "msStringPadEnd";
+export extern function padEnd(this s: string, targetLen: int32, pad: string): string from "msStringPadEnd";
 
 // ===== Splitting =====
 
@@ -94,10 +94,10 @@ export extern function parseInt(this s: string): int64 from "msStringParseInt";
 // ===== Capacity & Length =====
 
 /** Returns the allocated capacity of the string buffer. */
-export extern function capacity(this s: string): int64 from "msStringCapacity";
+export extern function capacity(this s: string): int32 from "msStringCapacity";
 
 /** Sets the length of the string, truncating or extending as needed. */
-export extern function setLength(this s: string, newLen: int64): void from "&msStringSetLength";
+export extern function setLength(this s: string, newLen: int32): void from "&msStringSetLength";
 
 // ===== In-Place Append =====
 
@@ -129,17 +129,17 @@ export extern function String<T>(val: T): string;
 export extern function asBytes(this s: string): uint8[] from "msAsBytes";
 
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
-export function byteLength(this s: string): int64 {
-	return s.asBytes().length as int64;
+export function byteLength(this s: string): int32 {
+	return s.asBytes().length;
 }
 
-export function byteAt(this s: string, idx: int64): int32 {
+export function byteAt(this s: string, idx: int32): int32 {
 	const b = s.asBytes();
 	if (idx < 0 || idx >= b.length) return -1;
 	return b[idx] as int32;
 }
 
-export function byteSlice(this s: string, start: int64, end: int64): string {
+export function byteSlice(this s: string, start: int32, end: int32): string {
 	const b = s.asBytes();
 	const result: uint8[] = [];
 	let i = start;

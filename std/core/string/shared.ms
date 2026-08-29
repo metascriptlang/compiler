@@ -42,7 +42,7 @@ export function contains(this s: string, sub: string): boolean {
 	return s.byteIndexOf(sub, 0) >= 0;
 }
 
-export function byteIndexOf(this s: string, sub: string, start: int64 = 0): int64 {
+export function byteIndexOf(this s: string, sub: string, start: int32 = 0): int32 {
 	const sb = s.asBytes();
 	const xb = sub.asBytes();
 	if (xb.length === 0) return start;
@@ -62,10 +62,10 @@ export function byteIndexOf(this s: string, sub: string, start: int64 = 0): int6
 	return -1;
 }
 
-export function byteLastIndexOf(this s: string, sub: string, startIdx: int64 = -1): int64 {
+export function byteLastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 {
 	const sb = s.asBytes();
 	const xb = sub.asBytes();
-	if (xb.length === 0) return sb.length as int64;
+	if (xb.length === 0) return sb.length;
 	if (xb.length > sb.length) return -1;
 	let i = sb.length - xb.length;
 	if (startIdx >= 0 && startIdx < i) i = startIdx;
@@ -76,18 +76,18 @@ export function byteLastIndexOf(this s: string, sub: string, startIdx: int64 = -
 			if (sb[i + j] !== xb[j]) { found = false; break; }
 			j = j + 1;
 		}
-		if (found) return i as int64;
+		if (found) return i;
 		i = i - 1;
 	}
 	return -1;
 }
 
 // Non-overlapping occurrences. An empty needle counts every gap: byteLength + 1.
-export function count(this s: string, sub: string): int64 {
+export function count(this s: string, sub: string): int32 {
 	const sb = s.asBytes();
 	const xb = sub.asBytes();
-	if (xb.length === 0) return (sb.length + 1) as int64;
-	let n: int64 = 0;
+	if (xb.length === 0) return sb.length + 1;
+	let n: int32 = 0;
 	let pos = 0;
 	while (pos <= sb.length - xb.length) {
 		const found = s.byteIndexOf(sub, pos);
