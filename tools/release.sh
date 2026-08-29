@@ -235,6 +235,15 @@ collect_vendor() {
     done
 }
 
+# Collect cparse builtin system-header shims: the module loader resolves
+# <install-root>/src/module/cparse/include for every C header import, so a
+# fresh install without it fails on any std .cms ('stdint.h' file not found).
+collect_cparse_include() {
+    local dest="$1"
+    mkdir -p "$dest/src/module/cparse/include"
+    cp "$ROOT/src/module/cparse/include/"*.h "$dest/src/module/cparse/include/"
+}
+
 # Build a single target
 build_target() {
     local target="$1"
@@ -290,6 +299,9 @@ build_target() {
 
     echo "  collecting vendor/..."
     collect_vendor "$stage"
+
+    echo "  collecting cparse include shims..."
+    collect_cparse_include "$stage"
 
     # Package: .zip for Windows (convention + native double-click support),
     # .tar.gz for macOS/Linux (preserves symlinks, executable bit, smaller).
