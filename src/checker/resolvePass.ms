@@ -622,6 +622,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 					}
 				}
 				const gi2 = createGenericInstance(baseType2, resolvedArgs);
+				gi2.typeName = baseName;
 				instantiateGenericBody(gi2, genericParams);
 				return isRefBase2 ? createRef(gi2) : gi2;
 			}
