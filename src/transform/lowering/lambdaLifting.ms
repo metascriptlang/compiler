@@ -502,12 +502,13 @@ function chainWalkFrom(access0: Node, curType0: Type, fieldName: string, chainNa
 		k += 1;
 	}
 	let result = makeMember(access, fieldName, loc);
-	result.nodeType = nodeOriginalType !== null ? nodeOriginalType : envFieldType(curType, fieldName);
+	const declaredFt = envFieldType(curType, fieldName);
+	result.nodeType = declaredFt !== null ? declaredFt : nodeOriginalType;
 	// If the storing env keeps this field as a ccgIntroducedPtr (Array/Union/
 	// Span as `Ptr<T>`), one extra deref recovers T.
 	if (isEnvPtrField(curType, fieldName)) {
 		result = makeHiddenDeref(result, loc);
-		result.nodeType = nodeOriginalType !== null ? nodeOriginalType : envFieldType(curType, fieldName);
+		result.nodeType = declaredFt !== null ? declaredFt : nodeOriginalType;
 	}
 	return result;
 }
@@ -561,11 +562,12 @@ function rewriteNode(
 			cast.nodeType = ptrType;
 			const deref = makeHiddenDeref(cast, node.location);
 			let result = makeMember(deref, d.name, node.location);
-			result.nodeType = node.nodeType !== null ? node.nodeType : envFieldType(envStructType, d.name);
+			const declaredFt = envFieldType(envStructType, d.name);
+			result.nodeType = declaredFt !== null ? declaredFt : node.nodeType;
 			// Ptr field (pointer-promoted param capture): extra deref to get T from T*
 			if (isEnvPtrField(envStructType, d.name)) {
 				result = makeHiddenDeref(result, node.location);
-				result.nodeType = node.nodeType !== null ? node.nodeType : envFieldType(envStructType, d.name);
+				result.nodeType = declaredFt !== null ? declaredFt : node.nodeType;
 			}
 			return result;
 		}
@@ -605,11 +607,12 @@ function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 			const envIdent = makeIdent(rewrite.envVarName, node.location);
 			envIdent.nodeType = createRef(rewrite.envStructType);
 			let result = makeMember(envIdent, d.name, node.location);
-			result.nodeType = node.nodeType !== null ? node.nodeType : envFieldType(rewrite.envStructType, d.name);
+			const declaredFt = envFieldType(rewrite.envStructType, d.name);
+			result.nodeType = declaredFt !== null ? declaredFt : node.nodeType;
 			// Ptr field (ccgIntroducedPtr capture): extra deref to get T from T*
 			if (isEnvPtrField(rewrite.envStructType, d.name)) {
 				result = makeHiddenDeref(result, node.location);
-				result.nodeType = node.nodeType !== null ? node.nodeType : envFieldType(rewrite.envStructType, d.name);
+				result.nodeType = declaredFt !== null ? declaredFt : node.nodeType;
 			}
 			return result;
 		}
