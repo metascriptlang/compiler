@@ -967,7 +967,7 @@ function createSnapshotPairEnv(captures: NameSet, capturedIdents: Node[], state:
 // Creates the shared env struct type and hoisted declaration for a function.
 // Called after detectAllCaptures finds captures, before walkLiftBody.
 
-function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdents: Node[], loc: SourceLocation, pairEnv: PreCreatedEnv): void {
+function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdents: Node[], loc: SourceLocation, pairEnv: PreCreatedEnv, ownLocalNames: NameSet): void {
 	// The env `_envP` will hold at body entry: the pre-created pair env at loop
 	// sites, else the enclosing shared env. `$up` wiring and the ancestor chain
 	// below must agree with that identity — a mismatch is an out-of-bounds cast.
@@ -1025,7 +1025,9 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 		// Ancestor capture: an enclosing env already stores this var. Do NOT add a
 		// field here — it is read via the `$up` walk, never copied (Nim parity).
 		let isAncestor = false;
-		for (const at of parentChainTypes) { if (envHasField(at, name)) { isAncestor = true; break; } }
+		if (ownLocalNames === null || !nameSetContains(ownLocalNames, name)) {
+			for (const at of parentChainTypes) { if (envHasField(at, name)) { isAncestor = true; break; } }
+		}
 		if (isAncestor) continue;
 		envFields.push(name);
 		envFieldTypes.push(lookupVarType(state, name));
@@ -1348,7 +1350,7 @@ function walkLift(node: Node, state: LiftState): void {
 			const fnLoc = node.location;
 			walkLiftBody(d.fnBody, state, () => {
 				if (allCaptures.items.length > 0) {
-					setupSharedEnv(state, allCaptures, allCapturedIdents, fnLoc, null as unknown as PreCreatedEnv);
+					setupSharedEnv(state, allCaptures, allCapturedIdents, fnLoc, null as unknown as PreCreatedEnv, null as unknown as NameSet);
 				}
 			});
 			popFuncBoundary(state.ss);
@@ -1494,7 +1496,7 @@ function walkLift(node: Node, state: LiftState): void {
 			const testLoc = node.location;
 			walkLiftBody(d.testBody, state, () => {
 				if (allCaptures.items.length > 0) {
-					setupSharedEnv(state, allCaptures, allCapturedIdents, testLoc, null as unknown as PreCreatedEnv);
+					setupSharedEnv(state, allCaptures, allCapturedIdents, testLoc, null as unknown as PreCreatedEnv, null as unknown as NameSet);
 				}
 			});
 			popFuncBoundary(state.ss);
@@ -1673,6 +1675,35 @@ function restoreSharedEnv(state: LiftState, snap: SharedEnvSnapshot): void {
 // when detection found nested-capture refs, then restores currentFnName /
 // currentParams.
 //
+function collectOwnDeclNames(node: Node, acc: NameSet): void {
+	if (node === null) return;
+	match (node.kind) {
+		NodeKind.VariableDecl => {
+			const d = node.data as VariableDeclData;
+			nameSetAdd(acc, d.declName);
+			collectOwnDeclNames(d.initializer, acc);
+		},
+		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction | NodeKind.MethodDecl | NodeKind.ConstructorDecl => {},
+		NodeKind.BlockStmt => {
+			const d = node.data as BlockStmtData;
+			for (const s of d.statements) { collectOwnDeclNames(s, acc); }
+		},
+		NodeKind.IfStmt => {
+			const d = node.data as IfStmtData;
+			collectOwnDeclNames(d.consequent, acc);
+			collectOwnDeclNames(d.alternate, acc);
+		},
+		NodeKind.WhileStmt => { collectOwnDeclNames((node.data as WhileStmtData).whileBody, acc); },
+		NodeKind.TryCatchStmt => {
+			const d = node.data as TryCatchStmtData;
+			collectOwnDeclNames(d.tryBody, acc);
+			collectOwnDeclNames(d.catchBody, acc);
+			collectOwnDeclNames(d.finallyBody, acc);
+		},
+		_ => {},
+	};
+}
+
 // `lifter` is the per-kind closure constructor (liftArrow vs liftFuncExpr).
 // `body` is guaranteed BlockStmt via `normalizeArrowBodies`.
 function liftCapturingClosureBody(
@@ -1698,6 +1729,9 @@ function liftCapturingClosureBody(
 	// (already filtered by `definedAtOrAboveInitial`).
 	const ownCaptures = detectionGetCaptures(state.detection, node);
 	const ownCapturedIdents = detectionGetCapturedIdents(state.detection, node);
+	const ownLocals = createNameSet();
+	for (const p of params) nameSetAdd(ownLocals, p);
+	collectOwnDeclNames(body, ownLocals);
 	const savedFnName = state.currentFnName;
 	const savedCurrentParams = state.currentParams;
 	// Loop-site closure: pre-create the snapshot pair env from the FULL capture
@@ -1713,6 +1747,7 @@ function liftCapturingClosureBody(
 		for (const dn of direct.items) { nameSetAdd(fullSet, dn); }
 		for (const di of directIdents) { fullIdents.push(di); }
 		for (const on of ownCaptures.items) {
+			if (nameSetContains(ownLocals, on)) continue;
 			if (!nameSetContains(fullSet, on)) {
 				nameSetAdd(fullSet, on);
 				const oi = findCapturedIdent(on, ownCapturedIdents);
@@ -1733,7 +1768,7 @@ function liftCapturingClosureBody(
 	const loc = node.location;
 	walkLiftBody(body, state, () => {
 		if (ownCaptures.items.length > 0) {
-			setupSharedEnv(state, ownCaptures, ownCapturedIdents, loc, preEnv);
+			setupSharedEnv(state, ownCaptures, ownCapturedIdents, loc, preEnv, ownLocals);
 		}
 	});
 	state.capturedIdents = [];
