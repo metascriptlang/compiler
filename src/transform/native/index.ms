@@ -22,6 +22,7 @@ import { coerceOptionals } from "./optionalCoercion";
 import { lowerBuiltins } from "./builtinLower";
 import { lowerStringOps } from "./stringOpLower";
 import { lowerEnumToString } from "./enumToStringLower";
+import { insertVarParamDerefs } from "./varParamDeref";
 
 export function transformForNative(program: Node, ctx: TransformContext): Node {
 	let result = markClosureCalls(program, ctx);
@@ -32,5 +33,6 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	// Last: injection must run after every pass that can request an Enum_toString
 	// (builtinLower/debugLower here + the stage-1 lowerBuiltins run in transformProgram).
 	result = lowerEnumToString(result, ctx);
+	result = insertVarParamDerefs(result, ctx);
 	return result;
 }

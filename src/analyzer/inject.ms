@@ -1853,6 +1853,13 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 		return moveOrCopy(stmt, bd.left, "", bd.right, rcInfo, MOC_IS_FIELD, idx, stmts, dctx, loc);
 	}
 
+	if (bd.left.kind === NodeKind.HiddenDeref) {
+		const rcInfo = bd.left.nodeType !== null ? classifyType(bd.left.nodeType, dctx.ctx) : noRcInfo();
+		if (!rcInfo.needsCleanup) return stmt;
+		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);
+		return moveOrCopy(stmt, bd.left, "", bd.right, rcInfo, MOC_IS_FIELD, idx, stmts, dctx, loc);
+	}
+
 	if (bd.left.kind !== NodeKind.Identifier) return stmt;
 	const leftD = bd.left.data as IdentifierData;
 
