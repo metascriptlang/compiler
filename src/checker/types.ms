@@ -930,6 +930,24 @@ export function peelToStructOrUnion(t: Type | null): Type | null {
 	return cur;
 }
 
+// A generic instantiation whose body has no nominal Struct/Union carries no
+// identity of its own: `type Brand<T> = T` means `Brand<number>` IS number.
+// Reference parity: ccgtypes.nim `irrelevantForBackend` + getSimpleTypeDesc
+// `of tyGenericInst: skipModifier typ`.
+export function peelTransparentInstance(t: Type): Type {
+	let cur: Type = t;
+	let _g = 0;
+	while (_g < PEEL_MAX_DEPTH) {
+		_g = _g + 1;
+		if (cur.kind !== TypeKind.GenericInstance || cur.typeReturn === null) return cur;
+		const nominal = peelToStructOrUnion(cur.typeExtra);
+		if (nominal !== null
+			&& (nominal.kind === TypeKind.Struct || nominal.kind === TypeKind.Union)) return cur;
+		cur = cur.typeReturn;
+	}
+	return cur;
+}
+
 // Detect a literal-typed discriminant field shared by every variant. Variants
 // must each have the SAME field name with the requested `literalKind` type
 // and DISTINCT values (different `typeName` strings). Returns the field name

@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase, isMaybeType } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase, isMaybeType, peelTransparentInstance } from "./types";
 
 
 // ===== Assignability =====
@@ -218,6 +218,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	if (target.kind === TypeKind.Varargs && target.typeChildren.length > 0) {
 		target = target.typeChildren[0];
 	}
+
+	source = peelTransparentInstance(source);
+	target = peelTransparentInstance(target);
 
 	// Never is the bottom type — assignable TO everything. After exhaustive
 	// narrowing (all union variants handled), the residual type is never.
