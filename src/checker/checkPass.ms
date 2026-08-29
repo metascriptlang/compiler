@@ -30,7 +30,8 @@ import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference } from "./flow";
 import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMutationLocation } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
-import { checkExpr, checkEnumExhaustiveness, checkDuplicatePatterns, fitNode, estimateExprEndCol, joinBranchTypes, fitJoinedBranch, stampCallSite } from "./checkExprPass";
+import { checkExpr, checkEnumExhaustiveness, checkDuplicatePatterns, estimateExprEndCol, stampCallSite } from "./checkExprPass";
+import { fitNode, joinBranchTypes, fitJoinedBranch } from "./fit";
 import { registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { forEachChild } from "../ast/visitor";
