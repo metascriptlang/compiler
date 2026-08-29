@@ -29,6 +29,12 @@ async function main(): Promise<void> {
     let s = 0;
     for (const f of fns) { const v = await f(10); s = s + v; }
     if (s !== 36) { throw "GUARD RED: loop-captured arrows s=" + s; }
+    const gaw: IntFn = async (x) => {
+        const y = await g1(x);
+        return y * 2;
+    };
+    const r7 = await gaw(20);
+    if (r7 !== 40) { throw "GUARD RED: await-inside-arrow r7=" + r7; }
     console.log("asyncArrowContextual ok");
 }
 await main();
