@@ -254,6 +254,17 @@ export function buildAnonStructDef(structName: string, rawName: string): string 
 // ===== Type Signature Key =====
 // Generates a unique string key for a Type (used for cache lookups).
 
+function structKeyIdentity(t: Type): string {
+	if (t.sym !== null) return mangledTypeName(t.sym, t.typeName);
+	if (t.typeNames !== null && t.typeNames.length > 0) {
+		const byShape = getGlobalTypeOwnerByShape(t.typeName, t.typeNames.join(","));
+		if (byShape !== "") return mangleQualified(t.typeName, mangleModuleName(byShape));
+	}
+	const owner = getGlobalTypeOwner(t.typeName);
+	if (owner !== "") return mangleQualified(t.typeName, mangleModuleName(owner));
+	return mangledTypeName(t.sym, t.typeName);
+}
+
 export function typeKey(t: Type | null): string {
 	if (t === null) return "null";
 	return match (t.kind) {
@@ -282,9 +293,8 @@ export function typeKey(t: Type | null): string {
 			// Anonymous/structural types: use structural key to distinguish
 			if (isAnonTypeName(t.typeName)) {
 				return `anon(${anonStructuralKey(t)})`;
-			} else {
-				return "object:" + t.typeName;
 			}
+			return "object:" + structKeyIdentity(t);
 		},
 		TypeKind.Array => {
 			const elemKey = typeKey(t.typeReturn);

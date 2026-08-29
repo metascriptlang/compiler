@@ -333,7 +333,7 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 	const name = mangledTypeName(declTypeSym(node), d.interfaceName);
 
 	// Skip if already declared (check both declaration set and type cache)
-	const ifaceKey = "object:" + d.interfaceName;
+	const ifaceKey = "object:" + name;
 	if (nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, ifaceKey)) return;
 	nameSetAdd(g.declaredThings, name);
 
@@ -383,7 +383,7 @@ function genClassDecl(g: CGen, node: Node): void {
 	const name = mangledTypeName(declTypeSym(node), d.className);
 
 	// Check if struct type already declared (by genObjectType for generic instances)
-	const classKey = "object:" + d.className;
+	const classKey = "object:" + name;
 	const typeAlreadyDeclared = nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, classKey);
 	// Always record ownership — declaredThings is the module's declaration claim,
 	// used by ensureTypeInfoDef to decide which module emits msTypeInfo definitions.
