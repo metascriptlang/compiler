@@ -5,6 +5,7 @@
 
 import { Type, TypeKind } from "../ast/node";
 import { hashToBase36 } from "std/hash";
+import { getGlobalTypeOwner, getGlobalTypeOwnerByShape } from "../checker/context";
 
 // ===== Data Structures =====
 
@@ -49,6 +50,15 @@ function monoStructuralKey(t: Type): string {
 	return key;
 }
 
+function monoOwnerPath(t: Type): string {
+	if (t.sym !== null && t.sym.modulePath !== "") return t.sym.modulePath;
+	if (t.typeNames !== null && t.typeNames.length > 0) {
+		const byShape = getGlobalTypeOwnerByShape(t.typeName, t.typeNames.join(","));
+		if (byShape !== "") return byShape;
+	}
+	return getGlobalTypeOwner(t.typeName);
+}
+
 // C-safe type key for name mangling and dedup.
 export function monoTypeKey(t: Type | null): string {
 	if (t === null) return "null";
@@ -73,7 +83,12 @@ export function monoTypeKey(t: Type | null): string {
 		TypeKind.Array => "arr_" + monoTypeKey(t.typeReturn),
 		TypeKind.Ref => "ref_" + monoTypeKey(t.typeReturn),
 		TypeKind.Ptr => "ptr_" + monoTypeKey(t.typeReturn),
-		TypeKind.Struct | TypeKind.Enum => t.typeName !== "" ? t.typeName : "anon" + hashToBase36(monoStructuralKey(t)),
+		TypeKind.Struct | TypeKind.Enum => {
+			if (t.typeName === "") return "anon" + hashToBase36(monoStructuralKey(t));
+			const owner = monoOwnerPath(t);
+			if (owner !== "") return t.typeName + "_" + hashToBase36(owner);
+			return t.typeName;
+		},
 		TypeKind.GenericInstance => {
 			let key = t.typeName;
 			let i = 0;
