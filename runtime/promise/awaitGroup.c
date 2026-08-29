@@ -301,8 +301,10 @@ static _Thread_local int32_t msSlotPoolIdx = 0;
  * the cross-TU "test program msDecref → pool.c msFutureReleaseFlush at exit"
  * flow. Pony parity: msMsgPools uses the same extern-in-header + define-in-.c
  * pattern (mailbox.h:76, defined in actor.c). */
+#if MS_FUTURE_SUBMIT_REF
 _Thread_local void* msFutureReleaseBuf[MS_FUTURE_RELEASE_CAP];
 _Thread_local int msFutureReleaseCount = 0;
+#endif
 
 void* msAwaitSlotCreate(int32_t n) {
 	msAwaitSlot* s;

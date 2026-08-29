@@ -201,6 +201,8 @@ void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
 	msPostCompletion(fut, NULL, isFail, error);
 }
 
+bool msCompletionQueueDrain(void) { return false; }
+
 #else
 /* POSIX: MPSC queue for cross-thread completion + wake-only self-pipe.
  * Pony parity: lock-free queue replaces pipe for data delivery (100x faster).

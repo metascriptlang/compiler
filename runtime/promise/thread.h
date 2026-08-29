@@ -147,7 +147,11 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	 * inline msDecref. The dispatcher drain processes it single-threaded,
 	 * avoiding cross-thread rc races on the env's non-atomic rc field. */
 	if (ctx->slotGroup == NULL && ctx->env != NULL) {
+#if MS_FUTURE_SUBMIT_REF
 		msCompletionQueuePushEnvRelease(ctx->env);
+#else
+		msDecref(ctx->env);
+#endif
 	}
 	/* No free — ctx is a local copy from the queue slot (Malebolgia: zero alloc) */
 }
