@@ -130,7 +130,7 @@ function lspFindOutermostObjLitAncestor(root: Node, target: Node): Node | null {
 	if (root === null) return null;
 	if (root === target) return null;
 	let isAncestor = false;
-	let childResult: Node = null as unknown as Node;
+	let childResult: Node | null = null;
 	forEachChild(root, (child: Node): void => {
 		if (!isAncestor) {
 			if (child === target) {
@@ -174,7 +174,7 @@ function lspFindParentVarDecl(root: Node, target: Node): Node | null {
 			return root;
 		}
 	}
-	let found: Node = null as unknown as Node;
+	let found: Node | null = null;
 	forEachChild(root, (child: Node): void => {
 		if (found === null) {
 			const r = lspFindParentVarDecl(child, target);
