@@ -110,7 +110,7 @@ function findCallExprHelper(node: Node, line: number, col: number): Node | null 
 			}
 		}
 	}
-	let found: Node = null as unknown as Node;
+	let found: Node | null = null;
 	forEachChild(node, (child: Node): void => {
 		if (found === null) {
 			const hit = findCallExprHelper(child, line, col);
@@ -1140,7 +1140,7 @@ function sgSortSuggestions(list: SgSuggest[]): void {
 // Walks depth-first; among matches, prefers the one with largest column (closest to cursor).
 export function findNodeAtPosition(root: Node, line: number, col: number): Node | null {
 	if (root === null) return null;
-	let best: Node = null as unknown as Node;
+	let best: Node | null = null;
 	if (root.location.line === line && root.location.column <= col) {
 		best = root;
 	}
@@ -1165,7 +1165,7 @@ function findIncompleteMemberExpr(root: Node, line: number, col: number): Node |
 			return root;
 		}
 	}
-	let found: Node = null as unknown as Node;
+	let found: Node | null = null;
 	forEachChild(root, (child: Node): void => {
 		if (found === null) {
 			const r = findIncompleteMemberExpr(child, line, col);
@@ -1184,7 +1184,7 @@ function findIncompleteMemberExpr(root: Node, line: number, col: number): Node |
 // on closed ObjectLiterals from earlier lines).
 export function findEnclosingObjectLiteral(root: Node, line: number, col: number): Node | null {
 	if (root === null) return null;
-	let result: Node = null as unknown as Node;
+	let result: Node | null = null;
 	if (root.kind === NodeKind.ObjectLiteral) {
 		// Same-line check: cursor is on ObjectLiteral's opening line
 		if (root.location.line === line && root.location.column <= col) {
@@ -1234,7 +1234,7 @@ function sgSubtreeTouchesLine(node: Node, targetLine: number): boolean {
 // Mirrors findEnclosingObjectLiteral pattern. Deepest (innermost) call wins.
 function findEnclosingCallExpr(root: Node, line: number, col: number): Node | null {
 	if (root === null) return null;
-	let result: Node = null as unknown as Node;
+	let result: Node | null = null;
 	if (root.kind === NodeKind.CallExpr) {
 		// Same-line: CallExpr location is at '(' token
 		if (root.location.line === line && root.location.column <= col) {
@@ -1449,7 +1449,7 @@ function sgCollectObjLiteralChain(node: Node, line: number, col: number, path: s
 // by checking if cursor line is between this import and the next statement.
 function findImportDeclOnLine(program: Node, line: number): Node | null {
 	if (program === null) return null;
-	let found: Node = null as unknown as Node;
+	let found: Node | null = null;
 	if (program.kind === NodeKind.Program && program.data !== null) {
 		const d = program.data as ProgramData;
 		if (d.programStmts === null) return null;
@@ -1470,7 +1470,7 @@ function findImportDeclOnLine(program: Node, line: number): Node | null {
 			}
 		}
 	} else {
-		let prevImp: Node = null as unknown as Node;
+		let prevImp: Node | null = null;
 		let prevLine = 0;
 		forEachChild(program, (child: Node): void => {
 			if (found !== null) return;
@@ -1479,7 +1479,7 @@ function findImportDeclOnLine(program: Node, line: number): Node | null {
 				found = prevImp;
 				return;
 			}
-			prevImp = null as unknown as Node;
+			prevImp = null;
 			const imp = importNodeFrom(child);
 			if (imp !== null) {
 				if (imp.location.line === line) { found = imp; return; }
