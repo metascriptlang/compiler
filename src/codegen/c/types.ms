@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelToStruct, hasDestructor, getAttachedOp, tupleTypeName } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, peelToStruct, hasDestructor, getAttachedOp, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
@@ -862,6 +862,8 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 		TypeKind.GenericParam => "void*",
 		// GenericInstance: resolve to monomorphized C struct name
 		TypeKind.GenericInstance => {
+			const transparent = peelTransparentInstance(t);
+			if (transparent !== t) return getTypeDesc(g, transparent);
 			// Build mangled name using monoTypeKey (single source of truth for C-safe type keys).
 			// Must match the checker's naming in resolvePass.ms and checkExprPass.ms.
 			let instName = t.typeName;
