@@ -467,6 +467,44 @@ static inline int _msSpawnDrainFd(int fd, char** outBuf, size_t* outLen) {
 	*outLen = len;
 	return 1;
 }
+
+/* Shared tail of the POSIX capture spawns: drain both pipes, reap the child,
+ * populate the thread-local result state. Takes ownership of the fds + pid;
+ * returns captured stdout. */
+static inline msString _msPosixFinishCapture(int outFd, int errFd, pid_t pid) {
+	char* outBuf = NULL; size_t outLen = 0;
+	char* errBuf = NULL; size_t errLen = 0;
+	if (!_msSpawnDrainFd(outFd, &outBuf, &outLen)) _msProcSpawnPipeOk = 0;
+	if (!_msSpawnDrainFd(errFd, &errBuf, &errLen)) _msProcSpawnPipeOk = 0;
+	close(outFd);
+	close(errFd);
+
+	int status = 0;
+	if (waitpid(pid, &status, 0) < 0) {
+		if (outBuf) free(outBuf);
+		if (errBuf) free(errBuf);
+		return MS_EMPTY_STRING;
+	}
+
+	_msProcSpawnOk = 1;
+	if (WIFEXITED(status)) {
+		_msProcSpawnExitCode = (int32_t)WEXITSTATUS(status);
+		_msProcSpawnSignal = 0;
+	} else if (WIFSIGNALED(status)) {
+		_msProcSpawnExitCode = 0;
+		_msProcSpawnSignal = (int32_t)WTERMSIG(status);
+	} else {
+		_msProcSpawnExitCode = -1;
+		_msProcSpawnSignal = 0;
+	}
+
+	msString stdoutResult = MS_EMPTY_STRING;
+	msString stderrResult = MS_EMPTY_STRING;
+	if (outBuf) { stdoutResult = msStringNew(outBuf, (int64_t)outLen); free(outBuf); }
+	if (errBuf) { stderrResult = msStringNew(errBuf, (int64_t)errLen); free(errBuf); }
+	_msProcSpawnStderr = stderrResult;
+	return stdoutResult;
+}
 #endif
 
 #ifdef _WIN32
@@ -504,6 +542,84 @@ static inline BOOL msSpawnPumpPipe(HANDLE h, char** buf, size_t* cap, size_t* le
 	*len += got;
 	return TRUE;
 }
+
+/* Create the two capture pipes with non-inheritable read ends. Callers hold
+ * _msSpawnCreateLock across this and the spawn (see that lock for why).
+ * 64 KB buffers rather than the ~4 KB default: the pump below is already
+ * deadlock-free at any size, this just cuts the number of Peek/Read round
+ * trips for the multi-kilobyte diagnostic dumps a failing compile produces.
+ * On failure every handle is closed and FALSE returned. */
+static inline BOOL _msWinCreateCapturePipes(HANDLE* outRd, HANDLE* outWr, HANDLE* errRd, HANDLE* errWr) {
+	SECURITY_ATTRIBUTES sa;
+	sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+	sa.bInheritHandle = TRUE;
+	sa.lpSecurityDescriptor = NULL;
+	if (!CreatePipe(outRd, outWr, &sa, 64 * 1024)) return FALSE;
+	if (!SetHandleInformation(*outRd, HANDLE_FLAG_INHERIT, 0)) {
+		CloseHandle(*outRd); CloseHandle(*outWr);
+		return FALSE;
+	}
+	if (!CreatePipe(errRd, errWr, &sa, 64 * 1024)) {
+		CloseHandle(*outRd); CloseHandle(*outWr);
+		return FALSE;
+	}
+	if (!SetHandleInformation(*errRd, HANDLE_FLAG_INHERIT, 0)) {
+		CloseHandle(*outRd); CloseHandle(*outWr);
+		CloseHandle(*errRd); CloseHandle(*errWr);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+/* Shared tail of the Windows capture spawns.
+ *
+ * Drain BOTH pipes concurrently: reading stdout to EOF and only then starting
+ * on stderr deadlocks — a child that fills the stderr pipe buffer blocks in
+ * WriteFile, so it never exits and never closes stdout, and the parent waits
+ * forever for a stdout EOF that cannot arrive. Compiler and linker
+ * diagnostics pass the buffer size routinely — the hang lands on exactly the
+ * builds whose output you need. PeekNamedPipe services both pipes from this
+ * one thread, so neither overlapped I/O nor a reader thread per pipe is
+ * needed. The 1 ms backoff only runs when both pipes are momentarily empty
+ * and still open.
+ *
+ * Takes ownership of the read ends and the process/thread handles; returns
+ * captured stdout. */
+static inline msString _msWinFinishCapture(HANDLE outRd, HANDLE errRd, PROCESS_INFORMATION pi) {
+	size_t outCap = 4096, outLen = 0;
+	size_t errCap = 4096, errLen = 0;
+	char* outBuf = (char*)malloc(outCap);
+	char* errBuf = (char*)malloc(errCap);
+	BOOL outOpen = TRUE, errOpen = TRUE;
+	while (outOpen || errOpen) {
+		BOOL didRead = FALSE;
+		if (outOpen && !msSpawnPumpPipe(outRd, &outBuf, &outCap, &outLen, &didRead)) outOpen = FALSE;
+		if (errOpen && !msSpawnPumpPipe(errRd, &errBuf, &errCap, &errLen, &didRead)) errOpen = FALSE;
+		if (!didRead && (outOpen || errOpen)) Sleep(1);
+	}
+	CloseHandle(outRd);
+	CloseHandle(errRd);
+	/* A failed allocation means the captured text is incomplete. Report it as a
+	 * pipe error instead of handing back a short read that reads like success. */
+	if (!outBuf || !errBuf) _msProcSpawnPipeOk = 0;
+
+	WaitForSingleObject(pi.hProcess, INFINITE);
+	DWORD exitCode = 0;
+	GetExitCodeProcess(pi.hProcess, &exitCode);
+	CloseHandle(pi.hProcess);
+	CloseHandle(pi.hThread);
+
+	_msProcSpawnOk = 1;
+	_msProcSpawnExitCode = (int32_t)exitCode;
+	_msProcSpawnSignal = 0;  /* Windows has no signal concept here */
+
+	msString stdoutResult = MS_EMPTY_STRING;
+	msString stderrResult = MS_EMPTY_STRING;
+	if (outBuf) { outBuf[outLen] = '\0'; stdoutResult = msStringNew(outBuf, (int64_t)outLen); free(outBuf); }
+	if (errBuf) { errBuf[errLen] = '\0'; stderrResult = msStringNew(errBuf, (int64_t)errLen); free(errBuf); }
+	_msProcSpawnStderr = stderrResult;
+	return stdoutResult;
+}
 #endif  /* _WIN32 */
 
 static inline msString msProcessSpawnSync(msString command) {
@@ -522,34 +638,9 @@ static inline msString msProcessSpawnSync(msString command) {
 	 * spawns. Every exit path below must release it. */
 	AcquireSRWLockExclusive(&_msSpawnCreateLock);
 
-	SECURITY_ATTRIBUTES sa;
-	sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-	sa.bInheritHandle = TRUE;
-	sa.lpSecurityDescriptor = NULL;
-
-	/* 64 KB pipe buffers rather than the ~4 KB default: the pump below is
-	 * already deadlock-free at any size, this just cuts the number of
-	 * Peek/Read round trips for the multi-kilobyte diagnostic dumps a failing
-	 * compile produces. */
 	HANDLE outRd = NULL, outWr = NULL;
 	HANDLE errRd = NULL, errWr = NULL;
-	if (!CreatePipe(&outRd, &outWr, &sa, 64 * 1024)) {
-		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
-		return MS_EMPTY_STRING;
-	}
-	if (!SetHandleInformation(outRd, HANDLE_FLAG_INHERIT, 0)) {
-		CloseHandle(outRd); CloseHandle(outWr);
-		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
-		return MS_EMPTY_STRING;
-	}
-	if (!CreatePipe(&errRd, &errWr, &sa, 64 * 1024)) {
-		CloseHandle(outRd); CloseHandle(outWr);
-		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
-		return MS_EMPTY_STRING;
-	}
-	if (!SetHandleInformation(errRd, HANDLE_FLAG_INHERIT, 0)) {
-		CloseHandle(outRd); CloseHandle(outWr);
-		CloseHandle(errRd); CloseHandle(errWr);
+	if (!_msWinCreateCapturePipes(&outRd, &outWr, &errRd, &errWr)) {
 		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 		return MS_EMPTY_STRING;
 	}
@@ -605,50 +696,7 @@ static inline msString msProcessSpawnSync(msString command) {
 		return MS_EMPTY_STRING;
 	}
 
-	/* Drain BOTH pipes concurrently.
-	 *
-	 * Reading stdout to EOF and only then starting on stderr deadlocks: a child
-	 * that fills the stderr pipe buffer blocks in WriteFile, so it never exits
-	 * and never closes stdout, and the parent waits forever for a stdout EOF
-	 * that cannot arrive. Compiler and linker diagnostics pass the buffer size
-	 * routinely — the hang lands on exactly the builds whose output you need.
-	 *
-	 * PeekNamedPipe services both pipes from this one thread, so neither
-	 * overlapped I/O nor a reader thread per pipe is needed. The 1 ms backoff
-	 * only runs when both pipes are momentarily empty and still open. */
-	size_t outCap = 4096, outLen = 0;
-	size_t errCap = 4096, errLen = 0;
-	char* outBuf = (char*)malloc(outCap);
-	char* errBuf = (char*)malloc(errCap);
-	BOOL outOpen = TRUE, errOpen = TRUE;
-	while (outOpen || errOpen) {
-		BOOL didRead = FALSE;
-		if (outOpen && !msSpawnPumpPipe(outRd, &outBuf, &outCap, &outLen, &didRead)) outOpen = FALSE;
-		if (errOpen && !msSpawnPumpPipe(errRd, &errBuf, &errCap, &errLen, &didRead)) errOpen = FALSE;
-		if (!didRead && (outOpen || errOpen)) Sleep(1);
-	}
-	CloseHandle(outRd);
-	CloseHandle(errRd);
-	/* A failed allocation means the captured text is incomplete. Report it as a
-	 * pipe error instead of handing back a short read that reads like success. */
-	if (!outBuf || !errBuf) _msProcSpawnPipeOk = 0;
-
-	WaitForSingleObject(pi.hProcess, INFINITE);
-	DWORD exitCode = 0;
-	GetExitCodeProcess(pi.hProcess, &exitCode);
-	CloseHandle(pi.hProcess);
-	CloseHandle(pi.hThread);
-
-	_msProcSpawnOk = 1;
-	_msProcSpawnExitCode = (int32_t)exitCode;
-	_msProcSpawnSignal = 0;  /* Windows has no signal concept here */
-
-	msString stdoutResult = MS_EMPTY_STRING;
-	msString stderrResult = MS_EMPTY_STRING;
-	if (outBuf) { outBuf[outLen] = '\0'; stdoutResult = msStringNew(outBuf, (int64_t)outLen); free(outBuf); }
-	if (errBuf) { errBuf[errLen] = '\0'; stderrResult = msStringNew(errBuf, (int64_t)errLen); free(errBuf); }
-	_msProcSpawnStderr = stderrResult;
-	return stdoutResult;
+	return _msWinFinishCapture(outRd, errRd, pi);
 
 #else  /* POSIX */
 	int outPipe[2], errPipe[2];
@@ -689,39 +737,189 @@ static inline msString msProcessSpawnSync(msString command) {
 	/* Parent */
 	close(outPipe[1]);
 	close(errPipe[1]);
+	return _msPosixFinishCapture(outPipe[0], errPipe[0], pid);
+#endif
+}
 
-	char* outBuf = NULL; size_t outLen = 0;
-	char* errBuf = NULL; size_t errLen = 0;
-	if (!_msSpawnDrainFd(outPipe[0], &outBuf, &outLen)) _msProcSpawnPipeOk = 0;
-	if (!_msSpawnDrainFd(errPipe[0], &errBuf, &errLen)) _msProcSpawnPipeOk = 0;
-	close(outPipe[0]);
-	close(errPipe[0]);
+/**
+ * Synchronous argv subprocess WITH capture — the no-shell counterpart of
+ * msProcessSpawnSync. Spawns `exe` with `args` directly (no /bin/sh, no
+ * cmd.exe) and reports through the same thread-local getters (exit code,
+ * signal, stderr, ok, pipeOk); returns captured stdout.
+ *
+ * This is the spawn path for invoking build tools (the C compiler above all):
+ * a shell in that loop only adds failure modes — cmd.exe quote-stripping, the
+ * 8191-char command-line cap, AutoRun hooks, POSIX-isms (`rm -f`, `2>/dev/null`)
+ * — and none of its features (pipes, redirects, globbing) are wanted when the
+ * command is already a token list. The reference compiler invokes cc exactly
+ * this way: per-argument CRT quoting straight into CreateProcessW.
+ *
+ * - Windows: MS-CRT quoting per argument (_msAppendWinArg), UTF-8 → UTF-16,
+ *   CreateProcessW with lpApplicationName=NULL so the first quoted token
+ *   resolves through the standard search order (exe dir, cwd, system dirs,
+ *   PATH). The W API also makes paths outside the ANSI codepage work.
+ * - POSIX: posix_spawnp (PATH search) with dup2 file actions onto two pipes.
+ */
+static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args) {
+	/* Reset side-channel state for this invocation. */
+	_msProcSpawnExitCode = 0;
+	_msProcSpawnSignal = 0;
+	_msProcSpawnStderr = MS_EMPTY_STRING;
+	_msProcSpawnOk = 0;
+	_msProcSpawnPipeOk = 1;
 
-	int status = 0;
-	if (waitpid(pid, &status, 0) < 0) {
-		if (outBuf) free(outBuf);
-		if (errBuf) free(errBuf);
+#ifdef _WIN32
+	AcquireSRWLockExclusive(&_msSpawnCreateLock);
+
+	HANDLE outRd = NULL, outWr = NULL;
+	HANDLE errRd = NULL, errWr = NULL;
+	if (!_msWinCreateCapturePipes(&outRd, &outWr, &errRd, &errWr)) {
+		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 		return MS_EMPTY_STRING;
 	}
 
-	_msProcSpawnOk = 1;
-	if (WIFEXITED(status)) {
-		_msProcSpawnExitCode = (int32_t)WEXITSTATUS(status);
-		_msProcSpawnSignal = 0;
-	} else if (WIFSIGNALED(status)) {
-		_msProcSpawnExitCode = 0;
-		_msProcSpawnSignal = (int32_t)WTERMSIG(status);
-	} else {
-		_msProcSpawnExitCode = -1;
-		_msProcSpawnSignal = 0;
+	/* Command line: "exe" arg1 arg2 … with MS-CRT quoting per token. */
+	const char* exeStr = msStringToCString(exe);
+	/* CreateProcessW with lpApplicationName=NULL resolves the first command-
+	 * line token itself and does NOT normalize forward slashes there (unlike
+	 * lpApplicationName, which accepts them). Managed-zig paths are
+	 * forward-slash ("C:/Users/…/zig.exe"), so normalize the exe token to
+	 * backslashes. Args keep their spelling — the child handles either. */
+	size_t exeLen = strlen(exeStr);
+	char* exeNorm = (char*)malloc(exeLen + 1);
+	if (!exeNorm) {
+		CloseHandle(outRd); CloseHandle(outWr);
+		CloseHandle(errRd); CloseHandle(errWr);
+		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
+		return MS_EMPTY_STRING;
+	}
+	memcpy(exeNorm, exeStr, exeLen + 1);
+	for (char* p = exeNorm; *p; p++) {
+		if (*p == '/') *p = '\\';
+	}
+	size_t cap = 256;
+	size_t len = 0;
+	char* cmdLine = (char*)malloc(cap);
+	if (!cmdLine) {
+		free(exeNorm);
+		CloseHandle(outRd); CloseHandle(outWr);
+		CloseHandle(errRd); CloseHandle(errWr);
+		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
+		return MS_EMPTY_STRING;
+	}
+	_msAppendWinArg(&cmdLine, &len, &cap, exeNorm);
+	free(exeNorm);
+	if (args != NULL && args->p != NULL) {
+		for (int64_t i = 0; i < args->len; i++) {
+			if (len + 2 > cap) { cap *= 2; cmdLine = (char*)realloc(cmdLine, cap); }
+			cmdLine[len++] = ' ';
+			const char* a = msStringToCString(args->p->data[i]);
+			_msAppendWinArg(&cmdLine, &len, &cap, a);
+		}
+	}
+	cmdLine[len] = '\0';
+
+	/* UTF-8 → UTF-16. MetaScript strings are UTF-8; building the command line
+	 * in UTF-8 and converting once keeps the quoting logic byte-based. */
+	int wlen = MultiByteToWideChar(CP_UTF8, 0, cmdLine, (int)len + 1, NULL, 0);
+	wchar_t* wcmd = NULL;
+	if (wlen > 0) wcmd = (wchar_t*)malloc(sizeof(wchar_t) * (size_t)wlen);
+	if (wcmd == NULL || MultiByteToWideChar(CP_UTF8, 0, cmdLine, (int)len + 1, wcmd, wlen) == 0) {
+		free(cmdLine);
+		if (wcmd) free(wcmd);
+		CloseHandle(outRd); CloseHandle(outWr);
+		CloseHandle(errRd); CloseHandle(errWr);
+		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
+		return MS_EMPTY_STRING;
 	}
 
-	msString stdoutResult = MS_EMPTY_STRING;
-	msString stderrResult = MS_EMPTY_STRING;
-	if (outBuf) { stdoutResult = msStringNew(outBuf, (int64_t)outLen); free(outBuf); }
-	if (errBuf) { stderrResult = msStringNew(errBuf, (int64_t)errLen); free(errBuf); }
-	_msProcSpawnStderr = stderrResult;
-	return stdoutResult;
+	STARTUPINFOW si;
+	PROCESS_INFORMATION pi;
+	ZeroMemory(&si, sizeof(si));
+	si.cb = sizeof(si);
+	si.dwFlags = STARTF_USESTDHANDLES;
+	si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+	si.hStdOutput = outWr;
+	si.hStdError = errWr;
+	ZeroMemory(&pi, sizeof(pi));
+
+	BOOL ok = CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+	free(cmdLine);
+	free(wcmd);
+	CloseHandle(outWr);  /* child writes; parent reads */
+	CloseHandle(errWr);
+	/* Both write ends are gone from this process — end of the critical
+	 * section (see _msSpawnCreateLock). The drain runs unlocked. */
+	ReleaseSRWLockExclusive(&_msSpawnCreateLock);
+	if (!ok) {
+		CloseHandle(outRd); CloseHandle(errRd);
+		return MS_EMPTY_STRING;
+	}
+
+	return _msWinFinishCapture(outRd, errRd, pi);
+
+#else  /* POSIX */
+	int outPipe[2], errPipe[2];
+	if (pipe(outPipe) < 0) return MS_EMPTY_STRING;
+	if (pipe(errPipe) < 0) {
+		close(outPipe[0]); close(outPipe[1]);
+		return MS_EMPTY_STRING;
+	}
+
+	const char* exeStr = msStringToCString(exe);
+	int64_t argc = (args != NULL) ? args->len : 0;
+	char** argv = (char**)malloc(sizeof(char*) * (size_t)(argc + 2));
+	if (!argv) {
+		close(outPipe[0]); close(outPipe[1]);
+		close(errPipe[0]); close(errPipe[1]);
+		return MS_EMPTY_STRING;
+	}
+	argv[0] = (char*)exeStr;
+	/* msStringToCString may reuse a shared buffer — materialize each arg now. */
+	for (int64_t i = 0; i < argc; i++) {
+		const char* src = msStringToCString(args->p->data[i]);
+		size_t slen = strlen(src);
+		char* copy = (char*)malloc(slen + 1);
+		if (!copy) {
+			for (int64_t j = 1; j <= i; j++) free(argv[j]);
+			free(argv);
+			close(outPipe[0]); close(outPipe[1]);
+			close(errPipe[0]); close(errPipe[1]);
+			return MS_EMPTY_STRING;
+		}
+		memcpy(copy, src, slen + 1);
+		argv[i + 1] = copy;
+	}
+	argv[argc + 1] = NULL;
+
+	posix_spawn_file_actions_t fa;
+	if (posix_spawn_file_actions_init(&fa) != 0) {
+		for (int64_t j = 1; j <= argc; j++) free(argv[j]);
+		free(argv);
+		close(outPipe[0]); close(outPipe[1]);
+		close(errPipe[0]); close(errPipe[1]);
+		return MS_EMPTY_STRING;
+	}
+	posix_spawn_file_actions_addclose(&fa, outPipe[0]);
+	posix_spawn_file_actions_addclose(&fa, errPipe[0]);
+	posix_spawn_file_actions_adddup2(&fa, outPipe[1], STDOUT_FILENO);
+	posix_spawn_file_actions_adddup2(&fa, errPipe[1], STDERR_FILENO);
+	posix_spawn_file_actions_addclose(&fa, outPipe[1]);
+	posix_spawn_file_actions_addclose(&fa, errPipe[1]);
+	pid_t pid = 0;
+	int spawnErr = posix_spawnp(&pid, exeStr, &fa, NULL, argv, MS_SPAWN_ENVIRON);
+	posix_spawn_file_actions_destroy(&fa);
+	for (int64_t j = 1; j <= argc; j++) free(argv[j]);
+	free(argv);
+	if (spawnErr != 0) {
+		close(outPipe[0]); close(outPipe[1]);
+		close(errPipe[0]); close(errPipe[1]);
+		return MS_EMPTY_STRING;
+	}
+
+	close(outPipe[1]);
+	close(errPipe[1]);
+	return _msPosixFinishCapture(outPipe[0], errPipe[0], pid);
 #endif
 }
 
