@@ -117,7 +117,7 @@ function buildCopyFn(gen: JSGenerator, t: Type, name: string): string {
 	} else {
 		const elem = t.typeReturn;
 		const typedName = t.kind === TypeKind.SizedArray && elem !== null
-			? jsTypedArrayName(elem.kind, gen.jsBigInt64) : "";
+			? jsTypedArrayName(elem.kind) : "";
 		if (needsValueCopy(elem)) {
 			body = "return v.map(" + copyFnName(gen, elem as Type) + ");";
 		} else if (typedName !== "" ) {

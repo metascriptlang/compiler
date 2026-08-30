@@ -58,7 +58,13 @@ export function emitNullLiteral(gen: JSGenerator, node: Node): void {
 
 export function emitBigIntLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as BigIntLiteralData;
-	emit(gen, d.bigintValue);
+	if (d.bigintValue.byteLength > 0 && d.bigintValue.byteAt(0) === "-".code) {
+		emit(gen, "(");
+		emit(gen, d.bigintValue);
+		emit(gen, ")");
+	} else {
+		emit(gen, d.bigintValue);
+	}
 }
 
 export function emitRegexLiteral(gen: JSGenerator, node: Node): void {
@@ -425,7 +431,7 @@ export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 	const t = node.nodeType;
 	let typedName = "";
 	if (t !== null && t.kind === TypeKind.SizedArray && t.typeReturn !== null) {
-		typedName = jsTypedArrayName(t.typeReturn.kind, gen.jsBigInt64);
+		typedName = jsTypedArrayName(t.typeReturn.kind);
 	}
 	if (typedName !== "") emit(gen, "new " + typedName + "(");
 	emit(gen, "[");

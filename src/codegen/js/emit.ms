@@ -22,7 +22,6 @@ export class JSGenerator {
 	importSourceToModuleId: string[];
 	importSourceToModuleIdKeys: string[];
 	thisName: string;
-	jsBigInt64: boolean;
 	staticSlots: string[]; // module-scope storage for `static` decls written inside bodies
 	// Multi-file emit (one ES module per source module). Names derive from the
 	// export surface, imports derive from actual references — source import
@@ -54,7 +53,7 @@ export class JSGenerator {
 }
 
 export function createJSGenerator(): JSGenerator {
-	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", jsBigInt64: false, staticSlots: [],
+	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", staticSlots: [],
 		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], neededModules: [], neededNames: [],
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
@@ -100,16 +99,16 @@ export function moduleExportsName(gen: JSGenerator, modulePath: string, name: st
 
 // ===== Typed Array Mapping (reference: arrayTypeForElemType) =====
 
-export function jsTypedArrayName(elemKind: TypeKind, bigInt64: boolean): string {
+export function jsTypedArrayName(elemKind: TypeKind): string {
 	return match (elemKind) {
 		TypeKind.Int8 => "Int8Array",
 		TypeKind.Int16 => "Int16Array",
 		TypeKind.Int32 => "Int32Array",
-		TypeKind.Int64 => bigInt64 ? "BigInt64Array" : "",
+		TypeKind.Int64 => "BigInt64Array",
 		TypeKind.Uint8 | TypeKind.Char | TypeKind.Boolean => "Uint8Array",
 		TypeKind.Uint16 => "Uint16Array",
 		TypeKind.Uint32 => "Uint32Array",
-		TypeKind.Uint64 => bigInt64 ? "BigUint64Array" : "",
+		TypeKind.Uint64 => "BigUint64Array",
 		TypeKind.Float32 => "Float32Array",
 		TypeKind.Float64 | TypeKind.Number => "Float64Array",
 		_ => "",

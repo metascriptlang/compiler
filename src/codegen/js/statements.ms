@@ -42,16 +42,16 @@ export function emitAssertStmt(gen: JSGenerator, node: Node): void {
 
 // Emit default initializer for uninitialized variable based on type.
 // Reference: createVar — typed arrays for numeric, inline literal for small, arrayConstr for large.
-function jsDefaultValue(t: Type, bigInt64: boolean): string {
+function jsDefaultValue(t: Type): string {
 	if (t === null) return "";
 	if (t.kind === TypeKind.SizedArray) {
 		const size = t.typeFlags;
 		const elemType = t.typeReturn;
 		let fill = "null";
 		if (elemType !== null) {
-			const typedName = jsTypedArrayName(elemType.kind, bigInt64);
+			const typedName = jsTypedArrayName(elemType.kind);
 			if (typedName !== "") return `new ${typedName}(${size})`;
-			const elemInit = jsDefaultValue(elemType, bigInt64);
+			const elemInit = jsDefaultValue(elemType);
 			if (elemInit !== "") fill = elemInit;
 		}
 		if (size > 32) return `new Array(${size}).fill(${fill})`;
@@ -67,14 +67,14 @@ function jsDefaultValue(t: Type, bigInt64: boolean): string {
 		|| t.kind === TypeKind.Uint8 || t.kind === TypeKind.Uint16 || t.kind === TypeKind.Uint32) {
 		return "0";
 	}
-	if (t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint64) return bigInt64 ? "0n" : "0";
+	if (t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint64) return "0n";
 	if (t.kind === TypeKind.Boolean) return "false";
 	if (t.kind === TypeKind.String) return "\"\"";
 	return "";
 }
 
 function emitDefaultInit(gen: JSGenerator, t: Type): void {
-	const v = jsDefaultValue(t, gen.jsBigInt64);
+	const v = jsDefaultValue(t);
 	if (v !== "") emit(gen, " = " + v);
 }
 
