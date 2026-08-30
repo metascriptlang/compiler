@@ -168,7 +168,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	*dest = newStr;
 }
 #define msStringWasMoved(s)   do { (s).len = 0; (s).p = NULL; } while(0)
-#define msStringSink(d, s)    do { msStringDestroy(d); (d) = (s); } while(0)
+#define msStringSink(d, ...)  do { msStringDestroy(d); (d) = (__VA_ARGS__); } while(0)
 
 /* --- Array lifecycle (unified) — uniquely owned payloads --- */
 /* Reference parity: payloads are never shared. DRC emits deep copy or move. */
@@ -204,7 +204,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 
 /* --- Legacy aliases (used by classify.ms for DRC injection layer) --- */
 #define msArrayNumberWasMoved(arr)     msArrayWasMoved(arr)
-#define msArrayNumberSink(d, s)        do { msArrayDestroy(d); (d) = (s); } while(0)
+#define msArrayNumberSink(d, ...)      do { msArrayDestroy(d); (d) = (__VA_ARGS__); } while(0)
 #define msArrayStringDestroy(arr)      msStringArrayDestroy(&(arr))
 /* Deep copy: allocate new payload, copy each string element.
  * Cache (s) in a local to prevent double-evaluation when `s` is a call. */
@@ -227,7 +227,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	(d).p = _asc_newp; \
 } while(0)
 #define msArrayStringWasMoved(arr)     msArrayWasMoved(arr)
-#define msArrayStringSink(d, s)        do { msArrayDestroy(d); (d) = (s); } while(0)
+#define msArrayStringSink(d, ...)      do { msArrayDestroy(d); (d) = (__VA_ARGS__); } while(0)
 #define msArrayRefDestroy(arr)         msRefArrayDestroy((msRefArray*)&(arr))
 /* Deep copy: allocate new payload, copy each ref element with incref.
  * Cache (s) in a local to prevent double-evaluation when `s` is a call. */
@@ -251,8 +251,8 @@ static inline void msStringCopy(msString* dest, msString src) {
 } while(0)
 /* Sink semantics: old dest payload freed (elements NOT decref'd — ownership
  * transfers from source which already holds the only refs). */
-#define msArrayRefSink(d, s)           do { \
-	msRefArray _ars_src = (s); \
+#define msArrayRefSink(d, ...)         do { \
+	msRefArray _ars_src = (__VA_ARGS__); \
 	if ((d).p != NULL) { free((msRefPayload*)(d).p); } \
 	(d) = _ars_src; \
 } while(0)
@@ -264,7 +264,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msArrayRefWasMoved(arr)        msArrayWasMoved(arr)
 #define msArrayUint8Destroy(arr)       msUint8ArrayDestroy(&(arr))
 #define msArrayUint8WasMoved(arr)      msArrayWasMoved(arr)
-#define msArrayUint8Sink(d, s)         do { msArrayDestroy(d); (d) = (s); } while(0)
+#define msArrayUint8Sink(d, ...)       do { msArrayDestroy(d); (d) = (__VA_ARGS__); } while(0)
 /* Alloc by len, never by raw cap: a string byte-view carries flag bits in cap
  * (see MS_CAP_MASK in msUint8ArrayPush) — reading cap raw mallocs garbage. */
 #define msArrayUint8Copy1(arr) do { \
@@ -295,7 +295,7 @@ static inline void msStringCopy(msString* dest, msString src) {
  * value layout is uniform. */
 #define msArrayClosureDestroy(arr)     msClosureArrayDestroy(&(arr))
 #define msArrayClosureCopy(d, s)       msClosureArrayCopy(&(d), &(s))
-#define msArrayClosureSink(d, s)       do { msClosureArrayDestroy(&(d)); (d) = (s); } while(0)
+#define msArrayClosureSink(d, ...)     do { msClosureArrayDestroy(&(d)); (d) = (__VA_ARGS__); } while(0)
 #define msArrayClosureWasMoved(arr)    msArrayWasMoved(arr)
 
 /* --- Ref/Ptr lifecycle (generic heap objects) --- */
@@ -355,7 +355,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msClosureDestroy(c)   do { if ((c).env != NULL) { msDecref((c).env); } (c).fn = NULL; (c).env = NULL; } while(0)
 #define msClosureCopy(c)      do { if ((c).env != NULL) msIncRef((c).env); } while(0)
 #define msClosureWasMoved(c)  do { (c).fn = NULL; (c).env = NULL; } while(0)
-#define msClosureSink(d, s)   do { msClosureDestroy(d); (d) = (s); } while(0)
+#define msClosureSink(d, ...) do { msClosureDestroy(d); (d) = (__VA_ARGS__); } while(0)
 #define msClosureTrace(c, _env) do { if ((c).env != NULL) msOrcTraceRef(&(c).env, (_env)); } while(0)
 
 /* --- Map lifecycle --- */
@@ -363,7 +363,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msMapFree(m)          msMapDestroy(&(m))
 #define msMapCopy(m)          do { msMap __mc = msMapCopyFn(m); (m) = __mc; } while(0)
 #define msMapWasMoved(m)      do { (m).len = 0; (m).p = NULL; } while(0)
-#define msMapSink(d, s)       do { msMapDestroy(&(d)); (d) = (s); } while(0)
+#define msMapSink(d, ...)     do { msMapDestroy(&(d)); (d) = (__VA_ARGS__); } while(0)
 #define msMapTrace(m)         /* TODO: ORC trace */
 
 /* --- Named object wasMoved (no-op for value-type named objects) --- */
