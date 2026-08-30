@@ -123,6 +123,40 @@ export function execFile(path: string, args: string[] = []): number {
 	return msProcessExecFile(path, args);
 }
 
+extern function msProcessSpawnSyncArgv(path: string, args: string[]): string;
+
+// Direct-argv counterpart of exec(): spawn `path` with `args` — no /bin/sh, no
+// cmd.exe — capturing stdout/stderr/exit/signal exactly like exec(). Same
+// Result<string, ProcessError> shape, so callers can swap exec() for this one
+// token at a time. The one difference: no exit-127 not-found heuristic (that
+// is a shell convention; here a missing binary reports as SpawnFailed).
+//
+// Prefer this over exec() whenever the command is assembled from tokens
+// (compilers, build tools) rather than written as a shell one-liner: without
+// a shell there is no quote-stripping, no 8191-char line cap, no AutoRun, and
+// no temptation to lean on shell-only syntax (`rm -f`, `2>/dev/null`).
+export function execFileCapture(path: string, args: string[] = []): Result<string, ProcessError> {
+	const stdoutText = msProcessSpawnSyncArgv(path, args);
+	const ok = msProcSpawnGetOk();
+	if (ok === 0) {
+		return Result.err(spawnFailed(path, "fork/exec failed"));
+	}
+	const pipeOk = msProcSpawnGetPipeOk();
+	if (pipeOk === 0) {
+		return Result.err(pipeError(path, "failed to drain stdout/stderr from child"));
+	}
+	const signal = msProcSpawnGetSignal();
+	const exitCode = msProcSpawnGetExitCode();
+	const stderrText = msProcSpawnGetStderr();
+	if (signal !== 0) {
+		return Result.err(signalTerminated(path, signal, stdoutText, stderrText));
+	}
+	if (exitCode !== 0) {
+		return Result.err(nonZeroExit(path, exitCode, stdoutText, stderrText));
+	}
+	return Result.ok(stdoutText);
+}
+
 // =============================================================================
 // Environment variables
 // =============================================================================
