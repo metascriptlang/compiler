@@ -54,6 +54,8 @@ function materializeIntOp(node: Node, ctx: TransformContext): Node {
 function divideAsInteger(node: Node): Node {
 	const t = node.nodeType;
 	if (t === null || !isIntConvKind(t.kind)) return node;
+	// BigInt division already truncates; Math.trunc on a BigInt throws.
+	if (t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint64) return node;
 	return truncateTo(node, t.kind, node.location);
 }
 
@@ -113,6 +115,7 @@ function compoundBaseOf(op: string): string {
 function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: TransformContext): Node {
 	const t = d.left.nodeType;
 	if (t === null || !isIntConvKind(t.kind)) return node;
+	if (t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint64) return node;
 	const unsigned = t.kind === TypeKind.Uint32;
 	if (base !== "/" && !unsigned) return node;
 	const readBack = cloneIfPure(d.left);

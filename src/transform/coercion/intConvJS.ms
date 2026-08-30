@@ -9,7 +9,7 @@ import { Node, NodeKind, TypeAssertionData, HiddenStdConvData, BinaryExprData, E
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeIdent, makeMember, makeNumber } from "../util";
-import { createPrimitive } from "../../checker/types";
+import { createPrimitive, isWideningInt64Conv } from "../../checker/types";
 import { parseInput, makeCtx, getStmts, firstExprKindAfter } from "../testUtil";
 
 export function lowerIntConvJS(program: Node, ctx: TransformContext): Node {
@@ -28,6 +28,10 @@ function materializeIntConv(node: Node): Node {
 		const d = node.data as HiddenStdConvData;
 		if (d.convType === null) return node;
 		if (!isIntConvKind(d.convType.kind)) return node;
+		// A widening conv marks the 64-bit boundary for BigInt mode; in Number
+		// mode the value is already integral, so the node just drops at codegen.
+		const srcT = d.convExpr !== null ? d.convExpr.nodeType : null;
+		if (srcT !== null && isWideningInt64Conv(srcT, d.convType)) return node;
 		return truncateTo(d.convExpr, d.convType.kind, node.location);
 	}
 	return node;
