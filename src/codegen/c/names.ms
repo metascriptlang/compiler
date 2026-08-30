@@ -197,6 +197,17 @@ export function mangleProcName(name: string, moduleName: string, id: number): st
 // (Nim sfImportc/sfExportc rule). Monomorphized instances ("__") and
 // compiler-generated ("$") names keep their existing spelling.
 
+// One globally cached object per shape, shared by every module, name already
+// encoding its content — so the sym it happens to carry is whichever module
+// created it first, not an owner. Same carve-out as "$" and mono "__" above.
+export function isSharedStructuralName(name: string): boolean {
+	if (name.length > 6 && name.slice(0, 6) === "Maybe_") return true;
+	if (name.length > 8 && name.slice(0, 8) === "msTuple_") return true;
+	if (name.length > 7 && name.slice(0, 7) === "msAnon_") return true;
+	if (name.length > 8 && name.slice(0, 8) === "msUnion_") return true;
+	return false;
+}
+
 export function mangledTypeName(sym: Symbol | null, name: string): string {
 	if (sym !== null) {
 		const early = symExternOrImportName(sym, name);
@@ -204,6 +215,7 @@ export function mangledTypeName(sym: Symbol | null, name: string): string {
 	}
 	if (name.length > 0 && name.slice(0, 1) === "$") return mangle(name);
 	if (name.indexOf("__", 0) >= 0) return mangle(name);
+	if (isSharedStructuralName(name)) return mangle(name);
 	if (sym !== null && sym.modulePath !== "") {
 		return mangleQualified(name, mangleModuleName(sym.modulePath));
 	}
