@@ -177,6 +177,17 @@ static inline void* msSpawn(msClosure fn) {
 	msIncRef(fut);
 	((msFutureBase*)fut)->crossThreadPublished = true;
 #endif
+#ifdef _WIN32
+	/* Channel-exists-before-visible, Windows twin of the submit-time
+	 * discipline above: ensure the scheduler-0 loop's IOCP exists before the
+	 * worker can complete, so msPostCompletion routes to the loop instead of
+	 * the I15-violating inline fallback. See msEnsureLoopChannel
+	 * (dispatchFull.c). */
+	{
+		extern void msEnsureLoopChannel(void);
+		msEnsureLoopChannel();
+	}
+#endif
 	msPoolSubmit(&ctx);  /* copied into queue slot — ctx can go out of scope */
 	return fut;
 }
@@ -195,6 +206,12 @@ static inline void* msSpawnInto(void* fut, msClosure fn, uint32_t copySize, uint
 #if MS_FUTURE_SUBMIT_REF
 	msIncRef(fut);  /* Amendment G: owner-side queue completion ref (see msSpawn) */
 	((msFutureBase*)fut)->crossThreadPublished = true;  /* Amendment H */
+#endif
+#ifdef _WIN32
+	{
+		extern void msEnsureLoopChannel(void);  /* see msSpawn */
+		msEnsureLoopChannel();
+	}
 #endif
 	msPoolSubmit(&ctx);
 	return fut;

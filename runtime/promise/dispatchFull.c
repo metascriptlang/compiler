@@ -181,13 +181,100 @@ static void msDispatcherCallSoon(msClosure cb) {
 /* Windows: IOCP — PostQueuedCompletionStatus / GetQueuedCompletionStatusEx.
  * No pipe, no selector. Native completion port handles everything. */
 
+/* The IOCP twin of the POSIX process-global wake pipe — the Layer-2 channel of
+ * PARALOCK Amendment A plus the scheduler-0 wake that actor.h's `sid == 0`
+ * sends use via msActorWakeEventLoop.
+ *
+ * POSIX topology (msGetDispatcher below the #else): ONE process-global wake
+ * pipe, and EVERY dispatcher's selector registers its read end — a 1-byte
+ * write fans out to every event loop. The IOCP mirror therefore cannot be a
+ * single first-loop-wins handle: it is a registry, and a wake posts to every
+ * registered port. Same fan-out, and a loop that does not exist simply is not
+ * in the registry. In every PARALOCK topology exactly one loop exists
+ * (scheduler 0 = the main thread; pool workers park on condvars and never run
+ * loops — the dual-path wait), so this holds one entry; the shape is kept so a
+ * multi-loop topology degrades the way POSIX does rather than silently
+ * missing wakes.
+ *
+ * Registry entry 0 — the first loop created, scheduler 0 in every real
+ * topology — doubles as the completion target for threads that own no
+ * dispatcher (see msPostCompletion): the POSIX worker pushes to the
+ * process-global MPSC that the event loop drains; the IOCP analog is the
+ * loop's own port.
+ *
+ * Publish ordering: reserve the slot (InterlockedIncrement) before storing the
+ * handle. A waker may observe a reserved slot whose handle is not yet stored
+ * (reads NULL, skips it) — harmless, because the owning thread cannot yet be
+ * blocked on a port it has not finished creating. */
+#define MS_WAKE_IOCP_MAX 8
+static HANDLE volatile gWakeIocps[MS_WAKE_IOCP_MAX];
+static volatile LONG gWakeIocpCount = 0;
+
 msDispatcher* msGetDispatcher(void) {
 	if (gDispatcher == NULL) {
 		gDispatcher = (msDispatcher*)calloc(1, sizeof(msDispatcher));
 		gDispatcher->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+		/* Register in the wake registry — the IOCP mirror of POSIX's
+		 * msSelectorRegister(gDispatcher->selector, gWakePipe[0], …) in the
+		 * #else branch below. */
+		LONG idx = InterlockedIncrement(&gWakeIocpCount) - 1;
+		if (idx >= 0 && idx < MS_WAKE_IOCP_MAX) {
+			gWakeIocps[idx] = gDispatcher->iocp;
+		}
 		msCallSoonProc = msDispatcherCallSoon;
 	}
 	return gDispatcher;
+}
+
+static HANDLE msFirstLoopIocp(void) {
+	LONG n = InterlockedCompareExchange(&gWakeIocpCount, 0, 0);
+	return n > 0 ? gWakeIocps[0] : NULL;
+}
+
+/* Init the cross-thread wake channel early — called by msActorRegister before
+ * any actor send can happen. POSIX opens the self-pipe + MPSC queue here
+ * (pthread_once); on Windows creating the dispatcher is what registers the
+ * wake port, so this is the same contract ("after this returns, a wake from
+ * any thread has a target") spelled in IOCP terms. Name kept because actor.h
+ * declares one symbol for both platforms. */
+void msEnsureWakePipe(void) {
+	(void)msGetDispatcher();
+}
+
+/* Wake the event loop(s) from another thread — the IOCP twin of POSIX's 1-byte
+ * write to the wake pipe: post to EVERY registered port, because any loop may
+ * be the one blocked. lpOverlapped = NULL is the wake itself — the same
+ * primitive Amendment B's IOCP engine-wake arm uses (msIoEngineWake,
+ * engineIOCP.c) — and the drain in msRunOnce skips NULL entries the same way
+ * the engine poll does. One syscall per loop, no allocation: the POSIX wake
+ * cost. */
+void msActorWakeEventLoop(void) {
+	LONG n = InterlockedCompareExchange(&gWakeIocpCount, 0, 0);
+	if (n > MS_WAKE_IOCP_MAX) n = MS_WAKE_IOCP_MAX;
+	for (LONG i = 0; i < n; i++) {
+		HANDLE h = gWakeIocps[i];
+		if (h != NULL) PostQueuedCompletionStatus(h, 0, 0, NULL);
+	}
+}
+
+/* No wake FD exists on Windows — the loop is woken through the IOCP above, not
+ * through a pollable descriptor. Same -1 contract as msGetDispatcherSelectorFd
+ * on Windows (below) and the wasm/emcc dispatchers, so callers that register
+ * the fd in their own selector skip it. */
+int32_t msGetWakePipeFd(void) { return -1; }
+
+/* Called from the spawn submit sites (thread.h) on the OWNER thread: ensure
+ * the scheduler-0 loop's port exists BEFORE a worker can complete into it —
+ * channel-exists-before-visible, the Windows twin of the submit-time
+ * discipline Amendment G applies to the completion ref. POSIX needs no
+ * counterpart: its completion channel is the process-global MPSC, created
+ * lazily by any thread's push. Worker-guarded: a nested spawn from a pool
+ * worker must not mint a worker-local port nobody drains — its children's
+ * completions route to registry entry 0 via msPostCompletion's fallback,
+ * exactly like POSIX's global queue. */
+void msEnsureLoopChannel(void) {
+	extern _Thread_local bool msIsPoolWorker;  /* pool.c */
+	if (!msIsPoolWorker) (void)msGetDispatcher();
 }
 
 void msCompletionQueuePush(void* fut, bool isFail, void* error) {
@@ -534,12 +621,19 @@ bool msRunOnce(int timeoutMs) {
 		BOOL ok = GetQueuedCompletionStatusEx(d->iocp, entries, 64, &count, (DWORD)(adj >= 0 ? adj : 500), FALSE);
 		if (ok) {
 			for (ULONG i = 0; i < count; i++) {
-				didWork = true;
 				msCompletionMsg* msg = (msCompletionMsg*)entries[i].lpOverlapped;
+				/* NULL = a cross-thread wake (msActorWakeEventLoop - the same
+				 * Amendment B IOCP-arm primitive msIoEngineWake uses). Nothing
+				 * to dispatch; engineIOCP.c's poll skips these identically.
+				 * Not counted as work: a wake-only batch leaves the loop free
+				 * to re-poll, exactly like POSIX draining wake-pipe bytes
+				 * without setting didWork. */
+				if (msg == NULL) continue;
+				didWork = true;
 				if (msg->fut != NULL) {
 					msFutureFireCallbacks((msFutureBase*)msg->fut);
 					/* Release the queue's in-flight ref, paired with the incref in
-					 * msPostCompletion — same contract as the POSIX drain above. */
+					 * msPostCompletion - same contract as the POSIX drain above. */
 					msFutureDrcDestroy(msg->fut);
 				}
 				free(msg);
@@ -669,6 +763,20 @@ void msRunForever(void) {
 void msPostCompletion(void* fut, void* value, bool isFail, void* error) {
 #ifdef _WIN32
 	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
+	if (iocp == NULL) {
+		/* This thread owns no dispatcher — a pool worker (dual-path wait:
+		 * workers park on condvars, never create one). POSIX pushes to the
+		 * process-global MPSC that the event loop drains; the IOCP mirror is
+		 * the loop's own port, registry entry 0 — the scheduler-0 main loop in
+		 * every PARALOCK topology. Completing inline here instead (the old
+		 * fallback) calls msFutureComplete/msFutureFail, which hit the
+		 * finished-guard the worker's Step-1 publish already set: callbacks
+		 * never fire and async steppers hang — exactly the Amendment A / I15
+		 * violation the drain path exists to prevent. Route to the loop so
+		 * the drain — the one place that fires via msFutureFireCallbacks —
+		 * runs them. */
+		iocp = msFirstLoopIocp();
+	}
 	if (iocp != NULL) {
 		msCompletionMsg* msg = (msCompletionMsg*)malloc(sizeof(msCompletionMsg));
 		if (msg == NULL) {

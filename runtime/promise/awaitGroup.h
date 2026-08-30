@@ -274,6 +274,17 @@ static inline void msAwaitGroupSetDoneFut(msAwaitGroup* g, void* fut) {
 			((msFutureBase*)fut)->crossThreadPublished = true;
 		}
 #endif
+#ifdef _WIN32
+		/* Channel-exists-before-visible, same as the msSpawn/msSpawnInto submit
+		 * sites (thread.h): finishSlot's last worker completes doneFut via
+		 * msCompletionQueuePushOwned -> msPostCompletion, which needs the
+		 * scheduler-0 loop's IOCP to exist or it falls back to the
+		 * I15-violating inline path. See msEnsureLoopChannel (dispatchFull.c). */
+		{
+			extern void msEnsureLoopChannel(void);
+			msEnsureLoopChannel();
+		}
+#endif
 		atomic_store_explicit(&g->doneFut, fut, memory_order_release);
 	}
 }
