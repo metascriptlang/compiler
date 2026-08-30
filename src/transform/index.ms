@@ -39,6 +39,7 @@ import { lowerObjectLiteralComplete } from "./coercion/objectLiteralComplete";
 import { lowerStringLengthJS } from "./coercion/stringLengthJS";
 import { lowerIntConvJS } from "./coercion/intConvJS";
 import { lowerIntArithJS } from "./coercion/intArithJS";
+import { lowerBigIntJS } from "./coercion/bigIntJS";
 import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
 import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
@@ -167,7 +168,9 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = resolveRuntimeIdents(result, ctx); }
 	// Must trail resolveRuntimeIdents: the synthesized `Math` receiver has to
 	// stay unbound, or it resolves to the prelude's own `class Math` and gets
-	// mangled as a module global.
+	// mangled as a module global. The 64-bit pass runs first so the width
+	// passes below never see the nodes it consumed.
+	if (jsBackend) { result = lowerBigIntJS(result, ctx); }
 	if (jsBackend) { result = lowerIntConvJS(result, ctx); }
 	if (jsBackend) { result = lowerIntArithJS(result, ctx); }
 	if (!jsBackend) { result = liftDestructors(result, ctx); }
