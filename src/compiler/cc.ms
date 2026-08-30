@@ -374,7 +374,7 @@ export function modeFlags(mode: number): string {
 // /usr/bin/gcc is a clang shim, but auto-detection never resolves to the name
 // "gcc" unless clang and zig are both absent, so this stays accurate.
 function isGnuGcc(cc: string): boolean {
-	return cc === "gcc" || cc.endsWith("-gcc") || cc.endsWith("g++");
+	return cc === "gcc" || cc === "g++" || cc.endsWith("-gcc") || cc.endsWith("-g++");
 }
 
 // Proven-broken pairs — an LTO link can NEVER succeed here, so even an
