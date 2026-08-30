@@ -37,10 +37,13 @@ function endsWith(s: string, suffix: string): boolean {
 }
 
 function trim(s: string): string {
+	// "\r" is load-bearing on Windows: git checkouts there use CRLF line
+	// endings, and without it every field name keeps a "\r\n\t" prefix —
+	// tableMentions then never matches and all 6 tables fail spuriously.
 	let a = 0;
 	let b = s.length;
-	while (a < b && (s.slice(a, a + 1) === " " || s.slice(a, a + 1) === "\t" || s.slice(a, a + 1) === "\n")) a = a + 1;
-	while (b > a && (s.slice(b - 1, b) === " " || s.slice(b - 1, b) === "\t" || s.slice(b - 1, b) === "\n")) b = b - 1;
+	while (a < b && (s.slice(a, a + 1) === " " || s.slice(a, a + 1) === "\t" || s.slice(a, a + 1) === "\n" || s.slice(a, a + 1) === "\r")) a = a + 1;
+	while (b > a && (s.slice(b - 1, b) === " " || s.slice(b - 1, b) === "\t" || s.slice(b - 1, b) === "\n" || s.slice(b - 1, b) === "\r")) b = b - 1;
 	return s.slice(a, b);
 }
 
