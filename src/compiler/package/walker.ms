@@ -17,6 +17,18 @@
 // Paths in `relPath` always use forward slashes, no leading "/".
 
 import { readDir, isFile, isDir, fileSize, join, exists } from "std/fs";
+import { env } from "std/process";
+
+// Test scratch dir — OS temp dir without std/os's C-header (see manifest.ms).
+function testTmpDir(): string {
+	const t = env.get("TMP");
+	if (t !== "") return t;
+	const t2 = env.get("TEMP");
+	if (t2 !== "") return t2;
+	const t3 = env.get("TMPDIR");
+	if (t3 !== "") return t3;
+	return "/tmp";
+}
 import { compileGlobs, globMatchAny } from "std/fs/glob";
 
 export interface FileEntry {
@@ -204,7 +216,7 @@ function cleanupFixture(root: string): void {
 }
 
 test "walker: empty includes → everything non-builtin-excluded" {
-	const root = "/tmp/mspub-walk-1";
+	const root = join(testTmpDir(), "mspub-walk-1");
 	if (makeFixture(root)) {
 		const includes: string[] = [];
 		const excludes: string[] = [];
@@ -224,7 +236,7 @@ test "walker: empty includes → everything non-builtin-excluded" {
 }
 
 test "walker: includes allowlist" {
-	const root = "/tmp/mspub-walk-2";
+	const root = join(testTmpDir(), "mspub-walk-2");
 	if (makeFixture(root)) {
 		const includes: string[] = ["src/**/*.ms"];
 		const excludes: string[] = [];
@@ -241,7 +253,7 @@ test "walker: includes allowlist" {
 }
 
 test "walker: excludes subtract from includes" {
-	const root = "/tmp/mspub-walk-3";
+	const root = join(testTmpDir(), "mspub-walk-3");
 	if (makeFixture(root)) {
 		const includes: string[] = ["src/**/*.ms"];
 		const excludes: string[] = ["src/sub/**"];
@@ -257,7 +269,7 @@ test "walker: excludes subtract from includes" {
 }
 
 test "walker: builtin excludes always apply" {
-	const root = "/tmp/mspub-walk-4";
+	const root = join(testTmpDir(), "mspub-walk-4");
 	if (makeFixture(root)) {
 		// Even if user tries to include .git, builtin still excludes it
 		const includes: string[] = ["**/*"];
@@ -280,7 +292,7 @@ test "walker: builtin excludes always apply" {
 }
 
 test "walker: bad glob surfaces error" {
-	const root = "/tmp/mspub-walk-5";
+	const root = join(testTmpDir(), "mspub-walk-5");
 	if (makeFixture(root)) {
 		const includes: string[] = ["a**b"];
 		const excludes: string[] = [];
@@ -293,7 +305,7 @@ test "walker: bad glob surfaces error" {
 test "walker: nonexistent root reports error" {
 	const includes: string[] = [];
 	const excludes: string[] = [];
-	const r = collectPublishFiles("/tmp/does-not-exist-xyz-987", includes, excludes);
+	const r = collectPublishFiles(join(testTmpDir(), "does-not-exist-xyz-987"), includes, excludes);
 	assert r.errors.length >= 1;
 	assert r.files.length === 0;
 }

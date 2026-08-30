@@ -1,8 +1,22 @@
 // Manifest — edit build.ms deps section.
 // Uses text-level insertion (proven in C backend) + fmt normalization.
 
-import { exists, readFile, writeFile } from "std/fs";
+import { exists, readFile, writeFile, join } from "std/fs";
+import { env } from "std/process";
 import { PackageSection, DepsSection, loadBuildConfig } from "../buildConfig";
+
+// Test scratch dir — the OS temp dir WITHOUT importing std/os: its C-header
+// (@compile of runtime/os.h) drags system includes into these test TUs.
+// Windows sets TMP/TEMP; POSIX falls back to /tmp (same as std/os tmpDir).
+function testTmpDir(): string {
+	const t = env.get("TMP");
+	if (t !== "") return t;
+	const t2 = env.get("TEMP");
+	if (t2 !== "") return t2;
+	const t3 = env.get("TMPDIR");
+	if (t3 !== "") return t3;
+	return "/tmp";
+}
 
 export function readManifest(buildPath: string): { package: PackageSection, deps: DepsSection, devDeps: DepsSection, valid: boolean } {
 	const cfg = loadBuildConfig(buildPath, false);
@@ -130,7 +144,7 @@ export function removeDepFromManifest(buildPath: string, name: string): boolean 
 // --- Tests ---
 
 test "addDepToManifest creates deps block" {
-	const path = "/tmp/test-manifest-add.ms";
+	const path = join(testTmpDir(), "test-manifest-add.ms");
 	writeFile(path, "const config = {\n\tentry: \"./src/index\",\n};\n\nexport default config;\n");
 	const ok = addDepToManifest(path, "cool-json", "1.2.3", "deps");
 	assert ok;
@@ -140,7 +154,7 @@ test "addDepToManifest creates deps block" {
 }
 
 test "addDepToManifest adds to existing block" {
-	const path = "/tmp/test-manifest-add2.ms";
+	const path = join(testTmpDir(), "test-manifest-add2.ms");
 	writeFile(path, "const config = {\n\tdeps: {\n\t\t\"foo\": \"1.0.0\",\n\t},\n};\n\nexport default config;\n");
 	const ok = addDepToManifest(path, "bar", "2.0.0", "deps");
 	assert ok;
@@ -150,7 +164,7 @@ test "addDepToManifest adds to existing block" {
 }
 
 test "addDepToManifest updates existing dep" {
-	const path = "/tmp/test-manifest-add3.ms";
+	const path = join(testTmpDir(), "test-manifest-add3.ms");
 	writeFile(path, "const config = {\n\tdeps: {\n\t\t\"foo\": \"1.0.0\",\n\t},\n};\n\nexport default config;\n");
 	const ok = addDepToManifest(path, "foo", "2.0.0", "deps");
 	assert ok;
@@ -160,7 +174,7 @@ test "addDepToManifest updates existing dep" {
 }
 
 test "removeDepFromManifest removes dep" {
-	const path = "/tmp/test-manifest-rm.ms";
+	const path = join(testTmpDir(), "test-manifest-rm.ms");
 	writeFile(path, "const config = {\n\tdeps: {\n\t\t\"foo\": \"1.0.0\",\n\t\t\"bar\": \"2.0.0\",\n\t},\n};\n\nexport default config;\n");
 	const ok = removeDepFromManifest(path, "foo");
 	assert ok;
