@@ -1,4 +1,3 @@
-// @skip-js: int64 is an IEEE double on JS until the BigInt mapping lands (docs/JSON.md roadmap 3)
 // @stdout: int64-fidelity all-ok
 // Oracle program — an int64 must survive the WHOLE pipeline exactly: source
 // literal → AST → codegen → runtime arithmetic → toString. 012-floatFormat pins

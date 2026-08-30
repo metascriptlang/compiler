@@ -1,10 +1,3 @@
-// @xfail(js): int64 IS a double on the JS backend — the BigInt representation
-//   is gated off there (jsBigInt64, codegen/js) because the operator half of
-//   the mapping is unwritten, so every int64 site on that backend is a Number
-//   and the delta checks below read 0 instead of 1. Not a JSON bug and not
-//   parser.ms's parseInt: that call is only where the loss becomes visible.
-//   When the mapping ships (docs/JSON.md roadmap 3) and the gate flips on,
-//   this XPASSes loud and the marker comes off.
 // @stdout: int64-json all-ok
 // Oracle program — int64 fidelity THROUGH the JSON surface, the one place the
 // two backends deliberately diverge today with no corpus coverage.
