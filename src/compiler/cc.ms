@@ -33,75 +33,174 @@ function checkZigCC(): boolean {
 	return hasZigCC;
 }
 
-// -- Solana BPF toolchain detection --
+// -- Solana SBF toolchain detection --
+//
+// The toolchain is Anza's platform-tools bundle: an LLVM whose clang has the
+// `sbf` target registered, plus the `ld.lld` shipped beside it. Stock system
+// clang does NOT qualify: it carries `bpf`/`bpfel` (Linux kernel BPF), which is
+// a different ABI — no static syscalls, different call convention, different
+// memory map. Linking a kernel-BPF object as a Solana program produces an ELF
+// the VM rejects, so the probe below matches the `sbf` target by name.
+//
+// Resolution order: $MSC_SBF_CLANG (escape hatch) → ~/.cache/solana/<ver>/
+// platform-tools (where `cargo build-sbf` installs it) → PATH clang.
 
-let _bpfClang = "";
-let _bpfClangChecked = false;
+const SBF_TARGET = "sbpfv3-solana-solana";
 
-function testBpfClang(binary: string): boolean {
-	// Check if clang supports BPF target (Apple clang doesn't)
-	return exec(`"${binary}" --print-targets 2>/dev/null | grep -q bpf`).ok;
+let _sbfClang = "";
+let _sbfClangChecked = false;
+
+function exeSuffix(): string {
+	return platform === "windows" ? ".exe" : "";
+}
+
+function homeDir(): string {
+	const h = env.get("HOME");
+	if (h !== "") return h;
+	return env.get("USERPROFILE");
+}
+
+// True when this clang has the Solana `sbf` backend registered. Reads the
+// --print-targets table in-process rather than shelling out to a pipeline:
+// `grep` does not exist on Windows and `2>/dev/null` is not cmd.exe syntax, so
+// the old probe returned false on every Windows host.
+function hasSbfTarget(binary: string): boolean {
+	const r = exec(`"${binary}" --print-targets`);
+	if (!r.ok) return false;
+	for (const line of r.value.split("\n")) {
+		// Rows read "    sbf        - SBF new (little endian)". Match the name
+		// column exactly so `bpf` and `bpfel` are not mistaken for a hit.
+		const name = line.trim().split(" ")[0];
+		if (name === "sbf") return true;
+	}
+	return false;
+}
+
+// Newest platform-tools under ~/.cache/solana. Entries are version dirs
+// ("v1.57"); readDir marks directories with a trailing "/". Lexicographic max is
+// good enough — the point is to prefer a recent install, and any of them that
+// passes hasSbfTarget can build.
+function cachedPlatformToolsClang(): string {
+	const home = homeDir();
+	if (home === "") return "";
+	const cacheRoot = join(home, ".cache/solana");
+	if (!exists(cacheRoot)) return "";
+	let best = "";
+	for (const entry of readDir(cacheRoot)) {
+		let name = entry;
+		if (name.endsWith("/")) name = name.slice(0, name.length - 1);
+		if (name === "") continue;
+		const candidate = join(cacheRoot, `${name}/platform-tools/llvm/bin/clang${exeSuffix()}`);
+		if (!exists(candidate)) continue;
+		if (candidate > best) best = candidate;
+	}
+	return best;
 }
 
 export function resolveBpfClang(): string {
-	if (_bpfClangChecked) return _bpfClang;
-	_bpfClangChecked = true;
-	const candidates = [
-		"/opt/homebrew/opt/llvm/bin/clang",  // macOS Apple Silicon
-		"/usr/local/opt/llvm/bin/clang",     // macOS Intel
-		"clang",                              // System clang (Linux)
-	];
-	for (const c of candidates) {
-		if (testBpfClang(c)) {
-			_bpfClang = c;
-			return _bpfClang;
-		}
+	if (_sbfClangChecked) return _sbfClang;
+	_sbfClangChecked = true;
+
+	const override = env.get("MSC_SBF_CLANG");
+	if (override !== "" && hasSbfTarget(override)) {
+		_sbfClang = override;
+		return _sbfClang;
+	}
+
+	const cached = cachedPlatformToolsClang();
+	if (cached !== "" && hasSbfTarget(cached)) {
+		_sbfClang = cached;
+		return _sbfClang;
+	}
+
+	const onPath = findOnPath("clang");
+	if (onPath !== "" && hasSbfTarget(onPath)) {
+		_sbfClang = onPath;
+		return _sbfClang;
 	}
 	return "";
 }
 
-let _sbpfLinker = "";
-let _sbpfLinkerChecked = false;
-
-export function resolveSbpfLinker(): string {
-	if (_sbpfLinkerChecked) return _sbpfLinker;
-	_sbpfLinkerChecked = true;
-	if (exec("which sbpf-linker > /dev/null 2>&1").ok) {
-		_sbpfLinker = "sbpf-linker";
-	} else {
-		// Try cargo default install location
-		const home = env.get("HOME");
-		if (home !== "") {
-			const cargoPath = `${home}/.cargo/bin/sbpf-linker`;
-			if (exec(`test -x "${cargoPath}"`).ok) {
-				_sbpfLinker = cargoPath;
-			}
-		}
-	}
-	return _sbpfLinker;
+// `ld.lld` from the same LLVM bin/ as the resolved clang. Deliberately not a
+// PATH lookup: a system ld.lld is a different LLVM version than the clang that
+// produced the objects, and platform-tools always ships the pair together.
+export function resolveSbfLinker(): string {
+	const clang = resolveBpfClang();
+	if (clang === "") return "";
+	const lld = join(dirname(clang), `ld.lld${exeSuffix()}`);
+	if (exists(lld)) return lld;
+	return "";
 }
 
-// Validate a .bc file is BPF-compatible (no floats, no aggregate returns).
-// Returns true if valid, false if llc rejects it.
-export function validateBpfBitcode(bcFile: string): boolean {
-	const llc = _bpfClang.length > 5 ? `"${_bpfClang.slice(0, _bpfClang.length - 5)}llc"` : "llc";
-	return exec(`${llc} -march=bpfel -filetype=null "${bcFile}" 2>/dev/null`).ok;
+// Linker script for SBPFv3, verbatim from the `link-script` field of
+//   rustc --target=sbpfv3-solana-solana --print target-spec-json
+// This is the authoritative layout, and it is NOT the same as the `sbf.ld` in
+// agave's C SDK — that one is the v0 legacy layout (.text at 0, live .dynamic/
+// .dynsym/.rel.dyn) and solana-sbpf rejects it with InvalidProgramHeader. The
+// loader expects exactly two PT_LOAD headers: PF_R .rodata at 0x0 and PF_X
+// .text at 0x1_0000_0000 (see solana-sbpf src/elf.rs, EXPECTED_PROGRAM_HEADERS).
+//
+// The /DISCARD/ of .data*/.bss* is what makes "no mutable globals" a hard
+// requirement rather than advice: a program that keeps one fails the link with
+// "relocation refers to a symbol in a discarded section" (verified) — loud, not
+// silent, but still a wall until module-level DCE lands (docs/BARE.md Phase 3b).
+const SBPF_LINK_SCRIPT = `PHDRS
+{
+  rodata PT_LOAD FLAGS(4);
+  text PT_LOAD FLAGS(1);
+  other PT_NULL FLAGS(0);
 }
 
+SECTIONS
+{
+  .rodata 0x000000000 : SUBALIGN(8) {
+    BYTE(0);
+    *(.rodata*)
+    *(.data.rel.ro*)
+    . = ALIGN(8);
+  } :rodata
+  .text 0x100000000 : {
+     *(.text*)
+  } :text
+  /DISCARD/ : {
+      *(.comment*)
+      *(.eh_frame*)
+      *(*hash*)
+      *(.bss*)
+      *(.data*)
+      *(.rel.dyn*)
+      *(.dynamic)
+      *(.dynsym)
+      *(.dynstr)
+    }
+}
+`;
+
+// Link SBF objects into a deployable Solana program (.so).
+//
+// One `ld.lld` invocation — no bitcode round-trip and no third-party linker.
+// The previous pipeline (clang -emit-llvm → llvm-link → `sbpf-linker` installed
+// via cargo) is gone: objects compiled for the real `sbf` target link directly,
+// and ld.lld ships inside platform-tools. --gc-sections drops unreferenced
+// functions (verified: strips a dead function, 952 → 880 bytes), rooted at the
+// `entrypoint` symbol via --entry.
 export function linkSolana(oFileList: string, outBinary: string): Result<void, ProcessError> {
-	// Derive llvm-link path from BPF clang binary
-	const llvmDir = _bpfClang.length > 5 ? _bpfClang.slice(0, _bpfClang.length - 5) : "";
-	const llvmLink = llvmDir !== "" ? `"${llvmDir}llvm-link"` : "llvm-link";
-	// Step 1: filter to only BPF-valid .bc files (reject float ops, aggregate returns)
-	let validFiles = "";
-	const parts = oFileList.split(" ");
-	for (const f of parts) {
-		if (f !== "" && validateBpfBitcode(f)) {
-			if (validFiles !== "") validFiles = `${validFiles} `;
-			validFiles = `${validFiles}${f}`;
-		}
+	const lld = resolveSbfLinker();
+	if (lld === "") {
+		return Result.err({
+			kind: ProcessErrorKind.NotFound,
+			command: "ld.lld",
+			exitCode: 0,
+			signal: 0,
+			output: "",
+			errorOutput: "",
+			message: "ld.lld not found next to the SBF clang (platform-tools llvm/bin)",
+		});
 	}
-	if (validFiles === "") {
+	ensureDir(dirname(outBinary));
+	const scriptPath = `${outBinary}.ld`;
+	const w = writeFile(scriptPath, SBPF_LINK_SCRIPT);
+	if (!w.ok) {
 		return Result.err({
 			kind: ProcessErrorKind.SpawnFailed,
 			command: "linkSolana",
@@ -109,28 +208,19 @@ export function linkSolana(oFileList: string, outBinary: string): Result<void, P
 			signal: 0,
 			output: "",
 			errorOutput: "",
-			message: "no BPF-valid bitcode files to link",
+			message: `cannot write linker script ${scriptPath}`,
 		});
 	}
-	// Step 2: merge valid .bc files into one
-	const combined = `${outBinary}.bc`;
-	const linkRes = exec(`${llvmLink} ${validFiles} -o "${combined}" 2>/dev/null`);
-	if (!linkRes.ok) return Result.err(linkRes.error);
-	// Step 3: sbpf-linker converts bitcode to Solana-compatible ELF (DYN type)
-	const linker = resolveSbpfLinker();
-	if (linker === "") {
-		return Result.err({
-			kind: ProcessErrorKind.NotFound,
-			command: "sbpf-linker",
-			exitCode: 0,
-			signal: 0,
-			output: "",
-			errorOutput: "",
-			message: "sbpf-linker not found on PATH",
-		});
-	}
-	const sbpfRes = exec(`${linker} "${combined}" --export entrypoint -o "${outBinary}" 2>/dev/null`);
-	if (!sbpfRes.ok) return Result.err(sbpfRes.error);
+	// --threads=1 / -z notext / --Bdynamic mirror the rustc target's pre-link-args.
+	//
+	// -shared is load-bearing twice over. (1) Syscalls (`sol_log_`, `sol_memcpy_`,
+	// …) are never defined in the program — the VM binds them at load time — so a
+	// non-shared link fails with "undefined symbol: sol_log_". (2) It yields ELF
+	// type DYN, which is what the loader expects (the rustc target is
+	// `only-cdylib`); --unresolved-symbols=ignore-all also links but produces EXEC.
+	const cmd = `"${lld}" --threads=1 -z notext --Bdynamic -shared --script "${scriptPath}" --entry entrypoint --gc-sections -o "${outBinary}" ${oFileList}`;
+	const r = exec(cmd);
+	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
 }
 
@@ -368,11 +458,18 @@ function isCrossZig(opts: CliOptions): boolean {
 
 export function cliCompileFlags(opts: CliOptions): string {
 	let flags = "";
-	// Solana/BPF: completely different flag set, skip everything else
+	// Solana/SBF: completely different flag set, skip everything else.
+	// The triple is the Solana one, NOT `bpfel`: bpfel is Linux kernel BPF, a
+	// different ABI the Solana VM will not run. `sbpfv3-solana-solana` is the
+	// current network target (platform-tools >= v1.53 — earlier releases shipped
+	// the name with a different LLVM definition; see the platform-tools README).
 	if (opts.targetOs === "solana") {
-		flags = appendFlag(flags, "-target bpfel");
+		flags = appendFlag(flags, `-target ${SBF_TARGET}`);
 		flags = appendFlag(flags, "-fno-builtin");
-		flags = appendFlag(flags, "-emit-llvm");
+		flags = appendFlag(flags, "-fPIC");
+		// Per-symbol sections so the --gc-sections at link time can strip what
+		// the program does not reach.
+		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
 		const rtDir = resolveRuntimeDir();
 		if (rtDir !== "") flags = appendFlag(flags, `-isystem ${rtDir}/runtime/freestanding`);
 		if (opts.passC !== "") flags = appendFlag(flags, opts.passC);

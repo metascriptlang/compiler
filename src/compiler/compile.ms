@@ -971,27 +971,31 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
 	resolveCC(opts);
+	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs);
 	applyGcMode(opts);
 
-	// Solana: resolve BPF toolchain, force --gc=manual, force release mode
+	// Solana: resolve the SBF toolchain, force --gc=manual, force release mode.
+	// Both halves come from Anza's platform-tools bundle — a stock LLVM will not
+	// do, so the diagnostic points at the bundle rather than at a package manager.
 	if (opts.targetOs === "solana") {
 		if (opts.gcMode === "" || opts.gcMode === "drc" || opts.gcMode === "orc") opts.gcMode = "manual";
 		if (opts.mode === 0) opts.mode = 1;
 		if (opts.ccBinary === "") {
-			const bpfClang = resolveBpfClang();
-			if (bpfClang === "") {
-				console.log(`${error("error")}: --os=solana requires clang with BPF target support`);
-				console.log(`  Install LLVM: ${bold("brew install llvm")} (macOS) or ${bold("apt install llvm")} (Linux)`);
+			const sbfClang = resolveBpfClang();
+			if (sbfClang === "") {
+				console.log(`${error("error")}: --os=solana requires a clang with the ${bold("sbf")} target registered`);
+				console.log(`  System clang carries ${bold("bpf")}/${bold("bpfel")} (Linux kernel BPF) — a different ABI, not this.`);
+				console.log(`  Install Anza platform-tools (${bold("cargo build-sbf")} fetches it to ~/.cache/solana),`);
+				console.log(`  or point at one: ${bold("MSC_SBF_CLANG=/path/to/platform-tools/llvm/bin/clang")}`);
 				exit(1);
 			}
-			opts.ccBinary = bpfClang;
+			opts.ccBinary = sbfClang;
 		}
-		const sbpfLinker = resolveSbpfLinker();
-		if (sbpfLinker === "") {
-			console.log(`${error("error")}: --os=solana requires sbpf-linker`);
-			console.log(`  Install: ${bold("cargo install sbpf-linker")}`);
+		if (resolveSbfLinker() === "") {
+			console.log(`${error("error")}: --os=solana requires ${bold("ld.lld")} beside the SBF clang`);
+			console.log(`  Expected it in the same platform-tools ${bold("llvm/bin")} directory.`);
 			exit(1);
 		}
 	}
@@ -1442,7 +1446,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	} else if (opts.targetOs === "solana") {
 		const linkRes = linkSolana(oFiles, outBinary);
 		if (!linkRes.ok) {
-			console.log(`${error("error")}: sbpf-linker failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+			console.log(`${error("error")}: SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 			if (linkRes.error.errorOutput !== "") console.log(linkRes.error.errorOutput);
 			exit(1);
 		}
