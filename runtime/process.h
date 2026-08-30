@@ -283,6 +283,29 @@ static inline void _msAppendWinArg(char** buf, size_t* len, size_t* cap, const c
 	*len = out - *buf;
 }
 
+/* Serializes pipe creation + CreateProcess + closing the parent's write ends.
+ *
+ * CreateProcess with bInheritHandles=TRUE hands the child EVERY handle that is
+ * inheritable in this process at that moment — not just the three named in
+ * STARTUPINFO. The pipe write ends must be inheritable for the child to write
+ * through them, so while one thread sits between its CreatePipe and its
+ * CloseHandle(write end), any other thread that spawns leaks that first
+ * thread's write end into an unrelated child. That child holds the pipe open,
+ * so the first thread's ReadFile never sees EOF and blocks until the unrelated
+ * child happens to exit — across a wide pool, effectively forever.
+ *
+ * @compile dispatch spawns across the whole runtime thread pool, so a
+ * many-core box hits this readily: it is why a `--os=solana` build stalled with
+ * a clang child sitting at 0.00 s CPU.
+ *
+ * The lock-free alternative is STARTUPINFOEX + PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+ * which confines inheritance to an explicit list. That is the structurally
+ * correct fix and worth taking if spawn ever becomes hot, but it costs several
+ * more failure paths (every std handle must itself be valid and inheritable).
+ * Spawn is ~1-3 ms against ~500 ms compiles, so serializing it does not show up
+ * in a build; only the spawn is serialized, the compiles still run in parallel. */
+static SRWLOCK _msSpawnCreateLock = SRWLOCK_INIT;
+
 static inline double msProcessExecFile(msString path, msStringArray* args) {
 	const char* pathStr = msStringToCString(path);
 
@@ -312,15 +335,21 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 	si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 	ZeroMemory(&pi, sizeof(pi));
 
+	/* This spawn creates no pipes of its own, but bInheritHandles=TRUE still
+	 * captures every inheritable handle in the process — including the pipe
+	 * write ends a concurrent msProcessSpawnSync is holding open. Taking the
+	 * same lock keeps that window closed; see _msSpawnCreateLock. */
+	AcquireSRWLockExclusive(&_msSpawnCreateLock);
 	BOOL ok = CreateProcessA(
-		pathStr,     /* lpApplicationName — accepts forward slashes */
+		pathStr,     /* lpApplicationName - accepts forward slashes */
 		cmdLine,     /* lpCommandLine (mutable) */
 		NULL, NULL,  /* process/thread security attrs */
-		TRUE,        /* bInheritHandles — for stdio inheritance */
+		TRUE,        /* bInheritHandles - for stdio inheritance */
 		0,           /* creation flags */
 		NULL,        /* inherit parent environment */
 		NULL,        /* inherit parent cwd */
 		&si, &pi);
+	ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 	free(cmdLine);
 	if (!ok) return -1.0;
 
@@ -440,6 +469,43 @@ static inline int _msSpawnDrainFd(int fd, char** outBuf, size_t* outLen) {
 }
 #endif
 
+#ifdef _WIN32
+/* Move whatever is currently buffered in `h` into a growable buffer without
+ * blocking. Returns FALSE once the pipe is at EOF (every write end closed) or
+ * on allocation failure; *didRead reports whether bytes moved so the caller can
+ * skip its backoff while either pipe is still producing.
+ *
+ * Past MS_SPAWN_MAX_OUTPUT the data is read and discarded rather than left in
+ * the pipe: stopping the reads would refill the buffer and block the child in
+ * WriteFile, which is the very deadlock this pump exists to avoid. */
+static inline BOOL msSpawnPumpPipe(HANDLE h, char** buf, size_t* cap, size_t* len, BOOL* didRead) {
+	DWORD avail = 0;
+	if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) return FALSE;  /* broken pipe == EOF */
+	if (avail == 0) return TRUE;
+	if (*buf == NULL) return FALSE;
+
+	char chunk[4096];
+	DWORD want = avail > (DWORD)sizeof(chunk) ? (DWORD)sizeof(chunk) : avail;
+	DWORD nRead = 0;
+	if (!ReadFile(h, chunk, want, &nRead, NULL) || nRead == 0) return FALSE;
+	*didRead = TRUE;
+
+	size_t got = (size_t)nRead;
+	if (*len >= MS_SPAWN_MAX_OUTPUT) return TRUE;               /* capped: drained and dropped */
+	if (*len + got > MS_SPAWN_MAX_OUTPUT) got = MS_SPAWN_MAX_OUTPUT - *len;
+	while (*len + got + 1 > *cap) {
+		size_t newCap = *cap * 2;
+		char* grown = (char*)realloc(*buf, newCap);
+		if (!grown) { free(*buf); *buf = NULL; return FALSE; }  /* realloc keeps the old block on failure */
+		*buf = grown;
+		*cap = newCap;
+	}
+	memcpy(*buf + *len, chunk, got);
+	*len += got;
+	return TRUE;
+}
+#endif  /* _WIN32 */
+
 static inline msString msProcessSpawnSync(msString command) {
 	/* Reset side-channel state for this invocation. */
 	_msProcSpawnExitCode = 0;
@@ -451,36 +517,70 @@ static inline msString msProcessSpawnSync(msString command) {
 	const char* cmd = msStringToCString(command);
 
 #ifdef _WIN32
+	/* Critical section runs to the CloseHandle of both write ends — see
+	 * _msSpawnCreateLock for why an unlocked window here hangs concurrent
+	 * spawns. Every exit path below must release it. */
+	AcquireSRWLockExclusive(&_msSpawnCreateLock);
+
 	SECURITY_ATTRIBUTES sa;
 	sa.nLength = sizeof(SECURITY_ATTRIBUTES);
 	sa.bInheritHandle = TRUE;
 	sa.lpSecurityDescriptor = NULL;
 
+	/* 64 KB pipe buffers rather than the ~4 KB default: the pump below is
+	 * already deadlock-free at any size, this just cuts the number of
+	 * Peek/Read round trips for the multi-kilobyte diagnostic dumps a failing
+	 * compile produces. */
 	HANDLE outRd = NULL, outWr = NULL;
 	HANDLE errRd = NULL, errWr = NULL;
-	if (!CreatePipe(&outRd, &outWr, &sa, 0)) return MS_EMPTY_STRING;
-	if (!SetHandleInformation(outRd, HANDLE_FLAG_INHERIT, 0)) {
-		CloseHandle(outRd); CloseHandle(outWr);
+	if (!CreatePipe(&outRd, &outWr, &sa, 64 * 1024)) {
+		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 		return MS_EMPTY_STRING;
 	}
-	if (!CreatePipe(&errRd, &errWr, &sa, 0)) {
+	if (!SetHandleInformation(outRd, HANDLE_FLAG_INHERIT, 0)) {
 		CloseHandle(outRd); CloseHandle(outWr);
+		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
+		return MS_EMPTY_STRING;
+	}
+	if (!CreatePipe(&errRd, &errWr, &sa, 64 * 1024)) {
+		CloseHandle(outRd); CloseHandle(outWr);
+		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 		return MS_EMPTY_STRING;
 	}
 	if (!SetHandleInformation(errRd, HANDLE_FLAG_INHERIT, 0)) {
 		CloseHandle(outRd); CloseHandle(outWr);
 		CloseHandle(errRd); CloseHandle(errWr);
+		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 		return MS_EMPTY_STRING;
 	}
 
-	/* Run via cmd.exe /c to support shell features (pipes, redirects). */
-	char* cmdLine = (char*)malloc(strlen(cmd) + 16);
+	/* Run via cmd.exe to support shell features (pipes, redirects). Flags are
+	 * `/d /s /c "<command>"`, the same form Node's child_process.exec uses.
+	 *
+	 * /s + wrapping the whole command in quotes, NOT a bare `/c %s`: without /s,
+	 * cmd applies its legacy quote-stripping rule — when the line starts with a
+	 * quote it drops that quote and the LAST one on the line, which unbalances
+	 * every quote in between. A command whose first token is a quoted path
+	 * (`"C:/…/zig.exe" cc …`) and that also carries a quoted arg containing
+	 * redirect characters (`-DMBEDTLS_CONFIG_FILE="<mbedtls/mbedtlsConfig.h>"`)
+	 * then exposes the `<`/`>` as redirects and cmd rejects the whole line with
+	 * "The syntax of the command is incorrect." before spawning anything.
+	 * With /s the outer pair is stripped and the remainder is passed verbatim;
+	 * redirects and pipes written outside that pair still work.
+	 *
+	 * /d skips the AutoRun command in HK{CU,LM}\Software\Microsoft\Command
+	 * Processor. Without it, an arbitrary user-configured command runs inside
+	 * every process we spawn — non-deterministic builds and an injection point.
+	 *
+	 * Sizing: "cmd.exe /d /s /c \"" (18) + closing quote (1) + NUL (1) = 20. */
+	char* cmdLine = (char*)malloc(strlen(cmd) + 24);
 	if (!cmdLine) {
 		CloseHandle(outRd); CloseHandle(outWr);
 		CloseHandle(errRd); CloseHandle(errWr);
+		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 		return MS_EMPTY_STRING;
 	}
-	sprintf(cmdLine, "cmd.exe /c %s", cmd);
+	sprintf(cmdLine, "cmd.exe /d /s /c \"%s\"", cmd);
 
 	STARTUPINFOA si;
 	PROCESS_INFORMATION pi;
@@ -496,40 +596,42 @@ static inline msString msProcessSpawnSync(msString command) {
 	free(cmdLine);
 	CloseHandle(outWr);  /* child writes; parent reads */
 	CloseHandle(errWr);
+	/* Both write ends are gone from this process, so no later spawn can leak
+	 * them into an unrelated child — end of the critical section. The drain
+	 * below is the slow part and runs unlocked, so spawns stay parallel. */
+	ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 	if (!ok) {
 		CloseHandle(outRd); CloseHandle(errRd);
 		return MS_EMPTY_STRING;
 	}
 
-	/* Drain stdout pipe. */
+	/* Drain BOTH pipes concurrently.
+	 *
+	 * Reading stdout to EOF and only then starting on stderr deadlocks: a child
+	 * that fills the stderr pipe buffer blocks in WriteFile, so it never exits
+	 * and never closes stdout, and the parent waits forever for a stdout EOF
+	 * that cannot arrive. Compiler and linker diagnostics pass the buffer size
+	 * routinely — the hang lands on exactly the builds whose output you need.
+	 *
+	 * PeekNamedPipe services both pipes from this one thread, so neither
+	 * overlapped I/O nor a reader thread per pipe is needed. The 1 ms backoff
+	 * only runs when both pipes are momentarily empty and still open. */
 	size_t outCap = 4096, outLen = 0;
+	size_t errCap = 4096, errLen = 0;
 	char* outBuf = (char*)malloc(outCap);
-	char chunk[4096];
-	DWORD nRead;
-	while (outBuf && ReadFile(outRd, chunk, sizeof(chunk), &nRead, NULL) && nRead > 0) {
-		size_t got = (size_t)nRead;
-		if (outLen + got > MS_SPAWN_MAX_OUTPUT) { got = MS_SPAWN_MAX_OUTPUT - outLen; if (got == 0) break; }
-		while (outLen + got + 1 > outCap) { outCap *= 2; outBuf = (char*)realloc(outBuf, outCap); if (!outBuf) break; }
-		if (!outBuf) break;
-		memcpy(outBuf + outLen, chunk, got);
-		outLen += got;
-		if (outLen >= MS_SPAWN_MAX_OUTPUT) break;
+	char* errBuf = (char*)malloc(errCap);
+	BOOL outOpen = TRUE, errOpen = TRUE;
+	while (outOpen || errOpen) {
+		BOOL didRead = FALSE;
+		if (outOpen && !msSpawnPumpPipe(outRd, &outBuf, &outCap, &outLen, &didRead)) outOpen = FALSE;
+		if (errOpen && !msSpawnPumpPipe(errRd, &errBuf, &errCap, &errLen, &didRead)) errOpen = FALSE;
+		if (!didRead && (outOpen || errOpen)) Sleep(1);
 	}
 	CloseHandle(outRd);
-
-	/* Drain stderr pipe. */
-	size_t errCap = 4096, errLen = 0;
-	char* errBuf = (char*)malloc(errCap);
-	while (errBuf && ReadFile(errRd, chunk, sizeof(chunk), &nRead, NULL) && nRead > 0) {
-		size_t got = (size_t)nRead;
-		if (errLen + got > MS_SPAWN_MAX_OUTPUT) { got = MS_SPAWN_MAX_OUTPUT - errLen; if (got == 0) break; }
-		while (errLen + got + 1 > errCap) { errCap *= 2; errBuf = (char*)realloc(errBuf, errCap); if (!errBuf) break; }
-		if (!errBuf) break;
-		memcpy(errBuf + errLen, chunk, got);
-		errLen += got;
-		if (errLen >= MS_SPAWN_MAX_OUTPUT) break;
-	}
 	CloseHandle(errRd);
+	/* A failed allocation means the captured text is incomplete. Report it as a
+	 * pipe error instead of handing back a short read that reads like success. */
+	if (!outBuf || !errBuf) _msProcSpawnPipeOk = 0;
 
 	WaitForSingleObject(pi.hProcess, INFINITE);
 	DWORD exitCode = 0;
