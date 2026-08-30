@@ -2,10 +2,11 @@
 //
 // Invokes clang to compile generated C source into native binaries.
 
-import { exec, env, cmdExists, platform, ProcessError, ProcessErrorKind } from "std/process";
-import { writeFile, ensureDir } from "std/fs";
+import { exec, env, cmdExists, findOnPath, platform, exit, ProcessError, ProcessErrorKind } from "std/process";
+import { writeFile, ensureDir, exists, readDir } from "std/fs";
 import { join, dirname } from "std/fs/path";
-import { CliOptions } from "./options";
+import { writeStderr } from "std/io";
+import { CliOptions, MODE_DANGER } from "./options";
 import { resolveRuntimeDir } from "../utils/path";
 import { managedZigCompiler } from "./toolchain";
 
@@ -273,16 +274,81 @@ export function modeFlags(mode: number): string {
 	};
 }
 
+// -- LTO capability + strategy --
+// One table, one place: which compiler/target pairs can link with LTO, and
+// which should reach for it by default. Both halves of the decision live with
+// the compiler, so resolveLto below must run right AFTER resolveCC — parseArgs
+// cannot decide this (it runs before the compiler is known).
+
+// GNU gcc (resolved names: "gcc", "x86_64-linux-gnu-gcc", "g++", …). macOS's
+// /usr/bin/gcc is a clang shim, but auto-detection never resolves to the name
+// "gcc" unless clang and zig are both absent, so this stays accurate.
+function isGnuGcc(cc: string): boolean {
+	return cc === "gcc" || cc.endsWith("-gcc") || cc.endsWith("g++");
+}
+
+// Proven-broken pairs — an LTO link can NEVER succeed here, so even an
+// explicit --lto= fails loud:
+// - zig → Mach-O: zig replaced LLD with its own Mach-O linker, which has no
+//   LTO path; `-fuse-ld=` is silently ignored, so there is no escape hatch.
+//   Target-scoped: the linker is picked by object format, not by host.
+// - zig → windows-gnu: the LTO link pulls in zigc.lib, whose MinGW math-shim
+//   exports (__INF, __QNAN, __SNANL, nanl, …) are weak+hidden in bitcode and
+//   get dropped during LTO internalization. A 3-line hello.c reproduces it at
+//   every opt level. (Zig 0.16.0.)
+export function ltoBroken(cc: string, targetOs: string): boolean {
+	if (!isZigCC(cc)) return false;
+	if (targetOs === "windows") return true;
+	return targetOs === "darwin" || targetOs === "macos";
+}
+
+// Should --danger reach for LTO by default? Practicality on top of
+// possibility: GNU gcc links -flto, but a whole-program link of this tree ran
+// 40+ minutes without finishing — never a sane default, still allowed
+// explicitly (informed choice, e.g. an overnight CI build).
+function ltoDefaultOn(cc: string, targetOs: string): boolean {
+	if (ltoBroken(cc, targetOs)) return false;
+	if (isGnuGcc(cc)) return false;
+	return true;
+}
+
+// Resolve opts.lto once the compiler is known. Empty = no explicit --lto=:
+// --danger means "the fastest binary this toolchain can produce on this
+// target", so it takes thin LTO where that links and drops it (with a notice)
+// where it cannot. An explicit --lto= against a proven-broken pair fails loud.
+export function resolveLto(opts: CliOptions): void {
+	const cc = getCompilerName(opts.ccCompiler, opts.ccBinary);
+	const ccName = isZigCC(cc) ? "zig cc" : cc;
+	if (opts.lto === "") {
+		if (opts.mode === MODE_DANGER && ltoDefaultOn(cc, opts.targetOs)) {
+			opts.lto = "thin";
+		} else {
+			opts.lto = "off";
+			if (opts.mode === MODE_DANGER) {
+				writeStderr(`note: --danger builds without LTO for ${ccName} targeting ${opts.targetOs}.\n`);
+			}
+		}
+		return;
+	}
+	if (opts.lto !== "off" && ltoBroken(cc, opts.targetOs)) {
+		const mac = opts.targetOs === "darwin" || opts.targetOs === "macos";
+		const hint = mac ? "re-run with --cc=clang, or drop --lto" : "drop --lto";
+		writeStderr(`error: ${ccName} cannot link with LTO targeting ${opts.targetOs}.\n`);
+		writeStderr(`  → ${hint}.\n`);
+		exit(1);
+	}
+}
+
 // -- LTO strategy flags --
 // Orthogonal to opt-level. Thin = parallel per-function LTO (fast link, ~full
 // runtime); full = monolithic whole-program LTO (slow serial link). Rides the
 // compile-flag string, which already flows to both compile and link commands.
-export function ltoFlags(lto: string): string {
-	return match (lto) {
-		"thin" => " -flto=thin",
-		"full" => " -flto",
-		_ => "",
-	};
+// Spelling is per-compiler: -flto=thin is an LLVM spelling; GNU gcc calls its
+// parallel variant -flto=auto and rejects "thin" outright.
+export function ltoFlags(lto: string, cc: string): string {
+	if (lto === "thin") return isGnuGcc(cc) ? " -flto=auto" : " -flto=thin";
+	if (lto === "full") return " -flto";
+	return "";
 }
 
 // -- Flag accumulation helpers --
@@ -348,8 +414,9 @@ export function cliCompileFlags(opts: CliOptions): string {
 	flags = appendFlag(flags, "-ffunction-sections");
 	// LTO strategy — emitted into the compile flags, which also flow to the link
 	// command (allLink = cliLinkFlags(allFlags)); thin bitcode + -flto=thin at
-	// link enables the parallel ThinLTO backend.
-	flags = appendFlag(flags, ltoFlags(opts.lto));
+	// link enables the parallel ThinLTO backend. opts.lto is final here:
+	// resolveLto ran right after resolveCC.
+	flags = appendFlag(flags, ltoFlags(opts.lto, getCompilerName(opts.ccCompiler, opts.ccBinary)));
 	if (opts.isHcr || opts.appMode === "lib" || opts.appMode === "staticlib") flags = appendFlag(flags, "-fPIC");
 	flags = appendFlag(flags, opts.passC);
 	return flags;

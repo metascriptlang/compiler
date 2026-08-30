@@ -46,7 +46,7 @@ import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { CliOptions, Target } from "./options";
 import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode } from "./io";
-import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbpfLinker, markCppCompile, getCompilerName } from "./cc";
+import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
 import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
@@ -1481,6 +1481,11 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
+	// Same compiler resolution as cmdBuildC: a test build emits and links C with
+	// the same flags, so it needs the same --cc normalization and the same
+	// LTO capability resolution once the compiler is known.
+	resolveCC(opts);
+	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
 

@@ -159,20 +159,13 @@ function ensureZig(assumeYes: boolean): string {
 	return managedZigBinary();
 }
 
-function resolvesToZig(opts: CliOptions): boolean {
-	if (opts.ccCompiler !== 0) return false;
-	return opts.ccBinary === "" || opts.ccBinary === "zig cc" || opts.ccBinary.endsWith("zig cc");
-}
-
+// Normalize the --cc alias and resolve (installing if needed) the compiler to
+// use. Every command that emits C must call this — cmdBuildC and cmdTest both
+// do; cmdRun reaches it through cmdBuildC. LTO capability checks live in
+// cc.ms (ltoBroken/resolveLto) and run right after this, once the compiler is
+// known.
 export function resolveCC(opts: CliOptions): void {
 	if (opts.ccBinary === "zig") opts.ccBinary = "zig cc";
-
-	const nativeMac = (opts.targetOs === "darwin" || opts.targetOs === "macos") && opts.targetOs === platform;
-	if (nativeMac && opts.lto !== "off" && resolvesToZig(opts)) {
-		eprintln(`error: Zig cannot use LTO on macOS (Mach-O limitation).`);
-		eprintln(`  → re-run with --cc=clang, or drop --lto.`);
-		exit(1);
-	}
 
 	if (opts.ccBinary !== "" || opts.ccCompiler !== 0) return;
 	if (opts.targetOs === "solana" || opts.targetOs === "bare" || opts.targetOs === "emcc") return;

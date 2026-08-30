@@ -242,11 +242,10 @@ export function parseArgs(): CliOptions {
 		i += 1;
 	}
 
-	// LTO default is mode-derived: danger (local optimized self-build) uses thin
-	// for a fast parallel link; debug/release stay off. --lto= overrides.
-	if (opts.lto === "") {
-		opts.lto = opts.mode === MODE_DANGER ? "thin" : "off";
-	}
+	// opts.lto stays "" here when no --lto= was given: the default depends on
+	// which compiler resolves (LTO capability is a compiler/target property),
+	// and the compiler is not known until resolveCC runs. resolveLto (cc.ms),
+	// called right after resolveCC, turns "" into thin/off per capability.
 
 	// Seeded last because backend/os/gc/mode are only final once every switch has
 	// been read; `seed` skips names the user already set, so -d: still wins
