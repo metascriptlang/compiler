@@ -10,6 +10,7 @@ import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDecl
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
 import { AliveSet, createAliveSet, aliveSetAdd } from "../codegen/c/context";
+import { hookBaseCName, hookBaseCNameOfSym } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
 import { SymbolKind, Type } from "../ast/node";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -298,7 +299,7 @@ function markUnionHookEdges(t: Type): void {
 		if (vt === null) continue;
 		let vbase = vt;
 		if ((vt.kind === TypeKind.Ref || vt.kind === TypeKind.Ptr) && vt.typeReturn !== null) vbase = vt.typeReturn;
-		const vn = vbase.typeName;
+		const vn = hookBaseCName(vbase.typeName, vbase, null);
 		if (vn.length === 0) continue;
 		for (const hn of [vn + "Copy", vn + "Destroy", vn + "Trace"]) {
 			const h = nameIndexLookup(hn);
@@ -308,7 +309,8 @@ function markUnionHookEdges(t: Type): void {
 		}
 	}
 	if (t.typeName.length > 0) {
-		for (const uhn of [t.typeName + "Copy", t.typeName + "Sink", t.typeName + "WasMoved"]) {
+		const un = hookBaseCName(t.typeName, t, null);
+		for (const uhn of [un + "Copy", un + "Sink", un + "WasMoved"]) {
 			const uh = nameIndexLookup(uhn);
 			if (uh !== "") {
 				markAndWalk(uh, uhn);
@@ -345,6 +347,12 @@ function markTypeInfoEdge(node: Node, modulePath: string): void {
 	const tn = t.typeName;
 	if (tn.length === 0) return;
 	const tiName = tn + "TypeInfo";
+	// The name index maps a name to ONE home, so a type name declared by several
+	// modules resolves to an arbitrary one; the type's own symbol is the identity
+	// that says which module's TypeInfo this allocation demands.
+	if (t.sym !== null && t.sym.modulePath !== "") {
+		markAndWalk(t.sym.modulePath, tiName);
+	}
 	const home = nameIndexLookup(tiName);
 	if (home !== "") {
 		markAndWalk(home, tiName);
@@ -435,9 +443,10 @@ function markAndWalk(modulePath: string, name: string): void {
 				|| (found.kind === NodeKind.ClassDecl && found.resolvedSym !== null
 					&& found.resolvedSym.symbolKind === SymbolKind.Actor);
 			if (isActorOrigin) {
+				const acName = hookBaseCNameOfSym(name, found.resolvedSym);
 				markAndWalk(modulePath, name + "TypeInfo");
-				markAndWalk(modulePath, name + "Destroy");
-				markAndWalk(modulePath, name + "Trace");
+				markAndWalk(modulePath, acName + "Destroy");
+				markAndWalk(modulePath, acName + "Trace");
 			}
 		}
 	}

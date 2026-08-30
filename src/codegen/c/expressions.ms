@@ -15,7 +15,7 @@ import {
 	emitProcLocalsLine, lookupLocalName, typeCacheGet, typeCacheHas, typeCacheSet,
 } from "./context";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey, hookBaseCName } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
@@ -1889,7 +1889,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				emitProcLocalsLine(p, `${cName}* ${tmp};`);
 				emitStmtsLine(p, `${tmp} = ${genAllocTyped(g, cName)};`);
 				if (memberValue.typeName !== "" && hasAsgnFlag(memberValue)) {
-					const hookName = bareTypeName(g, cName) + "Copy";
+					const hookName = hookBaseCName(memberValue.typeName, memberValue, g.checkerCtx) + "Copy";
 					ensureDrcProto(g, hookName);
 					emitStmtsLine(p, `${hookName}(${tmp}, &((${inner}).v${pvi}));`);
 				} else {

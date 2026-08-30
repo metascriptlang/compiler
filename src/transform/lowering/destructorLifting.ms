@@ -25,7 +25,7 @@ import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf, voidType } from "../../checker/types";
-import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName } from "../../codegen/c/types";
+import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName, hookBaseCName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
 import { walkNode } from "../walker";
@@ -103,6 +103,13 @@ class NodeBuf {
 
 function newBuf(): NodeBuf {
 	return { items: [] };
+}
+
+// A hook's base name is the C type name codegen emits for the same type. The
+// ownership registries dedup on that base, so a base less specific than the
+// emitted symbol makes the second declaring module skip hooks it still needs.
+function hookCName(typeName: string, t: Type | null, lctx: LiftCtx): string {
+	return hookBaseCName(typeName, t, lctx.checkerCtx);
 }
 
 // Reference parity: only types that completed hook generation have hooks.
@@ -560,8 +567,9 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				if (hook !== "trace" || isCyclicType(fieldType, lctx, visited)) {
 					// Field-recursion is a CONSUMER path — skip TypeInfo emission.
 					ensureHooks(resolvedName, fieldType, null as unknown as Type, false, lctx, loc);
-					if (namedTypeHasHooks(resolvedName, lctx)) {
-						namedObjOp(hook, resolvedName, xf, yf, buf, loc);
+					const fieldCName = hookCName(resolvedName, fieldType, lctx);
+					if (namedTypeHasHooks(fieldCName, lctx)) {
+						namedObjOp(hook, fieldCName, xf, yf, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
 					}
@@ -611,8 +619,9 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (unwrapped.mangledName !== "") {
 				if (hook !== "trace" || isCyclicType(unwrapped.body, lctx, visited)) {
 					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, false, lctx, loc);
-					if (namedTypeHasHooks(unwrapped.mangledName, lctx)) {
-						namedObjOp(hook, unwrapped.mangledName, xf, yf, buf, loc);
+					const monoCName = hookCName(unwrapped.mangledName, unwrapped.body, lctx);
+					if (namedTypeHasHooks(monoCName, lctx)) {
+						namedObjOp(hook, monoCName, xf, yf, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
 					}
@@ -640,8 +649,9 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				if (hook !== "trace" || isCyclicType(fieldType, lctx, visited)) {
 					// Field-recursion is a CONSUMER path — skip TypeInfo emission.
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, false, lctx, loc);
-					if (namedTypeHasHooks(fieldType.typeName, lctx)) {
-						namedObjOp(hook, fieldType.typeName, xf, yf, buf, loc);
+					const unionCName = hookCName(fieldType.typeName, fieldType, lctx);
+					if (namedTypeHasHooks(unionCName, lctx)) {
+						namedObjOp(hook, unionCName, xf, yf, buf, loc);
 					}
 				}
 			} else if (isPrimitiveOnlyUnion(fieldType)) {
@@ -1064,7 +1074,7 @@ function buildVariantChain(hook: string, objType: Type, p1: string, p2: string, 
 // classType is non-null for class types (= sym.symbolType = Ref<Struct>),
 // null for value types. When non-null, param types use classType so codegen
 // emits Doc* instead of Doc — matching the pointer the runtime passes.
-function generateHook(hook: string, typeName: string, objType: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): void {
+function generateHook(hook: string, typeName: string, cName: string, objType: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf = newBuf();
 	const isTrace = hook === "trace";
 	const isUnary = hook === "destroy" || hook === "wasMoved" || isTrace;
@@ -1111,6 +1121,7 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 		// ensureHooksByName does sym lookup + dispatch to unified ensureHooks —
 		// base classes are always declared so always reach ensureHooks.
 		const baseTypeName = getBaseClass(typeName, lctx);
+		const baseCName = hookCName(baseTypeName, null, lctx);
 		if (baseTypeName !== "") {
 			ensureHooksByName(baseTypeName, lctx, loc, null);
 		}
@@ -1132,7 +1143,7 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 			if (isPrimitiveOnlyUnion(objType)) {
 				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
 			} else {
-				generateUnionArms(hook, typeName, objType, p1, p2, lctx, buf, loc);
+				generateUnionArms(hook, cName, objType, p1, p2, lctx, buf, loc);
 			}
 		} else if (hook === "destroy") {
 			// Destroy: fields first (reverse), then base class (LIFO — standard pattern)
@@ -1140,13 +1151,13 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 				const visited: NameSet = createNameSet();
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
-			if (!fieldsFlattened && baseTypeName !== "" && namedTypeHasHooks(baseTypeName, lctx)) {
-				genCall(baseTypeName + "Destroy", hook, x1, x2, buf, loc);
+			if (!fieldsFlattened && baseTypeName !== "" && namedTypeHasHooks(baseCName, lctx)) {
+				genCall(baseCName + "Destroy", hook, x1, x2, buf, loc);
 			}
 		} else {
 			// Copy/sink/trace/wasMoved: base class first, then fields (standard pattern)
-			if (!fieldsFlattened && baseTypeName !== "" && namedTypeHasHooks(baseTypeName, lctx)) {
-				genCall(baseTypeName + hookSuffix(hook), hook, x1, x2, buf, loc);
+			if (!fieldsFlattened && baseTypeName !== "" && namedTypeHasHooks(baseCName, lctx)) {
+				genCall(baseCName + hookSuffix(hook), hook, x1, x2, buf, loc);
 			}
 			for (let i = 0; i < objType.typeNames.length; i += 1) {
 				const visited: NameSet = createNameSet();
@@ -1171,11 +1182,11 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 
 	let fnNode: Node | null = null;
 	if (isTrace) {
-		fnNode = makeFnDecl(typeName + suffix, [p1, p2], [typeName, "void*"], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(cName + suffix, [p1, p2], [typeName, "void*"], makeBlock(buf.items, loc), "", "void", loc);
 	} else if (isUnary) {
-		fnNode = makeFnDecl(typeName + suffix, [p1], [typeName], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(cName + suffix, [p1], [typeName], makeBlock(buf.items, loc), "", "void", loc);
 	} else {
-		fnNode = makeFnDecl(typeName + suffix, [p1, p2], [typeName, typeName], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(cName + suffix, [p1, p2], [typeName, typeName], makeBlock(buf.items, loc), "", "void", loc);
 	}
 	// Set hook param types explicitly (reference parity: symPrototype sets dest.typ/src.typ directly).
 	// For class types, use classType (Ref<Struct>) — already a pointer.
@@ -1188,7 +1199,7 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 	}
 	// trace param[1] is the raw callback/env pointer — reference: getSysType(pointer)
 	if (isTrace) setHookParamType(fnNode, 1, createPtr(voidType()));
-	markGeneratedOp(fnNode, typeName + suffix);
+	markGeneratedOp(fnNode, cName + suffix);
 	lctx.collector.push(fnNode);
 }
 
@@ -1227,10 +1238,10 @@ function emitMinimalTypeInfo(typeName: string, lctx: LiftCtx, loc: SourceLocatio
 
 // Emit the full msTypeInfo for a class/interface with RC fields. destroyFn
 // points to the generated <T>Destroy; traceFn points to <T>Trace iff cyclic.
-function emitFullTypeInfo(typeName: string, hasCycles: boolean, lctx: LiftCtx, loc: SourceLocation): void {
-	const traceFn = hasCycles ? makeIdent(typeName + "Trace", loc) : makeNull(loc);
+function emitFullTypeInfo(cName: string, typeName: string, hasCycles: boolean, lctx: LiftCtx, loc: SourceLocation): void {
+	const traceFn = hasCycles ? makeIdent(cName + "Trace", loc) : makeNull(loc);
 	const keys = ["name", "isCyclic", "traceFn", "destroyFn"];
-	const vals = [makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, makeIdent(typeName + "Destroy", loc)];
+	const vals = [makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, makeIdent(cName + "Destroy", loc)];
 	const baseTypeName = getBaseClass(typeName, lctx);
 	if (baseTypeName !== "") {
 		keys.push("base");
@@ -1243,7 +1254,7 @@ function emitFullTypeInfo(typeName: string, hasCycles: boolean, lctx: LiftCtx, l
 // Emit the <T>Dup hook. Ref types (class/interface) get the incref shortcut;
 // value types copy through <T>Copy. Signature identical to the paired Ref/val
 // dup emission in the old Path A / Path B, just deduplicated.
-function emitDup(typeName: string, objType: Type, classType: Type | null, isRef: boolean, lctx: LiftCtx, loc: SourceLocation): void {
+function emitDup(typeName: string, cName: string, objType: Type, classType: Type | null, isRef: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	const dupStmts: Node[] = [];
 	if (isRef) {
 		// ref types: result = src; incref(result). No =copy call — just pointer copy + refcount.
@@ -1253,14 +1264,14 @@ function emitDup(typeName: string, objType: Type, classType: Type | null, isRef:
 	} else {
 		// Value types: result = src; TypeName_copy(&result, &src); return result.
 		dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
-		dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "Copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdent("src", loc), loc)], loc), loc));
+		dupStmts.push(makeExprStmt(makeCall(makeIdent(cName + "Copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdent("src", loc), loc)], loc), loc));
 		dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
 	}
-	const dupNode = makeFnDecl(typeName + "Dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
+	const dupNode = makeFnDecl(cName + "Dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
 	const dupType = classType !== null ? classType : objType;
 	setHookParamType(dupNode, 0, dupType);
 	setHookReturnType(dupNode, dupType);
-	markGeneratedOp(dupNode, typeName + "Dup");
+	markGeneratedOp(dupNode, cName + "Dup");
 	lctx.collector.push(dupNode);
 }
 
@@ -1273,15 +1284,16 @@ function emitDup(typeName: string, objType: Type, classType: Type | null, isRef:
 function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInfo: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	// ----- Guards (order matches old ensureTypeHooks for perf parity) -----
 	if (typeName === "") return;
-	if (nameSetContains(lctx.generated, typeName)) return;
+	const cName = hookCName(typeName, objType, lctx);
+	if (nameSetContains(lctx.generated, cName)) return;
 	// Global dedup. Split: hooks-owned blocks hook emission, TypeInfo-owned
 	// blocks TypeInfo emission. When defining module (emitTypeInfo=true) sees
 	// hooks-owned but !typeInfo-owned, it still needs to enter and emit the
 	// TypeInfo — that's the race the unified entry fixes. Otherwise skip.
-	const hooksOwned = isGloballyOwned(typeName);
-	if (hooksOwned && (!emitTypeInfo || isTypeInfoGloballyOwned(typeName))) return;
-	if (nameSetContains(lctx.generating, typeName)) return;
-	nameSetAdd(lctx.generating, typeName);
+	const hooksOwned = isGloballyOwned(cName);
+	if (hooksOwned && (!emitTypeInfo || isTypeInfoGloballyOwned(cName))) return;
+	if (nameSetContains(lctx.generating, cName)) return;
+	nameSetAdd(lctx.generating, cName);
 
 	// ----- Resolve category via symbol lookup (matches old ensureTypeHooks) -----
 	let isClassOrInterface = refType !== null;
@@ -1292,7 +1304,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 			if (sym.symbolKind === SymbolKind.TypeAlias
 				&& sym.symbolType !== null
 				&& sym.symbolType.kind === TypeKind.Ref) {
-				nameSetAdd(lctx.generated, typeName);
+				nameSetAdd(lctx.generated, cName);
 				return;
 			}
 			if (sym.symbolKind === SymbolKind.Class
@@ -1319,14 +1331,14 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 	// callers (emitTypeInfo=false) mark as seen locally and bail; the defining
 	// module's processDecl (emitTypeInfo=true) emits both hooks and TypeInfo.
 	if (isCrossModuleClass && !emitTypeInfo) {
-		nameSetAdd(lctx.generated, typeName);
+		nameSetAdd(lctx.generated, cName);
 		return;
 	}
 
 	const shouldEmitHooks = !hooksOwned;
 	// Union covers `Ref<Union>` wrapped via TypeAlias (e.g. JsonValue) — see fixedbugs/bug037.
 	const isHeapAllocated = isClassOrInterface || objType.kind === TypeKind.Union;
-	const shouldEmitTypeInfo = emitTypeInfo && isHeapAllocated && !isTypeInfoGloballyOwned(typeName);
+	const shouldEmitTypeInfo = emitTypeInfo && isHeapAllocated && !isTypeInfoGloballyOwned(cName);
 
 	// No RC fields → minimal TypeInfo only (for class/interface) and skip hooks.
 	// Exception (Nim parity, `produceSym` in liftdestructors.nim:1180): plain
@@ -1350,10 +1362,10 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 		if (!isPlainValueAggregate) {
 			if (shouldEmitTypeInfo) {
 				emitMinimalTypeInfo(typeName, lctx, loc);
-				claimGlobalTypeInfo(typeName);
+				claimGlobalTypeInfo(cName);
 			}
-			nameSetAdd(lctx.generated, typeName);
-			if (shouldEmitHooks) claimGlobal(typeName);
+			nameSetAdd(lctx.generated, cName);
+			if (shouldEmitHooks) claimGlobal(cName);
 			return;
 		}
 	}
@@ -1362,30 +1374,30 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 	let hasCycles = false;
 
 	if (shouldEmitHooks) {
-		generateHook("destroy",  typeName, objType, classType, lctx, loc);
-		generateHook("copy",     typeName, objType, classType, lctx, loc);
-		generateHook("sink",     typeName, objType, classType, lctx, loc);
-		generateHook("wasMoved", typeName, objType, classType, lctx, loc);
-		setAttachedOp(objType, AttachedOp.AttachedDestructor, typeName + "Destroy");
+		generateHook("destroy",  typeName, cName, objType, classType, lctx, loc);
+		generateHook("copy",     typeName, cName, objType, classType, lctx, loc);
+		generateHook("sink",     typeName, cName, objType, classType, lctx, loc);
+		generateHook("wasMoved", typeName, cName, objType, classType, lctx, loc);
+		setAttachedOp(objType, AttachedOp.AttachedDestructor, cName + "Destroy");
 		// Record in the codegen global registry (Nim graph.attachedOps analog): for mono'd generic
 		// instances, setAttachedOp lands on this throwaway objType and never reaches the type codegen
 		// resolves, so codegen's ensureTypeInfoDef reads this by-name registry to wire .destroyFn.
-		recordGenDestroyHook(typeName);
-		setAttachedOp(objType, AttachedOp.AttachedAsgn,       typeName + "Copy");
-		setAttachedOp(objType, AttachedOp.AttachedSink,       typeName + "Sink");
-		setAttachedOp(objType, AttachedOp.AttachedWasMoved,   typeName + "WasMoved");
+		recordGenDestroyHook(cName);
+		setAttachedOp(objType, AttachedOp.AttachedAsgn,       cName + "Copy");
+		setAttachedOp(objType, AttachedOp.AttachedSink,       cName + "Sink");
+		setAttachedOp(objType, AttachedOp.AttachedWasMoved,   cName + "WasMoved");
 
 		const visited: NameSet = createNameSet();
 		hasCycles = isCyclicType(objType, lctx, visited);
 		if (hasCycles) {
-			generateHook("trace", typeName, objType, classType, lctx, loc);
-			setAttachedOp(objType, AttachedOp.AttachedTrace, typeName + "Trace");
+			generateHook("trace", typeName, cName, objType, classType, lctx, loc);
+			setAttachedOp(objType, AttachedOp.AttachedTrace, cName + "Trace");
 		}
 
-		emitDup(typeName, objType, classType, isClassOrInterface, lctx, loc);
-		setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "Dup");
+		emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
+		setAttachedOp(objType, AttachedOp.AttachedDup, cName + "Dup");
 
-		claimGlobal(typeName);
+		claimGlobal(cName);
 	} else if (shouldEmitTypeInfo) {
 		// Hooks live elsewhere but we still need hasCycles to populate TypeInfo.
 		const visited: NameSet = createNameSet();
@@ -1393,11 +1405,11 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 	}
 
 	if (shouldEmitTypeInfo) {
-		emitFullTypeInfo(typeName, hasCycles, lctx, loc);
-		claimGlobalTypeInfo(typeName);
+		emitFullTypeInfo(cName, typeName, hasCycles, lctx, loc);
+		claimGlobalTypeInfo(cName);
 	}
 
-	nameSetAdd(lctx.generated, typeName);
+	nameSetAdd(lctx.generated, cName);
 }
 
 // ===== (Removed: `ensureTypeHooks` and `ensureTypeHooksForType`.)

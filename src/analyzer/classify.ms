@@ -11,7 +11,7 @@ import { TransformContext, createTransformContext, NameSet, createNameSet, nameS
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { canFormAcycle } from "../transform/cycles";
 import { mangleMonoName } from "../monomorphize/registry";
-import { anonTypeName, isAnonTypeName, arrayCTypeName } from "../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName } from "../codegen/c/types";
 
 // ===== RC Classification Kind =====
 
@@ -199,7 +199,8 @@ function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 	if (resolvedName !== "") {
 		// Reference parity: hasAsgnFlag checks propagated flag (set at type creation)
 		if (hasAsgnFlag(t)) {
-			return makeRcInfo(RcKind.Named, resolvedName, resolvedName + "Destroy", resolvedName + "Copy", resolvedName + "WasMoved", resolvedName + "Sink", false);
+			const n = hookBaseCName(resolvedName, t, ctx.checkerCtx);
+			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", false);
 		}
 	}
 	return noRcInfo();
@@ -303,7 +304,8 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				return makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false);
 			}
 			if (t.typeName !== "" && hasAsgnFlag(t)) {
-				return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "Destroy", t.typeName + "Copy", t.typeName + "WasMoved", t.typeName + "Sink", false);
+				const un = hookBaseCName(t.typeName, t, ctx.checkerCtx);
+				return makeRcInfo(RcKind.Named, un, un + "Destroy", un + "Copy", un + "WasMoved", un + "Sink", false);
 			} else { return noRcInfo(); }
 		},
 		TypeKind.Tuple => {
