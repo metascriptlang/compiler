@@ -52,10 +52,11 @@ msc run examples/actorSpawnBasic.ms
 msc build examples/actorSpawnBasic.ms --target=c
 
 # Build the optimized self-host compiler binary → ./msc.
-# This exact line is THE build command: macOS is the team's primary dev
-# platform, and there --cc=clang is required, not optional (LTO/Mach-O —
-# see "Build Optimization" below). On Linux/Windows drop --cc=clang.
-msc build src/index.ms --gc=drc --danger --cc=clang --output=msc
+# One command on every platform: --danger means "fastest the resolved
+# toolchain can link" — thin LTO where that links (Linux zig, macOS clang),
+# no LTO + a notice where it cannot (macOS/Windows zig — see
+# "Build Optimization" below). Add --cc=clang on macOS to actually get LTO.
+msc build src/index.ms --gc=drc --danger --output=msc
 
 # Sync the freshly built msc + support trees to ~/.metascript/
 # so downstream projects (Neon, apps, etc.) pick it up via $PATH
@@ -72,26 +73,41 @@ bash tools/editor-plugin/build.sh --install
 ## Build Optimization — default `build` is UNOPTIMIZED (`-O0`)
 
 Opt level and LTO are **separate axes**. `modeFlags` (`src/compiler/cc.ms`):
-default=`-O0 -g`, `--release`=`-O2`, `--danger`=`-O3`. `--lto=off|thin|full`
-defaults to `thin` for `--danger`, `off` otherwise (`src/compiler/options.ms`).
-A compiler built with the plain `build` command runs ~4.5x slower than a
-`--danger` build.
+default=`-O0 -g`, `--release`=`-O2`, `--danger`=`-O3`. `--lto=off|thin|full` is
+**capability-resolved after the compiler is known** (`resolveLto` in
+`src/compiler/cc.ms`, called right after `resolveCC`): `--danger` takes thin
+LTO where the resolved compiler can link it and drops it (with a stderr notice)
+where it cannot; an explicit `--lto=` against a proven-broken pair fails loud.
+GNU gcc never gets LTO by default (a whole-program `-flto` link of this tree
+ran 40+ minutes unfinished) and uses the `-flto=auto` spelling, not
+`-flto=thin` (gcc rejects "thin" outright). A compiler built with the plain
+`build` command runs ~4.5x slower than a `--danger` build.
 
-Fast self-host build on macOS — **`--cc=clang` is mandatory, not a preference**:
+Fast self-host build on macOS — add `--cc=clang` to get LTO (~13%); without it
+zig still builds, just LTO-less (with a notice):
 ```bash
 msc build src/index.ms --gc=drc --danger --cc=clang --output=msc
 ```
-Cross-compiling Linux/Windows: `--danger` alone works (zig cc uses LLD there).
+Cross-compiling Linux: `--danger` alone works (zig cc uses LLD there).
 
-**Why (verified 2026-07-30 with raw `zig cc` 0.16.0, don't re-litigate):**
-`zig cc -O3 -flto` on a native-macOS target fails with `LTO requires using LLD`,
-while the SAME zig cross-compiling to `x86_64-linux-gnu` links `-flto` fine — so
-it is a Mach-O-target limitation, not a zig-quality or a config problem. Zig
-deliberately replaced LLD with its own Mach-O linker (ziglang/zig#8727) and its
-LTO path still requires LLD; ELF keeps LLD, hence Linux is unaffected. **There is
-no escape hatch through `zig cc`**: `-flld` is an unknown option and `-fuse-ld=`
-is silently ignored (ziglang/zig#18357). The guard lives in
-`src/compiler/toolchain.ms` and is scoped to native macOS only.
+**Why macOS/zig can't LTO (verified 2026-07-30 with raw `zig cc` 0.16.0, don't
+re-litigate):** `zig cc -O3 -flto` on a native-macOS target fails with
+`LTO requires using LLD`, while the SAME zig cross-compiling to
+`x86_64-linux-gnu` links `-flto` fine — so it is a Mach-O-target limitation,
+not a zig-quality or a config problem. Zig deliberately replaced LLD with its
+own Mach-O linker (ziglang/zig#8727) and its LTO path still requires LLD; ELF
+keeps LLD, hence Linux is unaffected. **There is no escape hatch through
+`zig cc`**: `-flld` is an unknown option and `-fuse-ld=` is silently ignored
+(ziglang/zig#18357). The capability table lives in `src/compiler/cc.ms`
+(`ltoBroken`), target-scoped.
+
+**Why Windows/zig can't LTO (verified 2026-08-31, zig 0.16.0):** the LTO link
+pulls in `zigc.lib`, whose MinGW math-shim exports (`__INF`, `__QNAN`,
+`__SNANL`, `nanl`, …) are weak+hidden in bitcode (`lib/std/c.zig` `symbol()`)
+and get dropped during LTO internalization — `undefined symbol: __QNANL` at
+every opt level; a 3-line `printf` hello.c reproduces. No flag fixes it from
+our side (`-lmingwex` etc. all fail). Also target-scoped: cross-compiling to
+windows-gnu from any host hits the same shim.
 
 **What it buys (5-round interleaved measurement, phase A on `src/index.ms`):**
 the gain is **LTO, not clang** — clang+thinLTO vs clang-noLTO is **~13%**, while
