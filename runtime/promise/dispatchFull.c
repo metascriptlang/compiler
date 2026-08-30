@@ -536,7 +536,12 @@ bool msRunOnce(int timeoutMs) {
 			for (ULONG i = 0; i < count; i++) {
 				didWork = true;
 				msCompletionMsg* msg = (msCompletionMsg*)entries[i].lpOverlapped;
-				if (msg->fut != NULL) msFutureFireCallbacks((msFutureBase*)msg->fut);
+				if (msg->fut != NULL) {
+					msFutureFireCallbacks((msFutureBase*)msg->fut);
+					/* Release the queue's in-flight ref, paired with the incref in
+					 * msPostCompletion — same contract as the POSIX drain above. */
+					msFutureDrcDestroy(msg->fut);
+				}
 				free(msg);
 			}
 		}
@@ -666,6 +671,28 @@ void msPostCompletion(void* fut, void* value, bool isFail, void* error) {
 	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
 	if (iocp != NULL) {
 		msCompletionMsg* msg = (msCompletionMsg*)malloc(sizeof(msCompletionMsg));
+		if (msg == NULL) {
+			/* No message to hand the loop — complete inline rather than
+			 * dereference NULL, matching the no-dispatcher branch below. */
+			if (isFail) msFutureFail(fut, error);
+			else msFutureComplete(fut, value);
+			return;
+		}
+		/* Queue-side ref, same contract as the POSIX msCompletionQueuePush.
+		 *
+		 * PostQueuedCompletionStatus is asynchronous — the dispatcher pops this
+		 * message in a later msRunOnce turn. By then the worker has already
+		 * published finished=true (thread.h, step 1 of the split completion), so
+		 * the owning thread's waitFor can observe the result and drop the last
+		 * reference, freeing the future while this raw pointer is still in
+		 * flight. The drain then reads f->failed off freed memory.
+		 *
+		 * The ref belongs here rather than in msCompletionQueuePush{,Owned}:
+		 * MS_FUTURE_SUBMIT_REF is 0 on Windows, so unlike POSIX there is no
+		 * submit-time ref for the "Owned" variant to inherit, and both wrappers
+		 * funnel through this function. Released by the IOCP drain in msRunOnce
+		 * right after msFutureFireCallbacks. */
+		if (fut != NULL) msIncRef(fut);
 		msg->fut = fut;
 		msg->value = value;
 		msg->isFail = isFail;

@@ -66,9 +66,28 @@ extern MS_THREAD_LOCAL void* msErrPayload;
  * futures. On the full POSIX MPSC dispatcher the queue's completion ref is taken
  * on the OWNER thread at submit time (msSpawn / msSpawnInto /
  * msAwaitGroupSetDoneFut), before the future can become visible-as-finished —
- * closing the publish->push UAF window. Windows IOCP + WASM + Emcc complete
- * inline / take no queue-side ref, so the ref is compiled out and PushOwned
- * degenerates to Push there. */
+ * closing the publish->push UAF window. WASM + Emcc complete inline / take no
+ * queue-side ref, so the ref is compiled out and PushOwned degenerates to Push
+ * there.
+ *
+ * Windows is excluded for a different reason than the other three, and NOT
+ * because "IOCP completes inline" — PostQueuedCompletionStatus is asynchronous,
+ * the message is popped a later msRunOnce turn. What removes the window is the
+ * dispatcher topology: msDispatcher (and its iocp) is thread-local, and pool
+ * workers never create one — msWaitFor/msWaitForReady guard the create with
+ * `if (!worker)`. A worker completing a spawn therefore finds iocp == NULL and
+ * completes inline; it posts no message and touches no rc.
+ *
+ * The only thread that owns an iocp is the one running the loop, so the only
+ * producer of completion messages is that same thread — reached when
+ * msPoolSubmit hits queue backpressure and runs the task inline on the caller
+ * (pool.c). Publish and post are then sequential on one thread with nothing in
+ * between, so a ref taken at post time is already ahead of any drop. That is
+ * what msPostCompletion does; a submit-time ref would instead leak on every
+ * spawn that reaches a worker, because no drain would ever release it.
+ *
+ * If the Windows iocp ever becomes process-global (so workers post too), this
+ * gate has to flip to 1 and msPostCompletion's incref has to go. */
 #if !defined(_WIN32) && !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
 #define MS_FUTURE_SUBMIT_REF 1
 #else
