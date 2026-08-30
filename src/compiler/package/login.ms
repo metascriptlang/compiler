@@ -19,7 +19,9 @@ const REGISTRY_HOST = "api.metascriptlang.org";
 const API_BASE = "https://" + REGISTRY_HOST;
 
 function credentialsPath(): string {
-	const home = env.get("HOME");
+	let home = env.get("HOME");
+	// Windows fallback — HOME isn't set by default there.
+	if (home === "") home = env.get("USERPROFILE");
 	if (home === "") return "";
 	return join(join(home, ".metascript"), "credentials");
 }

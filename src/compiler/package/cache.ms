@@ -9,9 +9,11 @@ import { exists } from "std/fs";
 // --- Base path ---
 
 // Returns the cache root: ~/.metascript/cache
-// Uses $HOME environment variable. Returns empty string if HOME is not set.
+// Uses $HOME, falling back to $USERPROFILE (Windows does not set HOME by
+// default — same pattern as cc.ms homeDir / cache.ms globalObjectsDir).
 export function cacheRoot(): string {
-	const home = env.get("HOME");
+	let home = env.get("HOME");
+	if (home === "") home = env.get("USERPROFILE");
 	if (home === "") return "";
 	return home + "/.metascript/cache";
 }
