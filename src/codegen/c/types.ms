@@ -8,24 +8,24 @@ import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isRe
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
-import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, isTypeInfoSkipped } from "./context";
-import { SymbolFlag, hasFlag } from "../../checker/symbol";
+import { SymbolFlag, hasFlag, lookupSymbol } from "../../checker/symbol";
 import { mangle, mangledTypeName, mangleQualified, mangleModuleName, mangleFieldName, safeName } from "./names";
-import { getGlobalTypeOwner, getGlobalTypeOwnerByShape } from "../../checker/context";
+import { getGlobalTypeOwner, getGlobalTypeOwnerByShape, CheckerContext } from "../../checker/context";
 
 // Struct C-name resolution: a sym-less named struct (macro-wire / mono
 // round-trips drop identity) first tries the shape-keyed owner registry so
 // its spelling matches the declaring module's definition even when the bare
 // name is claimed by several modules.
-function typeIdentityName(g: CGen, t: Type): string {
+export function resolvedTypeCName(t: Type, hasCheckerCtx: boolean): string {
 	if (t.sym !== null) return mangledTypeName(t.sym, t.typeName);
 	// A sym-less named type only borrows an owner from the registries during a
 	// real compilation; synthetic types built by unit tests (no checker context)
 	// keep the bare spelling.
-	if (g.checkerCtx !== null && t.typeName !== "") {
+	if (hasCheckerCtx && t.typeName !== "") {
 		if (t.typeNames !== null && t.typeNames.length > 0) {
 			const byShape = getGlobalTypeOwnerByShape(t.typeName, t.typeNames.join(","));
 			if (byShape !== "") return mangleQualified(t.typeName, mangleModuleName(byShape));
@@ -34,6 +34,44 @@ function typeIdentityName(g: CGen, t: Type): string {
 		if (owner !== "") return mangleQualified(t.typeName, mangleModuleName(owner));
 	}
 	return mangledTypeName(t.sym, t.typeName);
+}
+
+function typeIdentityName(g: CGen, t: Type): string {
+	return resolvedTypeCName(t, g.checkerCtx !== null);
+}
+
+// The single oracle for a lifecycle hook's base name, shared by the lifter (hook
+// definitions + ownership keys) and the analyzer (call sites). Both must spell a
+// type the way codegen spells its struct, or one module's hooks answer for
+// another module's same-named type.
+export function hookBaseCNameOfSym(typeName: string, sym: Symbol | null): string {
+	if (typeName === "") return "";
+	// Compiler-generated spellings ($Env_*, msAnon_*, monomorphized "__") are already
+	// unique and get mangled once at emission; mangling them here too would spell the
+	// definition and its references differently.
+	if (typeName.slice(0, 1) === "$") return typeName;
+	if (typeName.indexOf("__", 0) >= 0) return typeName;
+	if (sym !== null) return mangledTypeName(sym, typeName);
+	return typeName;
+}
+
+export function hookBaseCName(typeName: string, t: Type | null, cc: CheckerContext | null): string {
+	if (typeName === "") return "";
+	if (typeName.slice(0, 1) === "$") return typeName;
+	if (typeName.indexOf("__", 0) >= 0) return typeName;
+	const named = t !== null && t.typeName === typeName;
+	if (named && t.sym !== null) return mangledTypeName(t.sym, typeName);
+	if (cc === null) return named ? resolvedTypeCName(t, false) : typeName;
+	const sym = lookupSymbol(cc.table, typeName);
+	if (sym !== null) {
+		const isTypeSym = sym.symbolKind === SymbolKind.Class
+			|| sym.symbolKind === SymbolKind.Interface
+			|| sym.symbolKind === SymbolKind.TypeAlias
+			|| sym.symbolKind === SymbolKind.Actor;
+		if (isTypeSym) return mangledTypeName(sym, typeName);
+	}
+	if (named) return resolvedTypeCName(t, true);
+	return typeName;
 }
 
 function structIdentityName(g: CGen, t: Type): string {
