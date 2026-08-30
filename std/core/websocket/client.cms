@@ -30,10 +30,21 @@
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
 @passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
 @compile("runtime/crypto/hash.c");
-@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_util.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha1.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c");
+// md.c calls mbedtls_calloc / mbedtls_free (real functions under
+// MBEDTLS_PLATFORM_MEMORY), so platform.c has to come along with it.
+// psa_util.c is deliberately absent: nothing here calls it, and compiling it
+// drags in psa_generate_random + mbedtls_asn1_*, which only std/crypto/tls has.
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform.c");
+// md.c also carries a dead-but-defined mbedtls_md_error_from_psa() that
+// references psa_util.c; the COFF linker resolves symbols before section GC and
+// so needs those three defined. Weak stubs; the real psa_util.c overrides them
+// whenever std/crypto/tls is alive. Full reasoning in the file itself. Compiled
+// by std/crypto too — the @compile dedup makes the overlap a no-op, and this
+// module must carry it independently because it pulls md.c in on its own.
+@compile("runtime/crypto/psaMdStubs.c");
 
 extern function msCryptoRandomBytesRaw(size: number): string from "msCryptoRandomBytes";
 

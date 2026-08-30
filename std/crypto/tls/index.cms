@@ -76,7 +76,13 @@
 // platform_util.c, md.c, sha*.c, md5.c, ripemd160.c are compiled by
 // std/crypto/index.cms — not duplicated here to avoid linker errors.
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/constant_time.c");
-// psa_util.c compiled by std/crypto/index.cms
+// psa_util.c belongs here, not in std/crypto: its callers are all PSA/TLS
+// vendor sources this module owns (psa_crypto.c, pk_wrap.c, psa_crypto_{ecp,
+// ffdh,pake,rsa}.c), and its own references — psa_generate_random from
+// psa_crypto.c, mbedtls_asn1_* from asn1{parse,write}.c — resolve only against
+// this list. Compiling it from std/crypto left a hash-only program (no TLS in
+// the alive set) with those four symbols undefined.
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_util.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/block_cipher.c");
 
 // Symmetric ciphers
@@ -103,9 +109,9 @@
 @compile("runtime/crypto/tls/psaTlsStubs.c");
 
 // Import from ../index (not ../errors) so std/crypto's @compile directives
-// — specifically psa_util.c — enter the alive-set transitively. Without
-// this the PSA error-conversion helpers referenced by mbedtls's ssl_tls.c
-// and pk_wrap.c are undefined at link time.
+// enter the alive-set transitively — md.c, sha*.c and platform_util.c, which
+// the PSA drivers here call into. psa_util.c is no longer among them; this
+// module compiles it directly (see above).
 import { CryptoError, CryptoErrorKind, cryptoError } from "../index";
 
 // C bindings
