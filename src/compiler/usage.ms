@@ -48,7 +48,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("--colors") + "=<on|off>     Force color output on/off");
 	console.log("  " + cyan("--no-color") + "            Disable color output");
 	console.log("  " + cyan("--release") + "             Optimize for speed " + dim("(-O2)"));
-	console.log("  " + cyan("--danger") + "              Maximum optimization " + dim("(-O3 -flto)"));
+	console.log("  " + cyan("--danger") + "              Maximum optimization " + dim("(-O3, +LTO where the toolchain can link it)"));
 	console.log("  " + cyan("--cc") + "=<clang|gcc>      C compiler " + dim("(default: auto-detect)"));
 	console.log("  " + cyan("--strip") + "               Strip symbols from binary");
 	console.log("  " + cyan("--gc") + "=<mode>           GC mode " + dim("(drc|orc|none|manual)"));
