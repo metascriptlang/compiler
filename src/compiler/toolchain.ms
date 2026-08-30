@@ -39,7 +39,11 @@ function hasManagedZig(): boolean {
 
 export function managedZigCompiler(): string {
 	if (!hasManagedZig()) return "";
-	return `"${managedZigBinary()}" cc`;
+	// Unquoted: the consumer tokenizes this string into argv (runCc →
+	// execFileCapture), and quoting is the spawn layer's job (_msAppendWinArg /
+	// execvp), not the name's. The tokenizer keeps a quoted token whole, so a
+	// managed dir with spaces still lands as one argv element.
+	return `${managedZigBinary()} cc`;
 }
 
 function hostArch(): string {

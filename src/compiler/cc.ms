@@ -2,8 +2,8 @@
 //
 // Invokes clang to compile generated C source into native binaries.
 
-import { exec, env, cmdExists, findOnPath, platform, exit, ProcessError, ProcessErrorKind } from "std/process";
-import { writeFile, ensureDir, exists, readDir } from "std/fs";
+import { exec, env, cmdExists, findOnPath, platform, exit, execFileCapture, spawnFailed, ProcessError, ProcessErrorKind } from "std/process";
+import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { CliOptions, MODE_DANGER } from "./options";
@@ -610,12 +610,69 @@ function buildCompileCommand(cFile: string, outBinary: string, extraFlags: strin
 	return cmd;
 }
 
+// Invoke the C compiler/linker/archiver. The command is BUILT as a string (it
+// doubles as the .o cache key and the --verbose display) but EXECUTED as argv
+// — no shell between msc and the toolchain (see execFileCapture). A shell in
+// that loop only added failure modes: cmd.exe quote-stripping, the 8191-char
+// line cap, AutoRun hooks, and POSIX-isms (`rm -f`) that break on Windows.
+// Tokenizing on spaces is exact: these command strings never embed a space
+// inside a token (paths are glued to their -I/-iquote prefix; the same
+// assumption powers resolveIncludeFlags in compile.ms). "zig cc" tokenizes to
+// exe "zig" + first arg "cc", which is precisely what we want.
+// Shell word-splitting on a token: unescaped double quotes are removed (they
+// are quoting syntax, not payload). This is POSIX word semantics — and exactly
+// what the old cmd.exe//bin/sh path delivered, because both strip embedded
+// quotes while parsing the command line. Keeping the quotes would change the
+// meaning of flag values: -DMBEDTLS_CONFIG_FILE="<mbedtls/mbedtlsConfig.h>"
+// must reach the compiler as -DMBEDTLS_CONFIG_FILE=<mbedtls/mbedtlsConfig.h>
+// (an angle include), not as a macro whose value is a quoted string with
+// literal brackets (a filename that never exists).
+function shellUnquote(tok: string): string {
+	let hasQuote = false;
+	for (let i = 0; i < tok.length; i++) {
+		if (tok.charAt(i) === "\"") { hasQuote = true; break; }
+	}
+	if (!hasQuote) return tok;
+	let out = "";
+	for (let i = 0; i < tok.length; i++) {
+		const c = tok.charAt(i);
+		if (c === "\\") {
+			// Backslash escapes the next char (incl. a quote) — keep both.
+			if (i + 1 < tok.length) {
+				out = out + tok.charAt(i) + tok.charAt(i + 1);
+				i = i + 1;
+			} else {
+				out = out + c;
+			}
+			continue;
+		}
+		if (c === "\"") continue;
+		out = out + c;
+	}
+	return out;
+}
+
+function runCc(cmd: string): Result<string, ProcessError> {
+	const parts: string[] = [];
+	for (const raw of cmd.split(" ")) {
+		if (raw === "") continue;
+		const tok = shellUnquote(raw);
+		if (tok !== "") parts.push(tok);
+	}
+	if (parts.length === 0) return Result.err(spawnFailed(cmd, "empty command"));
+	const rest: string[] = [];
+	for (let i = 1; i < parts.length; i++) {
+		rest.push(parts[i]);
+	}
+	return execFileCapture(parts[0], rest);
+}
+
 // Compile a .c file to a native binary.
 // Returns Result.ok on exit-code 0; Result.err carries gcc/clang stderr.
 export function compileC(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
 	ensureDir(dirname(outBinary));
 	const cmd = buildCompileCommand(cFile, outBinary, extraFlags, mode, ccOption, ccBinary);
-	const r = exec(cmd);
+	const r = runCc(cmd);
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
 }
@@ -637,16 +694,17 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 
 	cmd = `${cmd} -c ${cFile} -o ${oFile}`;
 	if (extraFlags !== "") cmd = `${cmd} ${extraFlags}`;
-	const r = exec(cmd);
+	const r = runCc(cmd);
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
 }
 
-// Windows cmd.exe caps command lines at 8191 chars. Link commands with hundreds
-// of .o files exceed that. GCC/clang/zig cc accept `@file` response files —
-// spill the bulky middle (.o list + extraFlags) there and pass one `@path` on
-// the CLI. Windows cmd.exe caps the line at 8191; 7800 leaves headroom.
-const LINK_CMD_LIMIT = 7800;
+// Response files were introduced for cmd.exe's 8191-char line cap. The spawn
+// path no longer goes through a shell (runCc → execFileCapture →
+// CreateProcessW / posix_spawnp), whose ceiling is 32767; 30000 leaves
+// headroom. Over that (hundreds of .o files), the bulk still spills to a
+// per-binary @rsp that gcc/clang/zig parse from file.
+const LINK_CMD_LIMIT = 30000;
 
 // Link object files + runtime into a binary.
 // oFileList: space-separated list of .o file paths
@@ -665,13 +723,13 @@ export function linkObjects(oFileList: string, outBinary: string, extraFlags: st
 
 	let r: Result<string, ProcessError>;
 	if (cmd.length <= LINK_CMD_LIMIT) {
-		r = exec(cmd);
+		r = runCc(cmd);
 	} else {
 		// Overflow: bulk args go to a per-binary response file. The path is keyed to
 		// outBinary (not its dir) so concurrent builds in a shared dir don't clobber it.
 		const rspPath = `${outBinary}_link.rsp`;
 		writeFile(rspPath, bulk);
-		r = exec(`${compiler}${rtFlag} @${rspPath} -o ${outBinary} -lm`);
+		r = runCc(`${compiler}${rtFlag} @${rspPath} -o ${outBinary} -lm`);
 	}
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
@@ -681,8 +739,8 @@ export function linkObjects(oFileList: string, outBinary: string, extraFlags: st
 // archive first: `ar rcs` appends, so a leftover would keep already-dropped members.
 export function archiveStatic(oFileList: string, outArchive: string): Result<void, ProcessError> {
 	ensureDir(dirname(outArchive));
-	exec(`rm -f ${outArchive}`);
-	const r = exec(`ar rcs ${outArchive} ${oFileList}`);
+	if (exists(outArchive)) remove(outArchive);
+	const r = runCc(`ar rcs ${outArchive} ${oFileList}`);
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
 }
