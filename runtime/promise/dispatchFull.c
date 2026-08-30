@@ -618,7 +618,15 @@ bool msRunOnce(int timeoutMs) {
 	if (d->iocp != NULL) {
 		OVERLAPPED_ENTRY entries[64];
 		ULONG count = 0;
-		BOOL ok = GetQueuedCompletionStatusEx(d->iocp, entries, 64, &count, (DWORD)(adj >= 0 ? adj : 500), FALSE);
+		/* POSIX parity: its selector poll uses `didWork ? 0 : adj` — zero wait
+		 * when this tick already ran work (Step 1b drained actor mailboxes and
+		 * completed futures an msWaitFor spinner is polling). Without this,
+		 * every poll-style wait pays the full GetQueued timeout AFTER its
+		 * future resolved — 15.6ms per iteration at default timer resolution
+		 * (probed: actor CALL loop measured 64 it/s vs ~20k it/s with the fix
+		 * path; a 100k-iteration CALL program went from ~26 min to ~1 s). */
+		DWORD waitMs = didWork ? 0 : (DWORD)(adj >= 0 ? adj : 500);
+		BOOL ok = GetQueuedCompletionStatusEx(d->iocp, entries, 64, &count, waitMs, FALSE);
 		if (ok) {
 			for (ULONG i = 0; i < count; i++) {
 				msCompletionMsg* msg = (msCompletionMsg*)entries[i].lpOverlapped;
