@@ -1687,7 +1687,15 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// Link and execute
 	ensureDir("out/debug");
 	const testBin = "out/debug/_test_" + replaceExt(basename(filePath), "");
-	let testLink = allFlags;
+	// Same link flags as cmdBuildC. cmdTest used to assemble its own and so
+	// silently dropped everything cliLinkFlags contributes: the per-target
+	// system libraries and --passL. On Windows that is fatal — without
+	// -lws2_32 / -lmswsock / -lbcrypt every Winsock and BCrypt symbol is
+	// undefined at link, so `msc test` could not link any graph reaching
+	// std/net. macOS only loses -Wl,-dead_strip there, which is why the gap
+	// went unnoticed. forceExe keeps --app=lib / --hcr from turning the test
+	// binary into a shared library: execFile below has to run it.
+	let testLink = cliLinkFlags(allFlags, opts, true);
 	for (const obj of globalLinkObjects()) { testLink = appendFlag(testLink, obj); }
 	for (const flag of globalLinkFlags()) { testLink = appendFlag(testLink, flag); }
 	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary);

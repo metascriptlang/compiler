@@ -423,8 +423,14 @@ export function cliCompileFlags(opts: CliOptions): string {
 }
 
 // Build link-phase flags (adds passL + strip on top of compile flags).
-export function cliLinkFlags(base: string, opts: CliOptions): string {
-	// Solana: sbpf-linker handles everything, no extra link flags
+//
+// forceExe: the caller needs an executable whatever --app / --hcr say. Only
+// cmdTest passes it — the test binary is run via execFile, so a `-shared` link
+// would hand it an artifact it cannot execute, and that branch also skips the
+// per-target system libraries the test binary still has to resolve against.
+export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean = false): string {
+	// Solana: linkSolana drives ld.lld with its own flag set (linker script,
+	// entry symbol, gc-sections) — none of the cc-driver flags apply.
 	if (opts.targetOs === "solana") return appendFlag(base, opts.passL);
 	// Emscripten: emcc links to .js + .wasm bundle
 	if (opts.targetOs === "emcc") {
@@ -442,7 +448,7 @@ export function cliLinkFlags(base: string, opts: CliOptions): string {
 	let flags = base;
 	flags = appendFlag(flags, opts.passL);
 	if (opts.strip) flags = appendFlag(flags, "-s");
-	if (opts.isHcr || opts.appMode === "lib") {
+	if (!forceExe && (opts.isHcr || opts.appMode === "lib")) {
 		flags = appendFlag(flags, "-shared");
 	} else {
 		if (opts.targetOs === "linux") {
