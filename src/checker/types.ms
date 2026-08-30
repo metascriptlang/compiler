@@ -2296,6 +2296,14 @@ export function isNarrowingIntConv(source: Type, target: Type): boolean {
 	return integerRank(source) > integerRank(target);
 }
 
+// Widening into a 64-bit slot also carries a HiddenStdConv: the JS BigInt
+// representation needs the boundary marked, and C emits it as a no-op cast.
+export function isWideningInt64Conv(source: Type, target: Type): boolean {
+	if (target.kind !== TypeKind.Int64 && target.kind !== TypeKind.Uint64) return false;
+	if (!isIntegerType(source)) return false;
+	return integerRank(source) < integerRank(target);
+}
+
 
 export function isBoolType(t: Type): boolean {
 	return t.kind === TypeKind.Boolean;
