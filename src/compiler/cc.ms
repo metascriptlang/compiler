@@ -76,23 +76,42 @@ function hasSbfTarget(binary: string): boolean {
 	return false;
 }
 
+// Ordering for the version dirs below. Plain string comparison ranks "v1.9"
+// above "v1.57"; comparing equal-position digit runs by length first restores
+// numeric order without parsing.
+function isNewerVersionDir(a: string, b: string): boolean {
+	const ap = a.split(".");
+	const bp = b.split(".");
+	const shared = ap.length < bp.length ? ap.length : bp.length;
+	for (let i = 0; i < shared; i++) {
+		const x = ap[i];
+		const y = bp[i];
+		if (x.length !== y.length) return x.length > y.length;
+		if (x !== y) return x > y;
+	}
+	return ap.length > bp.length;
+}
+
 // Newest platform-tools under ~/.cache/solana. Entries are version dirs
-// ("v1.57"); readDir marks directories with a trailing "/". Lexicographic max is
-// good enough — the point is to prefer a recent install, and any of them that
-// passes hasSbfTarget can build.
+// ("v1.57"); readDir marks directories with a trailing "/". Any of them that
+// passes hasSbfTarget can build; the ordering only picks a recent one.
 function cachedPlatformToolsClang(): string {
 	const home = homeDir();
 	if (home === "") return "";
 	const cacheRoot = join(home, ".cache/solana");
 	if (!exists(cacheRoot)) return "";
 	let best = "";
+	let bestName = "";
 	for (const entry of readDir(cacheRoot)) {
 		let name = entry;
 		if (name.endsWith("/")) name = name.slice(0, name.length - 1);
 		if (name === "") continue;
 		const candidate = join(cacheRoot, `${name}/platform-tools/llvm/bin/clang${exeSuffix()}`);
 		if (!exists(candidate)) continue;
-		if (candidate > best) best = candidate;
+		if (bestName === "" || isNewerVersionDir(name, bestName)) {
+			best = candidate;
+			bestName = name;
+		}
 	}
 	return best;
 }
