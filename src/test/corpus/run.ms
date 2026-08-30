@@ -35,12 +35,32 @@
 // ASan (shadow memory inflates RSS). ASan on this platform has no leak
 // sanitizer — the ledger IS the leak signal in this lane.
 
-import { exec, exit, env } from "std/process";
+import { exec, exit, env, platform, cmdExists, findOnPath } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, remove, isDir } from "std/fs";
 import { writeStderr } from "std/io";
 
 const PROG_DIR = "src/test/corpus/programs/";
 const OUT_DIR = "out/corpus/";
+
+// Windows has no POSIX shell, so every place this runner reaches for one is a
+// platform fork. They are collected here rather than sprinkled through the
+// code: the cell launcher (launchCell), the poll sleep, the peak-RSS reader
+// and the staleness probe. The helper both forks need is wintime.c, built
+// once per run — see ensureWintime.
+const IS_WIN = platform === "windows";
+
+// cmd.exe will not execute a command token written with forward slashes:
+// `out/corpus/bin/x.exe` fails with "'out' is not recognized" while
+// `out\corpus\bin\x.exe` runs. Redirect targets are less picky, but the whole
+// path is converted so there is one rule to remember.
+function winPath(p: string): string {
+	return IS_WIN ? p.replaceAll("/", "\\") : p;
+}
+
+// cmd.exe has no /dev/null and does not fail softly about it: redirecting there
+// aborts the command with "The system cannot find the path specified" before
+// the program runs, which reads as an empty result rather than an error.
+const NULLDEV = IS_WIN ? "nul" : "/dev/null";
 
 function envOr(name: string, dflt: string): string {
 	const v = env.get(name);
@@ -55,10 +75,21 @@ function envOr(name: string, dflt: string): string {
 function resolveMsc(): string {
 	const explicit = env.get("MSC");
 	if (explicit != "") { return explicit; }
+	// The candidate is `msc.exe` on Windows. Probing only "./msc" there finds
+	// nothing and falls through to the INSTALLED compiler on PATH — the runner
+	// would then silently grade a build nobody just made.
+	if (IS_WIN && exists("./msc.exe")) { return "./msc.exe"; }
 	if (exists("./msc")) { return "./msc"; }
 	return "msc";
 }
 const MSC = resolveMsc();
+// The same cmd.exe rule that applies to cell binaries applies to the compiler
+// itself, and the default candidate is exactly the shape it rejects: a relative
+// forward-slash path. `./msc.exe build …` fails with "'.' is not recognized"
+// before msc ever starts, so every cell reports "build failed" for a reason
+// that has nothing to do with the compiler. MSC keeps the spelling the user
+// sees (header, exists() probe); MSC_CMD is the one that goes on a command line.
+const MSC_CMD = IS_WIN ? "\"" + winPath(MSC) + "\"" : MSC;
 const FILTER = envOr("MSCORPUS_FILTER", "");
 const RUN_SLOTS = envOr("MSCORPUS_JOBS", "4").parseInt() as int32;
 const SAN = envOr("MSCORPUS_SAN", "") == "1";
@@ -67,6 +98,25 @@ const SAN = envOr("MSCORPUS_SAN", "") == "1";
 // 1M overflows on 3M-iteration churn programs. Overflow still aborts LOUDLY.
 const SAN_PASSC = "-O0 -g -fsanitize=address -DMS_SLAB_MAX=0 -DMS_DRC_LEDGER -DMS_LEDGER_SET_SIZE=8388608u";
 const SAN_PASSL = "-fsanitize=address";
+
+// The danger and san lanes ask for clang by name. That is not a preference on
+// macOS — `--danger` defaults to --lto=thin and native-macOS zig + any LTO is
+// rejected outright (toolchain.ms), so clang is the only vehicle that reaches
+// LTO there. But a box with zig and no clang (a stock Windows install) would
+// turn every one of those cells into a build failure that says nothing about
+// the compiler under test. Drop the flag there instead: msc then notes
+// "--danger builds without LTO for zig cc targeting windows" and the lane runs
+// with -O3 minus whole-program DCE. The header prints which of the two it is,
+// so a weakened lane is never silent.
+const HAS_CLANG = cmdExists("clang");
+const DANGER_CC = HAS_CLANG ? " --cc=clang" : "";
+
+// The js lane runs its binary through `node`. Without node installed the cell
+// launches, fails to start, and reports a red that is about the HOST, not the
+// backend — worse than no lane at all, because it looks like a JS-backend bug.
+// Skip the lane instead and say so in the header. The build half still exercises
+// the JS backend on every other host, so this only costs the runtime compare.
+const HAS_NODE = cmdExists("node");
 
 interface Spec {
 	name: string;
@@ -87,6 +137,7 @@ interface Cell {
 	bin: string;
 	dir: string;
 	launched: boolean;
+	launchedAtMs: float64;
 	finished: boolean;
 	pass: boolean;
 	detail: string;
@@ -117,18 +168,52 @@ function shellOut(cmd: string): string {
 	return runCapture(cmd).output.trim();
 }
 
+// The Windows side of every POSIX-shell assumption in this file: background
+// launch, sub-second sleep, peak RSS, file mtime. Source + the measurements
+// behind each mode: src/test/corpus/wintime.c. Built once per run because it is
+// 150 lines of C and a stale copy would be worse than a rebuild.
+const WINTIME = OUT_DIR + "wintime.exe";
+
+function ensureWintime(): boolean {
+	if (!IS_WIN) { return true; }
+	const r = runCapture("zig cc -O2 src/test/corpus/wintime.c -o " + WINTIME + " -lpsapi");
+	if (exists(WINTIME)) { return true; }
+	progress("  !! cannot build " + WINTIME + " — the Windows runner needs it for cell launch, sleep and RSS:");
+	progress("     " + r.output.trim());
+	return false;
+}
+
+// POSIX `sleep` takes fractional SECONDS and does not exist on Windows at all;
+// wintime takes whole milliseconds. Both spellings of the same wait are passed
+// in rather than converted, so neither platform reads a rounded number.
+function pollSleep(posixSecs: string, winMs: int32): void {
+	if (IS_WIN) { runCapture(winPath(WINTIME) + " --sleep-ms " + winMs); return; }
+	runCapture("sleep " + posixSecs);
+}
+
 // A binary older than the tree reports the PREVIOUS compiler's behaviour as
 // today's result — indistinguishable from a real product bug, and the more
 // sessions share the tree the likelier it gets (docs/TESTGAP.md T8).
 function stalenessWarning(): string {
-	const path = MSC.contains("/") ? MSC : shellOut("command -v " + MSC);
+	// `command -v` is a POSIX shell builtin; findOnPath is the portable form and
+	// is what std/process itself uses. `stat` does not exist on Windows either —
+	// wintime --mtime prints the same Unix seconds `git log %ct` does.
+	const path = MSC.contains("/") || MSC.contains("\\") ? MSC : findOnPath(MSC);
 	if (path == "" || !exists(path)) { return ""; }
-	const mtime = shellOut("stat -f %m '" + path + "' 2>/dev/null || stat -c %Y '" + path + "' 2>/dev/null");
-	const commit = shellOut("git log -1 --format=%ct -- src std runtime ':!src/test' 2>/dev/null");
+	const mtime = IS_WIN
+		? shellOut(winPath(WINTIME) + " --mtime \"" + winPath(path) + "\"")
+		: shellOut("stat -f %m '" + path + "' 2>/dev/null || stat -c %Y '" + path + "' 2>/dev/null");
+	// The two git calls run on BOTH platforms, so every shell-ism in them has to
+	// be spelled portably — and each of these was measured failing on cmd.exe:
+	// `2>/dev/null` makes cmd reject the whole line ("cannot find the path"),
+	// and single quotes are not quote characters there, so `':!src/test'` and
+	// `%h' '%s` reach git with the quotes embedded (exit 128, both). Double
+	// quotes mean the same thing to sh and to cmd, so they are used throughout.
+	const commit = shellOut("git log -1 --format=%ct -- src std runtime \":!src/test\" 2>" + NULLDEV);
 	if (mtime == "" || commit == "") { return ""; }
 	const age = (commit.parseInt() - mtime.parseInt()) / 60;
 	if (age <= 0) { return ""; }
-	const when = shellOut("git log -1 --format=%h' '%s -- src std runtime ':!src/test' 2>/dev/null");
+	const when = shellOut("git log -1 --format=\"%h %s\" -- src std runtime \":!src/test\" 2>" + NULLDEV);
 	return "STALE COMPILER: " + path + " is " + age.toString() + " min older than the last commit touching src/std/runtime (excl. src/test) (" + when + ") — every verdict below describes the OLD compiler; rebuild before believing any red";
 }
 
@@ -259,7 +344,7 @@ function discoverSpecs(): Spec[] {
 
 function makeCell(spec: Spec, lane: string, bin: string): Cell {
 	const dir = OUT_DIR + "cells/" + spec.name + "." + lane + "/";
-	return { spec, lane, bin, dir, launched: false, finished: false, pass: false, detail: "" };
+	return { spec, lane, bin, dir, launched: false, launchedAtMs: 0.0, finished: false, pass: false, detail: "" };
 }
 
 function isXfail(c: Cell): boolean {
@@ -282,21 +367,56 @@ function parseRssMB(output: string): float64 {
 
 // ---- launch / finish ----
 
+// The cell body, in whichever shell this platform has. Both spellings run the
+// binary with its output redirected, then publish the exit code through a
+// temp-file rename so a half-written sentinel is never observed.
+function cellInner(c: Cell, q: (p: string) => string): string {
+	const bin = q(c.bin);
+	if (c.lane == "san") {
+		return bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
+	}
+	if (c.lane == "js") {
+		return "node " + bin + " > " + q(c.dir + "out.log") + " 2>&1";
+	}
+	if (c.spec.maxRssMb >= 0.0) {
+		// wintime prints the `time -l` RSS line to stderr, same as macOS.
+		const timer = IS_WIN ? q(WINTIME) + " " : "/usr/bin/time -l ";
+		return timer + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "time.log");
+	}
+	return bin + " > " + q(c.dir + "out.log") + " 2>&1";
+}
+
+function posixQuote(p: string): string { return p; }
+function winQuote(p: string): string { return "\"" + winPath(p) + "\""; }
+
 function launchCell(c: Cell): void {
 	ensureDir(c.dir);
 	if (exists(c.dir + "done")) { remove(c.dir + "done"); }
-	let inner = "";
-	if (c.lane == "san") {
-		inner = c.bin + " > " + c.dir + "stdout.log 2> " + c.dir + "err.log";
-	} else if (c.lane == "js") {
-		inner = "node " + c.bin + " > " + c.dir + "out.log 2>&1";
-	} else if (c.spec.maxRssMb >= 0.0) {
-		inner = "/usr/bin/time -l " + c.bin + " > " + c.dir + "stdout.log 2> " + c.dir + "time.log";
-	} else {
-		inner = c.bin + " > " + c.dir + "out.log 2>&1";
+	c.launchedAtMs = performance.now();
+	if (!IS_WIN) {
+		const inner = cellInner(c, posixQuote);
+		runCapture("( " + inner + "; echo $? > " + c.dir + "done.tmp; mv " + c.dir + "done.tmp " + c.dir + "done ) > /dev/null 2>&1 &");
+		c.launched = true;
+		return;
 	}
-	const cmd = "( " + inner + "; echo $? > " + c.dir + "done.tmp; mv " + c.dir + "done.tmp " + c.dir + "done ) > /dev/null 2>&1 &";
-	runCapture(cmd);
+	// Windows: the cell body goes into a .bat rather than onto the command
+	// line. It carries redirects, `%`-expansion and quoted paths, and pushing
+	// that through cmd.exe -> wintime -> cmd.exe would need two rounds of
+	// escaping; a file needs none.
+	//
+	// `setlocal enabledelayedexpansion` + !ERRORLEVEL! is load-bearing:
+	// %ERRORLEVEL% expands when cmd PARSES the line, i.e. before the program
+	// has run, so every cell would report the exit code of the previous
+	// statement. Measured — it reported 0 for a cell that exited 5.
+	const bat = c.dir + "cell.bat";
+	const inner = cellInner(c, winQuote);
+	writeFile(bat,
+		"@echo off\r\n" +
+		"setlocal enabledelayedexpansion\r\n" +
+		inner + "\r\n" +
+		"(echo !ERRORLEVEL!)> " + winQuote(c.dir + "done.tmp") + "\r\n" +
+		"move /y " + winQuote(c.dir + "done.tmp") + " " + winQuote(c.dir + "done") + " >nul\r\n");
+	runCapture(winQuote(WINTIME) + " --detach cmd /d /s /c " + winQuote(bat));
 	c.launched = true;
 }
 
@@ -475,7 +595,7 @@ function planJobs(specs: Spec[]): BuildJob[] {
 	for (const spec of specs) {
 		if (SAN) {
 			const bin = OUT_DIR + "bin/" + spec.name + ".san";
-			const cmd = MSC + " build " + spec.entry + " --gc=drc --cc=clang --passC=\"" + SAN_PASSC + "\" --passL=\"" + SAN_PASSL + "\" --output=" + bin;
+			const cmd = MSC_CMD + " build " + spec.entry + " --gc=drc" + DANGER_CC + " --passC=\"" + SAN_PASSC + "\" --passL=\"" + SAN_PASSL + "\" --output=" + bin;
 			jobs.push({ spec, lane: "san", cmd, cell: makeCell(spec, "san", bin) });
 			continue;
 		}
@@ -483,20 +603,23 @@ function planJobs(specs: Spec[]): BuildJob[] {
 			const modes: string[] = ["drc", "orc"];
 			for (const gc of modes) {
 				const bin = OUT_DIR + "bin/" + spec.name + "." + gc;
-				jobs.push({ spec, lane: gc, cmd: MSC + " build " + spec.entry + " --gc=" + gc + " --output=" + bin, cell: makeCell(spec, gc, bin) });
+				jobs.push({ spec, lane: gc, cmd: MSC_CMD + " build " + spec.entry + " --gc=" + gc + " --output=" + bin, cell: makeCell(spec, gc, bin) });
 			}
 			const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
-			jobs.push({ spec, lane: "danger", cmd: MSC + " build " + spec.entry + " --gc=drc --danger --cc=clang --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
+			jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --danger" + DANGER_CC + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
 		} else {
 			const cbin = OUT_DIR + "bin/" + spec.name + ".c";
-			jobs.push({ spec, lane: "c", cmd: MSC + " build " + spec.entry + " --gc=drc --output=" + cbin, cell: makeCell(spec, "c", cbin) });
+			jobs.push({ spec, lane: "c", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --output=" + cbin, cell: makeCell(spec, "c", cbin) });
 			const obin = OUT_DIR + "bin/" + spec.name + ".corc";
-			jobs.push({ spec, lane: "orc", cmd: MSC + " build " + spec.entry + " --gc=orc --output=" + obin, cell: makeCell(spec, "orc", obin) });
+			jobs.push({ spec, lane: "orc", cmd: MSC_CMD + " build " + spec.entry + " --gc=orc --output=" + obin, cell: makeCell(spec, "orc", obin) });
 			const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
-			jobs.push({ spec, lane: "danger", cmd: MSC + " build " + spec.entry + " --gc=drc --danger --cc=clang --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
-			if (!spec.skipJs) {
+			jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --danger" + DANGER_CC + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
+			// HAS_NODE, not laneUniverse: the program's DESIGN lanes still
+			// include js (so @xfail(js) keeps validating), only this host
+			// cannot execute the cell.
+			if (!spec.skipJs && HAS_NODE) {
 				const jsbin = OUT_DIR + "bin/" + spec.name + ".js";
-				jobs.push({ spec, lane: "js", cmd: MSC + " build " + spec.entry + " --target=js --output=" + jsbin, cell: makeCell(spec, "js", jsbin) });
+				jobs.push({ spec, lane: "js", cmd: MSC_CMD + " build " + spec.entry + " --target=js --output=" + jsbin, cell: makeCell(spec, "js", jsbin) });
 			}
 		}
 	}
@@ -524,9 +647,29 @@ function activeCount(running: Cell[]): int32 {
 	return n;
 }
 
+// A cell whose sentinel never arrives is a HANG, and a hang must cost one loud
+// FAIL — not an eternally green-freeze of the whole run. The default is 100x
+// the slowest healthy cell (serial actor churn runs in seconds); the env knob
+// exists so a genuinely-slow program can be granted more without weakening
+// anyone else's bound. The timed-out process is NOT killed (the runner has no
+// portable kill) — it lingers as an orphan and the verdict names it.
+const CELL_TIMEOUT_MS: float64 = envOr("MSCORPUS_CELL_TIMEOUT_MS", "300000").parseInt() as float64;
+
+function cellTimedOut(c: Cell): boolean {
+	return c.launched && !c.finished && performance.now() - c.launchedAtMs > CELL_TIMEOUT_MS;
+}
+
+function failCellTimeout(c: Cell, t: Tally): void {
+	c.pass = false;
+	c.detail = "cell TIMEOUT after " + ((performance.now() - c.launchedAtMs) / 1000).toString() + "s — no exit; the program hung (orphan process left running; rerun the cell binary directly to reproduce)";
+	c.finished = true;
+	reportCell(c, t);
+}
+
 function drain(running: Cell[], t: Tally, parityDone: Cell[]): void {
 	for (const c of running) {
 		if (!c.launched || c.finished) { continue; }
+		if (cellTimedOut(c)) { failCellTimeout(c, t); continue; }
 		if (!cellDone(c)) { continue; }
 		finishCell(c);
 		reportCell(c, t);
@@ -537,7 +680,7 @@ function drain(running: Cell[], t: Tally, parityDone: Cell[]): void {
 function waitForSlot(running: Cell[], t: Tally, parityDone: Cell[]): void {
 	drain(running, t, parityDone);
 	while (activeCount(running) >= RUN_SLOTS) {
-		runCapture("sleep 0.1");
+		pollSleep("0.1", 100);
 		drain(running, t, parityDone);
 	}
 }
@@ -545,6 +688,11 @@ function waitForSlot(running: Cell[], t: Tally, parityDone: Cell[]): void {
 function main(): void {
 	ensureDir(OUT_DIR + "bin");
 	ensureDir(OUT_DIR + "cells");
+
+	// Before anything else: on Windows the runner cannot launch, sleep or
+	// measure without this helper, and a half-working run would report reds
+	// that describe the harness rather than the compiler.
+	if (!ensureWintime()) { exit(1); }
 
 	const specs = discoverSpecs();
 	const jobs = planJobs(specs);
@@ -554,6 +702,17 @@ function main(): void {
 	progress("Corpus tier — " + specs.length + " programs, " + jobs.length + " builds, " + mode + " (msc=" + MSC + ", slots=" + RUN_SLOTS + ")");
 
 	const t: Tally = { fails: 0, xfails: 0, xpasses: 0, passes: 0 };
+
+	// Every lane this host cannot run at full strength is named here, once. A
+	// weakened lane still reports pass/fail, so without this line the summary
+	// would read exactly like a full run (docs/TESTGAP.md T9's rule applied to
+	// the host rather than to a directive).
+	if (!HAS_CLANG) {
+		progress("  !! clang not found — the danger" + (SAN ? " and san" : "") + " lane(s) build with the auto-detected compiler instead. On this host that means --danger WITHOUT LTO, so whole-program DCE (the class this lane exists to catch) is not exercised");
+	}
+	if (!HAS_NODE && !SAN) {
+		progress("  !! node not found — the js lane is DISABLED on this host; every parity verdict below is C-only (drc/orc/danger), so C↔JS backend divergence is not covered");
+	}
 
 	const stale = stalenessWarning();
 	if (stale != "") { progress(""); progress("  !! " + stale); }
@@ -599,14 +758,15 @@ function main(): void {
 
 	// drain the parallel tail
 	while (activeCount(running) > 0) {
-		runCapture("sleep 0.1");
+		pollSleep("0.1", 100);
 		drain(running, t, parityDone);
 	}
 
 	// serial cells: one at a time on an otherwise idle machine
 	for (const c of pendingSerial) {
 		launchCell(c);
-		while (!cellDone(c)) { runCapture("sleep 0.05"); }
+		while (!cellDone(c) && !cellTimedOut(c)) { pollSleep("0.05", 50); }
+		if (cellTimedOut(c)) { failCellTimeout(c, t); continue; }
 		finishCell(c);
 		reportCell(c, t);
 	}
