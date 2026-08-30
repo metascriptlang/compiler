@@ -580,6 +580,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 					let baseType = baseSym.symbolType;
 					if (isRefBase && baseType.typeReturn !== null) baseType = baseType.typeReturn;
 					const gi1 = createGenericInstance(baseType, resolvedArgs);
+					gi1.typeName = baseName;
 					instantiateGenericBody(gi1, genericParams);
 					return isRefBase ? createRef(gi1) : gi1;
 				}
