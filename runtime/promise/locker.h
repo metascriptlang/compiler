@@ -72,15 +72,53 @@
     syscall(SYS_futex, addr, FUTEX_WAKE_PRIVATE, INT_MAX, (void*)0, (void*)0, 0);
   }
 #elif defined(_WIN32)
-  #define MS_INFINITE 0xFFFFFFFFul
-  __declspec(dllimport) int  __stdcall WaitOnAddress(volatile void* addr, void* cmp, size_t size, unsigned long ms);
-  __declspec(dllimport) void __stdcall WakeByAddressAll(void* addr);
+  /* WaitOnAddress/WakeByAddressAll (Amendment E Tier 1's Windows arm) live in
+   * api-ms-win-core-synch-l1-2-0 (Win8+; forwarded from kernel32 on newer
+   * builds) — but the mingw import libs zig cc links do not carry them, so a
+   * static __declspec(dllimport) reference is an undefined symbol at link
+   * time (probed: linker error on every -l candidate). Resolve dynamically:
+   * one GetProcAddress pair at first use, spin fallback when absent. The
+   * fallback is the pre-Tier-1 pure-spin behaviour — degraded (contended
+   * waiters burn their spin budget instead of parking) but sound, same shape
+   * as the #else branch below. */
+  #include <windows.h>
+  typedef BOOL  (WINAPI *msWaitOnAddressFn)(volatile void*, void*, size_t, DWORD);
+  typedef void  (WINAPI *msWakeByAddressFn)(void*);
+  static msWaitOnAddressFn msWaitOnAddressP = NULL;
+  static msWakeByAddressFn msWakeByAddressAllP = NULL;
+  static LONG msFutexFnState = 0;  /* 0 = unresolved, 1 = resolving, 2 = done */
+  static inline void msFutexResolve(void) {
+    if (msFutexFnState == 2) return;
+    if (InterlockedCompareExchange(&msFutexFnState, 1, 0) == 0) {
+      HMODULE k32 = GetModuleHandleA("kernel32.dll");
+      HMODULE syn = GetModuleHandleA("api-ms-win-core-synch-l1-2-0.dll");
+      if (k32 != NULL) {
+        msWaitOnAddressP   = (msWaitOnAddressFn)(void*)GetProcAddress(k32, "WaitOnAddress");
+        msWakeByAddressAllP = (msWakeByAddressFn)(void*)GetProcAddress(k32, "WakeByAddressAll");
+      }
+      if (msWaitOnAddressP == NULL && syn != NULL) {
+        msWaitOnAddressP   = (msWaitOnAddressFn)(void*)GetProcAddress(syn, "WaitOnAddress");
+        msWakeByAddressAllP = (msWakeByAddressFn)(void*)GetProcAddress(syn, "WakeByAddressAll");
+      }
+      InterlockedExchange(&msFutexFnState, 2);
+    } else {
+      while (msFutexFnState == 1) msCpuRelax();
+    }
+  }
   static inline void msFutexWait(int* addr, int expected) {
-    int cmp = expected;
-    WaitOnAddress((volatile void*)addr, &cmp, sizeof(int), MS_INFINITE);
+    msFutexResolve();
+    if (msWaitOnAddressP != NULL) {
+      int cmp = expected;
+      msWaitOnAddressP((volatile void*)addr, &cmp, sizeof(int), INFINITE);
+    } else {
+      /* No WaitOnAddress on this OS: keep polling like the pre-Tier-1 spin
+       * path. The acquire load pairs with the release store in
+       * msTicketLockRelease, so we never sleep past our turn. */
+      while (msAtomicLoad(addr) == expected) msCpuRelax();
+    }
   }
   static inline void msFutexWakeAll(int* addr) {
-    WakeByAddressAll((void*)addr);
+    if (msWakeByAddressAllP != NULL) msWakeByAddressAllP((void*)addr);
   }
 #else
   static inline void msFutexWait(int* addr, int expected) { (void)addr; (void)expected; msCpuRelax(); }
