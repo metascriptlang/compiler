@@ -9,7 +9,7 @@ import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/c
 import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
-import { CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
+import { CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
 import { fitJoinedBranch, fitNode, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, trySynthesizeAsCoercion, widenVariantToUnion } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
@@ -299,6 +299,20 @@ function deriveCallBindings(
 		mergeUnifyBindings(bindings, backBindings);
 	}
 	return bindings;
+}
+
+function isTypeLevelAccess(ctx: CheckerContext, obj: Node): boolean {
+	const sym = obj.resolvedSym;
+	if (sym === null) return false;
+	if (sym.symbolKind === SymbolKind.Class
+		|| sym.symbolKind === SymbolKind.Actor
+		|| sym.symbolKind === SymbolKind.TypeAlias
+		|| sym.symbolKind === SymbolKind.Interface
+		|| sym.symbolKind === SymbolKind.Struct) return true;
+	if (sym.symbolKind !== SymbolKind.Function) return false;
+	if (obj.kind !== NodeKind.Identifier) return false;
+	if (ctx.extensionRegistry === null) return false;
+	return hasStaticExtForReceiver(ctx.extensionRegistry, sym.name);
 }
 
 function getCalleeName(callee: Node): string {
@@ -786,13 +800,12 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 			const objType = me.object.nodeType;
 			if (objType !== null) {
 				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
-				let filtered = filterExtsByReceiverType(allByName, objType);
 				// Type-level access (e.g., Buffer.method()) — only static extensions apply.
-				const isStaticAccess = me.object.resolvedSym !== null
-					&& (me.object.resolvedSym.symbolKind === SymbolKind.TypeAlias
-						|| me.object.resolvedSym.symbolKind === SymbolKind.Class
-						|| me.object.resolvedSym.symbolKind === SymbolKind.Actor
-						|| me.object.resolvedSym.symbolKind === SymbolKind.Interface);
+				const isStaticAccess = isTypeLevelAccess(ctx, me.object);
+				let filtered = filterExtsByReceiverType(allByName, objType);
+				if (filtered.length === 0 && isStaticAccess && me.object.resolvedSym !== null) {
+					filtered = filterStaticExtsByReceiverName(allByName, me.object.resolvedSym.name);
+				}
 				if (isStaticAccess && filtered.length > 1) {
 					const staticOnly: ExtensionMethod[] = [];
 					for (const ext of filtered) {
@@ -2704,12 +2717,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// skip instance field resolution — go to static method lookup.
 	// Allows field/method name coexistence: result.ok (field) vs Result.ok() (static method).
 	// TypeAlias included for patterns like Buffer.alloc() where Buffer is `type Buffer = string`.
-	const isStaticClassAccess = d.object.resolvedSym !== null
-		&& (d.object.resolvedSym.symbolKind === SymbolKind.Class
-			|| d.object.resolvedSym.symbolKind === SymbolKind.Actor
-			|| d.object.resolvedSym.symbolKind === SymbolKind.TypeAlias
-			|| d.object.resolvedSym.symbolKind === SymbolKind.Interface
-			|| d.object.resolvedSym.symbolKind === SymbolKind.Struct);
+	const isStaticClassAccess = isTypeLevelAccess(ctx, d.object);
 	let propType = isStaticClassAccess ? inferredType() : getProperty(resolvedObjType, d.property);
 	// Engine (macro-body) view of Node.nodeType: the VM wire carries a type-AST
 	// Node tree (mapTypeToAst), not the checker Type the class declares. Type
