@@ -110,7 +110,14 @@ function makeMaybeCarrier(payload: Node, carrierType: Type, loc: SourceLocation)
 }
 
 // Register a struct/interface == use for later on-demand Eq generation by destructorLifting.
-function registerStructEq(ctx: TransformContext, typeName: string): void {
+function registerStructEq(ctx: TransformContext, typeName: string, t: Type): void {
+	// ensureEq resolves the name in the CONSUMING module's scope; a struct whose
+	// name was never imported there is invisible to it, so route it through the
+	// carrier channel, which generates from the Type instead.
+	if (ctx.checkerCtx !== null && lookupSymbol(ctx.checkerCtx.table, typeName) === null) {
+		registerCarrierEq(ctx, t);
+		return;
+	}
 	for (const n of ctx.pendingStructEqs) {
 		if (n === typeName) return;
 	}
@@ -149,7 +156,7 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 	}
 	// Auto-generated == for interfaces (=== same as == for value types)
 	if ((opName === "==" || opName === "===") && isValueObject(leftType)) {
-		registerStructEq(ctx, typeName);
+		registerStructEq(ctx, typeName, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(typeName + "Eq", loc);
 		callee.nodeType = fnType;
@@ -414,7 +421,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	// 5. Direct base operators for value-type objects (auto-generated ==).
 	// === is the same as == for value types (no reference identity distinction).
 	if ((opName === "==" || opName === "===") && isValueObject(leftType)) {
-		registerStructEq(ctx, typeName);
+		registerStructEq(ctx, typeName, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(typeName + "Eq", loc);
 		callee.nodeType = fnType;
