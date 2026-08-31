@@ -445,6 +445,60 @@ static inline void msActorStop(int64_t pid, int32_t reason);
 static inline void msActorUnregisterByPtr(msActor* a);
 static inline void msActorDestroyWithReason(msActor* a, int32_t reason);
 
+/* ===== CALL reply completion plumbing (Amendment G / I15 / I16) =====
+ *
+ * A CALL reply future crosses threads: the sender (owner thread) creates it,
+ * the actor-processing thread (a pool worker for scheduler N) completes it,
+ * and the awaiting owner reads and destroys it. Two invariants apply:
+ *
+ *  I16 (Amendment G): the in-flight ref is taken on the SENDER thread inside
+ *  msActorSend, before the message becomes visible in the mailbox
+ *  (acquire-before-visible). The completers below push via
+ *  msCompletionQueuePushOwned — no worker-side incref, ever.
+ *
+ *  I15 (Amendment A): callbacks fire on the dispatcher DRAIN, never inline on
+ *  the actor-processing worker. Before this, msMsgComplete* fired inline and
+ *  the awaiting owner could observe `finished`, read the value, and destroy
+ *  the future while the worker was still inside msFutureFireCallbacks —
+ *  heap-use-after-free (SAN lane, 409/411, flaky under timing).
+ *
+ * Single-threaded builds (wasm/emcc, MS_FUTURE_SUBMIT_REF == 0) keep the old
+ * inline fire: there is no second thread, so I15/I16 have nothing to order. */
+
+/* Defined in the dispatch backends (dispatchFull.c / dispatchEmcc.c /
+ * dispatchWasm.c) — declared here because actor.h sits above thread.h in
+ * the include graph. */
+extern void msCompletionQueuePushOwned(void* fut, bool isFail, void* error);
+extern void msCompletionQueuePushReleaseBatch(void** futs, int count);
+
+/* Publish path tail used by msMsgComplete*: the value is already stored and
+ * `finished` is already release-stored (blocked waiters may read NOW — same
+ * split-completion Step 1 as thread.h's spawn workers); only the callback
+ * volley is routed. */
+static inline void msMsgReplyDispatch(void* fut) {
+#if MS_FUTURE_SUBMIT_REF
+    msCompletionQueuePushOwned(fut, false, NULL);
+#else
+    msFutureFireCallbacks((msFutureBase*)fut);
+#endif
+}
+
+/* Fail a CALL reply from any fail site (stop-during-suspend, teardown drain)
+ * and release the mailbox's in-flight ref. The release is DEFERRED through
+ * the completion queue (Amendment H): these sites can run on an actor-
+ * processing worker, and an inline decref would race the awaiting owner on
+ * the future's non-atomic rc. msFutureFail still fires inline so a blocked
+ * waiter unblocks immediately (I20 {noproc}); async steppers registered on
+ * the finished future re-fire through msFutureAddCallback's finished-path. */
+static inline void msMsgReplyFail(void* fut) {
+    if (fut == NULL) return;
+    msFutureFail(fut, NULL);
+#if MS_FUTURE_SUBMIT_REF
+    void* f = fut;
+    msCompletionQueuePushReleaseBatch(&f, 1);
+#endif
+}
+
 /* ===== Phase 5: Cooperative Actor Suspension ===== */
 
 /* Resume callback: re-enqueues actor on scheduler after spawn completion.
@@ -465,7 +519,7 @@ static inline void msActorResumeFromFut(void* rawActor, ...) {
          * reap scan. Never reap here: a stale queue entry's visit may hold the
          * shell, and the reaper must be the owner scheduler. */
         if (a->suspendedReplyFut != NULL) {
-            msFutureFail(a->suspendedReplyFut, NULL);
+            msMsgReplyFail(a->suspendedReplyFut);
         }
         a->suspendedReplyFut = NULL;
         atomic_store_explicit(&a->suspendedFut, NULL, memory_order_release);
@@ -498,7 +552,7 @@ static inline void msActorSuspend(msActor* a, void* implFut, void* replyFut) {
      * don't suspend, register no resume callback (no shell reference outlives
      * this call). The visit's reap gate collects on the next pass. */
     if (atomic_load_explicit(&a->stopRequested, memory_order_acquire)) {
-        if (replyFut != NULL) msFutureFail(replyFut, NULL);
+        if (replyFut != NULL) msMsgReplyFail(replyFut);
         msHazardClear(a);
         return;
     }
@@ -576,6 +630,22 @@ static inline void msActorSend(msActor* a, msMessage* msg) {
         msHazardClear(a);
         return;
     }
+    /* Amendment G (I16) for actor CALLs — acquire-before-visible. The reply
+     * future's in-flight ref is taken HERE, on the sender's thread, before
+     * the message becomes visible in the mailbox. The actor-processing
+     * thread (a pool worker for scheduler N) then publishes value+finished
+     * and routes the callback volley through msCompletionQueuePushOwned —
+     * no worker-side incref ever touches the non-atomic rc. The drain
+     * releases this ref after msFutureFireCallbacks; every fail site that
+     * pops the message pairs with msMsgReplyFail's deferred release.
+     * MUST stay after the two guards above: they fail the reply before any
+     * ref exists, and msMsgReplyFail would over-release it. */
+#if MS_FUTURE_SUBMIT_REF
+    if (msg->replyFuture != NULL) {
+        msIncRef(msg->replyFuture);
+        ((msFutureBase*)msg->replyFuture)->crossThreadPublished = true;
+    }
+#endif
     bool wasEmpty = msMpscPush(&a->mailbox, msg);
     atomic_store_explicit(&a->hasWork, true, memory_order_release);
 
@@ -770,10 +840,17 @@ static inline void* msMsgReplyFuture(void* msg) {
 }
 
 /* Future completion helpers — thin wrappers so dispatch can complete reply futures.
- * These call into future.h APIs. Include future.h before actor.h for call-semantics. */
+ * Split completion (same shape as thread.h's spawn workers): Step 1 stores the
+ * value and release-stores `finished` — a blocked msWaitFor may read NOW; Step
+ * 2 routes the callback volley to the dispatcher drain (msMsgReplyDispatch,
+ * I15) — never fired inline on the actor-processing worker. */
 static inline void msMsgCompleteDouble(void* fut, double val) {
     if (fut == NULL) return;
-    msFutureCompleteT((msFuture_double*)fut, val);
+    msFuture_double* f = (msFuture_double*)fut;
+    if (atomic_load_explicit(&f->base.finished, memory_order_acquire)) return;
+    f->value = val;
+    atomic_store_explicit(&f->base.finished, true, memory_order_release);
+    msMsgReplyDispatch(fut);
 }
 
 /* Typed completers for integral and bool actor returns. Mirror Double: the
@@ -784,22 +861,38 @@ static inline void msMsgCompleteDouble(void* fut, double val) {
  * the byte pattern diverges (e.g. double 3.0 vs int32 3). */
 static inline void msMsgCompleteInt32(void* fut, int32_t val) {
     if (fut == NULL) return;
-    msFutureCompleteT((msFuture_int32*)fut, val);
+    msFuture_int32* f = (msFuture_int32*)fut;
+    if (atomic_load_explicit(&f->base.finished, memory_order_acquire)) return;
+    f->value = val;
+    atomic_store_explicit(&f->base.finished, true, memory_order_release);
+    msMsgReplyDispatch(fut);
 }
 
 static inline void msMsgCompleteInt64(void* fut, int64_t val) {
     if (fut == NULL) return;
-    msFutureCompleteT((msFuture_int64*)fut, val);
+    msFuture_int64* f = (msFuture_int64*)fut;
+    if (atomic_load_explicit(&f->base.finished, memory_order_acquire)) return;
+    f->value = val;
+    atomic_store_explicit(&f->base.finished, true, memory_order_release);
+    msMsgReplyDispatch(fut);
 }
 
 static inline void msMsgCompleteBool(void* fut, bool val) {
     if (fut == NULL) return;
-    msFutureCompleteT((msFuture_bool*)fut, val);
+    msFuture_bool* f = (msFuture_bool*)fut;
+    if (atomic_load_explicit(&f->base.finished, memory_order_acquire)) return;
+    f->value = val;
+    atomic_store_explicit(&f->base.finished, true, memory_order_release);
+    msMsgReplyDispatch(fut);
 }
 
 static inline void msMsgCompletePtr(void* fut, void* val) {
     if (fut == NULL) return;
-    msFutureComplete(fut, val);
+    msFuture* f = (msFuture*)fut;
+    if (atomic_load_explicit(&f->base.finished, memory_order_acquire)) return;
+    f->value = val;
+    atomic_store_explicit(&f->base.finished, true, memory_order_release);
+    msMsgReplyDispatch(fut);
 }
 
 static inline void msMsgCompleteString(void* fut, msString val) {
@@ -811,12 +904,15 @@ static inline void msMsgCompleteString(void* fut, msString val) {
     if (atomic_load_explicit(&f->base.finished, memory_order_acquire)) return;
     f->value = val;
     atomic_store_explicit(&f->base.finished, true, memory_order_release);
-    msFutureFireCallbacks(&f->base);
+    msMsgReplyDispatch(fut);
 }
 
 static inline void msMsgCompleteVoid(void* fut) {
     if (fut == NULL) return;
-    msFutureCompleteVoid(fut);
+    msFutureBase* f = (msFutureBase*)fut;
+    if (atomic_load_explicit(&f->finished, memory_order_acquire)) return;
+    atomic_store_explicit(&f->finished, true, memory_order_release);
+    msMsgReplyDispatch(fut);
 }
 
 /* Set onTerminate callback (called by actorLower wiring).
@@ -896,7 +992,7 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
     {
         msMessage* dm;
         while ((dm = msMpscPop(&a->mailbox)) != NULL) {
-            if (dm->replyFuture != NULL) msFutureFail(dm->replyFuture, NULL);
+            if (dm->replyFuture != NULL) msMsgReplyFail(dm->replyFuture);
         }
     }
     msMpscDestroy(&a->mailbox);
