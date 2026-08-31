@@ -100,7 +100,7 @@ interface CtorEntry {
 }
 let _ctorRegistry: CtorEntry[] = [];
 
-function registerCtorDefaults(name: string, fnType: Type, defaults: Node[]): void {
+export function registerCtorDefaults(name: string, fnType: Type, defaults: Node[]): void {
 	for (const e of _ctorRegistry) {
 		if (e.name === name) return; // already registered
 	}

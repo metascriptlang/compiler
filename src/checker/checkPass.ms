@@ -23,7 +23,7 @@ import { isAssignable, explainStructuralPrefix, isObjectShapeMismatch } from "./
 import { setConditionalAssignFn } from "./types";
 setConditionalAssignFn(isAssignable);
 import { resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
-import { registerModuleCtx } from "./instantiate";
+import { registerModuleCtx, registerCtorDefaults } from "./instantiate";
 import { getGenericDecl } from "../parser/context";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
@@ -1010,6 +1010,12 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			const ctorSym = node.resolvedSym;
 			if (ctorSym !== null) {
 				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + 11, ctorSym, ctorSym.symbolType, SymbolKind.Method, "constructor", className, true);
+			}
+			// ctorLower later lifts this node out of classBody, so a module that only
+			// reaches the class through an import can no longer read the signature off
+			// the AST. The shared registry is the order-independent carrier.
+			if (className !== "" && node.nodeType !== null && node.nodeType.kind === TypeKind.Function) {
+				registerCtorDefaults(className + "_new", node.nodeType, d.ctorDefaults !== null ? d.ctorDefaults : []);
 			}
 			// Constructor allocates `this` — prepend to params for checking so this.* resolves,
 			// but don't modify AST (codegen handles `this` as a local, not a param).
