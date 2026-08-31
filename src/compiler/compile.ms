@@ -387,6 +387,27 @@ interface CBuildState {
 	includePaths: HashSet<string>;
 }
 
+// Dedupe on merge: many modules' @passC carry the same -I dirs (the crypto
+// prelude chain repeats its 5 vendor dirs per importing module); appending
+// them raw duplicated each dir hundreds of times until the cc command line
+// crossed CreateProcessW's 32767-char ceiling — spawn then fails with a bare
+// "fork/exec failed" (exit -1). Keep first occurrence, preserve order.
+function mergeFlagsDeduped(base: string, add: string): string {
+	if (add === "") return base;
+	const seen: HashSet<string> = new HashSet<string>();
+	for (const tok of base.split(" ")) {
+		if (tok !== "") seen.add(tok);
+	}
+	let result = base;
+	for (const tok of add.split(" ")) {
+		if (tok === "") continue;
+		if (seen.has(tok)) continue;
+		seen.add(tok);
+		result = appendFlag(result, tok);
+	}
+	return result;
+}
+
 function initCBuildState(opts: CliOptions): CBuildState {
 	let allFlags = cliCompileFlags(opts);
 	const includePaths: HashSet<string> = new HashSet<string>();
@@ -1232,7 +1253,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		// Accumulate compiler flags (@passC). Relative -I paths resolved using same
 		// rule as @compile (try CWD, then search includePaths which contains compilerRoot).
 		const resolved = resolveIncludeFlags(ctx.compilerFlags, includePaths);
-		allFlags = appendFlag(allFlags, resolved);
+		allFlags = mergeFlagsDeduped(allFlags, resolved);
 		// @passL/@link go directly to global linkState — no per-module merge
 		registerIncludePaths(resolved, includePaths);
 
@@ -1649,7 +1670,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		transformedPaths.push(modPath);
 
 		const resolved = resolveIncludeFlags(ctx.compilerFlags, includePaths);
-		allFlags = appendFlag(allFlags, resolved);
+		allFlags = mergeFlagsDeduped(allFlags, resolved);
 		registerIncludePaths(resolved, includePaths);
 	}
 
