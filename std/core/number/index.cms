@@ -1,0 +1,33 @@
+extern function msStringParseFloat(v: string): float64 from "msStringParseFloat";
+extern function cTrunc(x: float64): float64 from "trunc";
+extern function cFabs(x: float64): float64 from "fabs";
+
+export function Number(v: string): float64 {
+	return msStringParseFloat(v);
+}
+
+export function Number(v: boolean): float64 {
+	return v ? 1.0 : 0.0;
+}
+
+export function Number(v: int64): float64 {
+	return v as float64;
+}
+
+export function isNaN(this typeof Number, x: float64): boolean {
+	return x !== x;
+}
+
+// A finite double is the only kind for which x - x cancels: NaN stays NaN and
+// either infinity yields NaN too.
+export function isFinite(this typeof Number, x: float64): boolean {
+	return x - x === 0.0;
+}
+
+export function isInteger(this typeof Number, x: float64): boolean {
+	return x - x === 0.0 && cTrunc(x) === x;
+}
+
+export function isSafeInteger(this typeof Number, x: float64): boolean {
+	return x - x === 0.0 && cTrunc(x) === x && cFabs(x) <= 9007199254740991.0;
+}

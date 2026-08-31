@@ -117,6 +117,12 @@ export extern function stripInPlace(this s: string): void from "&msStringStripIn
 /** Returns a string created from the specified Unicode code point. */
 export extern function fromCodePoint(cp: number): string from "msStringFromCodePoint";
 
+const CHAR_UNIT_MASK: int32 = 0xFFFF;
+
+export function fromCharCode(this typeof String, code: int32): string {
+	return fromCodePoint((code & CHAR_UNIT_MASK) as number);
+}
+
 // ===== Type Coercion =====
 
 /** Converts any value to its string representation. Delegates to .toString(). */

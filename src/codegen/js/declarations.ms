@@ -2,7 +2,7 @@
 
 import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
-	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ActorDeclData, createNodeAt,
+	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, createNodeAt,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
@@ -92,6 +92,19 @@ function jsBaseClassName(gen: JSGenerator, node: Node, declaredName: string): st
 	return jsSymbolName(gen, parent, parent.name);
 }
 
+// Instance fields are assigned by the constructor, so only a static one carries
+// an initializer that nothing else would ever run.
+function emitStaticPropertyDecl(gen: JSGenerator, member: Node): void {
+	const d = member.data as PropertyDeclData;
+	if (!d.propIsStatic || d.propInitializer === null) return;
+	emitIndent(gen);
+	emit(gen, "static ");
+	emit(gen, safeJsName(d.propName));
+	emit(gen, " = ");
+	emitNode(gen, d.propInitializer);
+	emit(gen, ";\n");
+}
+
 function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as ClassDeclData;
 	emit(gen, "class ");
@@ -110,7 +123,7 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 				else { emitMethodDecl(gen, member); }
 			},
 			NodeKind.ConstructorDecl => { emitConstructorDecl(gen, member); },
-			NodeKind.PropertyDecl => {},
+			NodeKind.PropertyDecl => { emitStaticPropertyDecl(gen, member); },
 			_ => { emitNode(gen, member); },
 		};
 	}

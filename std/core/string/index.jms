@@ -89,6 +89,18 @@ export function msStringEquals(a: string, b: string): boolean {
 	unreachable;
 }
 
+// ===== Type Coercion =====
+
+@builtin("ToString")
+export extern function String<T>(val: T): string;
+
+// ===== Character Construction =====
+
+export function fromCharCode(this typeof String, code: int32): string {
+	@emit(`return globalThis.String.fromCharCode(Number(${code}) & 0xFFFF);`);
+	unreachable;
+}
+
 // ===== String Extension Methods (after lowering: s.method(args) → method(s, args)) =====
 
 export function charAt(this s: string, idx: int32): string {

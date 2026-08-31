@@ -53,26 +53,21 @@ test "float64 keeps using msNumberToString" {
 	assert result.value.contains("msNumberToString");
 }
 
-// ===== bigint literal: valid C when it fits, hard error when it does not =====
-// The checker types `123n` as Int64, so that is the contract the C backend has to
-// honour: a value inside int64 lowers to an ordinary integer constant. Before,
-// the C backend had no branch at all and passed `123n` through to clang, turning
-// a user-source problem into a syntax error in generated code.
+// ===== bigint literal: a distinct primitive, no longer an int64 spelling =====
+// `123n` is typed `bigint` (arbitrary precision). It does not flow into int64
+// slots, and a literal beyond int64 is legal — the checker no longer bounds it.
 
-test "bigint literal within int64 lowers to an integer constant in C" {
-	const result = compileToC("const a = 123n;");
-	assert result.ok;
-	assert result.value.contains("123");
-	assert !result.value.contains("123n");
-}
-
-test "bigint literal at int64 max keeps its digits in C" {
-	const result = compileToC("const a = 9223372036854775807n;");
-	assert result.ok;
-	assert result.value.contains("9223372036854775807");
-}
-
-test "bigint literal beyond int64 is a diagnostic, not invalid C" {
-	const result = compileToC("const a = 123456789012345678901234567890n;");
+test "bigint literal does not fit an int64 slot" {
+	const result = compileToC("function f(): int64 { return 123n; }");
 	assert !result.ok;
+}
+
+test "int64 does not fit a bigint slot without an explicit conversion" {
+	const result = compileToC("function k(x: bigint): void { }\nconst a: int64 = 5;\nk(a);");
+	assert !result.ok;
+}
+
+test "bigint literal beyond int64 typechecks" {
+	const result = compileToC("const a: bigint = 123456789012345678901234567890n;");
+	assert result.ok;
 }

@@ -1169,6 +1169,22 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void
 				parentChildren = crossModuleCtorParamTypes(parentSym);
 			}
 			const parentProtoKey = "proto:" + parentInitName;
+			// ctorLower lifts the constructor OUT of classBody, so reading the
+			// parent's ClassDecl finds no ConstructorDecl once that module has been
+			// transformed — which depends on module order. The lifted function's
+			// own symbol is the order-independent source.
+			if (parentChildren === null) {
+				const lifted = dispatchEntryForLiftedName(parentInitName);
+				if (lifted !== null && lifted.sym !== null) {
+					ensureCrossModuleProto(g, parentInitName, lifted.sym.symbolType, lifted.sym);
+				}
+			}
+			// A same-module parent needs no prototype: its `_init` is defined in this
+			// translation unit. Only a foreign parent can end up called undeclared.
+			const parentIsForeign = parentSym.modulePath !== "" && parentSym.modulePath !== g.modulePath;
+			if (parentIsForeign && parentChildren === null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
+				addError(g.checkerCtx, `cannot declare '${parentInitName}': the parent constructor signature is not reachable from this module`, node.location.line, node.location.column);
+			}
 			if (parentChildren !== null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
 				nameSetAdd(g.declaredProcs, parentProtoKey);
 				let parentProtoParams = `${parentName}* this`;
@@ -1407,7 +1423,17 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 
 		// Static property access: emit global variable name (ClassName.prop → ClassName__prop)
 		if (node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.Static)) {
-			ctx.results.push(staticFieldCName(node.resolvedSym.name));
+			const staticCName = staticFieldCName(node.resolvedSym.name);
+			// Declared in every module that reads it. The owning module also defines
+			// it, and an extern next to the definition is legal C — so this needs no
+			// knowledge of which module we are in, which a prelude symbol cannot give.
+			const externKey = "extern:" + staticCName;
+			if (!nameSetHas(g.declaredProcs, externKey)) {
+				nameSetAdd(g.declaredProcs, externKey);
+				const sType = node.nodeType !== null ? getTypeDesc(g, node.nodeType) : getTypeDesc(g, node.resolvedSym.symbolType);
+				addLine(sec(g, CSection.ProcHeaders), `extern ${sType} ${staticCName};`);
+			}
+			ctx.results.push(staticCName);
 			return;
 		}
 
@@ -2310,6 +2336,7 @@ function typeofConst(g: CGen, t: Type | null): string {
 	if (t.kind === TypeKind.String || t.kind === TypeKind.StringLiteral) return typeofStr(g, "string");
 	if (t.kind === TypeKind.Boolean || t.kind === TypeKind.BooleanLiteral) return typeofStr(g, "boolean");
 	if (t.kind === TypeKind.Function) return typeofStr(g, "function");
+	if (t.kind === TypeKind.BigInt) return typeofStr(g, "bigint");
 	return typeofStr(g, "object");
 }
 

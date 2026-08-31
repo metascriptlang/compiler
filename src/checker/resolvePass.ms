@@ -710,6 +710,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		"uint64" => createPrimitive(TypeKind.Uint64),
 		"float32" => createPrimitive(TypeKind.Float32),
 		"float64" => createPrimitive(TypeKind.Float64),
+		"bigint" => createPrimitive(TypeKind.BigInt),
 		"char" => charType(),
 		"cstring" => cstringType(),
 		_ => {

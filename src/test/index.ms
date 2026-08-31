@@ -63,6 +63,7 @@ import "./c/toycodec";
 import "./c/structuralPrefix";
 import "./c/drcLifecycle";
 import "./c/int64Literal";
+import "./c/bigintChecker";
 import "./js/basic";
 import "./js/result";
 import "./js/int64Literal";

@@ -383,10 +383,11 @@ export class ExtensionMethod {
 
 export class ExtensionRegistry {
 	methods: ExtensionMethod[];
+	staticReceivers: string[];
 }
 
 export function createExtensionRegistry(): ExtensionRegistry {
-	return { methods: [] };
+	return { methods: [], staticReceivers: [] };
 }
 
 // Create an ExtensionMethod with proper ownership invariant enforced.
@@ -427,6 +428,12 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 		}
 	}
 	registry.methods.push(method);
+	if (method.isStatic) {
+		for (const known of registry.staticReceivers) {
+			if (known === method.receiverTypeName) return;
+		}
+		registry.staticReceivers.push(method.receiverTypeName);
+	}
 }
 
 export function findExtension(registry: ExtensionRegistry, receiverTypeName: string, methodName: string): ExtensionMethod {
@@ -492,6 +499,23 @@ function findAllExtensionsByNameInner(registry: ExtensionRegistry, methodName: s
 			results.push(m);
 		}
 		i = i + 1;
+	}
+	return results;
+}
+
+export function hasStaticExtForReceiver(registry: ExtensionRegistry, receiverName: string): boolean {
+	if (receiverName === "") return false;
+	for (const known of registry.staticReceivers) {
+		if (known === receiverName) return true;
+	}
+	return false;
+}
+
+export function filterStaticExtsByReceiverName(exts: ExtensionMethod[], receiverName: string): ExtensionMethod[] {
+	const results: ExtensionMethod[] = [];
+	if (receiverName === "") return results;
+	for (const e of exts) {
+		if (e.isStatic && e.receiverTypeName === receiverName) results.push(e);
 	}
 	return results;
 }
@@ -1408,6 +1432,29 @@ test "not found" {
 	const r = createExtensionRegistry();
 	const found = findExtension(r, "string", "nope");
 	assert found === null;
+}
+
+test "namespace receiver is name-keyed, not kind-keyed" {
+	const r = createExtensionRegistry();
+	const inst: ExtensionMethod = { methodName: "trim", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const stat: ExtensionMethod = { methodName: "fromCharCode", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym: null };
+	registerExtension(r, inst);
+	registerExtension(r, stat);
+	assert hasStaticExtForReceiver(r, "String");
+	assert !hasStaticExtForReceiver(r, "helper");
+	assert !hasStaticExtForReceiver(r, "");
+}
+
+test "static ext filter keeps only statics of that receiver" {
+	const stat: ExtensionMethod = { methodName: "m", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym: null };
+	const otherRecv: ExtensionMethod = { methodName: "m", receiverTypeName: "Buffer", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym: null };
+	const inst: ExtensionMethod = { methodName: "m", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const all: ExtensionMethod[] = [stat, otherRecv, inst];
+	const got = filterStaticExtsByReceiverName(all, "String");
+	assert got.length === 1;
+	assert got[0].receiverTypeName === "String";
+	assert got[0].isStatic;
+	assert filterStaticExtsByReceiverName(all, "").length === 0;
 }
 
 test "no attached ops" {

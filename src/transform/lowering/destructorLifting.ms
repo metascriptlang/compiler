@@ -589,6 +589,12 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), buf, loc);
 			}
 		},
+		TypeKind.BigInt => {
+			// msBigInt is a refcounted heap value that can never form a cycle and
+			// carries no atomic count — the plain non-cyclic ref ops, matching the
+			// RcInfo classify.ms hands the analyzer for the same type.
+			refOp(hook, xf, yf, fieldName, false, false, buf, loc);
+		},
 		TypeKind.Ptr => {
 			defaultOp(hook, xf, yf, buf, loc);
 		},
@@ -1462,6 +1468,10 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 	// msString is a C struct, so === doesn't work. Call msStringEquals(a, b).
 	if (isStringLike(fieldType)) {
 		return makeCall(makeIdent("msStringEquals", loc), [aField, bField], loc);
+	}
+	// bigint fields are msBigInt* — `===` would answer identity, not value.
+	if (fieldType.kind === TypeKind.BigInt) {
+		return makeBinary(makeCall(makeIdent("msBigIntCmp", loc), [aField, bField], loc), "===", makeNumber(0, loc), loc);
 	}
 	if (isPayloadUnion(fieldType)) {
 		return payloadUnionEqExpr(aField, bField, fieldType, lctx, loc);

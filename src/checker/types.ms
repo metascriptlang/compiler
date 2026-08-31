@@ -103,6 +103,10 @@ export function emptyType(): Type {
 export function createPrimitive(kind: TypeKind): Type {
 	const t = emptyType();
 	t.kind = kind;
+	// bigint is a managed primitive like string, but its ordinal sits past the
+	// _sysTypes bound, so the flag cannot be stamped on a shared instance — an
+	// owner that never sees HasAsgn on the field gets no scope destroy at all.
+	if (kind === TypeKind.BigInt) { t.typeFlags = TypeFlag.HasAsgn as int32; }
 	return t;
 }
 
@@ -1602,6 +1606,7 @@ function typeKey(t: Type): string {
 		TypeKind.Uint32 => "uint32",
 		TypeKind.Float32 => "float32",
 		TypeKind.Float64 => "float64",
+		TypeKind.BigInt => "bigint",
 		TypeKind.Array => {
 			return "Array(" + (t.typeReturn !== null ? typeKey(t.typeReturn) : "any") + ")";
 		},
@@ -1770,7 +1775,8 @@ export function hasAsgnFlag(t: Type): boolean {
 export function arrayElementNeedsCleanup(elem: Type): boolean {
 	if (elem === null) return false;
 	if (elem.kind === TypeKind.String || elem.kind === TypeKind.Ref
-		|| elem.kind === TypeKind.Ptr || elem.kind === TypeKind.Function) return true;
+		|| elem.kind === TypeKind.Ptr || elem.kind === TypeKind.Function
+		|| elem.kind === TypeKind.BigInt) return true;
 	if (elem.kind === TypeKind.Distinct && elem.typeReturn !== null) {
 		return arrayElementNeedsCleanup(elem.typeReturn);
 	}
@@ -2683,6 +2689,7 @@ function typeNameOfInner(t: Type | null): string {
 		TypeKind.Uint64 => "uint64",
 		TypeKind.Float32 => "float32",
 		TypeKind.Float64 => "float64",
+		TypeKind.BigInt => "bigint",
 		TypeKind.Array => "Array",
 		TypeKind.SizedArray => "Array", // Both map to "Array" for extension lookup (UFCS)
 		TypeKind.Span => "Span",

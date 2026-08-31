@@ -178,6 +178,12 @@ export function synthStringify(ctx: CheckerContext, expr: Node): Node | null {
 }
 
 export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
+	if (leftType !== null && rightType !== null
+		&& leftType.kind === TypeKind.BigInt && rightType.kind === TypeKind.BigInt
+		&& (op === "+" || op === "-" || op === "*" || op === "/" || op === "%" || op === "**"
+			|| op === "&" || op === "|" || op === "^" || op === "<<" || op === ">>")) {
+		return leftType;
+	}
 	return match (op) {
 		"===" | "!==" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "instanceof" | "in" => booleanType(),
 		"&&" | "||" => leftType,
@@ -233,11 +239,13 @@ export function inferUnaryOp(op: string, operandType: Type): Type {
 			// Reference parity: -int32 → int32, +int32 → int32
 			if (isIntegerType(operandType)) return operandType;
 			if (isFloatType(operandType)) return operandType;
+			if (operandType !== null && operandType.kind === TypeKind.BigInt) return operandType;
 			return numberType();
 		},
 		"~" => {
 			// Reference parity: ~int32 → int32
 			if (isIntegerType(operandType)) return operandType;
+			if (operandType !== null && operandType.kind === TypeKind.BigInt) return operandType;
 			return int32Type();
 		},
 		"typeof" => stringType(),
@@ -305,7 +313,29 @@ export function isBitwiseBinaryOp(op: string): boolean {
 
 export function isBitwiseAllowed(t: Type | null): boolean {
 	if (t === null) return false;
-	return isIntegerType(t) || t.kind === TypeKind.Enum;
+	return isIntegerType(t) || t.kind === TypeKind.Enum || t.kind === TypeKind.BigInt;
+}
+
+// TS parity: bigint never coerces to or from another numeric type, so a mixed
+// arithmetic/bitwise operand pair is a compile error rather than a conversion.
+// Returns true when the caller must abandon the node as an error.
+export function rejectBigIntMix(ctx: CheckerContext, op: string, leftType: Type | null, rightType: Type | null, node: Node): boolean {
+	const leftBig = leftType !== null && leftType.kind === TypeKind.BigInt;
+	const rightBig = rightType !== null && rightType.kind === TypeKind.BigInt;
+	if (!leftBig && !rightBig) return false;
+	if (op === ">>>") {
+		addError(ctx, "operator '>>>' is not allowed on bigint — use '>>'", node.location.line, node.location.column);
+		return true;
+	}
+	if (leftBig === rightBig) return false;
+	const isArith = op === "+" || op === "-" || op === "*" || op === "/" || op === "%" || op === "**"
+		|| op === "+=" || op === "-=" || op === "*=" || op === "/=" || op === "%=";
+	if (!isArith && !isBitwiseBinaryOp(op)) return false;
+	const other = leftBig ? rightType : leftType;
+	if ((op === "+" || op === "+=") && other !== null && isStringLike(other)) return false;
+	const otherName = other !== null ? typeDisplayName(other) : "unknown";
+	addError(ctx, "cannot mix bigint and '" + otherName + "' in '" + op + "' — convert explicitly with BigInt(x) or Number(b)", node.location.line, node.location.column);
+	return true;
 }
 
 export function checkBitwiseOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): void {

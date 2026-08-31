@@ -13,7 +13,7 @@ import { Node, NodeKind, IfStmtData, WhileStmtData, DoWhileStmtData, Conditional
 import { isStructType, isMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeMember, makeNumber, makeBool, makeNull } from "../util";
+import { makeBinary, makeMember, makeNumber, makeBool, makeNull, makeUnary } from "../util";
 
 import { firstStmtKindAfter, firstExprKindAfter, stmtCountAfter } from "../testUtil";
 
@@ -61,6 +61,11 @@ function wrapTruthiness(cond: Node): Node {
 	// Maybe<T> in boolean context → .present
 	if (cond.nodeType !== null && isMaybeType(cond.nodeType)) {
 		return makeMember(cond, "present", cond.location);
+	}
+	// bigint → `!!b`. The inner `!` is what bigIntOpLower turns into msBigIntIsZero
+	// on C; on js the double negation is already the native truthiness of 0n.
+	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.BigInt) {
+		return makeUnary("!", makeUnary("!", cond, cond.location), cond.location);
 	}
 	// Non-nullable value types → always true (Reference: rejects objects in boolean context)
 	if (cond.nodeType !== null && isStructType(cond.nodeType)) return makeBool(true, cond.location);

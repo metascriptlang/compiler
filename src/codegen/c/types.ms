@@ -317,6 +317,7 @@ export function typeKey(t: Type | null): string {
 		TypeKind.Uint16 => "uint16",
 		TypeKind.Uint32 => "uint32",
 		TypeKind.Uint64 => "uint64",
+		TypeKind.BigInt => "bigint",
 		TypeKind.String => "string",
 		TypeKind.Boolean => "boolean",
 		TypeKind.Char => "char",
@@ -426,6 +427,7 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.BooleanLiteral => "MS_BOOL",
 		TypeKind.Char => "char",
 		TypeKind.String | TypeKind.StringLiteral => "msString",
+		TypeKind.BigInt => "msBigInt*",
 		TypeKind.CString => "const char*",
 		TypeKind.Void => "void",
 		// `Null` as a TYPE (not the literal value) appears when a generic param

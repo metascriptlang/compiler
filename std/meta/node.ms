@@ -45,6 +45,11 @@ export enum TypeKind {
 	Unknown,
 	None,
 	Inferred,
+	// Appended at the tail on purpose: inserting mid-enum shifts every later
+	// ordinal and desyncs the previous-generation builder's macro bridge —
+	// builds hang deterministically in expand. Append-only, like every member
+	// after Error.
+	BigInt,
 }
 
 // ===== Calling Convention =====
