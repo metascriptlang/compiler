@@ -391,6 +391,11 @@ function cellInner(c: Cell, q: (p: string) => string): string {
 		// those exit survivors as leaks and would mask the real verdict behind
 		// host-dependent noise — macOS never runs LSan here, so this restores
 		// lane parity rather than weakening it.
+		// Windows: `VAR=v cmd` is sh syntax — inside the cell .bat it must be a
+		// `set` line, else cmd.exe treats ASAN_OPTIONS as the command (exit 9009).
+		if (IS_WIN) {
+			return "set \"ASAN_OPTIONS=detect_leaks=0\"\r\n" + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
+		}
 		return "ASAN_OPTIONS=detect_leaks=0 " + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
 	}
 	if (c.lane == "js") {
