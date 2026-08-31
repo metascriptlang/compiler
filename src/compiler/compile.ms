@@ -6,7 +6,7 @@ import { parseSource } from "../parser/statements/validation";
 import { Node, ProgramData } from "../ast/node";
 import { CheckerContext, GcMode, hasErrors, hasFatalErrors, errorCount, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
-import { checkModuleGraph, getPreludeContext } from "../checker/orchestrator";
+import { checkModuleGraph, getPreludeContext, setGraphCheckTiming } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
@@ -975,6 +975,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	resolveCC(opts);
 	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
+	setGraphCheckTiming(opts.showTime);
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs);
 	applyGcMode(opts);
 
@@ -1542,6 +1543,25 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
+		// Same reuse as cmdBuildC: the graph-checker phase already ran the full
+		// 3 passes and registered program+ctx. Re-checking here not only doubled
+		// the build time, it dropped cross-module generic instances — those are
+		// created once (instantiation is memoized), attached to the graph-check
+		// program, and the discarded re-check never recreates them, so the owner
+		// module's TU emits none of them.
+		const reusedProgram = lookupModuleProgram(modPath);
+		const reusedCtx = lookupModuleCtx(modPath);
+		if (reusedProgram !== null && reusedCtx !== null) {
+			setOuterProgramForComptime(reusedProgram);
+			setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
+			reusedCtx.strictDefs = opts.strictDefs;
+			reusedCtx.strictNullChecks = opts.strictNullChecks;
+			exitOnFatalCheckerErrors(reusedCtx, modPath, mod.source);
+			reusedCtx.errors = [];
+			checkedMods.push({ program: reusedProgram, ctx: reusedCtx, modPath, source: mod.source });
+			programByPath.set(modPath, reusedProgram);
+			continue;
+		}
 		const program = parseOrExit(mod.source, modPath);
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
 		ctx.strictDefs = opts.strictDefs;
