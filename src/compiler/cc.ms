@@ -2,11 +2,12 @@
 //
 // Invokes clang to compile generated C source into native binaries.
 
-import { exec, env, cmdExists, findOnPath, platform, exit, execFileCapture, spawnFailed, ProcessError, ProcessErrorKind } from "std/process";
+import { exec, env, cmdExists, findOnPath, platform, exit, execFileCapture, spawnFailed, processError, ProcessError, ProcessErrorKind } from "std/process";
 import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { CliOptions, MODE_DANGER } from "./options";
+import { renameReplace, atomicWriteFile } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { managedZigCompiler } from "./toolchain";
 
@@ -692,10 +693,26 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 		cmd = `${cmd} -iquote${dirname(dirname(rtDir))}`;
 	}
 
-	cmd = `${cmd} -c ${cFile} -o ${oFile}`;
+	// Compile into a per-invocation tmp sibling, then publish over oFile with
+	// an atomic rename. A concurrent build linking through the old .o keeps
+	// reading the old bytes until the swap; it never links a half-written
+	// object or hits a missing file (the pre-fix direct -o raced readers).
+	const tmp = `${oFile}.tmp.${performance.now()}`;
+	cmd = `${cmd} -c ${cFile} -o ${tmp}`;
 	if (extraFlags !== "") cmd = `${cmd} ${extraFlags}`;
 	const r = runCc(cmd);
-	if (!r.ok) return Result.err(r.error);
+	if (!r.ok) {
+		remove(tmp);
+		return Result.err(r.error);
+	}
+	if (!renameReplace(tmp, oFile)) {
+		remove(tmp);
+		return Result.err(processError(
+			ProcessErrorKind.Unknown,
+			cmd,
+			`failed to publish object ${oFile} (target locked by a concurrent reader?)`
+		));
+	}
 	return Result.ok(null);
 }
 
@@ -728,7 +745,7 @@ export function linkObjects(oFileList: string, outBinary: string, extraFlags: st
 		// Overflow: bulk args go to a per-binary response file. The path is keyed to
 		// outBinary (not its dir) so concurrent builds in a shared dir don't clobber it.
 		const rspPath = `${outBinary}_link.rsp`;
-		writeFile(rspPath, bulk);
+		atomicWriteFile(rspPath, bulk);
 		r = runCc(`${compiler}${rtFlag} @${rspPath} -o ${outBinary} -lm`);
 	}
 	if (!r.ok) return Result.err(r.error);

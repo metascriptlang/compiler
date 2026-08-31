@@ -1,7 +1,7 @@
 // MetaScript Compiler CLI — File I/O and shared error helpers
 
 import { exit, platform } from "std/process";
-import { readFile, writeFile, ensureDir as fsEnsureDir } from "std/fs";
+import { readFile, writeFile, ensureDir as fsEnsureDir, rename, remove } from "std/fs";
 import { CheckerContext } from "../checker/context";
 import { error, red, green, bold, dim } from "../utils/color";
 
@@ -40,9 +40,42 @@ export function replaceExt(inputFile: string, newExt: string): string {
 // msc-specific file-IO helpers (replaceExt, ensureDir, readSource, etc.).
 
 // Ensure directory exists (creates parent directories as needed).
-// Delegates to std/fs — cross-platform (no shell dependency).
+// Delegates to std/fs - cross-platform (no shell dependency).
 export function ensureDir(dir: string): void {
 	fsEnsureDir(dir);
+}
+
+// -- Atomic file publish (concurrent-build safety) --
+
+// POSIX-semantics rename with a bounded retry. The swap itself is atomic
+// (msFsRename replaces an existing target on every OS); the retry only
+// covers the Windows window where a concurrent reader — e.g. a linker
+// reading this very .o — holds the target open without FILE_SHARE_DELETE,
+// making MoveFileExW fail until the reader closes. std has no sync sleep,
+// so the backoff is a short bounded busy pause; the common case succeeds
+// on the first attempt and never pauses.
+export function renameReplace(src: string, dst: string): boolean {
+	const deadline = performance.now() + 250;
+	while (true) {
+		const r = rename(src, dst);
+		if (r.ok) return true;
+		if (performance.now() >= deadline) return false;
+		const until = performance.now() + 20;
+		while (performance.now() < until) {}
+	}
+}
+
+// Write a file by publishing atomically: content goes to a per-invocation
+// tmp sibling, then renames over the final path. Concurrent readers never
+// observe a torn or missing file — the previous content stays intact until
+// the swap. Returns false only if the rename never landed (tmp is removed).
+export function atomicWriteFile(path: string, content: string): boolean {
+	const tmp = `${path}.tmp.${performance.now()}`;
+	const w = writeFile(tmp, content);
+	if (!w.ok) return false;
+	if (renameReplace(tmp, path)) return true;
+	remove(tmp);
+	return false;
 }
 
 // -- Platform-dependent file suffixes --

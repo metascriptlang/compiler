@@ -51,7 +51,7 @@ import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix,
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, hashContent } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
@@ -563,14 +563,18 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				// so the flag is set regardless of cache-hit / dedup / fresh-compile.
 				// See cc.ms `markCppCompile` for the why.
 				markCppCompile(fullPath);
-				const oFile = stableOFile(fullPath);
-				if (!_compiledOFiles.has(oFile)) {
-					_compiledOFiles.add(oFile);
-					let fileFlags = allFlags;
-					if (upFlag !== "") fileFlags = appendFlag(fileFlags, upFlag);
-					if (customFlags !== "") fileFlags = appendFlag(fileFlags, customFlags);
-					const cmdKey = fullCompileCmd(ccOption, mode, fileFlags);
-					const fp = computeFingerprint(fullPath, cmdKey);
+				let probeFlags = allFlags;
+				if (upFlag !== "") probeFlags = appendFlag(probeFlags, upFlag);
+				if (customFlags !== "") probeFlags = appendFlag(probeFlags, customFlags);
+				const probeKey = fullCompileCmd(ccOption, mode, probeFlags);
+				const probeFp = computeFingerprint(fullPath, probeKey);
+				const probeOFile = stableOFileFp(fullPath, probeFp);
+				if (!_compiledOFiles.has(probeOFile)) {
+					_compiledOFiles.add(probeOFile);
+					const fileFlags = probeFlags;
+					const cmdKey = probeKey;
+					const fp = probeFp;
+					const oFile = probeOFile;
 					if (isCompileCached(oFile, fp)) {
 						if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile} ${dim("(cached)")}`);
 						hitOFiles.push(oFile);
@@ -1333,20 +1337,21 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
 			if (upFlag !== "") modFlags = appendFlag(modFlags, upFlag);
 			const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, modFlags);
-			const oFile = stableOFile(p.modPath);
+			const modFp = moduleCompileFp(cCode, compileCmd);
+			const oFile = stableOFileFp(p.modPath, modFp);
 
-			if (isCCodeCached(p.modPath, cCode, compileCmd)) {
+			if (isCCodeCached(p.modPath, modFp)) {
 				oSlots.push(oFile);
 				if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
 			} else {
 				// Write only .c source BEFORE compile (always — debuggable).
 				// Defer fingerprint (.cfp) until after successful compile so a
 				// failed zig cc doesn't leave a false cache hit for the next run.
-				writeCSource(p.modPath, cCode);
-				const cFile = stableCFile(p.modPath);
+				writeCSource(p.modPath, modFp, cCode);
+				const cFile = stableCFileFp(p.modPath, modFp);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 				oSlots.push("");
-				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: moduleCompileFp(cCode, compileCmd), slot: oSlots.length - 1 });
+				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, slot: oSlots.length - 1 });
 				modulesRecompiled = modulesRecompiled + 1;
 			}
 		}
@@ -1381,13 +1386,17 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 
 	// Generate global init dispatcher and add it to the parallel batch (skip for
 	// HCR — .so has no main). No .c cache for the dispatcher; it always compiles.
+	// Its .o IS content-keyed though: two concurrent builds of different
+	// configs (drc vs orc emit different teardown in the dispatcher TU) must
+	// not rename over each other's object right before the other's link —
+	// that linked an orc dispatcher into a drc build (undefined msOrcCollect).
 	if (!opts.isHcr) {
 		if (opts.verbose) verboseLog("generating dispatcher");
 		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode === "lib" || opts.appMode === "staticlib");
 		const dispFile = `${cd}/_dispatch.c`;
 		writeOutput(dispFile, dispatcher);
 		oSlots.push("");
-		cJobs.push({ cFile: dispFile, oFile: `${cd}/_dispatch.o`, modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
+		cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_dispatch", moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags))), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
 	}
 
 	// DISPATCH + COLLECT — parallel cc over the runtime thread pool, publish
@@ -1409,7 +1418,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			console.log(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
 			exit(1);
 		} else {
-			invalidateCompileCache(cj.modPath);
+			invalidateCompileCache(cj.modPath, cj.fp);
 			if (opts.targetOs !== "solana") {
 				console.log(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
 				moduleCompileFailed = true;
@@ -1684,18 +1693,19 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
 		if (upFlag !== "") testModFlags = appendFlag(testModFlags, upFlag);
 		const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, testModFlags);
-		const oFile = stableOFile(p.modPath);
+		const modFp = moduleCompileFp(cCode, compileCmd);
+		const oFile = stableOFileFp(p.modPath, modFp);
 
-		if (isCCodeCached(p.modPath, cCode, compileCmd)) {
+		if (isCCodeCached(p.modPath, modFp)) {
 			oSlots.push(oFile);
 			if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
 		} else {
 			// Same as main path — defer fingerprint until success.
-			writeCSource(p.modPath, cCode);
-			const cFile = stableCFile(p.modPath);
+			writeCSource(p.modPath, modFp, cCode);
+			const cFile = stableCFileFp(p.modPath, modFp);
 			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 			oSlots.push("");
-			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: moduleCompileFp(cCode, compileCmd), slot: oSlots.length - 1 });
+			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, slot: oSlots.length - 1 });
 		}
 		compiled = compiled + 1;
 	}
@@ -1706,7 +1716,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const dispFile = `${tcd}/_test_dispatch.c`;
 	writeOutput(dispFile, dispatcher);
 	oSlots.push("");
-	cJobs.push({ cFile: dispFile, oFile: `${tcd}/_test_dispatch.o`, modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
+	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags))), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
 
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 	let testFailed = false;
@@ -1721,7 +1731,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			console.log(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
 			testFailed = true;
 		} else {
-			invalidateCompileCache(cj.modPath);
+			invalidateCompileCache(cj.modPath, cj.fp);
 			console.log(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
 			testFailed = true;
 		}

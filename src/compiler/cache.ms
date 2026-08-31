@@ -17,7 +17,7 @@ import { exec, env, platform, argv } from "std/process";
 import { exists, readFile, writeFile, rename, copyFile, fileSize, remove, readDir } from "std/fs";
 import { join } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
-import { ensureDir } from "./io";
+import { ensureDir, atomicWriteFile, renameReplace } from "./io";
 import { getCompilerName, modeFlags } from "./cc";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 import { VERSION } from "./usage";
@@ -25,8 +25,7 @@ import { VERSION } from "./usage";
 // ===== Hash Functions =====
 
 // Dual hash of string content → "hexHash_hexFingerprint" (stable, 64-bit effective).
-export function hashContent(s: string): string {
-	return `${hashToHex(djb2(s))}_${hashToHex(fingerprint(s))}`;
+export function hashContent(s: string): string {	return `${hashToHex(djb2(s))}_${hashToHex(fingerprint(s))}`;
 }
 
 // Hash a file's content. Returns "hash:byteLength" string.
@@ -101,6 +100,7 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 	const modeDir = mode >= 1 ? "release" : "debug";
 	_cacheDir = `out/${modeDir}/.cache`;
 	ensureDir(_cacheDir);
+	ensureLocalSchema();
 	_forceRebuild = forceRebuild;
 	toolchainStamp();
 }
@@ -146,6 +146,44 @@ function sanitizePath(path: string): string {
 // Stable .o path keyed by sanitized source path (unique, readable).
 export function stableOFile(srcPath: string): string {
 	return `${getCacheDir()}/${sanitizePath(srcPath)}.o`;
+}
+
+// Short filename-safe key for a fingerprint.
+function fpKey(fp: string): string {
+	return hashContent(fp).slice(0, 18);
+}
+
+// Local object path keyed by source path AND fingerprint: builds with
+// different flags / gc mode / emitted C write DIFFERENT physical files and
+// never rename over each other. The old shared-by-srcPath scheme let a drc
+// link pick up an orc-published object (undefined msOrcTeardownDepth /
+// msUnregisterCycle in the concurrent-build repro) — the atomic publish made
+// each file whole, but "whole and wrong config" still fails the link.
+export function stableOFileFp(srcPath: string, fp: string): string {
+	return `${getCacheDir()}/${sanitizePath(srcPath)}.${fpKey(fp)}.o`;
+}
+
+// Per-fingerprint generated-C path — the emitted C is config-dependent too
+// (drc vs orc teardown), so a concurrent build must never swap it under a
+// running cc of another config.
+export function stableCFileFp(modPath: string, fp: string): string {
+	return `${getCacheDir()}/${sanitizePath(modPath)}.${fpKey(fp)}.c`;
+}
+
+// One-time migration sweep: pre-fp-keyed layouts share physical files per
+// srcPath — unfixable in place — so bump the schema marker and wipe the dir
+// once. Cost is one cold rebuild, same as any toolchainStamp change.
+function ensureLocalSchema(): void {
+	const marker = `${getCacheDir()}/.schema-fpkey`;
+	if (exists(marker)) return;
+	const entries = readDir(getCacheDir());
+	for (const e of entries) {
+		if (e.length === 0) continue;
+		if (e === ".schema-fpkey") continue;
+		if (e.charAt(e.length - 1) === "/") continue;
+		remove(`${getCacheDir()}/${e}`);
+	}
+	writeFile(marker, "v1");
 }
 
 // Full compile command for fingerprint — includes compiler, -std, mode flags.
@@ -196,6 +234,9 @@ function globalOPath(fp: string): string {
 
 // On local miss, try to restore from global. Returns true if a valid entry was copied in.
 // Best-effort: any failure (permission, corrupt entry, disk error) falls through silently.
+// The restore lands via tmp+renameReplace: a concurrent linker reading the local
+// .o never sees the file disappear (which is what the old direct copy + the
+// caller-side remove-on-miss race produced).
 function tryRestoreFromGlobal(oFile: string, fp: string): boolean {
 	const src = globalOPath(fp);
 	if (src === "" || !exists(src)) return false;
@@ -206,15 +247,20 @@ function tryRestoreFromGlobal(oFile: string, fp: string): boolean {
 		remove(src);
 		return false;
 	}
-	const copied = copyFile(src, oFile);
+	const tmp = `${oFile}.tmp.${performance.now()}`;
+	const copied = copyFile(src, tmp);
 	if (!copied.ok) return false;
-	// Verify local size matches what we copied from.
-	if (fileSize(oFile) !== size) {
-		remove(oFile);
+	// Verify size on the tmp copy before publishing it over the final path.
+	if (fileSize(tmp) !== size) {
+		remove(tmp);
+		return false;
+	}
+	if (!renameReplace(tmp, oFile)) {
+		remove(tmp);
 		return false;
 	}
 	// Write the local .fp sentinel so future runs hit the fast path.
-	writeFile(oFile + ".fp", fp);
+	atomicWriteFile(oFile + ".fp", fp);
 	return true;
 }
 
@@ -286,6 +332,10 @@ function tryRemoveFile(path: string): void {
 // truly-from-scratch clang run can set MSC_NO_GLOBAL_CACHE=1.
 // Caller is responsible for passing the exact same fingerprint to writeCompileCache
 // on the miss path — compute it once via computeFingerprint and thread it through.
+// NOTE: a miss must NOT remove the local .o. Another concurrent build may be
+// linking through it right now (the old remove-on-miss raced links into
+// FileNotFound); a miss only means "this build recompiles", and the fresh
+// object is published atomically over the stale one by the compile path.
 export function isCompileCached(oFile: string, fp: string): boolean {
 	const fpFile = oFile + ".fp";
 	if (!_forceRebuild && exists(oFile) && exists(fpFile)) {
@@ -294,7 +344,6 @@ export function isCompileCached(oFile: string, fp: string): boolean {
 	}
 	// Local miss (or forceRebuild bypass of local) — try the global cache.
 	if (tryRestoreFromGlobal(oFile, fp)) return true;
-	tryRemoveFile(oFile);
 	return false;
 }
 
@@ -302,7 +351,7 @@ export function isCompileCached(oFile: string, fp: string): boolean {
 // (best-effort, silent on failure). Takes fingerprint explicitly so it's safe
 // to call from parallel workers without shared module state.
 export function writeCompileCache(oFile: string, fp: string): void {
-	writeFile(oFile + ".fp", fp);
+	atomicWriteFile(oFile + ".fp", fp);
 	populateGlobal(oFile, fp);
 }
 
@@ -476,7 +525,7 @@ export function writeProjectCache(
 			content = content + `${PRE_DEP}${path}=${hashFile(path)}\n`;
 		}
 	}
-	writeFile(projectCacheFile(), content);
+	atomicWriteFile(projectCacheFile(), content);
 }
 
 // ===== Per-Module C Code Cache (Layer 3) =====
@@ -488,9 +537,7 @@ export function writeProjectCache(
 // Stable .c path for a module, keyed by sanitized module path.
 export function stableCFile(modPath: string): string {
 	return `${getCacheDir()}/${sanitizePath(modPath)}.c`;
-}
-
-// Module compile fingerprint. Exported so the parallel compile path can
+}// Module compile fingerprint. Exported so the parallel compile path can
 // precompute it at gather time instead of holding every module's C text
 // alive until the post-join fingerprint write.
 export function moduleCompileFp(cCode: string, compileCmd: string): string {
@@ -498,18 +545,17 @@ export function moduleCompileFp(cCode: string, compileCmd: string): string {
 }
 
 // Check if generated C code matches cached version. If match, .o is up to date.
-export function isCCodeCached(modPath: string, cCode: string, compileCmd: string): boolean {
-	const oFile = stableOFile(modPath);
+// Takes the precomputed module fingerprint (moduleCompileFp) — the caller
+// needs the fp-keyed oFile path anyway. A miss (or _forceRebuild) must NOT
+// remove anything: the fp-keyed physical file belongs to this config alone,
+// and a FAILED compile cleans up via invalidateCompileCache.
+export function isCCodeCached(modPath: string, fp: string): boolean {
+	const oFile = stableOFileFp(modPath, fp);
 	const fpFile = oFile + ".cfp";
-	const fp = moduleCompileFp(cCode, compileCmd);
-	if (_forceRebuild) {
-		tryRemoveFile(oFile);
-		return false;
-	}
+	if (_forceRebuild) return false;
 	if (!exists(oFile) || !exists(fpFile)) return false;
 	const storedFp = try readFile(fpFile) catch "";
 	if (storedFp === fp) return true;
-	tryRemoveFile(oFile);
 	return false;
 }
 
@@ -518,14 +564,18 @@ export function isCCodeCached(modPath: string, cCode: string, compileCmd: string
 // callers — split form prevents Bug 6 (writing fingerprint before compile
 // confirms success).
 export function writeCCodeCache(modPath: string, cCode: string, compileCmd: string): void {
-	writeCSource(modPath, cCode);
-	writeCompileFingerprint(modPath, cCode, compileCmd);
+	const fp = moduleCompileFp(cCode, compileCmd);
+	writeCSource(modPath, fp, cCode);
+	writeCompileFingerprintFp(modPath, fp);
 }
 
-// Write only the .c source. Always safe — .c is debug-friendly
-// (lets user inspect generated C even when zig cc fails).
-export function writeCSource(modPath: string, cCode: string): void {
-	writeFile(stableCFile(modPath), cCode);
+// Write only the .c source (fp-keyed: emitted C is config-dependent — drc vs
+// orc teardown differ — so concurrent builds of different configs must never
+// swap it under a running cc). Always safe — .c is debug-friendly (lets user
+// inspect generated C even when zig cc fails). Published atomically: a
+// concurrent reader of the previous bytes is never torn.
+export function writeCSource(modPath: string, fp: string, cCode: string): void {
+	atomicWriteFile(stableCFileFp(modPath, fp), cCode);
 }
 
 // Write the compile-success fingerprint (.cfp). Call ONLY after
@@ -538,16 +588,18 @@ export function writeCompileFingerprint(modPath: string, cCode: string, compileC
 
 // Precomputed-fp variant for the parallel compile path (fp from moduleCompileFp).
 export function writeCompileFingerprintFp(modPath: string, fp: string): void {
-	writeFile(stableOFile(modPath) + ".cfp", fp);
+	if (fp === "") return; // dispatcher job — .o lives next to the output, not in the cache
+	atomicWriteFile(stableOFileFp(modPath, fp) + ".cfp", fp);
 }
 
 // Remove cache artifacts after a failed compile so the next run
 // triggers a clean retry. Removes .o (potentially partial/empty from failed
-// zig cc) + .cfp (defensive — should never be written on the failure path,
-// but harmless if accidentally present from older runs).
-export function invalidateCompileCache(modPath: string): void {
-	tryRemoveFile(stableOFile(modPath));
-	tryRemoveFile(stableOFile(modPath) + ".cfp");
+// zig cc) + .cfp + .c, all fp-keyed. No-op for dispatcher jobs (empty fp).
+export function invalidateCompileCache(modPath: string, fp: string): void {
+	if (fp === "") return;
+	tryRemoveFile(stableOFileFp(modPath, fp));
+	tryRemoveFile(stableOFileFp(modPath, fp) + ".cfp");
+	tryRemoveFile(stableCFileFp(modPath, fp));
 }
 
 // ===== Link Cache (Layer 4) =====
@@ -597,7 +649,7 @@ export function writeLinkCache(oFileList: string, linkFlags: string, outputFile:
 	let content = `${PRE_LINKCMD}${linkFlags}\n`;
 	content = content + `${PRE_OFILES}${oFileList}\n`;
 	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
-	writeFile(linkCacheFile(), content);
+	atomicWriteFile(linkCacheFile(), content);
 }
 
 // Export getCacheDir for compile.ms to use in -iquote paths.
@@ -614,22 +666,23 @@ export function cacheDir(): string {
 // writeCompileFingerprint (only after cc returns 0) + invalidateCompileCache
 // (called on cc failure path).
 
-function bug6_clearArtifacts(modPath: string): void {
-	tryRemoveFile(stableCFile(modPath));
-	tryRemoveFile(stableOFile(modPath));
-	tryRemoveFile(stableOFile(modPath) + ".cfp");
+function bug6_clearArtifacts(modPath: string, fp: string): void {
+	tryRemoveFile(stableCFileFp(modPath, fp));
+	tryRemoveFile(stableOFileFp(modPath, fp));
+	tryRemoveFile(stableOFileFp(modPath, fp) + ".cfp");
 }
 
 test "bug6: writeCSource alone does not produce a cache hit" {
 	// Split form: source written before compile, but no fingerprint until cc OK.
 	// isCCodeCached must stay false so the next run still attempts to compile.
 	const modPath = "test/bug6/probe_source_only.ms";
-	bug6_clearArtifacts(modPath);
-	writeCSource(modPath, "int main(){return 0;}");
-	assert exists(stableCFile(modPath));
-	assert !exists(stableOFile(modPath) + ".cfp");
-	assert !isCCodeCached(modPath, "int main(){return 0;}", "cc -O0");
-	bug6_clearArtifacts(modPath);
+	const fp = moduleCompileFp("int main(){return 0;}", "cc -O0");
+	bug6_clearArtifacts(modPath, fp);
+	writeCSource(modPath, fp, "int main(){return 0;}");
+	assert exists(stableCFileFp(modPath, fp));
+	assert !exists(stableOFileFp(modPath, fp) + ".cfp");
+	assert !isCCodeCached(modPath, fp);
+	bug6_clearArtifacts(modPath, fp);
 }
 
 test "toolchain stamp folds into module and external fingerprints" {
@@ -643,32 +696,34 @@ test "bug6: writeCompileFingerprint after writeCSource produces a cache hit" {
 	// Happy path: cc returned 0, both .c and .cfp present, .o present →
 	// isCCodeCached true so the next run reuses the object.
 	const modPath = "test/bug6/probe_happy.ms";
-	bug6_clearArtifacts(modPath);
 	const cCode = "int main(){return 0;}";
 	const cmd = "cc -O0";
-	writeCSource(modPath, cCode);
+	const fp = moduleCompileFp(cCode, cmd);
+	bug6_clearArtifacts(modPath, fp);
+	writeCSource(modPath, fp, cCode);
 	// Simulate the .o that compileCFile would have produced.
-	writeFile(stableOFile(modPath), "");
+	writeFile(stableOFileFp(modPath, fp), "");
 	writeCompileFingerprint(modPath, cCode, cmd);
-	assert exists(stableOFile(modPath) + ".cfp");
-	assert isCCodeCached(modPath, cCode, cmd);
-	bug6_clearArtifacts(modPath);
+	assert exists(stableOFileFp(modPath, fp) + ".cfp");
+	assert isCCodeCached(modPath, fp);
+	bug6_clearArtifacts(modPath, fp);
 }
 
-test "bug6: invalidateCompileCache removes both .o and .cfp" {
+test "bug6: invalidateCompileCache removes .o, .cfp and .c" {
 	// Failure path: cc returned non-zero. invalidateCompileCache must clean
-	// both .o (which may be partial/empty from failed cc) and .cfp (defensive
-	// — never written on failure post-fix, but old runs may leave one).
+	// .o (which may be partial/empty from failed cc), .cfp (defensive
+	// — never written on failure post-fix) and the fp-keyed .c.
 	const modPath = "test/bug6/probe_invalidate.ms";
-	bug6_clearArtifacts(modPath);
-	writeFile(stableOFile(modPath), "");
-	writeFile(stableOFile(modPath) + ".cfp", "stale_fp:cc -O0");
-	assert exists(stableOFile(modPath));
-	assert exists(stableOFile(modPath) + ".cfp");
-	invalidateCompileCache(modPath);
-	assert !exists(stableOFile(modPath));
-	assert !exists(stableOFile(modPath) + ".cfp");
-	bug6_clearArtifacts(modPath);
+	const fp = moduleCompileFp("int x;", "cc -O0");
+	bug6_clearArtifacts(modPath, fp);
+	writeFile(stableOFileFp(modPath, fp), "");
+	writeFile(stableOFileFp(modPath, fp) + ".cfp", "stale_fp:cc -O0");
+	assert exists(stableOFileFp(modPath, fp));
+	assert exists(stableOFileFp(modPath, fp) + ".cfp");
+	invalidateCompileCache(modPath, fp);
+	assert !exists(stableOFileFp(modPath, fp));
+	assert !exists(stableOFileFp(modPath, fp) + ".cfp");
+	bug6_clearArtifacts(modPath, fp);
 }
 
 test "bug6: failed-compile sequence yields no cache hit on retry" {
@@ -677,12 +732,58 @@ test "bug6: failed-compile sequence yields no cache hit on retry" {
 	//   2. compileCFile fails → invalidateCompileCache, NO writeCompileFingerprint
 	// Result must be: next isCCodeCached call returns false → retry compiles.
 	const modPath = "test/bug6/probe_fail_seq.ms";
-	bug6_clearArtifacts(modPath);
 	const cCode = "broken c source";
 	const cmd = "cc -O0";
-	writeCSource(modPath, cCode);
+	const fp = moduleCompileFp(cCode, cmd);
+	bug6_clearArtifacts(modPath, fp);
+	writeCSource(modPath, fp, cCode);
 	// (compileCFile would fail here — skip writeCompileFingerprint)
-	invalidateCompileCache(modPath);
-	assert !isCCodeCached(modPath, cCode, cmd);
-	bug6_clearArtifacts(modPath);
+	invalidateCompileCache(modPath, fp);
+	assert !isCCodeCached(modPath, fp);
+	bug6_clearArtifacts(modPath, fp);
+}
+
+test "distinct fingerprints get distinct physical objects" {
+	// The drc/orc concurrent repro: two configs sharing one .o path let a
+	// drc link pick up an orc object (undefined symbols). fp-keyed paths
+	// must give each fingerprint its own file.
+	const modPath = "test/bug6/probe_two_configs.ms";
+	const fpA = moduleCompileFp("int main(){}", "cc -O0");
+	const fpB = moduleCompileFp("int main(){}", "cc -O2");
+	assert stableOFileFp(modPath, fpA) !== stableOFileFp(modPath, fpB);
+	assert stableCFileFp(modPath, fpA) !== stableCFileFp(modPath, fpB);
+	bug6_clearArtifacts(modPath, fpA);
+	bug6_clearArtifacts(modPath, fpB);
+}
+
+test "cache miss keeps the stale object in place (no remove-on-miss)" {
+	// A miss must force a recompile, never delete a cache object: a concurrent
+	// build may be linking through it right now. The old remove-on-miss raced
+	// links into FileNotFound under parallel builds sharing one cache dir.
+	const modPath = "test/bug6/probe_keep.ms";
+	const fp = moduleCompileFp("int main(){}", "cc -O0");
+	bug6_clearArtifacts(modPath, fp);
+	writeFile(stableOFileFp(modPath, fp), "old-object");
+	writeFile(stableOFileFp(modPath, fp) + ".cfp", "stale-fp");
+	assert !isCCodeCached(modPath, fp);
+	assert exists(stableOFileFp(modPath, fp));
+	assert atomicWriteFile(stableOFileFp(modPath, fp), "new-object");
+	const body = try readFile(stableOFileFp(modPath, fp)) catch "";
+	assert body === "new-object";
+	bug6_clearArtifacts(modPath, fp);
+}
+
+test "atomicWriteFile replaces existing content and leaves no tmp siblings" {
+	const p = `${getCacheDir()}/atomic_probe.txt`;
+	atomicWriteFile(p, "one");
+	atomicWriteFile(p, "two");
+	const c = try readFile(p) catch "";
+	assert c === "two";
+	const entries = readDir(getCacheDir());
+	let leftovers = 0;
+	for (const e of entries) {
+		if (e.indexOf("atomic_probe.txt.tmp.", 0) >= 0) leftovers = leftovers + 1;
+	}
+	assert leftovers === 0;
+	remove(p);
 }
