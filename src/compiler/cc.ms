@@ -703,6 +703,10 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 	const r = runCc(cmd);
 	if (!r.ok) {
 		remove(tmp);
+		if (env.get("MSC_DEBUG_CC") !== "") {
+			console.log(`[cc-fail] len=${cmd.length} kind=${r.error.kind} exit=${r.error.exitCode} msg=${r.error.message}`);
+			console.log(`[cc-fail] ${cmd}`);
+		}
 		return Result.err(r.error);
 	}
 	if (!renameReplace(tmp, oFile)) {
