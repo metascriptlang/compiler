@@ -2,7 +2,7 @@
 
 import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
-	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData,
+	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ActorDeclData, createNodeAt,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
@@ -147,6 +147,72 @@ export function emitClassDecl(gen: JSGenerator, node: Node): void {
 	if ((node.flags & NodeFlag.ExternC) !== 0) return;
 	emitIndent(gen);
 	emitClassDeclInner(gen, node);
+}
+
+// ===== Actor Declaration =====
+
+// Actor on js degenerates to a native ES class (PARALOCK tier 1): sync method
+// bodies run sequentially on the single-threaded event loop — exactly actor
+// semantics without any machinery; async bodies may interleave at await
+// points (documented divergence, the same class as "js spawn = scheduling").
+// Same adapter shape the C backend's actorLower uses to build its state class.
+export function emitActorDecl(gen: JSGenerator, node: Node): void {
+	if ((node.flags & NodeFlag.ExternC) !== 0) return;
+	const d = node.data as ActorDeclData;
+	const cls = createNodeAt(NodeKind.ClassDecl, {
+		className: d.actorName,
+		classExtends: "",
+		classBody: d.actorBody,
+		nameLocation: d.nameLocation,
+	} as unknown as ClassDeclData, node.location);
+	cls.resolvedSym = node.resolvedSym;
+	emitIndent(gen);
+	emitClassDeclInner(gen, cls);
+}
+
+// ===== Method Declaration =====
+
+// Strip leading "this" from param list — JS class methods have implicit this.
+function skipThisParams(params: string[]): string[] {
+	if (params.length > 0 && params[0] === "this") {
+		const result: string[] = [];
+		for (let i = 1; i < params.length; i += 1) { result.push(params[i]); }
+		return result;
+	}
+	return params;
+}
+
+export function emitMethodDecl(gen: JSGenerator, node: Node): void {
+	const d = node.data as MethodDeclData;
+	if (isExternFlag(d.methodFlags)) return;
+	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
+	emitIndent(gen);
+	if (d.methodIsStatic) { emit(gen, "static "); }
+	const autoAsync = needsAutoAsync(d.methodFlags, d.methodBody);
+	match (d.methodFlags) {
+		"async" => { emit(gen, "async "); },
+		"generator" => { emit(gen, autoAsync ? "async *" : "*"); },
+		"async_generator" => { emit(gen, "async *"); },
+		_ => { if (autoAsync) emit(gen, "async "); },
+	};
+	emit(gen, d.methodName);
+	emit(gen, "(");
+	emitJoinedSafeParams(gen, node, skipThisParams(d.methodParams), ", ", safeJsName);
+	emit(gen, ") ");
+	emitBodyOrEmpty(gen, d.methodBody);
+	emitNewline(gen);
+}
+
+// ===== Constructor Declaration =====
+
+export function emitConstructorDecl(gen: JSGenerator, node: Node): void {
+	const d = node.data as ConstructorDeclData;
+	emitIndent(gen);
+	emit(gen, "constructor(");
+	emitJoinedSafeParams(gen, node, d.ctorParams, ", ", safeJsName);
+	emit(gen, ") ");
+	emitBodyOrEmpty(gen, d.ctorBody);
+	emitNewline(gen);
 }
 
 // ===== Import Declaration =====
