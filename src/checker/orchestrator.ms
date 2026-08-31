@@ -10,10 +10,14 @@ import {
 } from "./context";
 import { ScopeKind, openScope, addSymbolToScope, hasFlag, SymbolFlag } from "./symbol";
 import { ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
-import { runThreePasses, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude } from "./checkPass";
+import { runThreePasses, threePassTimings, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude, setSlowTrace } from "./checkPass";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { collectTopLevelLocal } from "./collectPass";
-import { registerModuleCtx, registerModuleProgram } from "./instantiate";
+import { isAssignableProfile } from "./compat";
+import { unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
+import { findAllExtensionsByNameProfile } from "./context";
+import { checkCallExprProfile } from "./callResolve";
+import { registerModuleCtx, registerModuleProgram, instantiateProfile, instantiateTimings } from "./instantiate";
 import { lex } from "../lexer/lexer";
 import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
@@ -39,6 +43,14 @@ import "../parser/statements/core";
 let lastPreludeCtx: CheckerContext = null as unknown as CheckerContext;
 export function getPreludeContext(): CheckerContext { return lastPreludeCtx; }
 
+// Sub-phase timing for the graph check, mirroring cmdBuildC's phase timers.
+// Off unless the caller asked for -t, so a normal build pays nothing.
+let graphTiming: boolean = false;
+export function setGraphCheckTiming(on: boolean): void {
+	graphTiming = on;
+	setSlowTrace(on);
+}
+
 // stdPath: when non-empty, resolves std/ imports against this path.
 // When empty, falls back to relative "std/" (resolved by reference compiler).
 // targetOs: build target ("macos" / "linux" / "windows" / "bare" / ...). Set on
@@ -49,9 +61,22 @@ export function getPreludeContext(): CheckerContext { return lastPreludeCtx; }
 export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform): ExportRegistry {
 	const registry = createExportRegistry();
 
+	// PROFILE: sub-phase timings summed across all modules (-t only).
+	let tPrelude: float64 = 0;
+	let tP1Parse: float64 = 0;
+	let tP1Collect: float64 = 0;
+	let tP2Parse: float64 = 0;
+	let tP2Inject: float64 = 0;
+	let tP2Passes: float64 = 0;
+	let tP2Directives: float64 = 0;
+	let tP2Mutations: float64 = 0;
+	let tP2Exports: float64 = 0;
+	const _tpre0 = performance.now();
+
 	// Load prelude into a base context — provides console, string methods, etc.
 	// Creates the shared IdentCache (one cache per compilation).
 	const baseCtx = buildPreludeContext(stdPath, backendExt);
+	tPrelude = performance.now() - _tpre0;
 	baseCtx.targetOs = targetOs;
 	lastPreludeCtx = baseCtx;
 	const sharedCache = getSharedIdentCache(baseCtx);
@@ -65,11 +90,14 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		if (mod === null) continue;
 		if (mod.source === "") continue;
 
+		const _t1p0 = performance.now();
 		const lr = lex(mod.source);
 		if (!lr.ok) continue;  // Phase 1 best-effort; errors caught in Phase 2
 		const parseState = createState(lr.value);
 		const pr = callStateProgramParser(parseState);
+		tP1Parse = tP1Parse + (performance.now() - _t1p0);
 		if (!pr.ok) continue;
+		const _t1c0 = performance.now();
 
 		// Register parsed Program in Phase 1 so cross-module @comptime / macro
 		// resolution can find ANY module's AST regardless of where it falls in
@@ -142,6 +170,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 			}
 		}
 		registerModuleExports(registry, path, earlyExports);
+		tP1Collect = tP1Collect + (performance.now() - _t1c0);
 	}
 
 	// ================================================================
@@ -157,6 +186,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		mod.exportNames = [];
 
 		// Parse with recovery — always get partial AST, errors in state.errors
+		const _t2p0 = performance.now();
 		const lr = lex(mod.source);
 		if (!lr.ok) {
 			mod.errors.push(createModuleError("Lex: " + lr.error, 0, 0, ErrorSeverity.Error));
@@ -164,6 +194,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		}
 		const parseState = createState(lr.value);
 		const pr = callStateProgramParser(parseState);
+		tP2Parse = tP2Parse + (performance.now() - _t2p0);
 
 		for (const parseErr of parseState.errors) {
 			mod.errors.push(createModuleError("Parse: " + parseErr, 0, 0, ErrorSeverity.Error));
@@ -175,6 +206,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		// BEFORE runThreePasses since macro expansion fires inside Pass 3.
 		registerModuleProgram(path, pr.value);
 
+		const _t2i0 = performance.now();
 		const ctx = createModuleContextWithCache(graph, mod, sharedCache);
 		ctx.exportRegistry = registry;
 		injectPrelude(ctx, baseCtx);
@@ -182,11 +214,22 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 
 		// Open Module scope for this module's declarations
 		openScope(ctx.table, ScopeKind.Module);
+		tP2Inject = tP2Inject + (performance.now() - _t2i0);
 
+		const _t2r0 = performance.now();
 		runThreePasses(ctx, pr.value);
+		const _t2r1 = performance.now();
+		tP2Passes = tP2Passes + (_t2r1 - _t2r0);
+		if (graphTiming && (_t2r1 - _t2r0) > 100) {
+			console.log(`    slowcheck ${path} ${_t2r1 - _t2r0}ms`);
+		}
+		const _t2d0 = performance.now();
 		collectDirectives(ctx, pr.value);
 		stampHeaderPaths(ctx);
+		tP2Directives = tP2Directives + (performance.now() - _t2d0);
+		const _t2m0 = performance.now();
 		analyzeParamMutations(ctx, pr.value);
+		tP2Mutations = tP2Mutations + (performance.now() - _t2m0);
 
 		// Register this module's ctx so cross-module generic instantiation can
 		// re-check cloned bodies in the DEFINING module's scope (resolving
@@ -206,9 +249,31 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		}
 
 		// Extract resolved exports and UPDATE registry (replaces Phase 1 placeholders)
+		const _t2e0 = performance.now();
 		const exports = collectExports(ctx, path);
 		for (const e of exports) { mod.exportNames.push(e.name); }
 		updateModuleExports(registry, path, exports);
+		tP2Exports = tP2Exports + (performance.now() - _t2e0);
+	}
+	if (graphTiming) {
+		console.log(`    prelude=${tPrelude}ms p1parse=${tP1Parse}ms p1collect=${tP1Collect}ms p2parse=${tP2Parse}ms p2inject=${tP2Inject}ms p2passes=${tP2Passes}ms p2directives=${tP2Directives}ms p2mutations=${tP2Mutations}ms p2exports=${tP2Exports}ms`);
+		const tp = threePassTimings();
+		console.log(`    3pass: collect=${tp[0]}ms resolve=${tp[1]}ms flow=${tp[2]}ms body=${tp[3]}ms unused=${tp[4]}ms`);
+		const ip = instantiateProfile();
+		const it = instantiateTimings();
+		console.log(`    instantiate: calls=${ip[0]} hits=${ip[1]} misses=${ip[2]} totalTime=${it[0]}ms bodyCheck=${it[1]}ms`);
+		const isa = isAssignableProfile();
+		const uni = unifyTypeProfile();
+		const sub = substituteTypeProfile();
+		const tno = typeNameOfProfile();
+		const tdn = typeDisplayNameProfile();
+		const cce = checkCallExprProfile();
+		console.log(`    isAssignable: n=${isa[0]} t=${isa[1]}ms | unifyType: n=${uni[0]} t=${uni[1]}ms | substituteType: n=${sub[0]} t=${sub[1]}ms`);
+		console.log(`    typeNameOf: n=${tno[0]} t=${tno[1]}ms | typeDisplayName: n=${tdn[0]} t=${tdn[1]}ms | checkCallExpr: n=${cce[0]} t=${cce[1]}ms`);
+		const gp = getPropertyProfile();
+		const fvb = findVariantByFieldNameProfile();
+		const fae = findAllExtensionsByNameProfile();
+		console.log(`    getProperty: n=${gp[0]} t=${gp[1]}ms | findVariantByFieldName: n=${fvb[0]} t=${fvb[1]}ms | findAllExtByName: n=${fae[0]} t=${fae[1]}ms`);
 	}
 	return registry;
 }

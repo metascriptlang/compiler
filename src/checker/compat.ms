@@ -183,10 +183,16 @@ function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
 }
 
 let _assignDepth = 0;
+let _isaCount: float64 = 0;
+let _isaTime: float64 = 0;
+export function isAssignableProfile(): float64[] { return [_isaCount, _isaTime]; }
 export function isAssignable(source: Type | null, target: Type | null): boolean {
 	if (_assignDepth > 20) return true;
+	_isaCount = _isaCount + 1;
 	_assignDepth = _assignDepth + 1;
+	const _isa0 = performance.now();
 	const result = isAssignableInner(source, target);
+	_isaTime = _isaTime + (performance.now() - _isa0);
 	_assignDepth = _assignDepth - 1;
 	return result;
 }

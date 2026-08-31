@@ -1422,7 +1422,12 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 	let i = 0;
 	while (i < d.statements.length) {
 		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { break; }
+		const _cs0 = performance.now();
 		checkStmt(ctx, d.statements[i]);
+		const _cs1 = performance.now();
+		if (_slowTrace && _cs1 - _cs0 > 100) {
+			console.log(`        SLOWSTMT ${ctx.modulePath}:${d.statements[i].location.line} ${_cs1 - _cs0}ms kind=${d.statements[i].kind}`);
+		}
 		i = i + drainHoisted(ctx, d.statements, i, hoistMark) + 1;
 	}
 	// PARALOCK Phase 1: verify every affine Promise declared in this block was consumed
@@ -1755,7 +1760,13 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 // Unified function body checker — works for FunctionDecl (resolved param types),
 // MethodDecl, ConstructorDecl.
 // paramLocs: per-param source locations for DEF recording (standard parity: semIdentDef → suggestSym)
+// PROFILE: per-function / per-statement slow-check tracer, printed live during
+// checking. Enabled via -t (setGraphCheckTiming → setSlowTrace).
+let _slowTrace: boolean = false;
+export function setSlowTrace(on: boolean): void { _slowTrace = on; }
+
 export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): void {
+	const _fb0 = performance.now();
 	const savedFunction = ctx.currentFunction;
 	const savedMatchDepth = ctx.matchExprDepth;
 	ctx.currentFunction = sym;
@@ -1814,6 +1825,11 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	ctx.initTracker.currentBlock = savedBlock;
 	ctx.currentFunction = savedFunction;
 	ctx.matchExprDepth = savedMatchDepth;
+	// PROFILE: surface pathological per-function check times immediately.
+	const _fb1 = performance.now();
+	if (_slowTrace && _fb1 - _fb0 > 500) {
+		console.log(`    SLOWFN ${ctx.modulePath} :: ${sym !== null ? sym.name : "<anon>"} ${_fb1 - _fb0}ms`);
+	}
 }
 
 function enterLoopScope(ctx: CheckerContext): boolean {
@@ -1867,6 +1883,17 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 // ===== Main Entry Point =====
 
 // Run all 3 passes on a program node with an existing context
+// PROFILE: cumulative per-pass timings inside runThreePasses, summed across
+// every module of one compilation. Read by the orchestrator's -t summary.
+let _tCollect: float64 = 0;
+let _tResolve: float64 = 0;
+let _tFlow: float64 = 0;
+let _tBody: float64 = 0;
+let _tUnused: float64 = 0;
+export function threePassTimings(): float64[] {
+	return [_tCollect, _tResolve, _tFlow, _tBody, _tUnused];
+}
+
 export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	// Phase 8b: expose this module's outer state to the @comptime evaluator
 	// so eager-fold (fired inside checkProgramBody) can resolve names and
@@ -1878,11 +1905,22 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	if (ctx.exportRegistry !== null && ctx.moduleGraph !== null && ctx.currentModule !== null && ctx.preludeCtx !== null) {
 		setOuterCheckContext(ctx.exportRegistry, ctx.moduleGraph, ctx.currentModule, ctx.preludeCtx);
 	}
+	const _c0 = performance.now();
 	collectTopLevel(ctx, program);
+	const _c1 = performance.now();
 	resolveDeclarations(ctx, program);
+	const _c2 = performance.now();
 	bindFlowGraph(program);  // Phase 1: build the CFG (unused by checker yet — Phase 2 will query)
+	const _c3 = performance.now();
 	checkProgramBody(ctx, program);
+	const _c4 = performance.now();
 	if (ctx.modulePath !== "") reportUnusedSymbols(ctx, program);
+	const _c5 = performance.now();
+	_tCollect = _tCollect + (_c1 - _c0);
+	_tResolve = _tResolve + (_c2 - _c1);
+	_tFlow = _tFlow + (_c3 - _c2);
+	_tBody = _tBody + (_c4 - _c3);
+	_tUnused = _tUnused + (_c5 - _c4);
 }
 
 // Mark symbols referenced inside a macro body as used.

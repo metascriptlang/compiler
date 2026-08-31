@@ -420,8 +420,25 @@ export function replaceTypeVars(node: Node, paramNames: string[], concreteTypes:
 
 // ===== On-Demand Instantiation =====
 
+// PROFILE: instantiation counters for the -t summary. The cache in
+// instantiateGenericFunction is scoped to the CURRENT module's symbol table
+// (lookupSymbol(ctx.table, ...)), so a later module re-instantiates the same
+// (generic, typeArgs) pair from scratch. These counters expose that.
+let _igfCalls: int64 = 0;
+let _igfHits: int64 = 0;
+let _igfMisses: int64 = 0;
+let _igfTime: float64 = 0;
+let _igfBodyTime: float64 = 0;
+export function instantiateProfile(): int64[] {
+	return [_igfCalls, _igfHits, _igfMisses];
+}
+export function instantiateTimings(): float64[] {
+	return [_igfTime, _igfBodyTime];
+}
+
 export function instantiateGenericFunction(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol {
 	if (ctx.genericInstDepth > 50) return null as unknown as Symbol;
+	_igfCalls = _igfCalls + 1;
 
 	// Extern/ImportC generic functions are handled by the C runtime (nativeName binding).
 	// Don't instantiate — the runtime provides the implementation.
@@ -463,9 +480,12 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	const existing = lookupSymbol(ctx.table, mangledName);
 	if (existing !== null) {
 		ctx.genericInstDepth = ctx.genericInstDepth - 1;
+		_igfHits = _igfHits + 1;
 		return existing;
 	}
 
+	const _ig0 = performance.now();
+	_igfMisses = _igfMisses + 1;
 	const fnNode = unwrapToFunctionDecl(sym.declNode);
 	if (fnNode === null) {
 		ctx.genericInstDepth = ctx.genericInstDepth - 1;
@@ -532,7 +552,9 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		// is a Ref) otherwise keeps its deref and the re-check stacks a second one.
 		clearCheckerState(cd.fnBody);
 		bindFunctionFlow(cloned, cd.fnBody);
+		const _igb0 = performance.now();
 		callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
+		_igfBodyTime = _igfBodyTime + (performance.now() - _igb0);
 		if (bodyCtx !== ctx && bodyCtx.errors.length > errBefore) {
 			addError(ctx, "in instantiation of '" + sym.name + displayTypeArgs(dedup.types) + "': " + bodyCtx.errors[errBefore].message, callLoc.line, callLoc.column);
 		}
@@ -546,6 +568,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	addPendingInstance(cloned);
 
 	ctx.genericInstDepth = ctx.genericInstDepth - 1;
+	_igfTime = _igfTime + (performance.now() - _ig0);
 	return instSym;
 }
 
