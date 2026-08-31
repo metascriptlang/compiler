@@ -97,8 +97,13 @@ let _forceRebuild = false;
 // Initialize cache with build mode and force flag. Must be called before any cache operations.
 // Reference-aligned: cacheSuffix (_d/_r), optForceFullMake (force bypass).
 export function initCache(mode: number, forceRebuild: boolean): void {
-	const modeDir = mode >= 1 ? "release" : "debug";
-	_cacheDir = `out/${modeDir}/.cache`;
+	const envDir = env.get("MSC_CACHE_DIR");
+	if (envDir !== "") {
+		_cacheDir = envDir;
+	} else {
+		const modeDir = mode >= 1 ? "release" : "debug";
+		_cacheDir = `out/${modeDir}/.cache`;
+	}
 	ensureDir(_cacheDir);
 	ensureLocalSchema();
 	_forceRebuild = forceRebuild;
@@ -107,7 +112,17 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 
 function getCacheDir(): string {
 	if (_cacheDir !== "") return _cacheDir;
-	_cacheDir = "out/debug/.cache";
+	// Reference parity (--nimcache): isolate the build cache per lane/config.
+	// Concurrent builds sharing one cache dir are CORRECT since fp-keying, but
+	// the project/link metadata is last-writer-wins — separate dirs (e.g. the
+	// SAN lane using an ASan driver) avoid pointless re-links. Env-based so
+	// runners can set it without new CLI surface.
+	const envDir = env.get("MSC_CACHE_DIR");
+	if (envDir !== "") {
+		_cacheDir = envDir;
+	} else {
+		_cacheDir = "out/debug/.cache";
+	}
 	ensureDir(_cacheDir);
 	return _cacheDir;
 }
