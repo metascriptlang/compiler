@@ -1,5 +1,4 @@
 // @stdout: concat acc=100000
-// @skip-js: spawn is native-only (js-lane audit pending, same as 410)
 // @serial
 
 // note: Regression guard for the string-returning spawn box path. The worker
