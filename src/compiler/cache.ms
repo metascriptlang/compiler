@@ -37,11 +37,14 @@ function hashFile(path: string): string {
 // ===== Toolchain Stamp =====
 
 // Identity of the compiling toolchain beyond VERSION: content hash of the msc
-// binary plus every file under the resolved runtime/ tree. VERSION only moves
-// on release, but WIP trees change codegen and runtime/*.h while reporting the
-// same version — two such builds must never share cache entries (locally or in
-// the global content-addressed cache), and an on-disk runtime header edit must
-// invalidate .o files even when their generated C is byte-identical.
+// binary plus every file under the resolved runtime/ AND vendor/ trees. VERSION
+// only moves on release, but WIP trees change codegen, runtime/*.h and vendor
+// headers while reporting the same version — two such builds must never share
+// cache entries (locally or in the global content-addressed cache), and an
+// on-disk runtime/vendor header edit must invalidate .o files even when their
+// generated C is byte-identical. vendor/ is a real compile input: runtime TUs
+// include vendor headers (zip/inflate/deflate → miniz.h, blake2b/chacha20/
+// x25519 → monocypher.h) and std modules @compile vendor .c directly.
 let _toolchainStamp = "";
 
 // readDir order is filesystem-dependent; the stamp must be stable across runs.
@@ -69,6 +72,19 @@ function collectFilesSorted(dir: string, prefix: string, outPaths: string[]): vo
 	}
 }
 
+// Content-hash every file under one support tree into the stamp accumulator.
+// Keys are prefixed with the tree name so runtime/x.h and vendor/x.h can never
+// collide. A missing tree contributes nothing.
+function stampTreeInto(acc: string, dir: string, prefix: string): string {
+	if (!exists(dir)) return acc;
+	const files: string[] = [];
+	collectFilesSorted(dir, "", files);
+	for (const f of files) {
+		acc = `${acc}\n${prefix}${f}:${hashFile(join(dir, f))}`;
+	}
+	return acc;
+}
+
 // Memoized; initCache computes it once on the main thread so parallel compile
 // workers only ever read the settled value.
 export function toolchainStamp(): string {
@@ -76,14 +92,8 @@ export function toolchainStamp(): string {
 	let acc = hashFile(resolveArgv0(argv[0]));
 	const root = resolveRuntimeDir();
 	if (root !== "") {
-		const rtDir = join(root, "runtime");
-		if (exists(rtDir)) {
-			const files: string[] = [];
-			collectFilesSorted(rtDir, "", files);
-			for (const f of files) {
-				acc = `${acc}\n${f}:${hashFile(join(rtDir, f))}`;
-			}
-		}
+		acc = stampTreeInto(acc, join(root, "runtime"), "runtime/");
+		acc = stampTreeInto(acc, join(root, "vendor"), "vendor/");
 	}
 	_toolchainStamp = hashContent(acc);
 	return _toolchainStamp;
@@ -206,9 +216,11 @@ export function fullCompileCmd(ccOption: number, mode: number, extraFlags: strin
 	return `${getCompilerName(ccOption, "")} -std=gnu11${modeFlags(mode)} ${extraFlags}`;
 }
 
-// Fingerprint folds in VERSION so that any msc release that changes runtime/*.h
-// (but not the .c bytes) still invalidates every entry — otherwise stale .o with
-// old header layout would be served. Also makes the global cache safe across upgrades.
+// Fingerprint folds in VERSION and toolchainStamp(): the stamp content-hashes
+// the msc binary plus every file under runtime/ and vendor/, so a header edit
+// that leaves the .c bytes identical still invalidates every entry — a stale
+// .o built against an old header layout is never served. VERSION stays folded
+// as a belt-and-braces release barrier — redundant with the stamp, but safe.
 // Folds in host `platform` too: host-native builds don't pass an explicit -target,
 // so without this a macOS Mach-O and a Windows PE object would share the same
 // fingerprint and collide in the global content-addressed cache (`~/.metascript/cache/objects/`).
