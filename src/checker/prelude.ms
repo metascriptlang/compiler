@@ -10,7 +10,7 @@
 
 // Default global imports. Returns array (module-level const string[] hits DRC bug).
 export function defaultGlobalImports(): string[] {
-	return ["std/core/system", "std/core/array", "std/core/string", "std/core/json", "std/core/buffer", "std/core/promise", "std/core/struct", "std/core/fetch", "std/core/date", "std/core/performance", "std/core/websocket"];
+	return ["std/core/system", "std/core/array", "std/core/string", "std/core/bigint", "std/core/json", "std/core/buffer", "std/core/promise", "std/core/struct", "std/core/fetch", "std/core/date", "std/core/performance", "std/core/websocket", "std/core/math", "std/core/number", "std/core/boolean"];
 }
 
 let _extraGlobalImports: string[] = [];
@@ -62,20 +62,24 @@ test "isGlobalImport sees extras" {
 	assert !isGlobalImport("/abs/neon/converters");
 }
 
-test "globalImports has system, string, array, json, buffer, promise, struct, fetch, date, performance, websocket" {
+test "globalImports has system, string, array, bigint, json, buffer, promise, struct, fetch, date, performance, websocket, math, number, boolean" {
 	const imports = defaultGlobalImports();
-	assert imports.length === 11;
+	assert imports.length === 15;
 	assert imports[0] === "std/core/system";
 	assert imports[1] === "std/core/array";
 	assert imports[2] === "std/core/string";
-	assert imports[3] === "std/core/json";
-	assert imports[4] === "std/core/buffer";
-	assert imports[5] === "std/core/promise";
-	assert imports[6] === "std/core/struct";
-	assert imports[7] === "std/core/fetch";
-	assert imports[8] === "std/core/date";
-	assert imports[9] === "std/core/performance";
-	assert imports[10] === "std/core/websocket";
+	assert imports[3] === "std/core/bigint";
+	assert imports[4] === "std/core/json";
+	assert imports[5] === "std/core/buffer";
+	assert imports[6] === "std/core/promise";
+	assert imports[7] === "std/core/struct";
+	assert imports[8] === "std/core/fetch";
+	assert imports[9] === "std/core/date";
+	assert imports[10] === "std/core/performance";
+	assert imports[11] === "std/core/websocket";
+	assert imports[12] === "std/core/math";
+	assert imports[13] === "std/core/number";
+	assert imports[14] === "std/core/boolean";
 }
 
 test "isGlobalImport matches" {
