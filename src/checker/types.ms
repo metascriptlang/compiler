@@ -890,7 +890,7 @@ export function peelToStruct(t: Type | null): Type | null {
 	while (cur !== null && _g < PEEL_MAX_DEPTH) {
 		_g = _g + 1;
 		if (cur.kind === TypeKind.Struct) return cur;
-		if ((cur.kind === TypeKind.Ref || cur.kind === TypeKind.Ptr) && cur.typeReturn !== null) {
+		if ((cur.kind === TypeKind.Ref || cur.kind === TypeKind.Ptr || cur.kind === TypeKind.Alias) && cur.typeReturn !== null) {
 			cur = cur.typeReturn;
 			continue;
 		}
@@ -911,7 +911,7 @@ export function peelToStructOrUnion(t: Type | null): Type | null {
 	while (cur !== null && _g < PEEL_MAX_DEPTH) {
 		_g = _g + 1;
 		if (cur.kind === TypeKind.Struct || cur.kind === TypeKind.Union) return cur;
-		if ((cur.kind === TypeKind.Ref || cur.kind === TypeKind.Ptr || cur.kind === TypeKind.Cursor) && cur.typeReturn !== null) {
+		if ((cur.kind === TypeKind.Ref || cur.kind === TypeKind.Ptr || cur.kind === TypeKind.Cursor || cur.kind === TypeKind.Alias) && cur.typeReturn !== null) {
 			cur = cur.typeReturn;
 			continue;
 		}
@@ -1640,6 +1640,7 @@ function typeKey(t: Type): string {
 
 export function isStructType(t: Type | null): boolean {
 	if (t === null) return false;
+	if (t.kind === TypeKind.Alias) return isStructType(t.typeReturn);
 	if (t.kind !== TypeKind.Struct) return false;
 	return (t.typeFlags & TypeFlag.IsStruct) !== 0;
 }
@@ -1801,6 +1802,7 @@ export function skipModifier(t: Type | null): Type | null {
 	if (t === null) return t;
 	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent || t.kind === TypeKind.Var) return t.typeReturn;
 	if (t.kind === TypeKind.Cursor) return t.typeReturn;
+	if (t.kind === TypeKind.Alias) return t.typeReturn;
 	return t;
 }
 
