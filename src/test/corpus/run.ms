@@ -97,7 +97,10 @@ const SAN = envOr("MSCORPUS_SAN", "") == "1";
 // finalized-pointer set degrades to append-only under slab-off — the default
 // 1M overflows on 3M-iteration churn programs. Overflow still aborts LOUDLY.
 const SAN_PASSC = "-O0 -g -fsanitize=address -Wno-error=incompatible-pointer-types -DMS_SLAB_MAX=0 -DMS_DRC_LEDGER -DMS_LEDGER_SET_SIZE=8388608u";
-const SAN_PASSL = "-fsanitize=address";
+// -pthread on Windows: the DRC ledger's pthread_mutex (runtime/drc.c) needs
+// winpthreads linked explicitly under a mingw-targeting clang (zig cc bundles
+// it implicitly, llvm-mingw and scoop's MinGW gcc do not).
+const SAN_PASSL = "-fsanitize=address" + (IS_WIN ? " -pthread" : "");
 
 // The danger and san lanes ask for clang by name. That is not a preference on
 // macOS — `--danger` defaults to --lto=thin and native-macOS zig + any LTO is
@@ -388,6 +391,11 @@ function cellInner(c: Cell, q: (p: string) => string): string {
 		// those exit survivors as leaks and would mask the real verdict behind
 		// host-dependent noise — macOS never runs LSan here, so this restores
 		// lane parity rather than weakening it.
+		// Windows: `VAR=v cmd` is sh syntax — inside the cell .bat it must be a
+		// `set` line, else cmd.exe treats ASAN_OPTIONS as the command (exit 9009).
+		if (IS_WIN) {
+			return "set \"ASAN_OPTIONS=detect_leaks=0\"\r\n" + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
+		}
 		return "ASAN_OPTIONS=detect_leaks=0 " + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
 	}
 	if (c.lane == "js") {

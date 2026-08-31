@@ -776,7 +776,17 @@ export function detectUnionDiscriminant(unionType: Type | null, fieldName: strin
 // `isRealDiscriminatedUnion` (codegen) or `narrowingObjType.kind === Union`
 // after `peelToStructOrUnion`. Without that gate, calling on `T | null`
 // (nullable) patterns would erroneously match the Ref variant's fields.
+let _fvbCount: float64 = 0;
+let _fvbTime: float64 = 0;
+export function findVariantByFieldNameProfile(): float64[] { return [_fvbCount, _fvbTime]; }
 export function findVariantByFieldName(unionType: Type | null, fieldName: string): number {
+	_fvbCount = _fvbCount + 1;
+	const _v0 = performance.now();
+	const r = findVariantByFieldNameInner(unionType, fieldName);
+	_fvbTime = _fvbTime + (performance.now() - _v0);
+	return r;
+}
+function findVariantByFieldNameInner(unionType: Type | null, fieldName: string): number {
 	if (unionType === null || unionType.typeChildren === null) return -1;
 	let i = 0;
 	while (i < unionType.typeChildren.length) {
@@ -1314,12 +1324,15 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	// Split declared param names (e.g. "K,V" → ["K", "V"])
 	const paramNames = splitTopLevel(declaredParams, ",");
 	if (paramNames.length === 0 || paramNames.length > gi.typeChildren.length) return;
-	let body = innerBase;
+	const names: string[] = [];
+	const args: Type[] = [];
 	let pi = 0;
 	while (pi < paramNames.length) {
-		body = substituteType(body, paramNames[pi].trim(), gi.typeChildren[pi]);
+		names.push(paramNames[pi].trim());
+		args.push(gi.typeChildren[pi]);
 		pi = pi + 1;
 	}
+	const body = substituteAllParams(innerBase, names, args);
 	// Re-wrap in Ref if the base was Ref<Struct>
 	gi.typeReturn = isRefWrapped ? createRef(body) : body;
 }
@@ -1462,11 +1475,7 @@ export function evaluateConditionalType(t: Type | null): Type {
 		unifyType(ext, check, bindings);
 		if (bindings.names.length > 0) {
 			// infer succeeded — substitute bindings into true branch
-			let result = t.typeChildren[2];
-			for (let i = 0; i < bindings.names.length; i += 1) {
-				result = substituteType(result, bindings.names[i], bindings.types[i]);
-			}
-			return result;
+			return substituteAllParams(t.typeChildren[2], bindings.names, bindings.types);
 		}
 		// infer failed — no match, return false branch
 		return t.typeChildren[3];
@@ -1963,7 +1972,17 @@ function substituteClearFlag(t: Type): void {
 	}
 }
 
+let _substCount: float64 = 0;
+let _substTime: float64 = 0;
+export function substituteTypeProfile(): float64[] { return [_substCount, _substTime]; }
 export function substituteType(t: Type | null, paramName: string, concrete: Type): Type {
+	_substCount = _substCount + 1;
+	const _s0 = performance.now();
+	const r = substituteTypeInner(t, paramName, concrete);
+	_substTime = _substTime + (performance.now() - _s0);
+	return r;
+}
+function substituteTypeInner(t: Type | null, paramName: string, concrete: Type): Type {
 	if (t === null) return inferredType();
 	if (t.kind === TypeKind.GenericParam && t.typeName === paramName) return concrete;
 	if (substituteIsSeen(t)) return t;
@@ -2043,14 +2062,127 @@ export function substituteType(t: Type | null, paramName: string, concrete: Type
 	return result;
 }
 
+// Multi-binding substitution in ONE tree walk. Semantically identical to
+// folding substituteType over each (name, concrete) pair — the concrete types
+// are fully resolved (no free GenericParams) by contract at every call site,
+// so simultaneous substitution equals sequential passes — but the tree is
+// walked once instead of once per binding. inferGenericReturn folds bindings
+// per call site; on self-host that was 21M single-param node walks (~56s).
+export function substituteAllParams(t: Type | null, names: string[], concretes: Type[]): Type {
+	if (t === null) return inferredType();
+	if (t.kind === TypeKind.GenericParam) {
+		for (let ni = 0; ni < names.length; ni += 1) {
+			if (t.typeName === names[ni]) return concretes[ni];
+		}
+		return t;
+	}
+	if (substituteIsSeen(t)) return t;
+	substituteSetFlag(t);
+	const result = match (t.kind) {
+			TypeKind.Number | TypeKind.String | TypeKind.Boolean |
+			TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
+			TypeKind.Never | TypeKind.Error | TypeKind.None | TypeKind.Inferred |
+			TypeKind.GenericParam | TypeKind.CString => t,
+			TypeKind.Array => createArray(substituteAllParams(t.typeReturn, names, concretes)),
+			TypeKind.SizedArray => createSizedArray(substituteAllParams(t.typeReturn, names, concretes), t.typeFlags - TypeFlag.Substituting),
+			TypeKind.Span => createSpan(substituteAllParams(t.typeReturn, names, concretes)),
+			TypeKind.Varargs => t.typeChildren.length > 0
+				? createVarargs(substituteAllParams(t.typeChildren[0], names, concretes))
+				: t,
+			TypeKind.Function => {
+				const fn = copyTypeForSubst(t);
+				substituteChildrenInPlaceAll(fn, names, concretes);
+				fn.typeReturn = substituteAllParams(t.typeReturn, names, concretes);
+				substituteClearFlag(t);
+				return fn;
+			},
+			TypeKind.Union | TypeKind.Tuple => {
+				const copy = copyTypeForSubst(t);
+				substituteChildrenInPlaceAll(copy, names, concretes);
+				substituteClearFlag(t);
+				// Re-canonicalize `T | null` after substitution (same rule as
+				// substituteTypeInner): collapse Union<T, Null> → Maybe<T> when
+				// the substituted member became a wrappable value-type.
+				if (t.kind === TypeKind.Union && copy.typeChildren.length === 2) {
+					const a = copy.typeChildren[0];
+					const b = copy.typeChildren[1];
+					if (a !== null && b !== null) {
+						if (b.kind === TypeKind.Null && isMaybeWrappable(a)) return createMaybeType(a);
+						if (a.kind === TypeKind.Null && isMaybeWrappable(b)) return createMaybeType(b);
+					}
+				}
+				return copy;
+			},
+			TypeKind.Ref => isAtomicRef(t)
+				? createArc(substituteAllParams(t.typeReturn, names, concretes))
+				: createRef(substituteAllParams(t.typeReturn, names, concretes)),
+			TypeKind.Ptr => createPtr(substituteAllParams(t.typeReturn, names, concretes)),
+			TypeKind.Borrow => createBorrow(substituteAllParams(t.typeReturn, names, concretes)),
+			TypeKind.Struct => substituteStructAll(t, names, concretes),
+			TypeKind.GenericInstance => {
+				// typeExtra intentionally NOT walked — same rationale as
+				// substituteTypeInner (walking it cost ~20× compile time).
+				const gi = copyTypeForSubst(t);
+				substituteChildrenInPlaceAll(gi, names, concretes);
+				if (gi.typeReturn !== null) {
+					gi.typeReturn = substituteAllParams(gi.typeReturn, names, concretes);
+				}
+				substituteClearFlag(t);
+				return gi;
+			},
+			TypeKind.Conditional => {
+				const cond = copyTypeForSubst(t);
+				substituteChildrenInPlaceAll(cond, names, concretes);
+				substituteClearFlag(t);
+				return evaluateConditionalType(cond);
+			},
+			_ => t,
+		};
+	substituteClearFlag(t);
+	return result;
+}
+
+function substituteChildrenInPlaceAll(copy: Type, names: string[], concretes: Type[]): void {
+	for (let ci = 0; ci < copy.typeChildren.length; ci += 1) {
+		copy.typeChildren[ci] = substituteAllParams(copy.typeChildren[ci], names, concretes);
+	}
+}
+
+function substituteStructAll(t: Type, names: string[], concretes: Type[]): Type {
+	const newFieldTypes: Type[] = [];
+	let changed = false;
+	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {
+		const sub = substituteAllParams(t.typeChildren[ci], names, concretes);
+		newFieldTypes.push(sub);
+		if (sub !== t.typeChildren[ci]) changed = true;
+	}
+	if (!changed) return t;
+	if ((t.typeFlags & TypeFlag.IsMaybe) !== 0) {
+		return createMaybeType(newFieldTypes[0]);
+	}
+	const newNames: string[] = [];
+	for (let ni = 0; ni < t.typeNames.length; ni += 1) {
+		newNames.push(t.typeNames[ni]);
+	}
+	const result = createStruct(t.typeName, newNames, newFieldTypes, isStructType(t));
+	result.typeReturn = t.typeReturn;
+	result.typeExtra = t.typeExtra;
+	const withDu: int32 = result.typeFlags | (t.typeFlags & (TypeFlag.DuVariant as int32));
+	result.typeFlags = withDu;
+	return result;
+}
+
 // Instantiate a generic type with concrete type arguments.
 export function instantiateGeneric(t: Type, genericParamNames: string[], typeArgs: Type[]): Type {
-	let result = t;
 	const limit = genericParamNames.length < typeArgs.length ? genericParamNames.length : typeArgs.length;
+	if (limit === 0) return t;
+	const names: string[] = [];
+	const args: Type[] = [];
 	for (let i = 0; i < limit; i += 1) {
-		result = substituteType(result, genericParamNames[i], typeArgs[i]);
+		names.push(genericParamNames[i]);
+		args.push(typeArgs[i]);
 	}
-	return result;
+	return substituteAllParams(t, names, args);
 }
 
 // ===== Type Unification =====
@@ -2083,7 +2215,16 @@ export function mergeUnifyBindings(into: UnifyBindings, from: UnifyBindings): vo
 
 let unifyDepth = 0;
 
+let _unifyCount: float64 = 0;
+let _unifyTime: float64 = 0;
+export function unifyTypeProfile(): float64[] { return [_unifyCount, _unifyTime]; }
 export function unifyType(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
+	_unifyCount = _unifyCount + 1;
+	const _u0 = performance.now();
+	unifyTypeGuard(formal, concrete, bindings);
+	_unifyTime = _unifyTime + (performance.now() - _u0);
+}
+function unifyTypeGuard(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
 	if (formal === null || concrete === null) return;
 	// Identity check — break circular type references (e.g., Doc → DocData → Doc)
 	if (formal === concrete) return;
@@ -2365,7 +2506,17 @@ function collectGenericParamNames(t: Type | null, names: string[]): void {
 	_collectGenericDepth = _collectGenericDepth - 1;
 }
 
+let _gpCount: float64 = 0;
+let _gpTime: float64 = 0;
+export function getPropertyProfile(): float64[] { return [_gpCount, _gpTime]; }
 export function getProperty(t: Type | null, name: string): Type {
+	_gpCount = _gpCount + 1;
+	const _g0 = performance.now();
+	const r = getPropertyInner(t, name);
+	_gpTime = _gpTime + (performance.now() - _g0);
+	return r;
+}
+function getPropertyInner(t: Type | null, name: string): Type {
 	if (t === null) return inferredType();
 	// Unwrap Ref/Ptr to access inner Object's properties (class types are Ref<Object>)
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
@@ -2485,7 +2636,17 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 // For human-readable display (error messages, signatures, hints) use
 // `typeDisplayName` instead — it never returns empty and falls back to the
 // kind's spelling.
+let _tnoCount: float64 = 0;
+let _tnoTime: float64 = 0;
+export function typeNameOfProfile(): float64[] { return [_tnoCount, _tnoTime]; }
 export function typeNameOf(t: Type | null): string {
+	_tnoCount = _tnoCount + 1;
+	const _n0 = performance.now();
+	const r = typeNameOfInner(t);
+	_tnoTime = _tnoTime + (performance.now() - _n0);
+	return r;
+}
+function typeNameOfInner(t: Type | null): string {
 	if (t === null) return "";
 	// Reference parity: ownership modifiers are transparent — unwrap before naming.
 	// Bounded peel loop (not self-recursion): a malformed cyclic wrapper alias
@@ -2570,7 +2731,17 @@ export function typeNameOf(t: Type | null): string {
 //
 // For type-keyed lookups (extension receiver matching, transform dispatch),
 // use typeNameOf directly — the empty return is intentional there.
+let _tdnCount: float64 = 0;
+let _tdnTime: float64 = 0;
+export function typeDisplayNameProfile(): float64[] { return [_tdnCount, _tdnTime]; }
 export function typeDisplayName(t: Type | null): string {
+	_tdnCount = _tdnCount + 1;
+	const _d0 = performance.now();
+	const r = typeDisplayNameInner(t);
+	_tdnTime = _tdnTime + (performance.now() - _d0);
+	return r;
+}
+function typeDisplayNameInner(t: Type | null): string {
 	if (t === null) return "<null>";
 	if (t.kind === TypeKind.Varargs && t.typeChildren.length > 0) {
 		return "..." + typeDisplayName(t.typeChildren[0]);

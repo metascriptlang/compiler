@@ -434,7 +434,18 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 				current = ants.flow;
 				continue;
 			}
+			// Per-query memo: without it, a query at the end of N sequential
+			// narrowing `if`s re-walks BOTH antecedents at every label —
+			// 2^N recursion (a 50-statement chain never finished). getTypeAtFlowNode
+			// is a pure function of (state, node), so the first result per label
+			// is final. Same cache list as the Shared-flow memo.
+			const cachedLabel = lookupSharedFlow(state, current);
+			if (cachedLabel !== null) {
+				result = cachedLabel;
+				break;
+			}
 			result = getTypeAtBranchLabel(state, current);
+			cacheSharedFlow(state, current, result);
 			break;
 		}
 		if ((flags & FlowFlags.LoopLabel) !== 0) {

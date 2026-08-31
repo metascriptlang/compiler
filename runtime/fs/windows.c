@@ -191,8 +191,48 @@ double msFsRemove(msString path) {
 
 double msFsRename(msString oldPath, msString newPath) {
 	_msFsLastErrno = 0;
-	if (rename(msStringToCString(oldPath), msStringToCString(newPath)) == 0) return 1.0;
-	_msFsLastErrno = errno;
+	/* CRT rename() on Windows fails with EEXIST when the target exists —
+	 * POSIX rename() atomically REPLACES it. MoveFileExW(REPLACE_EXISTING)
+	 * is the Win32 spelling of that contract (Node's fs.rename does the
+	 * same); posix.c keeps CRT rename, which already replaces there.
+	 * Fails with ACCESS_DENIED while a reader holds the target open
+	 * without FILE_SHARE_DELETE — callers that must not lose retry. */
+	const char* oldUtf8 = msStringToCString(oldPath);
+	const char* newUtf8 = msStringToCString(newPath);
+	const int oldWLen = MultiByteToWideChar(CP_UTF8, 0, oldUtf8, -1, NULL, 0);
+	const int newWLen = MultiByteToWideChar(CP_UTF8, 0, newUtf8, -1, NULL, 0);
+	if (oldWLen <= 0 || newWLen <= 0) {
+		_msFsLastErrno = ERROR_INVALID_PARAMETER;
+		return 0.0;
+	}
+	wchar_t* oldW = (wchar_t*)malloc((size_t)oldWLen * sizeof(wchar_t));
+	wchar_t* newW = (wchar_t*)malloc((size_t)newWLen * sizeof(wchar_t));
+	if (oldW == NULL || newW == NULL) {
+		if (oldW != NULL) free(oldW);
+		if (newW != NULL) free(newW);
+		_msFsLastErrno = ERROR_NOT_ENOUGH_MEMORY;
+		return 0.0;
+	}
+	MultiByteToWideChar(CP_UTF8, 0, oldUtf8, -1, oldW, oldWLen);
+	MultiByteToWideChar(CP_UTF8, 0, newUtf8, -1, newW, newWLen);
+	const BOOL moved = MoveFileExW(oldW, newW, MOVEFILE_REPLACE_EXISTING);
+	free(oldW);
+	free(newW);
+	if (moved) return 1.0;
+	const DWORD gle = GetLastError();
+	switch (gle) {
+	case ERROR_FILE_NOT_FOUND:
+	case ERROR_PATH_NOT_FOUND:
+		_msFsLastErrno = ENOENT; break;
+	case ERROR_ACCESS_DENIED:
+		_msFsLastErrno = EACCES; break;
+	case ERROR_INVALID_PARAMETER:
+		_msFsLastErrno = EINVAL; break;
+	case ERROR_NOT_ENOUGH_MEMORY:
+		_msFsLastErrno = ENOMEM; break;
+	default:
+		_msFsLastErrno = EIO; break;
+	}
 	return 0.0;
 }
 
