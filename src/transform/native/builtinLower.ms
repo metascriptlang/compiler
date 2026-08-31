@@ -125,6 +125,17 @@ function lowerEnumReverseIndex(node: Node, ctx: TransformContext): Node {
 // Resolution: user extension > number > boolean > enum > string > struct/class > array > fallback
 
 function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLocation, ctx: TransformContext): Node {
+	// bigint is a primitive with no user-extensible toString, and the synthetic
+	// calls that interpolation and concat build carry no symbol for
+	// extensionMethodLower to route — so it resolves ahead of the extension probe.
+	if (objType.kind === TypeKind.BigInt) {
+		if (ctx.jsBackend) return callNode;
+		const cdb = callNode.data as CallExprData;
+		const radixArg = cdb.arguments.length > 0 ? cdb.arguments[0] : makeNumber(10, loc);
+		const bcall = makeCall(makeIdent("msBigIntToString", loc), [obj, radixArg], loc);
+		bcall.nodeType = stringType();
+		return bcall;
+	}
 	// Priority 1: user-defined toString extension → leave for extensionMethodLower
 	if (ctx.checkerCtx !== null) {
 		const tn = typeNameOf(objType);

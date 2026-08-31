@@ -42,6 +42,13 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		call.nodeType = stringType();
 		return call;
 	}
+	// bigint → digits + "n", matching what node prints for console.log(255n).
+	// Interpolation and concat drop the suffix; that split is TS behaviour, not ours.
+	if (t.kind === TypeKind.BigInt && !ctx.jsBackend) {
+		const call = makeCall(makeIdent("msBigIntToDebugString", loc), [arg], loc);
+		call.nodeType = stringType();
+		return call;
+	}
 	// Boolean → msBoolToString
 	if (t.kind === TypeKind.Boolean) {
 		const call = makeCall(makeIdent("msBoolToString", loc), [arg], loc);

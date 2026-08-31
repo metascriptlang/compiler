@@ -61,6 +61,8 @@ function materializeBigInt(node: Node, ctx: TransformContext): Node {
 	}
 	if (node.kind === NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
+		const bigCast = bigintCast(node, d);
+		if (bigCast !== null) return bigCast;
 		const dstK = intKindOfName(d.asType);
 		if (dstK === TypeKind.Unknown || d.asExpr === null) return node;
 		const srcT = d.asExpr.nodeType;
@@ -95,6 +97,28 @@ function bigLit(text: string, kind: TypeKind, loc: SourceLocation): Node {
 }
 
 // ===== Conversions (genConv rows, exact-C narrow variant) =====
+
+// `x as bigint` / `b as <numeric>`. int64 and uint64 are already native BigInt
+// on this backend, so those legs only need the width clamp C applies.
+function bigintCast(node: Node, d: TypeAssertionData): Node | null {
+	if (d.asExpr === null) return null;
+	const srcT = d.asExpr.nodeType;
+	const dstBig = d.asType === "bigint";
+	const srcBig = srcT !== null && srcT.kind === TypeKind.BigInt;
+	if (!dstBig && !srcBig) return null;
+	const loc = node.location;
+	if (dstBig) {
+		if (srcBig || srcT === null) return d.asExpr;
+		if (is64Kind(srcT.kind)) return d.asExpr;
+		return bigIntOf(d.asExpr, loc);
+	}
+	const dstK = intKindOfName(d.asType);
+	if (dstK === TypeKind.Int64) return asN(false, 64, d.asExpr, loc);
+	if (dstK === TypeKind.Uint64) return asN(true, 64, d.asExpr, loc);
+	const bits = narrowBits(dstK);
+	if (bits > 0) return numberOf(asN(!isSignedNarrowKind(dstK), bits, d.asExpr, loc), loc);
+	return numberOf(d.asExpr, loc);
+}
 
 function bigConvert(inner: Node, srcK: TypeKind, dstK: TypeKind, loc: SourceLocation): Node {
 	if (srcK === dstK) return inner;

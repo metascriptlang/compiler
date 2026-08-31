@@ -77,6 +77,7 @@ import { lowerBuiltins } from "./native/builtinLower";
 import { lowerCStringConv } from "./native/cstringConvLower";
 import { lowerSubscript } from "./lowering/subscriptLower";
 import { lowerOperators } from "./lowering/operatorLower";
+import { lowerBigIntOps } from "./native/bigIntOpLower";
 import { lowerStringOps } from "./native/stringOpLower";
 import { lowerConditionalExpr } from "./lowering/conditionalExprLower";
 import { lowerUpdateExpr } from "./lowering/updateExprLower";
@@ -148,6 +149,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = lowerStringLengthJS(result, ctx); }
 	result = lowerCStringConv(result, ctx);
 	result = lowerOperators(result, ctx);
+	if (!jsBackend) { result = lowerBigIntOps(result, ctx); }
 	if (!jsBackend) { result = lowerStringOps(result, ctx); }
 	result = lowerSubscript(result, ctx);
 	if (!jsBackend) { result = spanLower(result, ctx); }
