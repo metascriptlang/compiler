@@ -28,7 +28,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { checkBitwiseOperands, checkNegatedIntLiteral, fitJoinedBranch, fitNode, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, trySynthesizeAsCoercion, unwrapAsUnknown, widenVariantToUnion, wrapInConv } from "./fit";
+import { checkBitwiseOperands, checkNegatedIntLiteral, fitJoinedBranch, fitNode, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, trySynthesizeAsCoercion, unwrapAsUnknown, widenVariantToUnion, wrapInConv } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -162,15 +162,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 		},
 		NodeKind.BigIntLiteral => {
-			// The literal is typed Int64, so a value outside int64 has no type to
-			// live in. Rejecting it here keeps the C backend from forwarding the
-			// `n` suffix to the C compiler as a syntax error in generated code.
-			const bd = node.data as BigIntLiteralData;
-			const digits = bd.bigintValue.slice(0, bd.bigintValue.byteLength - 1);
-			if (!fitsInt64Decimal(digits, false)) {
-				addError(ctx, "bigint literal " + digits + " does not fit int64 (arbitrary-precision bigint is not implemented yet)", node.location.line, node.location.column);
-			}
-			node.nodeType = createPrimitive(TypeKind.Int64);
+			node.nodeType = createPrimitive(TypeKind.BigInt);
 			return;
 		},
 		NodeKind.StringLiteral => {
@@ -701,6 +693,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.nodeType = isRelational ? booleanType() : ((maybeSide.typeReturn !== null) ? maybeSide.typeReturn : inferredType());
 				return;
 			}
+			if (rejectBigIntMix(ctx, d.operator, effLeft, effRight, node)) { node.nodeType = errorType(); return; }
 			node.nodeType = inferBinaryOp(d.operator, effLeft!, effRight!);
 			if (d.operator === "??" && node.nodeType !== null && isMaybeType(node.nodeType)) {
 				d.right = fitJoinedBranch(ctx, d.right, node.nodeType);
@@ -719,6 +712,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			checkExpr(ctx, d.operand, unaryExpected);
 			const operandType = d.operand.nodeType;
+			if (d.unaryOp === "+" && operandType !== null && operandType.kind === TypeKind.BigInt) {
+				addError(ctx, "unary '+' is not allowed on bigint — use Number(b) to convert", node.location.line, node.location.column);
+				node.nodeType = errorType(); return;
+			}
 			// Bitwise NOT: integer/enum = ok, number = warn, other = error
 			if (d.unaryOp === "~") {
 				if (operandType !== null && operandType.kind === TypeKind.Number) {
@@ -756,7 +753,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					}
 				}
 			}
-			if (d.updateArg.nodeType !== null && isNumeric(d.updateArg.nodeType)) { node.nodeType = d.updateArg.nodeType; return; }
+			if (d.updateArg.nodeType !== null && (isNumeric(d.updateArg.nodeType) || d.updateArg.nodeType.kind === TypeKind.BigInt)) { node.nodeType = d.updateArg.nodeType; return; }
 			node.nodeType = int32Type(); return;
 		},
 		NodeKind.CallExpr => checkCallExpr(ctx, node, expectedType),

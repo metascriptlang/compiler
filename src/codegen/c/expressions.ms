@@ -2310,6 +2310,7 @@ function typeofConst(g: CGen, t: Type | null): string {
 	if (t.kind === TypeKind.String || t.kind === TypeKind.StringLiteral) return typeofStr(g, "string");
 	if (t.kind === TypeKind.Boolean || t.kind === TypeKind.BooleanLiteral) return typeofStr(g, "boolean");
 	if (t.kind === TypeKind.Function) return typeofStr(g, "function");
+	if (t.kind === TypeKind.BigInt) return typeofStr(g, "bigint");
 	return typeofStr(g, "object");
 }
 

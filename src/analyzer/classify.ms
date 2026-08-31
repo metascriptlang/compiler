@@ -214,6 +214,9 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 
 	return match (t.kind) {
 		TypeKind.String => makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false),
+		// msBigInt is an msAllocTyped heap value that cannot reference anything,
+		// so it rides the plain acyclic Ref path — msDecref reaches its destroyFn.
+		TypeKind.BigInt => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false),
 		TypeKind.Array => classifyArray(t, ctx),
 		TypeKind.Ref => {
 			// Actors are exempt from DRC — their lifecycle is managed by the actor
