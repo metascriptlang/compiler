@@ -45,10 +45,11 @@ typedef struct msTimerHeap {
 /* ===== Cross-Thread Completion ===== */
 #if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
 typedef struct {
-	void* fut;          /* msFuture_ptr* — spawn results use void* value */
+	void* fut;          /* msFuture_ptr* - spawn results use void* value */
 	void* value;
 	bool isFail;
 	void* error;
+	int32_t kind;       /* 0 = future completion; -3 = deferred env release (value = env) */
 } msCompletionMsg;
 #endif
 
@@ -99,6 +100,7 @@ void msRunForever(void);
 
 /* Post completion from pool thread to event loop (libuv pattern) */
 void msPostCompletion(void* fut, void* value, bool isFail, void* error);
+void msPostEnvRelease(void* env);
 
 /* Standard reference sleepAsync(ms) — returns msFuture_void* */
 msFuture_void* msSleepAsync(int ms);

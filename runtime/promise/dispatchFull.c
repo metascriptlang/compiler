@@ -277,15 +277,53 @@ void msEnsureLoopChannel(void) {
 	if (!msIsPoolWorker) (void)msGetDispatcher();
 }
 
+/* Cross-thread completion core: takeRef=true takes the queue-side in-flight
+ * ref (public Push contract); takeRef=false relies on the owner-thread submit
+ * ref (Amendment G Owned path). Defined below, before the POSIX #else. */
+static void msPostCompletionCore(void* fut, void* value, bool isFail, void* error, bool takeRef);
+
 void msCompletionQueuePush(void* fut, bool isFail, void* error) {
 	msPostCompletion(fut, NULL, isFail, error);
 }
 
-/* Windows IOCP takes no queue-side ref (the completion msg carries a raw
- * fut pointer), so Owned == Push here — the owner-thread submit ref is
- * gated off on Windows (MS_FUTURE_SUBMIT_REF == 0). */
+/* Owned path: the owner-thread submit ref (Amendment G, MS_FUTURE_SUBMIT_REF)
+ * already holds the future across the worker's publish and this post — a ref
+ * here would double-count against the drain's single release. */
 void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
-	msPostCompletion(fut, NULL, isFail, error);
+	msPostCompletionCore(fut, NULL, isFail, error, false);
+}
+
+/* Amendment H (Windows): deferred closure-env release — same kind=-3 message
+ * msPostEnvRelease posts, reached through the queue-named API thread.h calls
+ * under MS_FUTURE_SUBMIT_REF. */
+void msCompletionQueuePushEnvRelease(void* env) {
+	msPostEnvRelease(env);
+}
+
+/* Amendment H on Windows: deferred future releases ride the same IOCP as
+ * completions, one kind=-2 message per future (POSIX chains them through the
+ * MPSC; the IOCP has no chaining, so one post each). The drain decrefs on the
+ * loop thread, serializing with the drain's own decref. */
+void msCompletionQueuePushReleaseBatch(void** futs, int count) {
+	if (count <= 0) return;
+	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
+	if (iocp == NULL) iocp = msFirstLoopIocp();
+	if (iocp == NULL) {
+		/* No loop exists yet — single-threaded process, inline decref is safe. */
+		for (int i = 0; i < count; i++) msFutureDrcDestroy(futs[i]);
+		return;
+	}
+	for (int i = 0; i < count; i++) {
+		if (futs[i] == NULL) continue;
+		msCompletionMsg* msg = (msCompletionMsg*)malloc(sizeof(msCompletionMsg));
+		if (msg == NULL) { msFutureDrcDestroy(futs[i]); continue; }
+		msg->fut = NULL;
+		msg->value = futs[i];
+		msg->isFail = false;
+		msg->error = NULL;
+		msg->kind = -2;
+		PostQueuedCompletionStatus(iocp, 0, 0, (LPOVERLAPPED)msg);
+	}
 }
 
 bool msCompletionQueueDrain(void) { return false; }
@@ -638,6 +676,31 @@ bool msRunOnce(int timeoutMs) {
 				 * without setting didWork. */
 				if (msg == NULL) continue;
 				didWork = true;
+				if (msg->kind == -3) {
+					/* Deferred env release (Amendment H parity with the POSIX
+					 * kind=-3 drain): decref on the loop thread — the env's rc
+					 * field is non-atomic. Same destroy sequence as the POSIX
+					 * branch in msCompletionQueueDrain. */
+					void* env = msg->value;
+					if (env != NULL) {
+						const msTypeInfo* __t = msHeader(env)->type;
+						if (msDecRefIsLast(env)) {
+							MS_DESTROY_DISPATCH(__t, env);
+							msDestroyAndDispose(env);
+						}
+					}
+					free(msg);
+					continue;
+				}
+				if (msg->kind == -2) {
+					/* Deferred future release (Amendment H parity with the
+					 * POSIX kind=-2 drain): the owner thread's deferred decref
+					 * pushed by msCompletionQueuePushReleaseBatch. Runs here,
+					 * serialized with the drain's own decref — never racy. */
+					if (msg->value != NULL) msFutureDrcDestroy(msg->value);
+					free(msg);
+					continue;
+				}
 				if (msg->fut != NULL) {
 					msFutureFireCallbacks((msFutureBase*)msg->fut);
 					/* Release the queue's in-flight ref, paired with the incref in
@@ -767,8 +830,19 @@ void msRunForever(void) {
 
 /* Post completion from pool thread to event loop. Thread-safe.
  * POSIX: MPSC queue push (lock-free, Pony parity).
- * Windows: PostQueuedCompletionStatus to IOCP (native MPSC). */
+ * Windows: PostQueuedCompletionStatus to IOCP (native MPSC).
+ * Core: takeRef=true takes the queue-side in-flight ref (public Push
+ * contract, both platforms); takeRef=false relies on the owner-thread
+ * submit ref (Amendment G Owned path — Windows IOCP only). The forward
+ * declaration lives OUTSIDE any #ifdef so the POSIX build sees it before
+ * the definition (static-after-use is an error there). */
+static void msPostCompletionCore(void* fut, void* value, bool isFail, void* error, bool takeRef);
+
 void msPostCompletion(void* fut, void* value, bool isFail, void* error) {
+	msPostCompletionCore(fut, value, isFail, error, true);
+}
+
+static void msPostCompletionCore(void* fut, void* value, bool isFail, void* error, bool takeRef) {
 #ifdef _WIN32
 	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
 	if (iocp == NULL) {
@@ -794,34 +868,68 @@ void msPostCompletion(void* fut, void* value, bool isFail, void* error) {
 			else msFutureComplete(fut, value);
 			return;
 		}
-		/* Queue-side ref, same contract as the POSIX msCompletionQueuePush.
+		/* Queue-side in-flight ref, same contract as the POSIX
+		 * msCompletionQueuePush incref: PostQueuedCompletionStatus is
+		 * asynchronous — the dispatcher pops this message in a later msRunOnce
+		 * turn, and without a ref the future could be freed while this raw
+		 * pointer is still in flight. Released by the IOCP drain in msRunOnce
+		 * right after msFutureFireCallbacks.
 		 *
-		 * PostQueuedCompletionStatus is asynchronous — the dispatcher pops this
-		 * message in a later msRunOnce turn. By then the worker has already
-		 * published finished=true (thread.h, step 1 of the split completion), so
-		 * the owning thread's waitFor can observe the result and drop the last
-		 * reference, freeing the future while this raw pointer is still in
-		 * flight. The drain then reads f->failed off freed memory.
-		 *
-		 * The ref belongs here rather than in msCompletionQueuePush{,Owned}:
-		 * MS_FUTURE_SUBMIT_REF is 0 on Windows, so unlike POSIX there is no
-		 * submit-time ref for the "Owned" variant to inherit, and both wrappers
-		 * funnel through this function. Released by the IOCP drain in msRunOnce
-		 * right after msFutureFireCallbacks. */
-		if (fut != NULL) msIncRef(fut);
+		 * takeRef=false ONLY for the Owned path (msCompletionQueuePushOwned,
+		 * called by spawn workers): with MS_FUTURE_SUBMIT_REF=1 the
+		 * owner-thread submit incref (Amendment G) already holds the future
+		 * across publish and post — a second ref here would double-count
+		 * against the drain's single release. The incref must also not run on
+		 * the worker for the same reason the release must not: rc is
+		 * non-atomic and the owner thread decrefs concurrently. */
+		if (takeRef && fut != NULL) msIncRef(fut);
 		msg->fut = fut;
 		msg->value = value;
 		msg->isFail = isFail;
 		msg->error = error;
+		msg->kind = 0;
 		PostQueuedCompletionStatus(iocp, 0, 0, (LPOVERLAPPED)msg);
 	} else {
 		if (isFail) msFutureFail(fut, error);
 		else msFutureComplete(fut, value);
 	}
 #else
+	(void)takeRef; /* POSIX increfs inside msCompletionQueuePush */
 	msCompletionQueuePush(fut, isFail, error);
 #endif
 }
+
+/* Amendment H (Windows mirror of msCompletionQueuePushEnvRelease): deferred
+ * closure-env release. Spawn workers must not decref the closure env on their
+ * own thread — the env's rc field is non-atomic and races the owning thread's
+ * own decref (observed as heap corruption 0xC0000374 after a few thousand
+ * struct spawns). POSIX routes the release through the completion queue so it
+ * runs single-threaded on the dispatcher drain; post the same kind=-3 message
+ * through the IOCP here. POSIX keeps its native queue path. */
+#ifdef _WIN32
+void msPostEnvRelease(void* env) {
+	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
+	if (iocp == NULL) iocp = msFirstLoopIocp();
+	if (iocp == NULL) {
+		/* No loop exists yet — the process is effectively single-threaded at
+		 * this point, so an inline decref is race-free. */
+		msDecref(env);
+		return;
+	}
+	msCompletionMsg* msg = (msCompletionMsg*)malloc(sizeof(msCompletionMsg));
+	if (msg == NULL) { msDecref(env); return; }
+	msg->fut = NULL;
+	msg->value = env;
+	msg->isFail = false;
+	msg->error = NULL;
+	msg->kind = -3;
+	PostQueuedCompletionStatus(iocp, 0, 0, (LPOVERLAPPED)msg);
+}
+#else
+void msPostEnvRelease(void* env) {
+	msCompletionQueuePushEnvRelease(env);
+}
+#endif
 
 /* Standard reference sleepAsync pattern
  * Create timer future, push to heap, return future */

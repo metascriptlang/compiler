@@ -63,32 +63,26 @@ extern MS_THREAD_LOCAL bool msErr;         /* slot-failure propagation (mirror f
 extern MS_THREAD_LOCAL void* msErrPayload;
 
 /* Amendment G (PARALOCK, I16): in-flight ownership of cross-thread completion
- * futures. On the full POSIX MPSC dispatcher the queue's completion ref is taken
- * on the OWNER thread at submit time (msSpawn / msSpawnInto /
- * msAwaitGroupSetDoneFut), before the future can become visible-as-finished —
- * closing the publish->push UAF window. WASM + Emcc complete inline / take no
- * queue-side ref, so the ref is compiled out and PushOwned degenerates to Push
- * there.
+ * futures. The queue's completion ref is taken on the OWNER thread at submit
+ * time (msSpawn / msSpawnInto / msAwaitGroupSetDoneFut), before the future can
+ * become visible-as-finished — closing the publish->push UAF window. The Owned
+ * post (worker side) takes no ref; the dispatcher drain's msFutureDrcDestroy
+ * releases it. Amendment H pairs with this: crossThreadPublished futures
+ * defer their owner-side decref to the dispatcher, so every rc op on the
+ * future happens either on the owner thread (submit incref) or on the
+ * dispatcher (drain + deferred release) — never on a worker, never racy.
+ * WASM + Emcc complete inline / take no queue-side ref, so the ref is
+ * compiled out and PushOwned degenerates to Push there.
  *
- * Windows is excluded for a different reason than the other three, and NOT
- * because "IOCP completes inline" — PostQueuedCompletionStatus is asynchronous,
- * the message is popped a later msRunOnce turn. What removes the window is the
- * dispatcher topology: msDispatcher (and its iocp) is thread-local, and pool
- * workers never create one — msWaitFor/msWaitForReady guard the create with
- * `if (!worker)`. A worker completing a spawn therefore finds iocp == NULL and
- * completes inline; it posts no message and touches no rc.
- *
- * The only thread that owns an iocp is the one running the loop, so the only
- * producer of completion messages is that same thread — reached when
- * msPoolSubmit hits queue backpressure and runs the task inline on the caller
- * (pool.c). Publish and post are then sequential on one thread with nothing in
- * between, so a ref taken at post time is already ahead of any drop. That is
- * what msPostCompletion does; a submit-time ref would instead leak on every
- * spawn that reaches a worker, because no drain would ever release it.
- *
- * If the Windows iocp ever becomes process-global (so workers post too), this
- * gate has to flip to 1 and msPostCompletion's incref has to go. */
-#if !defined(_WIN32) && !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
+ * Windows history: the gate was 0 while msDispatcher (and its iocp) was
+ * thread-local and pool workers never posted — msPostCompletion took the
+ * in-flight ref at post time on the loop thread instead. That arrangement
+ * became unsound the moment the IOCP went process-global (msFirstLoopIocp
+ * routing, dispatchFull.c): workers post, so a post-time incref races the
+ * owning thread's decref on the non-atomic rc field. With this gate now 1,
+ * msPostCompletion's incref applies only to the public Push path, and the
+ * Owned path carries the submit ref exactly like POSIX. */
+#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
 #define MS_FUTURE_SUBMIT_REF 1
 #else
 #define MS_FUTURE_SUBMIT_REF 0

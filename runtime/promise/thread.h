@@ -149,6 +149,13 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	if (ctx->slotGroup == NULL && ctx->env != NULL) {
 #if MS_FUTURE_SUBMIT_REF
 		msCompletionQueuePushEnvRelease(ctx->env);
+#elif defined(_WIN32)
+		/* Amendment H parity: MS_FUTURE_SUBMIT_REF is 0 on Windows, but an
+		 * inline worker-thread msDecref still races the owning thread on the
+		 * env's non-atomic rc field (heap corruption 0xC0000374 after a few
+		 * thousand spawns). Route through the IOCP completion (kind=-3) so
+		 * the release runs on the dispatcher drain, exactly like POSIX. */
+		msPostEnvRelease(ctx->env);
 #else
 		msDecref(ctx->env);
 #endif
