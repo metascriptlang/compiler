@@ -1393,10 +1393,15 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	if (!opts.isHcr) {
 		if (opts.verbose) verboseLog("generating dispatcher");
 		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode === "lib" || opts.appMode === "staticlib");
-		const dispFile = `${cd}/_dispatch.c`;
-		writeOutput(dispFile, dispatcher);
+		// The dispatcher TU is a fixed input to its compile job — its .c must be
+		// fp-keyed and published atomically like any module's: two concurrent
+		// builds with different entries/configs write different dispatcher C to
+		// one fixed path otherwise, and the loser compiles the winner's dispatcher.
+		const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags));
+		writeCSource("_dispatch", dispFp, dispatcher);
+		const dispFile = stableCFileFp("_dispatch", dispFp);
 		oSlots.push("");
-		cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_dispatch", moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags))), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
+		cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
 	}
 
 	// DISPATCH + COLLECT — parallel cc over the runtime thread pool, publish
@@ -1713,10 +1718,12 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// Generate test dispatcher (runs all module inits + test tables)
 	if (opts.verbose) verboseLog("generating test dispatcher");
 	const dispatcher = genTestDispatcher(graph.loadOrder, filePath);
-	const dispFile = `${tcd}/_test_dispatch.c`;
-	writeOutput(dispFile, dispatcher);
+	// Same concurrent-build rule as cmdBuildC's dispatcher: fp-keyed + atomic .c.
+	const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags));
+	writeCSource("_test_dispatch", dispFp, dispatcher);
+	const dispFile = stableCFileFp("_test_dispatch", dispFp);
 	oSlots.push("");
-	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags))), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
+	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
 
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 	let testFailed = false;
