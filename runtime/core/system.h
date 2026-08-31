@@ -383,20 +383,24 @@ static inline void msStringCopy(msString* dest, msString src) {
 #include "runtime/promise/combinator.h"
 
 /* String boxing for spawn/Promise — msString must be defined before this.
- * Reference parity: check strlitFlag before refcounting.
- * String literals have MS_STRLIT_FLAG in cap and NO heap header — msIncRef
- * on a literal would write into adjacent static memory (corruption). */
+ * MOVE semantics: the shell takes over the payload's single ownership; the
+ * caller must treat the source string as moved (wasMoved / not decref'd
+ * afterwards). msStrPayload is { cap, data[] } with NO refcount header —
+ * strings are COW value types — so the old "incref the heap payload" was
+ * invalid on BOTH kinds: a literal has no header at all, and a heap payload's
+ * preceding slot is ordinary heap data, which the incref silently corrupted
+ * (heap corruption surfaced by string-returning spawns). spawnLower lowers
+ * string boxing through msSinkBoxStruct's memcpy+memset-move for exactly this
+ * reason; this function stays for direct callers, which must copy first if
+ * they need to keep the source alive. */
 static inline void* msBoxString(msString v) {
 	msString* p = (msString*)malloc(sizeof(msString));
 	*p = v;
-	if (v.p && !(v.p->cap & MS_STRLIT_FLAG)) {
-		msIncRef(v.p);  /* heap string — incref to keep payload alive */
-	}
 	return p;
 }
 static inline msString msUnboxString(void* p) {
 	msString v = *(msString*)p;
-	free(p);  /* free the box shell; string payload survives via its own refcount */
+	free(p);  /* free the box shell; the payload's ownership moves to the reader */
 	return v;
 }
 

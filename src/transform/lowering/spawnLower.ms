@@ -33,7 +33,18 @@ export function boxForType(retVal: Node, retType: Type, loc: SourceLocation): No
 		TypeKind.Boolean => makeCall(makeIdent("msBoxBool", loc), [retVal], loc),
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
 			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => makeCall(makeIdent("msBoxInt32", loc), [retVal], loc),
-		TypeKind.String => makeCall(makeIdent("msBoxString", loc), [retVal], loc),
+		TypeKind.String => {
+			// Same sink contract as the struct case. msBoxString increfs the msString
+			// payload, but strings are value types — the payload has NO refcount header
+			// (msStrContentSize = cap + data only), so the incref writes into the heap
+			// slot BEFORE the payload and corrupts it. msSinkBoxStruct memcpys the
+			// 16-byte struct into the shell and memsets the source: payload ownership
+			// transfers to the box, the source's scope-exit destroy becomes a no-op,
+			// and readers (msUnboxString copy-out / worker inline memcpy) are unchanged.
+			const call = makeCall(makeIdent("msSinkBoxStruct", loc), [retVal], loc);
+			call.nodeType = retType;
+			return call;
+		},
 		TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Tuple | TypeKind.Array => {
 			// msSinkBoxStruct: codegen expands to malloc+memcpy+wasMoved (DRC-aware)
 			const call = makeCall(makeIdent("msSinkBoxStruct", loc), [retVal], loc);
