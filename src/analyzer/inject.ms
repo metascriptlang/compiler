@@ -316,12 +316,28 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		if (calleeName === "msFutureCompleteT" || calleeName.startsWith("msMsgComplete")) isCompleteSink = true;
 	}
 
+	// `msSpawnInto(fut, closure, ...)` — the spawn takes ownership of the
+	// pre-allocated future: thread.h's submit incref (Amendment G) and the
+	// worker's inline publish ride on it, and the CALL result (same future)
+	// carries the caller's ownership onward. Same precedent as msFutureCompleteT
+	// above: without this, DRC wraps the msFutureCreateInline argument in a
+	// scope-exit $tmp decref that double-owns against the spawn submit ref —
+	// the future is freed while the worker still publishes into it (heap
+	// corruption after a few thousand string spawns; string is the only
+	// spawn shape with a caller-side pre-allocated future).
+	let isSpawnIntoSink = false;
+	if (cd.callee.kind === NodeKind.Identifier) {
+		if ((cd.callee.data as IdentifierData).name === "msSpawnInto") isSpawnIntoSink = true;
+	}
+
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
 		// Push value arg (index 1, after receiver) is sink
 		if (isArrayPush && i === 1) argMode = DrcMode.Consumed;
 		// future/actor-reply completion value arg (index 1, after the future) is sink
 		if (isCompleteSink && i === 1) argMode = DrcMode.Consumed;
+		// spawn-into future arg (index 0) is sink — spawn owns the pre-allocated future
+		if (isSpawnIntoSink && i === 0) argMode = DrcMode.Consumed;
 		cd.arguments[i] = processNode(cd.arguments[i], dctx, argMode);
 
 		// Reference parity (passCopyToSink): when a borrow expression (ArrayAccess/MemberExpr)
