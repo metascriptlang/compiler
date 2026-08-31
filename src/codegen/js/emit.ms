@@ -4,6 +4,7 @@
 // emitNode delegates to registered callback (set by jsgen.ms) to break circular imports.
 
 import { Node, NodeKind, TypeKind, BlockStmtData } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
 import { JsImportEntry } from "../../checker/context";
 import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
 
@@ -282,6 +283,25 @@ export function emitBodyOrEmpty(gen: JSGenerator, body: Node): void {
 	} else {
 		emitBlockOrStmt(gen, body);
 	}
+}
+
+// MS allows `await` inside a function that was not declared `async` (the C
+// backend's asyncDesugar lowers every await to generator machinery whatever
+// the declared flag). The JS backend keeps async/await native, so any body
+// that still contains an AwaitExpr must be emitted `async` — declared or not.
+// Pure syntax decision at emission; no semantic change on the C side.
+export function needsAutoAsync(flags: string, body: Node): boolean {
+	if (flags === "async" || flags === "async_generator") return false;
+	return body !== null && bodyContainsAwait(body);
+}
+
+function bodyContainsAwait(node: Node): boolean {
+	if (node.kind === NodeKind.AwaitExpr) return true;
+	let found = false;
+	forEachChild(node, (child) => {
+		if (!found) found = bodyContainsAwait(child);
+	});
+	return found;
 }
 
 // ===== Finalize =====

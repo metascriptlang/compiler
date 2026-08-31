@@ -4,18 +4,19 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
 
 // ===== Function Declaration =====
 
 function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as FunctionDeclData;
+	const autoAsync = needsAutoAsync(d.fnFlags, d.fnBody);
 	match (d.fnFlags) {
 		"async" => { emit(gen, "async function "); },
-		"generator" => { emit(gen, "function* "); },
+		"generator" => { emit(gen, autoAsync ? "async function* " : "function* "); },
 		"async_generator" => { emit(gen, "async function* "); },
-		_ => { emit(gen, "function "); },
+		_ => { emit(gen, autoAsync ? "async function " : "function "); },
 	};
 	const fnEmitted = jsSymbolName(gen, node.resolvedSym, d.fnName);
 	if (fnEmitted !== d.fnName) markNamed(gen, node, d.fnName);
@@ -126,11 +127,12 @@ function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): 
 	if (isExternFlag(d.methodFlags)) return;
 	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
 	emitIndent(gen);
+	const autoAsync = needsAutoAsync(d.methodFlags, d.methodBody);
 	match (d.methodFlags) {
 		"async" => { emit(gen, "async function "); },
-		"generator" => { emit(gen, "function* "); },
+		"generator" => { emit(gen, autoAsync ? "async function* " : "function* "); },
 		"async_generator" => { emit(gen, "async function* "); },
-		_ => { emit(gen, "function "); },
+		_ => { emit(gen, autoAsync ? "async function " : "function "); },
 	};
 	emit(gen, jsSymbolName(gen, member.resolvedSym, className + "_" + d.methodName));
 	emit(gen, "(");
@@ -145,50 +147,6 @@ export function emitClassDecl(gen: JSGenerator, node: Node): void {
 	if ((node.flags & NodeFlag.ExternC) !== 0) return;
 	emitIndent(gen);
 	emitClassDeclInner(gen, node);
-}
-
-// ===== Method Declaration =====
-
-// Strip leading "this" from param list — JS class methods have implicit this.
-function skipThisParams(params: string[]): string[] {
-	if (params.length > 0 && params[0] === "this") {
-		const result: string[] = [];
-		for (let i = 1; i < params.length; i += 1) { result.push(params[i]); }
-		return result;
-	}
-	return params;
-}
-
-export function emitMethodDecl(gen: JSGenerator, node: Node): void {
-	const d = node.data as MethodDeclData;
-	if (isExternFlag(d.methodFlags)) return;
-	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
-	emitIndent(gen);
-	if (d.methodIsStatic) { emit(gen, "static "); }
-	match (d.methodFlags) {
-		"async" => { emit(gen, "async "); },
-		"generator" => { emit(gen, "*"); },
-		"async_generator" => { emit(gen, "async *"); },
-		_ => {},
-	};
-	emit(gen, d.methodName);
-	emit(gen, "(");
-	emitJoinedSafeParams(gen, node, skipThisParams(d.methodParams), ", ", safeJsName);
-	emit(gen, ") ");
-	emitBodyOrEmpty(gen, d.methodBody);
-	emitNewline(gen);
-}
-
-// ===== Constructor Declaration =====
-
-export function emitConstructorDecl(gen: JSGenerator, node: Node): void {
-	const d = node.data as ConstructorDeclData;
-	emitIndent(gen);
-	emit(gen, "constructor(");
-	emitJoinedSafeParams(gen, node, d.ctorParams, ", ", safeJsName);
-	emit(gen, ") ");
-	emitBodyOrEmpty(gen, d.ctorBody);
-	emitNewline(gen);
 }
 
 // ===== Import Declaration =====

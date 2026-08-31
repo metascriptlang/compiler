@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData,
 } from "../../ast/node";
-import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName } from "./emit";
+import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner } from "../c/names";
 import { emitCopyOnRead } from "./valueCopy";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -447,7 +447,7 @@ export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 
 export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 	const d = node.data as ArrowFunctionData;
-	const isAsync = d.arrowFlags === "async" || d.arrowFlags === "async_generator";
+	const isAsync = d.arrowFlags === "async" || d.arrowFlags === "async_generator" || needsAutoAsync(d.arrowFlags, d.arrowBody);
 	if (isAsync) { emit(gen, "async "); }
 	if (d.arrowParams.length === 1 && !isAsync) {
 		emit(gen, d.arrowParams[0]);
@@ -464,11 +464,12 @@ export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 
 export function emitFunctionExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as FunctionExprData;
+	const autoAsync = needsAutoAsync(d.funcExprFlags, d.funcExprBody);
 	match (d.funcExprFlags) {
 		"async" => { emit(gen, "async function("); },
-		"generator" => { emit(gen, "function*("); },
+		"generator" => { emit(gen, autoAsync ? "async function*(" : "function*("); },
 		"async_generator" => { emit(gen, "async function*("); },
-		_ => { emit(gen, "function("); },
+		_ => { emit(gen, autoAsync ? "async function(" : "function("); },
 	};
 	emitJoinedStrings(gen, d.funcExprParams, ", ");
 	emit(gen, ") ");
