@@ -32,6 +32,8 @@ import { refineTypes } from "../transform/typeRefine";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
+import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
+import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet } from "../transform/context";
 import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, hasModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
@@ -1084,6 +1086,29 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		const mod = findModule(graph, modPath);
 		if (mod === null) {
 			console.log(`${error("error")}: internal: module '${modPath}' is in loadOrder but missing from the graph — its code will be skipped`);
+			continue;
+		}
+		// The graph-checker phase (loadAndCheckGraph → checkModuleGraph) already
+		// ran the full 3 passes on every module and registered program+ctx
+		// (registerModuleProgram/registerModuleCtx). Re-parsing + re-checking here
+		// duplicated ~half the build time and re-populated the exact same
+		// diagnostics. Reuse the checked pair — reference parity: Nim checks each
+		// module exactly once (sem results cached on the module). LSP-only
+		// finalization (sgSortRecords, stampJsModulePaths) is skipped on this path.
+		const reusedProgram = lookupModuleProgram(modPath);
+		const reusedCtx = lookupModuleCtx(modPath);
+		if (reusedProgram !== null && reusedCtx !== null) {
+			setOuterProgramForComptime(reusedProgram);
+			setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
+			reusedCtx.strictDefs = opts.strictDefs;
+			reusedCtx.strictNullChecks = opts.strictNullChecks;
+			exitOnFatalCheckerErrors(reusedCtx, modPath, mod.source);
+			if (hasErrors(reusedCtx)) {
+				totalCheckerErrors = totalCheckerErrors + errorCount(reusedCtx);
+			}
+			reusedCtx.errors = [];
+			checkedMods.push({ program: reusedProgram, ctx: reusedCtx, modPath, source: mod.source });
+			programByPath.set(modPath, reusedProgram);
 			continue;
 		}
 		const _tp0 = performance.now();
