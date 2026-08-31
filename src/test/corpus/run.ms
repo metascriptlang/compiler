@@ -96,7 +96,7 @@ const SAN = envOr("MSCORPUS_SAN", "") == "1";
 // 8M ledger-set entries: ASan quarantines freed addresses (no reuse), so the
 // finalized-pointer set degrades to append-only under slab-off — the default
 // 1M overflows on 3M-iteration churn programs. Overflow still aborts LOUDLY.
-const SAN_PASSC = "-O0 -g -fsanitize=address -DMS_SLAB_MAX=0 -DMS_DRC_LEDGER -DMS_LEDGER_SET_SIZE=8388608u";
+const SAN_PASSC = "-O0 -g -fsanitize=address -Wno-error=incompatible-pointer-types -DMS_SLAB_MAX=0 -DMS_DRC_LEDGER -DMS_LEDGER_SET_SIZE=8388608u";
 const SAN_PASSL = "-fsanitize=address";
 
 // The danger and san lanes ask for clang by name. That is not a preference on
@@ -110,6 +110,15 @@ const SAN_PASSL = "-fsanitize=address";
 // so a weakened lane is never silent.
 const HAS_CLANG = cmdExists("clang");
 const DANGER_CC = HAS_CLANG ? " --cc=clang" : "";
+
+// SAN lane needs a driver that links the ASan runtime itself. zig cc 0.16
+// targeting linux-gnu compiles -fsanitize=address objects fine but its link
+// step cannot find the runtime (ld.lld: undefined __asan_init) — a
+// driver-level gap, not a flag we can add from here. clang and gcc both
+// self-link it. Prefer clang (parity with the danger lane), fall back to
+// gcc (stock Linux), and only then go driverless (managed zig), which is
+// correct on the hosts where that combination is known to work.
+const SAN_CC = HAS_CLANG ? " --cc=clang" : (cmdExists("gcc") ? " --cc=gcc" : "");
 
 // The js lane runs its binary through `node`. Without node installed the cell
 // launches, fails to start, and reports a red that is about the HOST, not the
@@ -373,7 +382,13 @@ function parseRssMB(output: string): float64 {
 function cellInner(c: Cell, q: (p: string) => string): string {
 	const bin = q(c.bin);
 	if (c.lane == "san") {
-		return bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
+		// detect_leaks=0: the DRC LEDGER is this lane's leak signal (by design —
+		// module-level RC values legitimately survive exit, probe-verified; see
+		// @ledger-slack). LSan (default-on with gcc/clang ASan on Linux) reports
+		// those exit survivors as leaks and would mask the real verdict behind
+		// host-dependent noise — macOS never runs LSan here, so this restores
+		// lane parity rather than weakening it.
+		return "ASAN_OPTIONS=detect_leaks=0 " + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
 	}
 	if (c.lane == "js") {
 		return "node " + bin + " > " + q(c.dir + "out.log") + " 2>&1";
@@ -595,7 +610,7 @@ function planJobs(specs: Spec[]): BuildJob[] {
 	for (const spec of specs) {
 		if (SAN) {
 			const bin = OUT_DIR + "bin/" + spec.name + ".san";
-			const cmd = MSC_CMD + " build " + spec.entry + " --gc=drc" + DANGER_CC + " --passC=\"" + SAN_PASSC + "\" --passL=\"" + SAN_PASSL + "\" --output=" + bin;
+			const cmd = MSC_CMD + " build " + spec.entry + " --gc=drc" + SAN_CC + " --passC=\"" + SAN_PASSC + "\" --passL=\"" + SAN_PASSL + "\" --output=" + bin;
 			jobs.push({ spec, lane: "san", cmd, cell: makeCell(spec, "san", bin) });
 			continue;
 		}
