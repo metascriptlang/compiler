@@ -1,0 +1,47 @@
+// Every call below is a native pattern, so the call site emits `Math.floor(x)`
+// verbatim — no wrapper frame, no mangled receiver. `extern class` was tried
+// first and does not reach the global: its static calls emit an undefined
+// `Math_floor__…` name.
+export class Math {
+	static E: float64 = 2.718281828459045;
+	static LN10: float64 = 2.302585092994046;
+	static LN2: float64 = 0.6931471805599453;
+	static LOG10E: float64 = 0.4342944819032518;
+	static LOG2E: float64 = 1.4426950408889634;
+	static PI: float64 = 3.141592653589793;
+	static SQRT1_2: float64 = 0.7071067811865476;
+	static SQRT2: float64 = 1.4142135623730951;
+}
+
+export extern function abs(this typeof Math, x: float64): float64 from "Math.abs(#)";
+export extern function ceil(this typeof Math, x: float64): float64 from "Math.ceil(#)";
+export extern function floor(this typeof Math, x: float64): float64 from "Math.floor(#)";
+export extern function round(this typeof Math, x: float64): float64 from "Math.round(#)";
+export extern function trunc(this typeof Math, x: float64): float64 from "Math.trunc(#)";
+export extern function sign(this typeof Math, x: float64): float64 from "Math.sign(#)";
+export extern function sqrt(this typeof Math, x: float64): float64 from "Math.sqrt(#)";
+export extern function cbrt(this typeof Math, x: float64): float64 from "Math.cbrt(#)";
+export extern function pow(this typeof Math, x: float64, y: float64): float64 from "Math.pow(#, #)";
+export extern function exp(this typeof Math, x: float64): float64 from "Math.exp(#)";
+export extern function expm1(this typeof Math, x: float64): float64 from "Math.expm1(#)";
+export extern function log(this typeof Math, x: float64): float64 from "Math.log(#)";
+export extern function log1p(this typeof Math, x: float64): float64 from "Math.log1p(#)";
+export extern function log2(this typeof Math, x: float64): float64 from "Math.log2(#)";
+export extern function log10(this typeof Math, x: float64): float64 from "Math.log10(#)";
+export extern function hypot(this typeof Math, x: float64, y: float64): float64 from "Math.hypot(#, #)";
+export extern function min(this typeof Math, a: float64, b: float64): float64 from "Math.min(#, #)";
+export extern function max(this typeof Math, a: float64, b: float64): float64 from "Math.max(#, #)";
+export extern function random(this typeof Math): float64 from "Math.random(@)";
+export extern function sin(this typeof Math, x: float64): float64 from "Math.sin(#)";
+export extern function cos(this typeof Math, x: float64): float64 from "Math.cos(#)";
+export extern function tan(this typeof Math, x: float64): float64 from "Math.tan(#)";
+export extern function asin(this typeof Math, x: float64): float64 from "Math.asin(#)";
+export extern function acos(this typeof Math, x: float64): float64 from "Math.acos(#)";
+export extern function atan(this typeof Math, x: float64): float64 from "Math.atan(#)";
+export extern function atan2(this typeof Math, y: float64, x: float64): float64 from "Math.atan2(#, #)";
+export extern function sinh(this typeof Math, x: float64): float64 from "Math.sinh(#)";
+export extern function cosh(this typeof Math, x: float64): float64 from "Math.cosh(#)";
+export extern function tanh(this typeof Math, x: float64): float64 from "Math.tanh(#)";
+export extern function asinh(this typeof Math, x: float64): float64 from "Math.asinh(#)";
+export extern function acosh(this typeof Math, x: float64): float64 from "Math.acosh(#)";
+export extern function atanh(this typeof Math, x: float64): float64 from "Math.atanh(#)";

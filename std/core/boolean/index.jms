@@ -1,0 +1,4 @@
+export extern function Boolean(v: string): boolean from "Boolean(#)";
+export extern function Boolean(v: float64): boolean from "Boolean(#)";
+export extern function Boolean(v: int64): boolean from "Boolean(#)";
+export extern function Boolean(v: boolean): boolean from "Boolean(#)";

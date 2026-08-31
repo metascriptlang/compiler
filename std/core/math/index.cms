@@ -1,0 +1,74 @@
+export class Math {
+	static E: float64 = 2.718281828459045;
+	static LN10: float64 = 2.302585092994046;
+	static LN2: float64 = 0.6931471805599453;
+	static LOG10E: float64 = 0.4342944819032518;
+	static LOG2E: float64 = 1.4426950408889634;
+	static PI: float64 = 3.141592653589793;
+	static SQRT1_2: float64 = 0.7071067811865476;
+	static SQRT2: float64 = 1.4142135623730951;
+}
+
+export extern function abs(this typeof Math, x: float64): float64 from "fabs";
+export extern function ceil(this typeof Math, x: float64): float64 from "ceil";
+export extern function floor(this typeof Math, x: float64): float64 from "floor";
+export extern function trunc(this typeof Math, x: float64): float64 from "trunc";
+export extern function sqrt(this typeof Math, x: float64): float64 from "sqrt";
+export extern function cbrt(this typeof Math, x: float64): float64 from "cbrt";
+export extern function pow(this typeof Math, x: float64, y: float64): float64 from "pow";
+export extern function exp(this typeof Math, x: float64): float64 from "exp";
+export extern function expm1(this typeof Math, x: float64): float64 from "expm1";
+export extern function log(this typeof Math, x: float64): float64 from "log";
+export extern function log1p(this typeof Math, x: float64): float64 from "log1p";
+export extern function log2(this typeof Math, x: float64): float64 from "log2";
+export extern function log10(this typeof Math, x: float64): float64 from "log10";
+export extern function hypot(this typeof Math, x: float64, y: float64): float64 from "hypot";
+export extern function sin(this typeof Math, x: float64): float64 from "sin";
+export extern function cos(this typeof Math, x: float64): float64 from "cos";
+export extern function tan(this typeof Math, x: float64): float64 from "tan";
+export extern function asin(this typeof Math, x: float64): float64 from "asin";
+export extern function acos(this typeof Math, x: float64): float64 from "acos";
+export extern function atan(this typeof Math, x: float64): float64 from "atan";
+export extern function atan2(this typeof Math, y: float64, x: float64): float64 from "atan2";
+export extern function sinh(this typeof Math, x: float64): float64 from "sinh";
+export extern function cosh(this typeof Math, x: float64): float64 from "cosh";
+export extern function tanh(this typeof Math, x: float64): float64 from "tanh";
+export extern function asinh(this typeof Math, x: float64): float64 from "asinh";
+export extern function acosh(this typeof Math, x: float64): float64 from "acosh";
+export extern function atanh(this typeof Math, x: float64): float64 from "atanh";
+
+// C rounds half away from zero, JS rounds half toward +Infinity: round(-2.5) is
+// -3 there and -2 here. Emitting floor(x + 0.5) keeps the two backends equal.
+export function round(this typeof Math, x: float64): float64 {
+	return Math.floor(x + 0.5);
+}
+
+export function sign(this typeof Math, x: float64): float64 {
+	if (x > 0.0) return 1.0;
+	if (x < 0.0) return -1.0;
+	return x;
+}
+
+export function min(this typeof Math, a: float64, b: float64): float64 {
+	return a < b ? a : b;
+}
+
+export function max(this typeof Math, a: float64, b: float64): float64 {
+	return a > b ? a : b;
+}
+
+extern function time(slot: int64): int64 from "time";
+
+let randState: uint64 = 0;
+
+export function random(this typeof Math): float64 {
+	if (randState === 0) {
+		randState = ((time(0) as uint64) * 6364136223846793005) | 1;
+	}
+	let x = randState;
+	x = x ^ (x << 13);
+	x = x ^ (x >> 7);
+	x = x ^ (x << 17);
+	randState = x;
+	return ((x >> 11) as float64) / 9007199254740992.0;
+}
