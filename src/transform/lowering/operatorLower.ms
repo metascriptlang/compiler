@@ -20,7 +20,7 @@ import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberEx
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
-import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion } from "../../checker/types";
+import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
 import { resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
 
@@ -243,7 +243,11 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	const opName = d.operator;
 	const isNotEqual = opName === "!=" || opName === "!==";
 
-	const leftType = resolveType(ctx, d.left);
+	let leftType = resolveType(ctx, d.left);
+	if (leftType !== null) {
+		const leftPeeled = peelThrough(leftType, PEEL_ALIAS);
+		if (leftPeeled !== null) leftType = leftPeeled;
+	}
 	const loc = node.location;
 
 	const compoundBase = match (opName) {
