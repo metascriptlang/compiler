@@ -366,7 +366,7 @@ function genArrayLoop(hook: string, elemType: Type, xf: Node, yf: Node, lctx: Li
 // (msStringArray/msRefArray/…) are runtime/fixed-block provided; only per-type names get a
 // seqElemTypes entry. Shared by `arrayOp` (call-site element use) and `scanTypeForArrays`.
 function registerSeqElement(elem: Type, lctx: LiftCtx): void {
-	if (elem.kind === TypeKind.Distinct && elem.typeReturn !== null) {
+	if ((elem.kind === TypeKind.Distinct || elem.kind === TypeKind.Alias) && elem.typeReturn !== null) {
 		// distinct shares its base layout → reuse the base type's per-type walker
 		registerSeqElement(elem.typeReturn, lctx);
 		return;
@@ -664,7 +664,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				primitiveUnionOp(hook, fieldType, xf, yf, buf, loc);
 			}
 		},
-		TypeKind.Distinct => {
+		TypeKind.Distinct | TypeKind.Alias => {
 			if (fieldType.typeReturn !== null) {
 				fillBody(hook, x, y, fieldName, fieldType.typeReturn, lctx, buf, visited, loc);
 			}

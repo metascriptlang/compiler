@@ -1556,6 +1556,14 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		const distType = createDistinct(resolved);
 		assignType(sym.symbolType, distType);
 		node.nodeType = sym.symbolType;
+	} else if (!hasGenericAlias && resolved.sym !== null
+		&& (resolved.kind === TypeKind.Struct || resolved.kind === TypeKind.Enum)) {
+		const wrap = emptyType();
+		wrap.kind = TypeKind.Alias;
+		wrap.typeName = d.aliasName;
+		wrap.typeReturn = resolved;
+		assignType(sym.symbolType, wrap);
+		node.nodeType = sym.symbolType;
 	} else {
 		assignType(sym.symbolType, resolved);
 		node.nodeType = sym.symbolType;

@@ -20,7 +20,7 @@ import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberEx
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
-import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion } from "../../checker/types";
+import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
 import { resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
 
@@ -110,7 +110,14 @@ function makeMaybeCarrier(payload: Node, carrierType: Type, loc: SourceLocation)
 }
 
 // Register a struct/interface == use for later on-demand Eq generation by destructorLifting.
-function registerStructEq(ctx: TransformContext, typeName: string): void {
+function registerStructEq(ctx: TransformContext, typeName: string, t: Type): void {
+	// ensureEq resolves the name in the CONSUMING module's scope; a struct whose
+	// name was never imported there is invisible to it, so route it through the
+	// carrier channel, which generates from the Type instead.
+	if (ctx.checkerCtx !== null && lookupSymbol(ctx.checkerCtx.table, typeName) === null) {
+		registerCarrierEq(ctx, t);
+		return;
+	}
 	for (const n of ctx.pendingStructEqs) {
 		if (n === typeName) return;
 	}
@@ -149,7 +156,7 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 	}
 	// Auto-generated == for interfaces (=== same as == for value types)
 	if ((opName === "==" || opName === "===") && isValueObject(leftType)) {
-		registerStructEq(ctx, typeName);
+		registerStructEq(ctx, typeName, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(typeName + "Eq", loc);
 		callee.nodeType = fnType;
@@ -243,7 +250,11 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	const opName = d.operator;
 	const isNotEqual = opName === "!=" || opName === "!==";
 
-	const leftType = resolveType(ctx, d.left);
+	let leftType = resolveType(ctx, d.left);
+	if (leftType !== null) {
+		const leftPeeled = peelThrough(leftType, PEEL_ALIAS);
+		if (leftPeeled !== null) leftType = leftPeeled;
+	}
 	const loc = node.location;
 
 	const compoundBase = match (opName) {
@@ -410,7 +421,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	// 5. Direct base operators for value-type objects (auto-generated ==).
 	// === is the same as == for value types (no reference identity distinction).
 	if ((opName === "==" || opName === "===") && isValueObject(leftType)) {
-		registerStructEq(ctx, typeName);
+		registerStructEq(ctx, typeName, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(typeName + "Eq", loc);
 		callee.nodeType = fnType;

@@ -306,6 +306,7 @@ function structKeyIdentity(t: Type): string {
 export function typeKey(t: Type | null): string {
 	if (t === null) return "null";
 	return match (t.kind) {
+		TypeKind.Alias => typeKey(t.typeReturn),
 		TypeKind.Number => "number",
 		TypeKind.Float64 => "float64",
 		TypeKind.Float32 => "float32",
@@ -429,6 +430,7 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.String | TypeKind.StringLiteral => "msString",
 		TypeKind.BigInt => "msBigInt*",
 		TypeKind.CString => "const char*",
+		TypeKind.Alias => t.typeReturn === null ? "void" : getSimpleTypeDesc(t.typeReturn),
 		TypeKind.Void => "void",
 		// `Null` as a TYPE (not the literal value) appears when a generic param
 		// monomorphizes to T=Null — e.g. `id(null)` without contextual type.
@@ -804,6 +806,9 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 	// share the underlying type's representation (e.g. `distinct type UserId =
 	// number` compiles to `double`).
 	if (t.kind === TypeKind.Distinct) {
+		return getTypeDesc(g, t.typeReturn);
+	}
+	if (t.kind === TypeKind.Alias) {
 		return getTypeDesc(g, t.typeReturn);
 	}
 	// Reference parity: tyVarargs is a transparent marker for rest params. The C
@@ -1289,7 +1294,7 @@ export function getArrayTypeName(elemType: string): string {
 function elemArrayCName(elem: Type): string {
 	const simple = getSimpleTypeDesc(elem);
 	if (simple !== "") return simple;
-	if (elem.kind === TypeKind.Distinct && elem.typeReturn !== null) return elemArrayCName(elem.typeReturn);
+	if ((elem.kind === TypeKind.Distinct || elem.kind === TypeKind.Alias) && elem.typeReturn !== null) return elemArrayCName(elem.typeReturn);
 	if (elem.kind === TypeKind.Enum) return mangle(elem.typeName);
 	if (elem.kind === TypeKind.EnumLiteral) return (elem.typeReturn !== null && elem.typeReturn.kind === TypeKind.Enum) ? mangle(elem.typeReturn.typeName) : "int32_t";
 	if (elem.kind === TypeKind.Tuple) return tupleTypeName(elem);

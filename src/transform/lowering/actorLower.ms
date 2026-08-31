@@ -46,7 +46,7 @@ function typeMsgKind(t: Type | null): string {
 	if (t === null) return "ptr";
 	ensureGIBody(t);
 	if (isValueLayoutType(t)) return "struct";
-	if (t.kind === TypeKind.Distinct) return typeMsgKind(t.typeReturn);
+	if (t.kind === TypeKind.Distinct || t.kind === TypeKind.Alias) return typeMsgKind(t.typeReturn);
 	const result = match (t.kind) {
 		TypeKind.String => "string",
 		TypeKind.Array => "array",
