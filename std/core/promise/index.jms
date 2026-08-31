@@ -14,4 +14,20 @@ export extern class Promise<T> {
 	static extern any<T>(promises: Promise<T>[]): Promise<T>;
 	static extern resolve(value: T): Promise<T>;
 	static extern reject(error: string): Promise<void>;
+
+	// Instance surface used by the spawn twin below. The C prelude declares
+	// the full then/catch/finally trio; js only needs then (errors travel via
+	// the native rejection path, not MS methods).
+	extern then(fn: () => T): Promise<T>;
+}
+
+// spawn on js is SCHEDULING, not parallelism — the documented Node-semantics
+// degeneration of the PARALOCK worker-pool spawn (tier 1). The closure body
+// runs on the event loop as the next microtask; async bodies compose through
+// native promise flattening, sync bodies evaluate inside `.then` and resolve
+// immediately. Parallelism stays a C-backend concern (tier 2 worker_threads
+// is deliberately NOT built until a real workload demands it).
+export function spawn<T>(fn: () => T): Promise<T> {
+	const seed: Promise<T> = Promise.resolve(null as unknown as T);
+	return seed.then(fn);
 }
