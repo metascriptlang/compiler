@@ -311,18 +311,23 @@ function populateGlobal(oFile: string, fp: string): void {
 	if (!renamed.ok) remove(tmp);
 }
 
-// Called at msc startup: if the cache was populated by a different VERSION,
-// wipe the dir. Guards against stale entries after any upgrade path (msc upgrade,
-// brew, manual cp, downgrade). Also sweeps orphan .tmp.<ts> files left by
-// populateGlobal if an msc process was killed mid-copy. Idempotent, ~1ms.
+// Called at msc startup: if the cache was populated by a different VERSION or
+// a different toolchain stamp (msc binary + runtime/ + vendor/ content), wipe
+// the dir. The stamp is folded into every fingerprint, so a stamp change makes
+// every existing entry unreachable — this wipe is pure garbage collection and
+// can never cost a cache hit. Guards against stale entries after any upgrade
+// path (msc upgrade, brew, manual cp, downgrade, WIP tree edits). Also sweeps
+// orphan .tmp.<ts> files left by populateGlobal if an msc process was killed
+// mid-copy. Idempotent.
 export function ensureVersionMarker(): void {
 	const dir = globalObjectsDir();
 	if (dir === "") return;
 	ensureDir(dir);
 	const marker = `${dir}/.version`;
+	const markerValue = `${VERSION}:${toolchainStamp()}`;
 	const stored = try readFile(marker) catch "";
 	const entries = readDir(dir);
-	if (stored !== VERSION) {
+	if (stored !== markerValue) {
 		// Mismatch — wipe .o entries and any orphan tmp files. Preserve .version
 		// itself so we don't need a second write; it will be overwritten below.
 		for (const e of entries) {
@@ -331,7 +336,7 @@ export function ensureVersionMarker(): void {
 			if (e.charAt(e.length - 1) === "/") continue;
 			remove(`${dir}/${e}`);
 		}
-		writeFile(marker, VERSION);
+		writeFile(marker, markerValue);
 		return;
 	}
 	// Version matches — still sweep orphan .tmp.<ts> leftovers from crashed runs.
