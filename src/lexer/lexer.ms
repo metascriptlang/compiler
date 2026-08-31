@@ -168,6 +168,14 @@ test "numbers" {
 	assert lexFirst("1e10") === TokenKind.Number;
 	assert lexFirst("1.5e-3") === TokenKind.Number;
 	assert lexFirst("123n") === TokenKind.BigInt;
+	assert lexFirst("0xffn") === TokenKind.BigInt;
+	assert lexFirst("0XFFn") === TokenKind.BigInt;
+	assert lexFirst("0b1111n") === TokenKind.BigInt;
+	assert lexFirst("0o17n") === TokenKind.BigInt;
+	assert lexFirst("1_000n") === TokenKind.BigInt;
+	assert lexFirst("0xff") === TokenKind.Number;
+	assert lexFirst("0b1111") === TokenKind.Number;
+	assert lexFirst("0o17") === TokenKind.Number;
 	assert lexFirstVal("1_000") === "1000";
 	assert lexFirstVal("0xFF_FF") === "0xFFFF";
 }

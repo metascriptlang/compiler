@@ -7,6 +7,17 @@ import { isDigit, isLetter, isHexDigit, isOctalDigit, isBinaryDigit } from "./ch
 
 // ===== Number Scanning =====
 
+// `0xffn` / `0b1111n` / `0o17n` are bigint literals like `255n` — the radix
+// prefixes reach the same suffix check as the decimal tail.
+function addNumericToken(s: LexerState, val: string, line: number, column: number): void {
+	if (peek(s) === "n".code) {
+		advanceChar(s);
+		addToken(s, TokenKind.BigInt, val + "n", line, column);
+		return;
+	}
+	addToken(s, TokenKind.Number, val, line, column);
+}
+
 export function scanNumber(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column;
@@ -22,7 +33,7 @@ export function scanNumber(s: LexerState): void {
 				if (peek(s) !== "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
 				advanceChar(s);
 			}
-			addToken(s, TokenKind.Number, val, startLine, startCol);
+			addNumericToken(s, val, startLine, startCol);
 			return;
 		}
 		if (next === "b".code || next === "B".code) {
@@ -32,7 +43,7 @@ export function scanNumber(s: LexerState): void {
 				if (peek(s) !== "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
 				advanceChar(s);
 			}
-			addToken(s, TokenKind.Number, val, startLine, startCol);
+			addNumericToken(s, val, startLine, startCol);
 			return;
 		}
 		if (next === "o".code || next === "O".code) {
@@ -42,7 +53,7 @@ export function scanNumber(s: LexerState): void {
 				if (peek(s) !== "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
 				advanceChar(s);
 			}
-			addToken(s, TokenKind.Number, val, startLine, startCol);
+			addNumericToken(s, val, startLine, startCol);
 			return;
 		}
 	}
@@ -76,13 +87,7 @@ export function scanNumber(s: LexerState): void {
 		}
 	}
 
-	// BigInt suffix
-	if (peek(s) === "n".code) {
-		advanceChar(s);
-		addToken(s, TokenKind.BigInt, val + "n", startLine, startCol);
-	} else {
-		addToken(s, TokenKind.Number, val, startLine, startCol);
-	}
+	addNumericToken(s, val, startLine, startCol);
 }
 
 // ===== String Scanning =====
