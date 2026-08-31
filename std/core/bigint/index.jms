@@ -1,0 +1,23 @@
+// bigint on the js target is the native BigInt primitive: the operators need no
+// lowering and the literal reaches the emitter verbatim. The module exists so the
+// prelude import resolves on both targets; the conversion surface lands here.
+
+export function toString(this b: bigint, radix: int32 = 10): string {
+	@emit(`return ${b}.toString(Number(${radix}));`);
+	unreachable;
+}
+
+export function BigInt(v: string): bigint {
+	@emit(`return globalThis.BigInt(${v});`);
+	unreachable;
+}
+
+export function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint {
+	@emit(`return globalThis.BigInt.asIntN(Number(${bits}), ${b});`);
+	unreachable;
+}
+
+export function asUintN(this typeof BigInt, bits: int64, b: bigint): bigint {
+	@emit(`return globalThis.BigInt.asUintN(Number(${bits}), ${b});`);
+	unreachable;
+}

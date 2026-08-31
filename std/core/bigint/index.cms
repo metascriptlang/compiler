@@ -1,0 +1,36 @@
+@include("runtime/bigint/bigint.h");
+
+// mbedTLS bignum only — no PSA/TLS sources are pulled in by this module.
+@passC("-Iruntime/crypto");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/core");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
+@passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
+// bignum.h lives under mbedtls/private and only declares mbedtls_mpi_* when the
+// consumer opts in to the private surface.
+@passC("-DMBEDTLS_DECLARE_PRIVATE_IDENTIFIERS");
+
+@compile("runtime/bigint/bigint.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum_core.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/constant_time.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c");
+
+// The operator forms are synthesized by src/transform/native/bigIntOpLower.ms
+// and reach C as bare calls against the header above.
+extern function msBigIntToString(b: bigint, radix: int32): string;
+extern function msBigIntToFloat64(b: bigint): float64;
+extern function msBigIntFromFloat64(v: float64): bigint;
+extern function msBigIntFromLit(s: string): bigint;
+extern function msBigIntAsIntN(bits: int64, b: bigint): bigint;
+extern function msBigIntAsUintN(bits: int64, b: bigint): bigint;
+
+export function toString(this b: bigint, radix: int32 = 10): string {
+	return msBigIntToString(b, radix);
+}
+
+export extern function BigInt(v: string): bigint from "msBigIntFromLit";
+
+export extern function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsIntN";
+export extern function asUintN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsUintN";
