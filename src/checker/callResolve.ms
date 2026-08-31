@@ -19,7 +19,7 @@ import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym } from "./template";
-import { UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, createArray, createEnumLiteral, createFunction, createGenericInstance, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isMaybeType, isNumeric, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
+import { UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, createArray, createEnumLiteral, createFunction, createGenericInstance, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isMaybeType, isNumeric, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
 import { checkActorArgSendable, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
@@ -622,7 +622,17 @@ function isNullableWideningOf(joined: Type | null, okT: Type | null): boolean {
 	return false;
 }
 
+let _cceCount: float64 = 0;
+let _cceTime: float64 = 0;
+export function checkCallExprProfile(): float64[] { return [_cceCount, _cceTime]; }
 export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
+	_cceCount = _cceCount + 1;
+	const _cc0 = performance.now();
+	const r = checkCallExprInner(ctx, node, expectedType);
+	_cceTime = _cceTime + (performance.now() - _cc0);
+	return r;
+}
+function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
 	callCheckExpr(ctx, d.callee, null);
 	// Phase 5: super(args) call — type-check args against parent class
@@ -1568,11 +1578,8 @@ function findBindingIndex(b: UnifyBindings, name: string): number {
 // that need to convert a formal type containing GenericParam(s) into its
 // concrete substituted form after Pass 1/2/3 binding.
 function applySubstitutions(t: Type, b: UnifyBindings): Type {
-	let result = t;
-	for (let i = 0; i < b.names.length; i += 1) {
-		result = substituteType(result, b.names[i], b.types[i]);
-	}
-	return result;
+	if (b.names.length === 0) return t;
+	return substituteAllParams(t, b.names, b.types);
 }
 
 function hasBindingName(b: UnifyBindings, name: string): boolean {
