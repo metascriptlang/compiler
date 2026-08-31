@@ -7,6 +7,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+/* stdout/stderr stay in the CRT's default TEXT mode on Windows: every '\n'
+ * becomes CRLF on redirect, while the JS lane (node) and every POSIX target
+ * emit plain LF — byte-parity across lanes breaks (corpus c-vs-js diff was
+ * exactly the trailing \r set). Node writes LF everywhere even on Windows;
+ * matching it is the one-right-place fix (runtime once), not a runner
+ * normalization. Runs before main via the constructor the runtime already
+ * relies on elsewhere. */
+__attribute__((constructor)) static void msStdStreamsBinaryMode(void) {
+	_setmode(_fileno(stdout), _O_BINARY);
+	_setmode(_fileno(stderr), _O_BINARY);
+}
+#endif
+
 /* DRC / exception globals — thread-local for multi-threaded safety */
 MS_THREAD_LOCAL bool msErr = false;
 MS_THREAD_LOCAL msException* msCurrException = NULL;
