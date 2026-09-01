@@ -1,0 +1,68 @@
+// MetaScript Actor Prelude — JavaScript Backend
+//
+// Tier 1 (the permanent js model, same degeneration as spawn): actors are
+// single-threaded, event-loop-scheduled objects. The actor model's core
+// guarantee — turn-based exclusive access to actor state — is trivially true
+// on one thread, so semantics match the C PARALOCK runtime for every program
+// that does not depend on cross-actor interleaving. Parallelism and
+// isolation stay C-backend concerns (PARALOCK tier 2/3, deliberately not
+// built).
+//
+// The registry lives on globalThis (not module scope) because the codegen
+// stamps the `pid` field as raw text with an inline self-bootstrapping
+// registrar — a program may use actors without importing this module, and a
+// node-form call would miss the bundle's module-qualified name mangling.
+// Pids start at 1: a live actor always has a nonzero pid, the same
+// observable contract as the C runtime.
+
+export enum ExitReason {
+	Normal,
+	Shutdown,
+	Error,
+}
+
+export function stop(pid: int64, reason: ExitReason): void {
+	@emit(`var g = globalThis.__msActors;
+if (!g) return;
+var a = g.live.get(${pid});
+if (a === undefined) return;
+g.live.delete(${pid});
+if (typeof a.onTerminate === "function") a.onTerminate(${reason});`);
+}
+
+// ===== Links / monitors / traps — inert on one thread =====
+// Exit signals originate only from stop(), and stop() runs synchronously on
+// the same stack as the caller, so there is no async signal to deliver.
+// The calls are accepted (surface parity) and do nothing.
+
+export function link(a: int64, b: int64): void {}
+export function unlink(a: int64, b: int64): void {}
+export function trapExits(actorPid: int64, shouldTrap: boolean): void {}
+export function monitor(watcherPid: int64, targetPid: int64): int64 { return 0; }
+export function demonitor(targetPid: int64, monitorRef: int64): void {}
+export function setIdleTimeout(pid: int64, ms: number): void {}
+
+// ===== Name registry =====
+
+const _names: Map<string, int64> = new Map<string, int64>();
+
+export function registerName(pid: int64, name: string): boolean {
+	if (_names.has(name)) return false;
+	_names.set(name, pid);
+	return true;
+}
+
+export function whereis(name: string): int64 {
+	const pid = _names.get(name);
+	if (pid === null || pid === undefined) return 0;
+	return pid;
+}
+
+export function unregister(name: string): void {
+	_names.delete(name);
+}
+
+export function clockMs(): number {
+	@emit(`return Date.now();`);
+	unreachable;
+}
