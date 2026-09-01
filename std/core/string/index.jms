@@ -169,6 +169,34 @@ export function capacity(this s: string): int32 {
 	return s.byteLength();
 }
 
+// ===== In-Place Mutators (surface parity only) =====
+// C's string is a mutable heap buffer, so setLength/append/setSlice/
+// stripInPlace exist in index.cms. js strings are native and immutable, so
+// these cannot rebind the caller's value: the names are declared for graph
+// check parity (every C-surface program compiles on js), but a call refuses
+// loudly instead of silently diverging.
+
+export function setLength(this s: string, newLen: int32): void {
+	@emit(`throw new Error("string.setLength(): in-place string mutation is not available on the js backend (strings are native and immutable)");`);
+	unreachable;
+}
+
+export function append(this s: string, other: string): void {
+	@emit(`throw new Error("string.append(): in-place string mutation is not available on the js backend (strings are native and immutable)");`);
+	unreachable;
+}
+
+export function setSlice(this s: string, start: number, end: number): void {
+	@emit(`throw new Error("string.setSlice(): in-place string mutation is not available on the js backend (strings are native and immutable)");`);
+	unreachable;
+}
+
+export function stripInPlace(this s: string): void {
+	@emit(`throw new Error("string.stripInPlace(): in-place string mutation is not available on the js backend (strings are native and immutable)");`);
+	unreachable;
+}
+
+
 export function fromCodePoint(cp: number): string {
 	@emit(`return (${cp} < 0 || ${cp} > 1114111) ? "" : String.fromCodePoint(${cp});`);
 	unreachable;
