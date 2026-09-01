@@ -1,9 +1,6 @@
 // @ledger-slack(msStringArrayRefCell): 2
 // std/process argv module-init allocates 2 string arrays never destroyed at
 // exit — TESTGAP T6 (probed: bare `import { argv }` program shows 2/0).
-// @skip-js: std/fs index.jms is a stub — isFile/isDir alias existsSync,
-// appendFile overwrites, no readDir/removeAll/ensureDir/fileSize. Unlock =
-// port the jms facade to real node:fs calls; this program is the contract.
 // Parity program — std fs I/O floor: write → stat → read roundtrip, append,
 // copy, lines roundtrip, dir tree (ensureDir/readDir/rename/remove/removeAll),
 // and the Result error path (readFile of a missing path → IoErrorKind).
