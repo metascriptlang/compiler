@@ -8,7 +8,7 @@ import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, createNodeAt, makeLoc, BinaryExprData, UnaryExprData, UpdateExprData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
-import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern } from "../../utils/string";
+import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
 import { isIdentLike } from "../util";
 
 type ExprResult = Result<Expression, string>;
@@ -72,7 +72,7 @@ export function mockExpr(state: ParserState, minPrec: number): ExprResult {
 	const tok = current(state);
 	if (tok.kind === TokenKind.Number) {
 		advance(state);
-		const isFloat = tok.value.indexOf(".") >= 0 || tok.value.indexOf("e") >= 0 || tok.value.indexOf("E") >= 0;
+		const isFloat = numericLiteralIsFloat(tok.value);
 		const intVal = isFloat ? 0 as int64 : parseIntegerLiteral(tok.value);
 		const outOfRangeText = isFloat || integerLiteralFits(tok.value) ? "" : tok.value;
 		const isBitPattern = !isFloat && integerLiteralIsBitPattern(tok.value);

@@ -67,6 +67,26 @@ export function parseIntStr(s: string): number {
 	return result;
 }
 
+export function numericLiteralIsFloat(s: string): boolean {
+	if (s.byteLength > 2 && s.charAt(0) === "0") {
+		const prefix = s.charAt(1);
+		if (prefix === "x" || prefix === "X" || prefix === "b" || prefix === "B" || prefix === "o" || prefix === "O") {
+			return false;
+		}
+	}
+	return s.indexOf(".") >= 0 || s.indexOf("e") >= 0 || s.indexOf("E") >= 0;
+}
+
+test "numericLiteralIsFloat hex with e" { assert !numericLiteralIsFloat("0xe0"); }
+
+test "numericLiteralIsFloat hex capital" { assert !numericLiteralIsFloat("0xE0"); }
+
+test "numericLiteralIsFloat hex plain" { assert !numericLiteralIsFloat("0xff"); }
+
+test "numericLiteralIsFloat binary octal" { assert !numericLiteralIsFloat("0b1010"); assert !numericLiteralIsFloat("0o17"); }
+
+test "numericLiteralIsFloat decimal" { assert numericLiteralIsFloat("1.5"); assert numericLiteralIsFloat("1e5"); assert numericLiteralIsFloat("1E5"); assert !numericLiteralIsFloat("42"); }
+
 test "endsWith match" { assert "hello.ms".endsWith(".ms"); }
 
 test "endsWith no match" { assert !"hello.ms".endsWith(".js"); }
