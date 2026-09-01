@@ -1,6 +1,5 @@
 // @maxrss: 40
 // @stdout: leak-ternary-cond hits=
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: FIXED by callHoist lowerTernary: a fresh RC call in a ternary BRANCH (`c ? provide(i).ok : false`) is evaluated only when that branch runs, so it can't be hoisted eagerly. Lowered to a result temp + if/else (each branch its own scope). Permanent regression guard — was 277MB leaking, now flat.
 
 // FIXED (callHoist ternary lowering) — a fresh RC call in a ternary BRANCH leaked.

@@ -1,12 +1,4 @@
 // @stdout: assign guardTrue=A-guarded
-// @xfail(js): the JS bundle never emits the enum's member constants, so the
-//   program dies with `ReferenceError: K_A is not defined` before reaching
-//   the contract under test. Separate pre-existing JS-backend bug (identical
-//   on the pre-fix binary), NOT the guard's subject: the emitted JS match
-//   lowering is already correct here (`if (f) {...} else {...}`). The two
-//   existing enum corpus programs are both @skip-js, so nothing else in the
-//   corpus ever ran an enum through the JS lane. Reported; remove this
-//   marker (XPASS will say so) once enum emission lands.
 // Same-pattern arms with a `when` guard — first-match-wins. lowerMatch is a
 // SHARED pass, so pre-fix BOTH backends ran the unguarded sibling after the
 // guarded arm (assign mode: overwrote the result; stmt mode: ran both

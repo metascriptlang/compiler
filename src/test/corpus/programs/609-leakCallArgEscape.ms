@@ -1,6 +1,5 @@
 // @maxrss: 40
 // @stdout: leak-callarg-escape acc=
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: FIXED with leak-callarg-object (inject.ms processObjectLiteral self-capture). Escape-heavy variant: a fresh interface object literal passed inline as a call arg is stored by the callee into a returned Box, then pushed into a persistent hub.subs list drained every 8 iters — so the value OUTLIVES the statement that created it (the multi-alias broadcast shape the Phase-3 callHoist hoist crashed on with over-free/SIGSEGV). This case is the PERMANENT discriminator proving the Phase-4 fix is over-free-SAFE on escaping values: the push-incref keeps the value alive until drain frees it, so the caller's scope-exit destroy of the captured temp is one balanced decref — NOT a premature free. Was 370MB @ 2M, now flat ~2MB drc+orc. If this ever SIGSEGVs, a fix made the literal capture too eager (destroying a value still aliased downstream).
 
 // leak-callarg-escape — ESCAPE-HEAVY variant of leak-callarg-object.

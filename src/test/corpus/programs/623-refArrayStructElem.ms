@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: ref-array-struct-elem done
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Reference-array T[] of value-struct + generic-instance elements with owned heap fields: the boxed cell's destroyFn must run the per-type <Name>ArrayDestroy walker (per-element decref), not a free-only buffer wipe. destructorLifting's comprehensive walk now registers array element hooks for expression-position arrays too, so the walker is emitted. Regression for the ~617MB leak the prior number[]/string[]/interface-element tests missed.
 
 // Reference-array T[] of managed value-elements (struct, generic-instance struct, named

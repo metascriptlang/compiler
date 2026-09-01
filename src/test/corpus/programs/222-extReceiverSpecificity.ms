@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: ext-receiver-specificity PASS
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Extension overload receiver specificity: concrete receiver (this string) beats catch-all (this unknown); catch-all still serves types with no concrete overload, incl. through generic instantiation (describe<T>). Scoring in resolveExtensionOverloadCall strips the receiver param, so both overloads tie into 'Ambiguous call' without the specificity pre-filter -- historically swallowed inside instantiation body-checks and emitted as argument-less C calls (the Map.get key.hash() bug when std added hash(this unknown)).
 
 // Extension overload receiver specificity: a concrete receiver must beat the

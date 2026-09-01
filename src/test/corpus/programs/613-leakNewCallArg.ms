@@ -1,6 +1,5 @@
 // @maxrss: 40
 // @stdout: leak-new-callarg acc=
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: FIXED by inject.ms processNew (the NewExpr sibling of leak-callarg-object). A fresh `new T(...)` passed inline as a non-sink call arg the callee stores leaked (rc=0 stuck) — processNew captured the constructor ARGS but never the `new` RESULT. Was 124MB @ 2M (found by post-fix coverage probing). processNew now ensureDestructions the result in Normal mode (mirrors processObjectLiteral; the ctor owns the object's fields so destroy is balanced). Now flat ~2MB drc+orc. Nim 889.
 
 // leak-new-callarg — fresh `new T(...)` as a stored call argument (the NewExpr sibling of

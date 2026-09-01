@@ -5,14 +5,6 @@
 // destroy==0 types), which this program's JSON stringify/parse provides. Same
 // survivor as 302/505/609 — probe-attributed 2026-08-08: 9/9 JSON-internal
 // cells balance, decode path is clean.
-// @xfail(js): the JS backend emits `K_Member` for an enum member read but never
-// emits the `var K_Member = <n>;` declaration unless something else pulls the
-// enum in (e.g. reverse-index or Enum_toString, as 230-enumToString does).
-// Pre-existing and independent of this program's subject: `enum K { A, B }` +
-// `const v = K.A` alone reproduces it on shipped v0.2.34.
-// note: TS-style union discriminated by ENUM members — the shape the boolean
-// auto-stamp already covered and the enum one did not, so the union was not a
-// DU at all and its values could not even be constructed (guard bug091).
 enum EvKind { Click, Key, Wheel }
 
 interface ClickEv { kind: EvKind.Click; x: int32; }

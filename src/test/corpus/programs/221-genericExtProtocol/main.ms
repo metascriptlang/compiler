@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: generic-ext-protocol PASS
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Cross-module convention protocol through a generic (the yoga layoutPass<T> shape): generic in module A calls extension methods on T defined only in the instantiating module B. instantiateGenericFunction re-checks the cloned body via pickBodyCtx (defining module's ctx) whose per-module extensionRegistry lacked B's extensions → member call unresolved → raw generic emitted with T=void* → C compile error; the unresolved call's unknown return also cascaded the recursion into walkTree<unknown>. Fix: inject the instantiating ctx's extensions into the body-check registry for the re-check duration, then truncate (Nim mixin semantics; mirrors injectConcreteTypeSyms/removeInjectedSyms in the same function). Two instantiations (Panel, Widget) assert per-type dispatch.
 
 // Cross-module convention protocol through a generic (the yoga layoutPass

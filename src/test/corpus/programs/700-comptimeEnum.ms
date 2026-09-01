@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: comptime-enum PASS
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Enum-member ordinals inside comptime/macro eval. The ordinal was split across two channels — KEY on the member's resolvedSym, VALUE only in the Raiser VM's enumMap (populated solely from physically-injected EnumDecls). A single-file/local enum had an empty enumMap → members folded to nil → wrong comptime value (single-file @comptime yielded the wrong ordinal; at HEAD this program fails 'null not assignable to number'). Fix: rgen reads the ordinal self-contained from the member's EnumLiteral type (expressions.ms), so a local enum resolves the same as a cross-module one. Asserts explicit ordinals (Green=5 via @comptime helper, Blue=9 via macro helper, Red=3 runtime) so a nil-fold surfaces as a wrong number, not a lucky match-fallthrough. Remaining known gap (separate pre-existing root, not covered): a direct enum-member read in a body with NO helper call to seed the enum type (e.g. `@comptime { return E.M as number }` with a local E) — the type collector seeds only from injected fn signatures, so E is never injected and the inner check can't resolve it; crashes at HEAD too.
 
 // Native guard for enum-member ordinals inside comptime/macro evaluation.

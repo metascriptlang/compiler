@@ -1,6 +1,5 @@
 // @maxrss: 40
 // @stdout: leak-arraylit-callarg acc=
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: FIXED by inject.ms processArrayLiteral (the ArrayLiteral sibling of leak-callarg-object). A fresh array literal passed inline as a non-sink call arg the callee stores leaked the array SHELL (rc=0 stuck) — MS arrays are reference types (heap), so a fresh array literal is an owned heap value, unlike Nim's value-type bracket (which is why it was wrongly skipped at first; 124MB @ 2M, found by post-fix coverage probing). RC string ELEMENTS also make it an over-free guard: the fix sinks elements into the array (owned) AND captures the shell in Normal mode, so the shell's destroy is balanced — a shell-only fix would over-free the borrowed elements (SIGSEGV). Discriminates correct-fix (flat) from no-fix (LEAK) and naive-shell-only (SIGSEGV). Now flat ~2MB drc+orc. Nim 889 adapted.
 
 // leak-arraylit-callarg — fresh ARRAY literal as a stored call argument (the ArrayLiteral sibling

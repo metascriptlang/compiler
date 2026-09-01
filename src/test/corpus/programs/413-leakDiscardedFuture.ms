@@ -1,7 +1,6 @@
 // @maxrss: 40
 // @stdout: leak-discarded-future done
 // @serial
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Guards the FLAG-SCOPE of the analyzer's awaitable skip (inject.ms skipAwaitableCapture). A discarded fire-and-forget async future is owned by the caller and must be captured+destroyed by the ordinary discarded-call path; the awaitable skip is scoped to non-RC binding/condition walks ONLY, so it must NOT suppress this. If the skip regresses to global (skip every future in ensureDestructionIfNeeded), each discarded future leaks ~188B/iter (was 94MB at 500k during the global-guard misstep, now flat). Complements paralock-nested, which guards the opposite side (awaited stepper futures must NOT be re-captured).
 
 // Guards the flag-scoping of the analyzer's awaitable skip (inject.ms skipAwaitableCapture).

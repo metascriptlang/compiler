@@ -1,6 +1,5 @@
 // @maxrss: 40
 // @stdout: leak-hashmap-enlarge acc=
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: FIXED by classifyArray reading the instantiated body's hasAsgn + mono-TypeInfo wiring. hashMapEnlarge swaps the slot array (const old = m.data; m.data = newData; migrate), orphaning the old HashMapEntry__K_V[]. classifyArray decided RC from the abstract base (Entry<K,V>, K/V unbound → hasAsgn false) not the instantiated body (Entry__string → true), so the array of a mono'd generic struct misclassified non-RC → no per-element destroy on field-reassign; AND the mono HashMap__K_V TypeInfo.destroyFn was NULL (see leak-map-drop) so dropping never recursed. Nim parity: tfHasAsgn set per-instantiation. Was 574MB @ 50k×50 fill(+enlarge)+drop, now flat ~2MB drc+orc.
 
 // FIXED by classifyArray reading the instantiated body's hasAsgn (analyzer) + destructorLifting

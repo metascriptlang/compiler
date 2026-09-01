@@ -7,7 +7,7 @@
 // (src/monomorphize/collect.ms) can use them without a circular import.
 
 import { Node, NodeKind, NodeData, NodeFlag, makeLoc, createNodeAt, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, FunctionDeclData, ArrowFunctionData, FunctionExprData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, MacroDeclData, VariableDeclData, ReturnStmtData, ThrowStmtData, ExprStmtData, TryCatchStmtData, DeferStmtData, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchStmtData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, TypeAssertionData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, AssertStmtData, ComptimeBlockData, SpliceManyData, QuoteExprData, MacroInvocationData, SymbolKind, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ImportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, PropertyDeclData, ExternDeclData, TypeAnnotationData, BreakStmtData, ContinueStmtData, UnreachableStmtData, BigIntLiteralData, RegexLiteralData, HiddenStdConvData, ProgramData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, Type, TypeKind } from "../ast/node";
-import { isResult, getResultOkType, getResultErrType } from "../checker/types";
+import { isResult, getResultOkType, getResultErrType, isAtomicRef } from "../checker/types";
 
 // ===== Clone Mode =====
 // Mono: monomorphization (copies nodeType, drops typeExpr — used by generic instantiation)
@@ -268,7 +268,15 @@ export function monoConcreteTypeName(t: Type | null): string {
 		TypeKind.Boolean => "boolean",
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
-		TypeKind.Ref => monoConcreteTypeName(t.typeReturn),
+		// Plain Ref strips to its pointee (the class-annotation convention:
+		// "SomeClass" re-resolves to Ref<Struct> by itself). An ATOMIC Ref
+		// (Arc<T>) must keep its wrapper: "Arc<T>" is the spelling
+		// resolveAnnotation understands (resolvePass createArc), and stripping
+		// it turned `T := Arc<P>` in `Promise<T>` into bare `Promise<P>`
+		// during generic-body re-check — the 406 spawn-twin mismatch.
+		TypeKind.Ref => isAtomicRef(t)
+			? `Arc<${monoConcreteTypeName(t.typeReturn)}>`
+			: monoConcreteTypeName(t.typeReturn),
 		TypeKind.Ptr => `Ptr<${monoConcreteTypeName(t.typeReturn)}>`,
 		TypeKind.Array => `Array<${monoConcreteTypeName(t.typeReturn)}>`,
 		TypeKind.Struct | TypeKind.Enum => t.typeName,

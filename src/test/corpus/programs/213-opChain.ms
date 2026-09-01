@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: op-chain acc=105
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Locks NESTED/CHAINED overloaded operators (a*b+c, a+b+c, c+a*b, a*b*c+a, -(a+b), v+=a*b). operatorLower.makeExtOpCall built the replacement CallExpr with no nodeType; the bottom-up walker then made a parent operator's resolveType return null → it skipped lowering → raw C operator on structs → clang 'invalid operands'. Fix: the lowered call carries its operator return type. Separate from NRVO (this is transform/operatorLower, not codegen out-param). Reference (Nim) resolves operators in sem and types the call at once, so it can't drop the type.
 
 // Regression: NESTED/CHAINED overloaded operators. A binary/unary operator whose

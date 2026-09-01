@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: cond-nrvo acc=40
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Locks conditional evaluation of `?:` branches that compile to statements. A struct/object/new in a ternary branch is statement-emitting (NRVO f(&tmp);); left inline before the C ?:, BOTH branches ran unconditionally → over-execution, or a crash when the untaken branch was only valid under the condition. conditionalExprLower lowers hazardous ternaries to temp+if/else (matchLower / Reference genIf parity), keeping inline ?: for pure branches. Covers direct var-init, guard pattern (untaken branch is empty[0] → would crash, caught by exit code), nested ?: in a branch, call-argument, and a ternary nested in another ternary's CONDITION (the condition is unconditional, so hoistTernaries descends into it). acc=40 only if exactly the taken branches ran (runs==4). Also covers ?? and ?. since they are ternaries by this pass. Seam closed 2026-08-05: conditionalExprLower now rewrites EVERY `&&`/`||` to guarded branches (predicate-free, same cure as the ternary fix) — corpus 215-shortCircuitNrvo locks it, 216/217 lock the sibling match-hoist and assignment-order seams.
 
 // Regression: a statement-emitting expression (NRVO struct/object/new) in a `?:`

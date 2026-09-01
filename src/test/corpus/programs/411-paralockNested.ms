@@ -1,7 +1,6 @@
 // @maxrss: 80
 // @stdout: paralock-nested check=
 // @serial
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: PARALOCK guard: spawn + actor + async crossed, 20k-iteration massive interleave on the shared worker pool. Standing answer to 'did my change break PARALOCK seamlessly?'. The final marker only prints if the actor tag round-trips. Higher RSS bound — concurrency runtime has a larger steady-state baseline (pool threads + mailboxes).
 
 // PARALOCK guard — spawn + actor + async crossed, massive, run NATIVELY.

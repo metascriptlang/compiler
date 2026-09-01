@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: macro-arg-reuse PASS
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Stage A compile-once cache + args-in-registers. A macro compiled once (getOrCompileMacro, cached on CheckerContext identity) is re-invoked with different args — dbl(5)→10, dbl(21)→42 — each arg marshalled via nodeToValue into the callee's registers and re-entered through vmCallFunction, replacing the old per-invocation const-baking (const p = <arg literal>) + full recompile. If the cache reuse were unsound the second call would reuse the first's arg; if the reused VM's heap weren't reset between calls the marshalled arg would alias stale objects. Either surfaces as a wrong number in the assertion.
 
 // Stage A gate: a macro compiled ONCE is re-invoked with DIFFERENT args, each

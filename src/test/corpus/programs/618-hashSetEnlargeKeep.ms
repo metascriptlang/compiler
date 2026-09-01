@@ -1,6 +1,5 @@
 // @maxrss: 40
 // @stdout: hashset-enlarge-keep ok n=5000
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: FIXED in std/core/struct.ms hashSetEnlarge: the rehash loop wrote through the LOCAL `newData` after `s.data = newData` — under the C backend's value-array field-assign (deep copy) the rehash filled a dead local and every enlarge silently EMPTIED the live table. Correctness guard, not a leak guard: the marker only prints if all 5000 keys survive every enlarge and size is honest. The alias only forms under the C backend value-array copy, so no inline test can observe it. Nim parity: tables.nim enlarge swaps then writes through t.data[j].
 
 // FIXED in std/core/struct.ms hashSetEnlarge: the rehash loop wrote through the
