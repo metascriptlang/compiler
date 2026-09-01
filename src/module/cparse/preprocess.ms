@@ -9,6 +9,7 @@ import { TargetInfo, predefinedMacros, targetLinuxX86_64 } from "./target";
 import { tokenizeFile, convertPPTokens } from "./tokenize";
 import { readFile } from "std/fs";
 import { dirname } from "std/fs/path";
+import { djb2, fingerprint, hashToHex } from "std/hash";
 
 export interface PreprocessResult {
 	head: CToken;
@@ -63,6 +64,12 @@ interface PPContext {
 	file: string;
 	counter: number;          // for __COUNTER__
 	arena: CToken[];          // owns all tokens this preprocess session creates
+	readLog: string[];        // null normally; when set, every file probe/read is recorded as "<path>\t<hash>" / "<path>\t-" for the caller's dep cache
+}
+
+// Same dual-hash as compiler/cache.ms hashContent — dep-cache entries keyed by it.
+function headerDepHash(s: string): string {
+	return `${hashToHex(djb2(s))}_${hashToHex(fingerprint(s))}`;
 }
 
 // ===== Token Utilities =====
@@ -867,21 +874,28 @@ function preprocessTokens(tok: CToken, ctx: PPContext): CToken {
 
 // ===== #include Handling =====
 
-// Try to read a file. Returns "" if the file doesn't exist or can't be read.
-function tryReadFile(path: string): string {
-	return try readFile(path) catch "";
+// tryReadFile + dep-cache recording: every probe (hit or miss) lands in
+// ctx.readLog so the consumer's disk cache can later verify the exact set of
+// filesystem facts this preprocess depended on — including absences, which
+// flip resolution if a file later appears.
+function probeReadFile(path: string, ctx: PPContext): string {
+	const content = try readFile(path) catch "";
+	if (ctx.readLog !== null) {
+		ctx.readLog.push(content !== "" ? `${path}\t${headerDepHash(content)}` : `${path}\t-`);
+	}
+	return content;
 }
 
 function searchIncludePaths(filename: string, ctx: PPContext): string {
 	// Absolute path
 	if (filename.byteLength > 0 && filename.byteAt(0) === "/".code) {
-		if (tryReadFile(filename) !== "") return filename;
+		if (probeReadFile(filename, ctx) !== "") return filename;
 		return "";
 	}
 	// Search include paths
 	for (const dir of ctx.includePaths) {
 		const path = dir + "/" + filename;
-		if (tryReadFile(path) !== "") return path;
+		if (probeReadFile(path, ctx) !== "") return path;
 	}
 	return "";
 }
@@ -933,7 +947,7 @@ function includeFile(filename: string, tok: CToken, ctx: PPContext, includerDir:
 	let resolved = "";
 	if (includerDir !== "") {
 		const sibling = includerDir + "/" + filename;
-		if (tryReadFile(sibling) !== "") resolved = sibling;
+		if (probeReadFile(sibling, ctx) !== "") resolved = sibling;
 	}
 	if (resolved === "") resolved = searchIncludePaths(filename, ctx);
 	if (resolved === "") {
@@ -948,7 +962,7 @@ function includeFile(filename: string, tok: CToken, ctx: PPContext, includerDir:
 	if (ctx.includeStack.has(resolved)) return tok;
 	ctx.includeStack.set(resolved, true);
 
-	const source = try readFile(resolved) catch "";
+	const source = probeReadFile(resolved, ctx);
 	const tokenized = tokenizeFile(source, resolved);
 	// Included tokens splice into the outer stream — fold the nested arena into
 	// the session arena so they outlive this call.
@@ -1182,7 +1196,8 @@ function initMacros(ctx: PPContext): void {
 export function preprocess(
 	head: CToken,
 	target: TargetInfo,
-	includePaths: string[]
+	includePaths: string[],
+	readLog: string[] = null as unknown as string[]
 ): PreprocessResult {
 	const ctx: PPContext = {
 		macros: new HashMap<string, Macro>(),
@@ -1195,6 +1210,7 @@ export function preprocess(
 		file: head.file,
 		counter: 0,
 		arena: [],
+		readLog,
 	};
 
 	initMacros(ctx);

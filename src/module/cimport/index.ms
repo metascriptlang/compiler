@@ -17,6 +17,7 @@ export interface ParseOptions {
 	target: TargetInfo;
 	includePaths: string[];
 	extraDefines: string[];
+	readLog: string[];        // null normally; records every preprocessor file probe/read for the caller's dep cache
 }
 
 export interface ParseOutput {
@@ -29,6 +30,7 @@ export function defaultOptions(): ParseOptions {
 		target: defaultHostTarget(),
 		includePaths: [],
 		extraDefines: [],
+		readLog: null as unknown as string[],
 	};
 }
 
@@ -43,7 +45,7 @@ export function parseHeader(
 	const tok = tokenizeFile(source, path);
 	for (const d of tok.diagnostics) diagnostics.push(d);
 
-	const pp = preprocess(tok.head, opts.target, opts.includePaths);
+	const pp = preprocess(tok.head, opts.target, opts.includePaths, opts.readLog);
 	for (const d of pp.diagnostics) diagnostics.push(d);
 
 	const parsed = parseTranslationUnit(pp.head, opts.target);
