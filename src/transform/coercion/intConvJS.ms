@@ -10,6 +10,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeIdent, makeMember, makeNumber } from "../util";
 import { createPrimitive, isWideningInt64Conv } from "../../checker/types";
+import { isFloatKind } from "./bigIntJS";
 import { parseInput, makeCtx, getStmts, firstExprKindAfter } from "../testUtil";
 
 export function lowerIntConvJS(program: Node, ctx: TransformContext): Node {
@@ -21,12 +22,29 @@ function materializeIntConv(node: Node): Node {
 	if (node.kind === NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
 		const kind = intKindOfName(d.asType);
-		if (kind === TypeKind.Unknown) return node;
+		if (kind === TypeKind.Unknown) {
+			const floatKind = floatKindOfName(d.asType);
+			if (floatKind !== TypeKind.Unknown && d.asExpr !== null) {
+				const srcT = d.asExpr.nodeType;
+				if (srcT !== null && (srcT.kind === TypeKind.Int64 || srcT.kind === TypeKind.Uint64)) {
+					return numberOf64(d.asExpr, floatKind, node.location);
+				}
+			}
+			return node;
+		}
 		return truncateTo(d.asExpr, kind, node.location);
 	}
 	if (node.kind === NodeKind.HiddenStdConv) {
 		const d = node.data as HiddenStdConvData;
 		if (d.convType === null) return node;
+		if (isFloatKind(d.convType.kind)) {
+			// int64 is a BigInt at runtime on js; widening to a float must go
+			// through Number() or the BigInt leaks into arithmetic as-is.
+			const srcT = d.convExpr !== null ? d.convExpr.nodeType : null;
+			if (srcT !== null && (srcT.kind === TypeKind.Int64 || srcT.kind === TypeKind.Uint64)) {
+				return numberOf64(d.convExpr, d.convType.kind, node.location);
+			}
+		}
 		if (!isIntConvKind(d.convType.kind)) return node;
 		// A widening conv marks the 64-bit boundary for BigInt mode; in Number
 		// mode the value is already integral, so the node just drops at codegen.
@@ -35,6 +53,20 @@ function materializeIntConv(node: Node): Node {
 		return truncateTo(d.convExpr, d.convType.kind, node.location);
 	}
 	return node;
+}
+
+function floatKindOfName(name: string): TypeKind {
+	return match (name) {
+		"float32" => TypeKind.Float32,
+		"float64" | "number" => TypeKind.Float64,
+		_ => TypeKind.Unknown,
+	};
+}
+
+function numberOf64(inner: Node, kind: TypeKind, loc: SourceLocation): Node {
+	const result = makeCall(makeIdent("Number", loc), [inner], loc);
+	result.nodeType = createPrimitive(kind);
+	return result;
 }
 
 // Mask and shift truncate a float on their own — `3.9 & 0xff` is 3 — so the

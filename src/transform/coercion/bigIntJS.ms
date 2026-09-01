@@ -290,7 +290,7 @@ function asTyped(node: Node, kind: TypeKind): Node {
 
 // ===== Classifiers =====
 
-function isFloatKind(kind: TypeKind): boolean {
+export function isFloatKind(kind: TypeKind): boolean {
 	return kind === TypeKind.Number || kind === TypeKind.Float64 || kind === TypeKind.Float32;
 }
 
