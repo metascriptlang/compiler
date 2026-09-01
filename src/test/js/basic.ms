@@ -205,3 +205,13 @@ test "E2E JS: sequence literal stays a plain array" {
 	assert js.ok;
 	assert !js.value.contains("new Uint8Array([");
 }
+
+// corpus 015 regression: copy-on-read must see through the Maybe<T> carrier
+// (erased to a native `T | null` on js) — returning a narrowed optional field
+// must not wrap in msValCopy_<Maybe…> or string-concat prints "[object Object]".
+test "E2E JS: narrowed optional field returns the raw value, no Maybe carrier copy" {
+	const js = compileToJS("function pick(p: { when: boolean, fb?: string }): string { if (p.fb !== null) { return p.fb; } return \"d\"; }\nconst r = pick({ when: true, fb: \"hit\" });");
+	assert js.ok;
+	assert js.value.contains("return p.fb;");
+	assert !js.value.contains("msValCopy_");
+}
