@@ -170,9 +170,9 @@ function emitTypedef(obj: Obj, prefix: string): string {
 
 // ===== Main Entry Point =====
 
-export function translateCHeader(source: string, importedNames: string[], withExport: boolean = false, headerPath: string = "header.h", includePaths: string[] = [], outDiags: Diagnostic[] = null as unknown as Diagnostic[], emittedNames: HashSet<string> = null as unknown as HashSet<string>): string {
+export function translateCHeader(source: string, importedNames: string[], withExport: boolean = false, headerPath: string = "header.h", includePaths: string[] = [], outDiags: Diagnostic[] = null as unknown as Diagnostic[], emittedNames: HashSet<string> = null as unknown as HashSet<string>, readLog: string[] = null as unknown as string[]): string {
 	const prefix = withExport ? "export " : "";
-	const parsed = parseHeader(source, headerPath, { target: defaultHostTarget(), includePaths, extraDefines: [] });
+	const parsed = parseHeader(source, headerPath, { target: defaultHostTarget(), includePaths, extraDefines: [], readLog });
 	if (outDiags !== null) {
 		for (const d of parsed.diagnostics) outDiags.push(d);
 	}

@@ -51,6 +51,10 @@ export class JSGenerator {
 	pendingLine: int32;       // 1-based .ms line, 0 = nothing pending
 	pendingCol: int32;
 	pendingName: int32;
+	// True while emitting an ActorDecl's synthesized class: the constructor
+	// prologue stamps the synthetic pid and instance field defaults are
+	// emitted as JS class fields (the tier-1 actor surface).
+	inActorDecl: boolean;
 }
 
 export function createJSGenerator(): JSGenerator {
@@ -59,7 +63,8 @@ export function createJSGenerator(): JSGenerator {
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
-		pendingLine: 0 as int32, pendingCol: 0 as int32, pendingName: -1 as int32 };
+		pendingLine: 0 as int32, pendingCol: 0 as int32, pendingName: -1 as int32,
+		inActorDecl: false };
 }
 
 export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): void {

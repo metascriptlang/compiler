@@ -215,3 +215,15 @@ test "E2E JS: narrowed optional field returns the raw value, no Maybe carrier co
 	assert js.value.contains("return p.fb;");
 	assert !js.value.contains("msValCopy_");
 }
+
+// tier-1 actor surface: every actor class stamps a synthetic pid field FIRST
+// (registration before user field defaults run) backed by the globalThis
+// registry installed by std/actor/index.jms — corpus 401-403 guard the
+// runtime behavior across all lanes.
+test "E2E JS: actor decl emits a class with the synthetic pid field first" {
+	const js = compileToJS("actor Leaf {\n\tbuf: string = \"\";\n\tsize(): number { return this.buf.length; }\n}\nconst l = new Leaf();\nconst n = l.size();");
+	assert js.ok;
+	assert js.value.contains("class Leaf");
+	assert js.value.contains("pid = (globalThis.__msActorRegister || (globalThis.__msActorRegister = function (a) {");
+	assert js.value.contains("buf = \"\";");
+}

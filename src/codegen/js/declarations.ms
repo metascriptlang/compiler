@@ -123,7 +123,37 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 				else { emitMethodDecl(gen, member); }
 			},
 			NodeKind.ConstructorDecl => { emitConstructorDecl(gen, member); },
-			NodeKind.PropertyDecl => { emitStaticPropertyDecl(gen, member); },
+			NodeKind.PropertyDecl => {
+				const pd = member.data as PropertyDeclData;
+				if (pd.propIsStatic) {
+					emitStaticPropertyDecl(gen, member);
+				} else if (gen.inActorDecl) {
+					// Actor instance fields emit as JS class fields, in
+					// declaration order, running before any constructor body —
+					// the same defaults-then-ctor order as the C runtime.
+					emitIndent(gen);
+					if (pd.propName === "pid" && pd.propInitializer === null) {
+						// Synthetic registration field (see emitActorDecl).
+						// Self-bootstrapping: a program may use actors WITHOUT
+						// importing std/actor, so the registrar installs itself
+						// on first construction. std/actor's stop() reads the
+						// same globalThis registry.
+						emit(gen, "pid = (globalThis.__msActorRegister || (globalThis.__msActorRegister = function (a) {\n");
+						emitIndent(gen);
+						emit(gen, "\tvar g = globalThis.__msActors || (globalThis.__msActors = { next: 1n, live: new Map() });\n");
+						emitIndent(gen);
+						emit(gen, "\tg.live.set(g.next, a);\n");
+						emitIndent(gen);
+						emit(gen, "\treturn g.next++;\n");
+						emitIndent(gen);
+						emit(gen, "}))(this);\n");
+					} else if (pd.propInitializer !== null) {
+						emit(gen, `${safeJsName(pd.propName)} = `);
+						emitNode(gen, pd.propInitializer);
+						emit(gen, ";\n");
+					}
+				}
+			},
 			_ => { emitNode(gen, member); },
 		};
 	}
@@ -172,15 +202,32 @@ export function emitClassDecl(gen: JSGenerator, node: Node): void {
 export function emitActorDecl(gen: JSGenerator, node: Node): void {
 	if ((node.flags & NodeFlag.ExternC) !== 0) return;
 	const d = node.data as ActorDeclData;
+	// Tier-1 actor surface: the synthesized class carries a synthetic `pid`
+	// field FIRST (before user field defaults — a default may read state, so
+	// registration must already have run). The field body is emitted raw by
+	// emitClassDeclInner's PropertyDecl arm (globalThis registry — a node-form
+	// call would miss the bundle's module-qualified name mangling).
+	const pidField = createNodeAt(NodeKind.PropertyDecl, {
+		propName: "pid",
+		propType: "int64",
+		propIsStatic: false,
+		propIsReadonly: true,
+		propVisibility: "",
+		propInitializer: null as unknown as Node,
+	} as unknown as PropertyDeclData, node.location);
+	const body: Node[] = [pidField];
+	for (const m of d.actorBody) body.push(m);
 	const cls = createNodeAt(NodeKind.ClassDecl, {
 		className: d.actorName,
 		classExtends: "",
-		classBody: d.actorBody,
+		classBody: body,
 		nameLocation: d.nameLocation,
 	} as unknown as ClassDeclData, node.location);
 	cls.resolvedSym = node.resolvedSym;
+	gen.inActorDecl = true;
 	emitIndent(gen);
 	emitClassDeclInner(gen, cls);
+	gen.inActorDecl = false;
 }
 
 // ===== Method Declaration =====
