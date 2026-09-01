@@ -33,7 +33,7 @@ extern function msBufferSet(buf: Buffer, index: number, value: number): void;
 extern function msBufferCopy(src: Buffer, dst: Buffer, dstStart: number, srcStart: number, srcEnd: number): number;
 
 // Fill byte
-extern function msBufferFill(buf: Buffer, value: number, start: number, end: number): Buffer;
+extern function msBufferFill(buf: Buffer, value: number, start: number, end: number): void;
 
 // Byte-level search (single byte by value — different from string's indexOf which takes string needle)
 extern function msBufferIndexOf(buf: Buffer, value: number, byteOffset: number): number;
@@ -44,10 +44,10 @@ extern function msBufferIndexOfBuffer(buf: Buffer, needle: Buffer, byteOffset: n
 extern function msBufferLastIndexOfBuffer(buf: Buffer, needle: Buffer, byteOffset: number): number;
 
 // Byte swap / reverse (in-place mutation)
-extern function msBufferSwap16(buf: Buffer): Buffer;
-extern function msBufferSwap32(buf: Buffer): Buffer;
-extern function msBufferSwap64(buf: Buffer): Buffer;
-extern function msBufferReverse(buf: Buffer): Buffer;
+extern function msBufferSwap16(buf: Buffer): void;
+extern function msBufferSwap32(buf: Buffer): void;
+extern function msBufferSwap64(buf: Buffer): void;
+extern function msBufferReverse(buf: Buffer): void;
 
 // Validation
 extern function msBufferIsAscii(buf: Buffer): number;
@@ -111,8 +111,8 @@ extern function msBufferWriteIntBE(buf: Buffer, value: number, offset: number, b
 extern function msBufferWriteString(buf: Buffer, str: string, offset: number, length: number, encoding: string): number;
 
 // Fill with string/buffer pattern (exponential doubling)
-extern function msBufferFillString(buf: Buffer, value: string, start: number, end: number, encoding: string): Buffer;
-extern function msBufferFillBuffer(buf: Buffer, pattern: Buffer, start: number, end: number): Buffer;
+extern function msBufferFillString(buf: Buffer, value: string, start: number, end: number, encoding: string): void;
+extern function msBufferFillBuffer(buf: Buffer, pattern: Buffer, start: number, end: number): void;
 
 // toString with encoding + range
 extern function msBufferToStringRange(buf: Buffer, start: number, end: number, encoding: string): string;
@@ -241,8 +241,8 @@ export function copyTo(this buf: Buffer, target: Buffer, targetStart: number, so
 
 // --- Byte fill ---
 
-export function fill(this buf: Buffer, value: number, start: number, end: number): Buffer {
-	return msBufferFill(buf, value, start, end);
+export function fill(this buf: Buffer, value: number, start: number, end: number): void {
+	msBufferFill(buf, value, start, end);
 }
 
 // --- Single-byte search (by value, not by string needle) ---
@@ -281,12 +281,12 @@ export function write(this buf: Buffer, str: string, offset: number, length: num
 
 // --- Fill with pattern ---
 
-export function fillString(this buf: Buffer, value: string, start: number, end: number, encoding: string): Buffer {
-	return msBufferFillString(buf, value, start, end, encoding);
+export function fillString(this buf: Buffer, value: string, start: number, end: number, encoding: string): void {
+	msBufferFillString(buf, value, start, end, encoding);
 }
 
-export function fillBuffer(this buf: Buffer, value: Buffer, start: number, end: number): Buffer {
-	return msBufferFillBuffer(buf, value, start, end);
+export function fillBuffer(this buf: Buffer, value: Buffer, start: number, end: number): void {
+	msBufferFillBuffer(buf, value, start, end);
 }
 
 // --- Read Unsigned Integers ---
@@ -351,10 +351,10 @@ export function writeBigInt64BE(this buf: Buffer, value: number, offset: number)
 
 // --- Byte Swap / Reverse (in-place mutation) ---
 
-export function swap16(this buf: Buffer): Buffer { return msBufferSwap16(buf); }
-export function swap32(this buf: Buffer): Buffer { return msBufferSwap32(buf); }
-export function swap64(this buf: Buffer): Buffer { return msBufferSwap64(buf); }
-export function bufReverse(this buf: Buffer): Buffer { return msBufferReverse(buf); }
+export function swap16(this buf: Buffer): void { msBufferSwap16(buf); }
+export function swap32(this buf: Buffer): void { msBufferSwap32(buf); }
+export function swap64(this buf: Buffer): void { msBufferSwap64(buf); }
+export function bufReverse(this buf: Buffer): void { msBufferReverse(buf); }
 
 // --- Variable-Length Integer Read/Write (1-6 bytes) ---
 

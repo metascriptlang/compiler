@@ -43,7 +43,7 @@ int64_t msBufferCopy(msBuffer src, msBuffer dst, int64_t dstStart, int64_t srcSt
 
 /* ===== Fill ===== */
 
-msBuffer msBufferFill(msBuffer buf, int64_t value, int64_t start, int64_t end);
+void msBufferFill(msBuffer buf, int64_t value, int64_t start, int64_t end);
 
 /* ===== Read Integers ===== */
 
@@ -103,13 +103,13 @@ int64_t msBufferLastIndexOf(msBuffer buf, int64_t value, int64_t byteOffset);
 
 /* ===== Byte Swap ===== */
 
-msBuffer msBufferSwap16(msBuffer buf);
-msBuffer msBufferSwap32(msBuffer buf);
-msBuffer msBufferSwap64(msBuffer buf);
+void msBufferSwap16(msBuffer buf);
+void msBufferSwap32(msBuffer buf);
+void msBufferSwap64(msBuffer buf);
 
 /* ===== Reverse (in-place mutation) ===== */
 
-msBuffer msBufferReverse(msBuffer buf);
+void msBufferReverse(msBuffer buf);
 
 /* ===== Validation ===== */
 
@@ -138,8 +138,8 @@ int64_t msBufferWriteIntBE(msBuffer buf, int64_t value, int64_t offset, int64_t 
 
 /* ===== Fill String / Buffer ===== */
 
-msBuffer msBufferFillString(msBuffer buf, msString value, int64_t start, int64_t end, msString encoding);
-msBuffer msBufferFillBuffer(msBuffer buf, msBuffer pattern, int64_t start, int64_t end);
+void msBufferFillString(msBuffer buf, msString value, int64_t start, int64_t end, msString encoding);
+void msBufferFillBuffer(msBuffer buf, msBuffer pattern, int64_t start, int64_t end);
 
 /* ===== toString with encoding + range ===== */
 

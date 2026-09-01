@@ -229,14 +229,14 @@ int64_t msBufferCopy(msBuffer src, msBuffer dst, int64_t dstStart, int64_t srcSt
 	return len;
 }
 
-msBuffer msBufferFill(msBuffer buf, int64_t value, int64_t start, int64_t end) {
-	if (!buf.p) return buf;
+void msBufferFill(msBuffer buf, int64_t value, int64_t start, int64_t end) {
+	if (!buf.p) return;
 	if (start < 0) start = 0;
 	if (end > buf.len) end = buf.len;
-	if (start >= end) return buf;
+	if (start >= end) return;
 
 	memset(buf.p->data + start, (int)(value & 0xFF), end - start);
-	return buf;
+	return;
 }
 
 /* ===== Read Integers ===== */
@@ -563,40 +563,40 @@ int64_t msBufferLastIndexOf(msBuffer buf, int64_t value, int64_t byteOffset) {
 
 /* ===== Byte Swap ===== */
 
-msBuffer msBufferSwap16(msBuffer buf) {
-	if (!buf.p || buf.len % 2 != 0) return MS_EMPTY_BUFFER;
+void msBufferSwap16(msBuffer buf) {
+	if (!buf.p || buf.len % 2 != 0) return;
 	uint16_t* data = (uint16_t*)buf.p->data;
 	int64_t count = buf.len / 2;
 	for (int64_t i = 0; i < count; i++) {
 		data[i] = BSWAP16(data[i]);
 	}
-	return buf;
+	return;
 }
 
-msBuffer msBufferSwap32(msBuffer buf) {
-	if (!buf.p || buf.len % 4 != 0) return MS_EMPTY_BUFFER;
+void msBufferSwap32(msBuffer buf) {
+	if (!buf.p || buf.len % 4 != 0) return;
 	uint32_t* data = (uint32_t*)buf.p->data;
 	int64_t count = buf.len / 4;
 	for (int64_t i = 0; i < count; i++) {
 		data[i] = BSWAP32(data[i]);
 	}
-	return buf;
+	return;
 }
 
-msBuffer msBufferSwap64(msBuffer buf) {
-	if (!buf.p || buf.len % 8 != 0) return MS_EMPTY_BUFFER;
+void msBufferSwap64(msBuffer buf) {
+	if (!buf.p || buf.len % 8 != 0) return;
 	uint64_t* data = (uint64_t*)buf.p->data;
 	int64_t count = buf.len / 8;
 	for (int64_t i = 0; i < count; i++) {
 		data[i] = BSWAP64(data[i]);
 	}
-	return buf;
+	return;
 }
 
 /* ===== Reverse ===== */
 
-msBuffer msBufferReverse(msBuffer buf) {
-	if (!buf.p || buf.len <= 1) return buf;
+void msBufferReverse(msBuffer buf) {
+	if (!buf.p || buf.len <= 1) return;
 	char* data = buf.p->data;
 	int64_t left = 0;
 	int64_t right = buf.len - 1;
@@ -607,7 +607,7 @@ msBuffer msBufferReverse(msBuffer buf) {
 		left++;
 		right--;
 	}
-	return buf;
+	return;
 }
 
 /* ===== Validation ===== */
@@ -900,11 +900,11 @@ int64_t msBufferWriteIntBE(msBuffer buf, int64_t value, int64_t offset, int64_t 
 
 /* ===== Fill String ===== */
 
-msBuffer msBufferFillString(msBuffer buf, msString value, int64_t start, int64_t end, msString encoding) {
-	if (!buf.p || !value.p || value.len == 0) return buf;
+void msBufferFillString(msBuffer buf, msString value, int64_t start, int64_t end, msString encoding) {
+	if (!buf.p || !value.p || value.len == 0) return;
 	if (start < 0) start = 0;
 	if (end > buf.len) end = buf.len;
-	if (start >= end) return buf;
+	if (start >= end) return;
 
 	const char* pattern = value.p->data;
 	int64_t patternLen = value.len;
@@ -933,7 +933,7 @@ msBuffer msBufferFillString(msBuffer buf, msString value, int64_t start, int64_t
 
 	if (patternLen == 0) {
 		if (decoded.p) free(decoded.p);
-		return buf;
+		return;
 	}
 
 	/* Exponential doubling fill (Bun pattern: 1→2→4→8...) */
@@ -952,23 +952,23 @@ msBuffer msBufferFillString(msBuffer buf, msString value, int64_t start, int64_t
 		memcpy(buf.p->data + start + written, buf.p->data + start, fillLen - written);
 	}
 
-	return buf;
+	return;
 }
 
 /* ===== Fill Buffer (exponential doubling) ===== */
 
-msBuffer msBufferFillBuffer(msBuffer buf, msBuffer pattern, int64_t start, int64_t end) {
-	if (!buf.p || !pattern.p || pattern.len == 0) return buf;
+void msBufferFillBuffer(msBuffer buf, msBuffer pattern, int64_t start, int64_t end) {
+	if (!buf.p || !pattern.p || pattern.len == 0) return;
 	if (start < 0) start = 0;
 	if (end > buf.len) end = buf.len;
-	if (start >= end) return buf;
+	if (start >= end) return;
 
 	int64_t fillLen = end - start;
 	int64_t patLen = pattern.len;
 
 	if (patLen == 1) {
 		memset(buf.p->data + start, (unsigned char)pattern.p->data[0], fillLen);
-		return buf;
+		return;
 	}
 
 	int64_t firstCopy = (patLen < fillLen) ? patLen : fillLen;
@@ -983,7 +983,7 @@ msBuffer msBufferFillBuffer(msBuffer buf, msBuffer pattern, int64_t start, int64
 		memcpy(buf.p->data + start + written, buf.p->data + start, fillLen - written);
 	}
 
-	return buf;
+	return;
 }
 
 /* ===== toString with encoding + range ===== */
