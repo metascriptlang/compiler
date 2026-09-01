@@ -121,6 +121,11 @@ char* msBigIntToCString(const msBigInt* a, int32_t radix) {
 		if (buf == NULL) bigFail("out of memory");
 		CHK(mbedtls_mpi_write_string(&a->v, radix, buf, olen, &olen));
 		for (char* p = buf; *p; p++) *p = (char)tolower((unsigned char)*p);
+		char* d = buf;
+		if (*d == '-') d++;
+		while (d[0] == '0' && d[1] != '\0') {
+			memmove(d, d + 1, strlen(d));
+		}
 		return buf;
 	}
 	/* mbedtls_mpi_write_string caps at radix 16; peel digits by division */

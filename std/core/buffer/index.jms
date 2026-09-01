@@ -450,10 +450,35 @@ export extern function readFloatBE(this b: Buffer, o: number): number from "new 
 export extern function readFloatLE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat32(#, true)";
 export extern function readDoubleBE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat64(#, false)";
 export extern function readDoubleLE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat64(#, true)";
-export extern function readBigUInt64LE(this b: Buffer, o: number): number from "Number(new DataView(#.buffer).getBigUint64(#, true))";
-export extern function readBigUInt64BE(this b: Buffer, o: number): number from "Number(new DataView(#.buffer).getBigUint64(#, false))";
-export extern function readBigInt64LE(this b: Buffer, o: number): number from "Number(new DataView(#.buffer).getBigInt64(#, true))";
-export extern function readBigInt64BE(this b: Buffer, o: number): number from "Number(new DataView(#.buffer).getBigInt64(#, false))";
+export extern function readBigUInt64LE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigUint64(#, true)";
+export extern function readBigUInt64BE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigUint64(#, false)";
+export extern function readBigInt64LE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigInt64(#, true)";
+export extern function readBigInt64BE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigInt64(#, false)";
+
+extern function dvSetBigU64LE(this b: Buffer, o: number, v: bigint): void from "new DataView(#.buffer).setBigUint64(#, #, true)";
+extern function dvSetBigU64BE(this b: Buffer, o: number, v: bigint): void from "new DataView(#.buffer).setBigUint64(#, #, false)";
+extern function dvSetBigI64LE(this b: Buffer, o: number, v: bigint): void from "new DataView(#.buffer).setBigInt64(#, #, true)";
+extern function dvSetBigI64BE(this b: Buffer, o: number, v: bigint): void from "new DataView(#.buffer).setBigInt64(#, #, false)";
+
+export function writeBigUInt64LE(this b: Buffer, value: bigint, o: number): number {
+	dvSetBigU64LE(b, o, value);
+	return o + 8;
+}
+
+export function writeBigUInt64BE(this b: Buffer, value: bigint, o: number): number {
+	dvSetBigU64BE(b, o, value);
+	return o + 8;
+}
+
+export function writeBigInt64LE(this b: Buffer, value: bigint, o: number): number {
+	dvSetBigI64LE(b, o, value);
+	return o + 8;
+}
+
+export function writeBigInt64BE(this b: Buffer, value: bigint, o: number): number {
+	dvSetBigI64BE(b, o, value);
+	return o + 8;
+}
 
 extern function dvSetU16BE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setUint16(#, #, false)";
 extern function dvSetU16LE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setUint16(#, #, true)";

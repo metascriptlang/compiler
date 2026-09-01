@@ -88,14 +88,17 @@ extern function msBufferWriteDoubleLE(buf: Buffer, value: number, offset: number
 extern function msBufferWriteDoubleBE(buf: Buffer, value: number, offset: number): number;
 
 // 64-bit integer read/write
-extern function msBufferReadUint64LE(buf: Buffer, offset: number): number;
-extern function msBufferReadUint64BE(buf: Buffer, offset: number): number;
-extern function msBufferReadInt64LE(buf: Buffer, offset: number): number;
-extern function msBufferReadInt64BE(buf: Buffer, offset: number): number;
-extern function msBufferWriteUint64LE(buf: Buffer, value: number, offset: number): number;
-extern function msBufferWriteUint64BE(buf: Buffer, value: number, offset: number): number;
-extern function msBufferWriteInt64LE(buf: Buffer, value: number, offset: number): number;
-extern function msBufferWriteInt64BE(buf: Buffer, value: number, offset: number): number;
+extern function msBufferReadUint64LE(buf: Buffer, offset: number): uint64;
+extern function msBufferReadUint64BE(buf: Buffer, offset: number): uint64;
+extern function msBufferReadInt64LE(buf: Buffer, offset: number): int64;
+extern function msBufferReadInt64BE(buf: Buffer, offset: number): int64;
+extern function msBufferWriteUint64LE(buf: Buffer, value: int64, offset: number): int64;
+extern function msBufferWriteUint64BE(buf: Buffer, value: int64, offset: number): int64;
+extern function msBufferWriteInt64LE(buf: Buffer, value: int64, offset: number): int64;
+extern function msBufferWriteInt64BE(buf: Buffer, value: int64, offset: number): int64;
+extern function msBigIntFromInt64(v: int64): bigint;
+extern function msBigIntFromUint64(v: uint64): bigint;
+extern function msBigIntToInt64(b: bigint): int64;
 
 // Variable-length integer read/write (1-6 bytes)
 extern function msBufferReadUintLE(buf: Buffer, offset: number, byteLength: number): number;
@@ -314,10 +317,10 @@ export function readDoubleBE(this buf: Buffer, offset: number): number { return 
 
 // --- Read 64-bit ---
 
-export function readBigUInt64LE(this buf: Buffer, offset: number): number { return msBufferReadUint64LE(buf, offset); }
-export function readBigUInt64BE(this buf: Buffer, offset: number): number { return msBufferReadUint64BE(buf, offset); }
-export function readBigInt64LE(this buf: Buffer, offset: number): number { return msBufferReadInt64LE(buf, offset); }
-export function readBigInt64BE(this buf: Buffer, offset: number): number { return msBufferReadInt64BE(buf, offset); }
+export function readBigUInt64LE(this buf: Buffer, offset: number): bigint { return msBigIntFromUint64(msBufferReadUint64LE(buf, offset)); }
+export function readBigUInt64BE(this buf: Buffer, offset: number): bigint { return msBigIntFromUint64(msBufferReadUint64BE(buf, offset)); }
+export function readBigInt64LE(this buf: Buffer, offset: number): bigint { return msBigIntFromInt64(msBufferReadInt64LE(buf, offset)); }
+export function readBigInt64BE(this buf: Buffer, offset: number): bigint { return msBigIntFromInt64(msBufferReadInt64BE(buf, offset)); }
 
 // --- Write Unsigned Integers ---
 
@@ -344,10 +347,10 @@ export function writeDoubleBE(this buf: Buffer, value: number, offset: number): 
 
 // --- Write 64-bit ---
 
-export function writeBigUInt64LE(this buf: Buffer, value: number, offset: number): number { return msBufferWriteUint64LE(buf, value, offset); }
-export function writeBigUInt64BE(this buf: Buffer, value: number, offset: number): number { return msBufferWriteUint64BE(buf, value, offset); }
-export function writeBigInt64LE(this buf: Buffer, value: number, offset: number): number { return msBufferWriteInt64LE(buf, value, offset); }
-export function writeBigInt64BE(this buf: Buffer, value: number, offset: number): number { return msBufferWriteInt64BE(buf, value, offset); }
+export function writeBigUInt64LE(this buf: Buffer, value: bigint, offset: number): number { return msBufferWriteUint64LE(buf, msBigIntToInt64(BigInt.asUintN(64, value)), offset); }
+export function writeBigUInt64BE(this buf: Buffer, value: bigint, offset: number): number { return msBufferWriteUint64BE(buf, msBigIntToInt64(BigInt.asUintN(64, value)), offset); }
+export function writeBigInt64LE(this buf: Buffer, value: bigint, offset: number): number { return msBufferWriteInt64LE(buf, msBigIntToInt64(BigInt.asIntN(64, value)), offset); }
+export function writeBigInt64BE(this buf: Buffer, value: bigint, offset: number): number { return msBufferWriteInt64BE(buf, msBigIntToInt64(BigInt.asIntN(64, value)), offset); }
 
 // --- Byte Swap / Reverse (in-place mutation) ---
 
