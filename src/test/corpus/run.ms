@@ -4,7 +4,11 @@
 // contract lives in its directive head:
 //
 //   // @maxrss: <MB>       -> RSS cells: build+run under --gc=drc AND --gc=orc,
-//                             /usr/bin/time -l, assert exit + signal + peak RSS
+//                             /usr/bin/time -l, assert exit + signal + peak RSS;
+//                             plus a js cell (unless @skip-js) — same
+//                             build+run+byte-compare as a parity cell, only
+//                             the RSS bound stays native-only (node's heap is
+//                             not comparable to C RSS)
 //   // @stdout: <substr>   -> merged output must contain <substr> (legacy native
 //                             tier semantics; parity programs omit it)
 //   // @exit: <n>          -> expected exit code (default 0)
@@ -238,8 +242,7 @@ function stalenessWarning(): string {
 }
 
 function laneUniverse(spec: Spec): string[] {
-	if (spec.maxRssMb >= 0.0) { return ["drc", "orc", "danger", "san"]; }
-	const lanes: string[] = ["c", "orc", "danger", "san"];
+	const lanes: string[] = spec.maxRssMb >= 0.0 ? ["drc", "orc", "danger", "san"] : ["c", "orc", "danger", "san"];
 	if (!spec.skipJs) { lanes.push("js"); }
 	return lanes;
 }
@@ -255,12 +258,11 @@ function joinWith(items: string[], sep: string): string {
 	return out;
 }
 
-// A directive that cannot apply is a lie the runner used to keep (T9): removing
-// @skip-js from an @maxrss program reads as "js lane enabled" and enables
-// nothing. @xfail naming an impossible lane fails; inert @skip-js is reported
-// as one aggregate because it is a design call, not per-program neglect.
-function validateDirectives(specs: Spec[], t: Tally): string[] {
-	const inert: string[] = [];
+// A directive that cannot apply is a lie the runner used to keep (T9):
+// @xfail naming an impossible lane fails loud. @skip-js applies to every
+// program — @maxrss ones included, since they get a js cell alongside the
+// RSS cells (2026-09-01 audit) — so it is never inert anymore.
+function validateDirectives(specs: Spec[], t: Tally): void {
 	for (const spec of specs) {
 		const lanes = laneUniverse(spec);
 		for (const lane of spec.xfailLanes) {
@@ -269,9 +271,7 @@ function validateDirectives(specs: Spec[], t: Tally): string[] {
 				t.fails = t.fails + 1;
 			}
 		}
-		if (spec.skipJs && spec.maxRssMb >= 0.0) { inert.push(spec.name); }
 	}
-	return inert;
 }
 
 // ---- directive head ----
@@ -574,7 +574,9 @@ function finishSanCell(c: Cell): void {
 
 function finishCell(c: Cell): void {
 	if (c.lane == "san") { finishSanCell(c); return; }
-	if (c.spec.maxRssMb >= 0.0) { finishRssCell(c); return; }
+	// js lane of an @maxrss program finishes parity-style: no time.log, and
+	// the RSS bound is native-only.
+	if (c.spec.maxRssMb >= 0.0 && c.lane != "js") { finishRssCell(c); return; }
 	finishParityCell(c);
 }
 
@@ -592,7 +594,7 @@ function reportCell(c: Cell, t: Tally): void {
 }
 
 function comparableOutputOf(c: Cell): string {
-	return c.spec.maxRssMb >= 0.0 ? c.dir + "stdout.log" : c.dir + "out.log";
+	return c.spec.maxRssMb >= 0.0 && c.lane != "js" ? c.dir + "stdout.log" : c.dir + "out.log";
 }
 
 // byte-compare a finished parity group; one extra verdict line per program
@@ -636,9 +638,16 @@ function planJobs(specs: Spec[]): BuildJob[] {
 				const bin = OUT_DIR + "bin/" + spec.name + "." + gc;
 				jobs.push({ spec, lane: gc, cmd: MSC_CMD + " build " + spec.entry + " --gc=" + gc + " --output=" + bin, cell: makeCell(spec, gc, bin) });
 			}
-			const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
-			jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --danger" + DANGER_CC + DANGER_PASSC + DANGER_PASSL + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
-		} else {
+		const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
+		jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --danger" + DANGER_CC + DANGER_PASSC + DANGER_PASSL + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
+		// js cell rides along since the 2026-09-01 audit: same
+		// build+run+byte-compare as a parity js cell. finishCell routes it
+		// to the parity verdict — the RSS bound stays native-only.
+		if (!spec.skipJs && HAS_NODE) {
+			const jsbin = OUT_DIR + "bin/" + spec.name + ".js";
+			jobs.push({ spec, lane: "js", cmd: MSC_CMD + " build " + spec.entry + " --target=js --output=" + jsbin, cell: makeCell(spec, "js", jsbin) });
+		}
+	} else {
 			const cbin = OUT_DIR + "bin/" + spec.name + ".c";
 			jobs.push({ spec, lane: "c", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --output=" + cbin, cell: makeCell(spec, "c", cbin) });
 			const obin = OUT_DIR + "bin/" + spec.name + ".corc";
@@ -747,10 +756,7 @@ function main(): void {
 
 	const stale = stalenessWarning();
 	if (stale != "") { progress(""); progress("  !! " + stale); }
-	const inertSkipJs = validateDirectives(specs, t);
-	if (inertSkipJs.length > 0) {
-		progress("  !! " + inertSkipJs.length + " programs carry @skip-js under @maxrss — INERT: @maxrss programs never get a js cell, so the marker enables and disables nothing");
-	}
+	validateDirectives(specs, t);
 	progress("");
 	const running: Cell[] = [];
 	const pendingSerial: Cell[] = [];
