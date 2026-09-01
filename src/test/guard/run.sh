@@ -50,6 +50,9 @@ build() {
 for ms in "$DIR"/*.ms; do
   [ -e "$ms" ] || continue
   name="$(basename "$ms" .ms)"
+  # run.ms is the cross-platform port of this script, not a probe — running it
+  # here nests a second full guard pass (and its out/guard/work builds collide).
+  [ "$name" = "run" ] && continue
   balance=$(grep -oE '// *GUARD-BALANCE +[A-Za-z0-9_]+' "$ms" | awk '{print $NF}')
   balanceOrc=$(grep -oE '// *GUARD-BALANCE-ORC +[A-Za-z0-9_]+' "$ms" | awk '{print $NF}')
   checkfails=$(grep -E '^// GUARD-CHECK-FAIL ' "$ms" | sed -E 's|^// GUARD-CHECK-FAIL ||')
