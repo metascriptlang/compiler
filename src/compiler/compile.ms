@@ -37,7 +37,7 @@ import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbac
 import { createTransformContextWithChecker, createNameSet } from "../transform/context";
 import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, hasModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
-import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider } from "../module/loader";
+import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache } from "../module/loader";
 import { ResolverConfig, createDefaultConfig, Backend, resolveImportWithConfig } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
@@ -51,10 +51,15 @@ import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix,
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, hashContent } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, hashContent, headerInlineKey, lookupHeaderInline, storeHeaderInline } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
+
+// Header-inline disk cache injection (loader can't import ./cache directly —
+// checker/context → module/graph layering; callbacks pattern). Registered at
+// module load so every later build engages it without an init-order hazard.
+registerHeaderCache(headerInlineKey, lookupHeaderInline, storeHeaderInline);
 
 // ===== Build Helpers =====
 
@@ -305,6 +310,13 @@ export function applyGcMode(opts: CliOptions): void {
 	graphPreludeCtx.targetOs = opts.targetOs;
 }
 
+// Loader-half timing gate, twin of the orchestrator's setGraphCheckTiming —
+// both fire under -t so one flag split stays observable in one place.
+let graphLoadTiming: boolean = false;
+export function setGraphLoadTiming(on: boolean): void {
+	graphLoadTiming = on;
+}
+
 function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, targetOs: string = platform): ModuleGraph {
 	if (verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const provider = createFileSystemProvider();
@@ -315,10 +327,19 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	// globals (e.g. INITIAL_CAPACITY in std/core/struct.ms) must be ready
 	// before any user-module __Init000 touches them.
 	const graph = createModuleGraph();
+	// Split the "graph load+check" phase: this block is the LOADER half
+	// (parse of every module in the closure — prelude tree included), the
+	// orchestrator PROFILE line covers the check half. Build-perf §1.
+	const _gl0 = performance.now();
 	if (config.stdPath !== "") {
 		loadPreludeModules(graph, provider, config);
 	}
+	const _pl0 = performance.now();
 	const _r = loadModule(graph, entryPath, provider, config, 1);
+	if (graphLoadTiming) {
+		const ih = takeInlineHeaderTimings();
+		console.log(`    graphLoad: preludeMods=${performance.now() - _gl0}ms entryTree=${performance.now() - _pl0}ms modules=${graph.loadOrder.length} inlineHeader=${ih.ms}ms/${ih.n}mods hits=${ih.hits}`);
+	}
 
 	reportGraphErrors(graph);
 	exitOnModuleErrors(graph, "error");
@@ -1001,6 +1022,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
+	setGraphLoadTiming(opts.showTime);
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs);
 	applyGcMode(opts);
 

@@ -25,12 +25,13 @@ import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../ast/node";
-import { readFile } from "std/fs";
+import { readFile, writeFile, ensureDir } from "std/fs";
 import { translateCHeader } from "./cimport/emit";
 import { Diagnostic, DiagSeverity } from "./cparse/error";
 import { resolveRuntimeDir } from "../utils/path";
 import { isAbsolute, dirname, join, normalize } from "std/fs/path";
-import { cwd } from "std/process";
+import { cwd, env } from "std/process";
+import { djb2, fingerprint, hashToHex } from "std/hash";
 // (utils/string imports removed — using native .slice)
 
 // ===== Source Provider =====
@@ -48,14 +49,15 @@ export class SourceProvider {
 	entries: MapEntry[];
 	useFileSystem: boolean;
 	taReadFn: TaReadFn;  // null for map/filesystem providers; non-null for Trans-Am-backed
+	readLog: string[];   // null normally; set per-call by the header-inline cache wrapper to record every probe as "<path>\t<hash>" / "<path>\t-"
 }
 
 export function createMapProvider(entries: MapEntry[]): SourceProvider {
-	return { entries, useFileSystem: false, taReadFn: null as unknown as TaReadFn };
+	return { entries, useFileSystem: false, taReadFn: null as unknown as TaReadFn, readLog: null as unknown as string[] };
 }
 
 export function createFileSystemProvider(): SourceProvider {
-	return { entries: [], useFileSystem: true, taReadFn: null as unknown as TaReadFn };
+	return { entries: [], useFileSystem: true, taReadFn: null as unknown as TaReadFn, readLog: null as unknown as string[] };
 }
 
 // Trans-Am-backed provider. The callback MUST load the file into Trans-Am, record a
@@ -72,16 +74,21 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 		return Result.err(`File not found: ${path}`);
 	}
 	for (const e of provider.entries) {
-		if (e.entryPath === path) return Result.ok(e.entrySource);
+		if (e.entryPath === path) {
+			if (provider.readLog !== null) provider.readLog.push(`${path}\t${headerDepHash(e.entrySource)}`);
+			return Result.ok(e.entrySource);
+		}
 	}
 	if (provider.useFileSystem) {
 		const content = try readFile(path) catch "";
 		if (content.length > 0) {
+			if (provider.readLog !== null) provider.readLog.push(`${path}\t${headerDepHash(content)}`);
 			const cached: MapEntry = { entryPath: path, entrySource: content };
 			provider.entries.push(cached);
 			return Result.ok(content);
 		}
 	}
+	if (provider.readLog !== null) provider.readLog.push(`${path}\t-`);
 	return Result.err(`File not found: ${path}`);
 }
 
@@ -96,7 +103,112 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 // collectImport treats .h sources as a special case: it skips ExportRegistry
 // lookup and symbol creation because the inlined extern decls below define
 // the symbols locally in the current module's scope.
+// Build-perf §1.2: how much of the loader half is C-header translation
+// (chibicc) vs plain read. Accumulated under graphLoadTiming; read by
+// compile.ms's graphLoad print.
+let _inlineMs: float64 = 0;
+let _inlineN: int32 = 0;
+let _inlineHits: int32 = 0;
+export interface InlineHeaderTimings {
+	ms: float64;
+	n: int32;
+	hits: int32;
+}
+export function takeInlineHeaderTimings(): InlineHeaderTimings {
+	const r: InlineHeaderTimings = { ms: _inlineMs, n: _inlineN, hits: _inlineHits };
+	_inlineMs = 0;
+	_inlineN = 0;
+	_inlineHits = 0;
+	return r;
+}
+
+// ===== Header-Inline Disk Cache (build-perf Phase A0) =====
+//
+// inlineHeaderImports is a pure transform (module source + headers → source)
+// and the compiler runs it twice per module per build (graph load + checker
+// prelude load); the chibicc translation inside dominated the loader half.
+// Cache mechanics live in compiler/cache.ms (Layer 5) — loader.ms cannot
+// import that module (checker/context → module/graph would make the module
+// layer depend on the checker), so the implementations are injected at
+// compile.ms module load, the same cycle-breaker pattern as
+// parser/statements/callbacks.ms.
+
+type HeaderCacheKeyFn = (source: string, modulePath: string, compact: boolean) => string;
+type HeaderCacheLookupFn = (key: string) => string;
+type HeaderCacheStoreFn = (key: string, deps: string[], output: string) => void;
+
+let _hcKeyFn: HeaderCacheKeyFn = null as unknown as HeaderCacheKeyFn;
+let _hcLookupFn: HeaderCacheLookupFn = null as unknown as HeaderCacheLookupFn;
+let _hcStoreFn: HeaderCacheStoreFn = null as unknown as HeaderCacheStoreFn;
+
+export function registerHeaderCache(keyFn: HeaderCacheKeyFn, lookupFn: HeaderCacheLookupFn, storeFn: HeaderCacheStoreFn): void {
+	_hcKeyFn = keyFn;
+	_hcLookupFn = lookupFn;
+	_hcStoreFn = storeFn;
+}
+
+// Same dual-hash as compiler/cache.ms hashContent — dep lines are keyed by it.
+function headerDepHash(s: string): string {
+	return `${hashToHex(djb2(s))}_${hashToHex(fingerprint(s))}`;
+}
+
+// Returns the cache key when this call should engage the disk cache, "" when
+// not: cache unregistered, MSC_NO_HEADER_CACHE=1, non-filesystem provider
+// (Trans-Am, pure map providers whose entries may not mirror disk), or a
+// source that cannot contain a .h import at all.
+function headerCacheEngage(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean): string {
+	if (_hcLookupFn === null) return "";
+	if (provider.taReadFn !== null || !provider.useFileSystem) return "";
+	if (env.get("MSC_NO_HEADER_CACHE") !== "") return "";
+	if (source.indexOf(".h") < 0) return "";
+	return _hcKeyFn(source, modulePath, compactReplacement);
+}
+
 export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean = false, outErrors: ModuleError[] = null as unknown as ModuleError[]): string {
+	const _ih0 = performance.now();
+	_inlineN = _inlineN + 1;
+	const key = headerCacheEngage(source, modulePath, provider, compactReplacement);
+	if (key !== "") {
+		const hit = _hcLookupFn(key);
+		if (hit !== "") {
+			_inlineHits = _inlineHits + 1;
+			_inlineMs = _inlineMs + (performance.now() - _ih0);
+			return hit;
+		}
+	}
+	const errLen0 = outErrors !== null ? outErrors.length : 0;
+	const prevLog = provider.readLog;
+	const probeLog: string[] = [];
+	const cparseReads: string[] = [];
+	if (key !== "") provider.readLog = probeLog;
+	let deps: string[] = null as unknown as string[];
+	let output = "";
+	try {
+		output = inlineHeaderImportsInner(source, modulePath, provider, compactReplacement, outErrors, key !== "" ? cparseReads : (null as unknown as string[]));
+	} finally {
+		if (key !== "") {
+			const seen = new HashSet<string>();
+			deps = [];
+			for (const d of probeLog) {
+				if (!seen.has(d)) { seen.add(d); deps.push(d); }
+			}
+			for (const d of cparseReads) {
+				if (!seen.has(d)) { seen.add(d); deps.push(d); }
+			}
+			provider.readLog = prevLog;
+		}
+	}
+	// Store only clean runs: a run that surfaced diagnostics must recompute
+	// next time so the diagnostics re-surface. Output equal to source means
+	// nothing was inlined — recomputing that is as cheap as a hit.
+	if (key !== "" && deps !== null && output !== source && (outErrors === null || outErrors.length === errLen0)) {
+		_hcStoreFn(key, deps, output);
+	}
+	_inlineMs = _inlineMs + (performance.now() - _ih0);
+	return output;
+}
+
+function inlineHeaderImportsInner(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean, outErrors: ModuleError[], cparseReads: string[]): string {
 	let result = source;
 	let searchPos = 0;
 	let insertedLines = 0;
@@ -199,7 +311,7 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 			? [builtinInclude, compilerRoot, headerDir, headerParentDir]
 			: [builtinInclude, headerDir, headerParentDir];
 		const headerDiags: Diagnostic[] = [];
-		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags, emittedHeaderDecls);
+		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags, emittedHeaderDecls, cparseReads);
 		if (outErrors !== null && headerDiags.length > 0) {
 			const importLine = countLinesBefore(result, importIdx) - insertedLines;
 			for (const hd of headerDiags) {
@@ -810,4 +922,77 @@ test "module source stored" {
 	const mod = findModule(graph, "/src/a.ms");
 	assert mod !== null;
 	assert mod.source === "const x = 42;";
+}
+
+// ===== Header-Inline Cache Wrapper Tests =====
+//
+// These exercise the WRAPPER (engagement gating, hit short-circuit, dep
+// harvest, store conditions) against an injected fake cache; the disk
+// mechanics (entry format, dep verification, marker GC) live in
+// compiler/cache.ms Layer 5 tests. Restore the null registration after each
+// test so later tests in the binary run cache-neutral.
+
+function unregisterHeaderCacheForTest(): void {
+	registerHeaderCache(null as unknown as HeaderCacheKeyFn, null as unknown as HeaderCacheLookupFn, null as unknown as HeaderCacheStoreFn);
+}
+
+test "header cache wrapper: miss stores deps+output, hit short-circuits" {
+	ensureDir("/tmp/mshcw");
+	writeFile("/tmp/mshcw/a.h", "extern int hcwA(void);\n");
+	const src = "import { hcwA } from " + "\"./a.h\";\n";
+	let storedKey = "";
+	let storedDeps: string[] = [];
+	let storedOut = "";
+	registerHeaderCache(
+		(_s: string, _m: string, _c: boolean) => "KHCW",
+		(k: string) => { return k === "KHCW" && storedOut !== "" ? storedOut : ""; },
+		(k: string, d: string[], o: string) => { storedKey = k; storedDeps = d; storedOut = o; }
+	);
+	takeInlineHeaderTimings();
+	const out1 = inlineHeaderImports(src, "/tmp/mshcw/main.ms", createFileSystemProvider());
+	assert storedKey === "KHCW";
+	assert storedOut === out1;
+	assert out1.indexOf("extern function hcwA") >= 0;
+	let sawHeader = false;
+	for (const d of storedDeps) {
+		if (d.indexOf("/tmp/mshcw/a.h\t", 0) === 0) sawHeader = true;
+	}
+	assert sawHeader;
+	const out2 = inlineHeaderImports(src, "/tmp/mshcw/main.ms", createFileSystemProvider());
+	assert out2 === out1;
+	const t = takeInlineHeaderTimings();
+	assert t.hits === 1;
+	assert t.n === 2;
+	unregisterHeaderCacheForTest();
+}
+
+test "header cache wrapper: diagnostics-producing runs are not stored" {
+	const src = "import { nope } from " + "\"./missing.h\";\n";
+	let storeCalls = 0;
+	registerHeaderCache(
+		(_s: string, _m: string, _c: boolean) => "KERR",
+		(_k: string) => "",
+		(_k: string, _d: string[], _o: string) => { storeCalls = storeCalls + 1; }
+	);
+	const errs: ModuleError[] = [];
+	const out = inlineHeaderImports(src, "/tmp/mshcw/miss.ms", createFileSystemProvider(), false, errs);
+	assert errs.length > 0;
+	assert out.indexOf("extern function nope") < 0;
+	assert storeCalls === 0;
+	unregisterHeaderCacheForTest();
+}
+
+test "header cache wrapper: map providers bypass the cache" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/virt/b.h", "extern int vB(void);\n"));
+	registerHeaderCache(
+		(_s: string, _m: string, _c: boolean) => "KMAP",
+		(_k: string) => "SHOULD-NEVER-SERVE",
+		(_k: string, _d: string[], _o: string) => {}
+	);
+	const src = "import { vB } from " + "\"/virt/b.h\";\n";
+	const out = inlineHeaderImports(src, "/virt/main.ms", createMapProvider(entries));
+	assert out.indexOf("SHOULD-NEVER-SERVE") < 0;
+	assert out.indexOf("extern function vB") >= 0;
+	unregisterHeaderCacheForTest();
 }

@@ -14,7 +14,7 @@
 //   BuildCache                   → project cache file (key=value format)
 
 import { exec, env, platform, argv } from "std/process";
-import { exists, readFile, writeFile, rename, copyFile, fileSize, remove, readDir } from "std/fs";
+import { exists, readFile, writeFile, rename, copyFile, fileSize, remove, readDir, ensureDir } from "std/fs";
 import { join } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { ensureDir, atomicWriteFile, renameReplace } from "./io";
@@ -238,13 +238,21 @@ export function computeFingerprint(srcPath: string, compileCmd: string): string 
 // publish on successful compile. Safe across concurrent msc instances because
 // .o content is deterministic for a given fingerprint (tmp+rename atomic publish).
 
-// Return global cache dir, or "" if disabled (opt-out) or HOME unknown.
-function globalObjectsDir(): string {
+// Return the shared global cache root (~/.metascript/cache), or "" if disabled
+// (opt-out) or HOME unknown.
+function globalCacheRoot(): string {
 	if (env.get("MSC_NO_GLOBAL_CACHE") !== "") return "";
 	const home = env.get("HOME");
 	const base = home !== "" ? home : env.get("USERPROFILE");
 	if (base === "") return "";
-	return `${base}/.metascript/cache/objects`;
+	return `${base}/.metascript/cache`;
+}
+
+// Return global cache dir, or "" if disabled (opt-out) or HOME unknown.
+function globalObjectsDir(): string {
+	const root = globalCacheRoot();
+	if (root === "") return "";
+	return `${root}/objects`;
 }
 
 // Convert a fingerprint string into a flat filename hash (stable, collision-safe).
@@ -311,24 +319,18 @@ function populateGlobal(oFile: string, fp: string): void {
 	if (!renamed.ok) remove(tmp);
 }
 
-// Called at msc startup: if the cache was populated by a different VERSION or
-// a different toolchain stamp (msc binary + runtime/ + vendor/ content), wipe
-// the dir. The stamp is folded into every fingerprint, so a stamp change makes
-// every existing entry unreachable — this wipe is pure garbage collection and
-// can never cost a cache hit. Guards against stale entries after any upgrade
-// path (msc upgrade, brew, manual cp, downgrade, WIP tree edits). Also sweeps
-// orphan .tmp.<ts> files left by populateGlobal if an msc process was killed
-// mid-copy. Idempotent.
-export function ensureVersionMarker(): void {
-	const dir = globalObjectsDir();
-	if (dir === "") return;
+// Per-dir version-marker GC: entries are keyed by the toolchain stamp, so a
+// stamp change makes every existing entry unreachable — this wipe is pure
+// garbage collection and can never cost a cache hit. Also sweeps orphan
+// .tmp.<ts> files left by atomic publishes if an msc process was killed
+// mid-write. Idempotent.
+function wipeStampedDirOnMarker(dir: string, markerValue: string): void {
 	ensureDir(dir);
 	const marker = `${dir}/.version`;
-	const markerValue = `${VERSION}:${toolchainStamp()}`;
 	const stored = try readFile(marker) catch "";
 	const entries = readDir(dir);
 	if (stored !== markerValue) {
-		// Mismatch — wipe .o entries and any orphan tmp files. Preserve .version
+		// Mismatch — wipe entries and any orphan tmp files. Preserve .version
 		// itself so we don't need a second write; it will be overwritten below.
 		for (const e of entries) {
 			if (e.length === 0) continue;
@@ -342,10 +344,21 @@ export function ensureVersionMarker(): void {
 	// Version matches — still sweep orphan .tmp.<ts> leftovers from crashed runs.
 	for (const e of entries) {
 		if (e.length === 0) continue;
-		// Match "<hash>.o.tmp.<ts>" — contains ".tmp." substring.
 		if (e.indexOf(".tmp.", 0) < 0) continue;
 		remove(`${dir}/${e}`);
 	}
+}
+
+// Called at msc startup: wipe every global cache dir whose contents were
+// populated by a different VERSION or a different toolchain stamp (msc binary
+// + runtime/ + vendor/ content). Guards against stale entries after any
+// upgrade path (msc upgrade, brew, manual cp, downgrade, WIP tree edits).
+export function ensureVersionMarker(): void {
+	const dir = globalObjectsDir();
+	if (dir === "") return;
+	const markerValue = `${VERSION}:${toolchainStamp()}`;
+	wipeStampedDirOnMarker(dir, markerValue);
+	wipeStampedDirOnMarker(headersCacheDir(), markerValue);
 }
 
 // Remove a file if it exists (reference-aligned: tryRemoveFile).
@@ -684,6 +697,95 @@ export function writeLinkCache(oFileList: string, linkFlags: string, outputFile:
 	atomicWriteFile(linkCacheFile(), content);
 }
 
+// ===== Header Inline Cache (Layer 5) =====
+//
+// Caches the output of the loader's inlineHeaderImports transform — the
+// chibicc translation of every `import { ... } from "*.h"` in a module
+// source — on disk, content-hash keyed. Model: ccache / Zig @cImport's
+// content-addressed translate cache (the reference compiler has no
+// header-translation step at all; its FFI is hand-written declarations, so
+// this caches the one transform that is OUR divergence from it).
+//
+// Key folds: module source, modulePath, compact flag, VERSION, platform,
+// compiler root (resolveRuntimeDir — the emitted @include paths and include
+// search roots embed it) and toolchainStamp (msc binary + every file under
+// runtime/ and vendor/). Headers OUTSIDE the stamped trees (user projects,
+// std/, cparse builtin stubs) are covered by the recorded dep list: the
+// transform logs every file it probed or read — "<path>\t<hash>" when read,
+// "<path>\t-" when probed-absent — and a lookup re-verifies each dep against
+// disk. Any divergence (content changed, file appeared, file vanished) is a
+// miss; a miss recomputes exactly as without the cache. Deps under the
+// stamped trees skip re-verification: the stamp already content-hashes those
+// trees whole, so the key itself moved when they changed.
+//
+// Only error-free translations are stored: a run that surfaced diagnostics
+// recomputes next time so the diagnostics re-surface (loader-side gate).
+// MSC_NO_HEADER_CACHE=1 disables both lookup and store.
+
+const HEADER_ENTRY_MAGIC = "MSHI1";
+
+// Global when available, else the local cache dir (exotic environments).
+function headersCacheDir(): string {
+	const root = globalCacheRoot();
+	if (root !== "") return `${root}/headers`;
+	return `${getCacheDir()}/headers`;
+}
+
+export function headerInlineKey(source: string, modulePath: string, compact: boolean): string {
+	return hashContent(`${VERSION}:${platform}:${compact ? "C" : "F"}:${resolveRuntimeDir()}:${modulePath}\n${source}\n${toolchainStamp()}`);
+}
+
+function depUnderStampedTrees(path: string): boolean {
+	const root = resolveRuntimeDir();
+	if (root === "") return false;
+	return path.startsWith(`${root}/runtime/`) || path.startsWith(`${root}/vendor/`);
+}
+
+// Verify one dep line against disk. Returns true when the recorded fact
+// still holds.
+function verifyHeaderDep(dep: string): boolean {
+	const tab = dep.indexOf("\t", 0);
+	if (tab <= 0) return false;
+	const path = dep.slice(0, tab);
+	const hash = dep.slice(tab + 1, dep.length);
+	if (depUnderStampedTrees(path)) return true;
+	const content = try readFile(path) catch "";
+	if (hash === "-") return content === "";
+	return content !== "" && hashContent(content) === hash;
+}
+
+// Lookup a cached inlineHeaderImports output. Entry layout:
+//   "MSHI1\n<dep>\n...\n--\n<output>"
+// Returns "" on miss, disabled, corrupt entry, or any dep that no longer
+// verifies. A miss never deletes the entry — concurrent readers first.
+export function lookupHeaderInline(key: string): string {
+	if (env.get("MSC_NO_HEADER_CACHE") !== "") return "";
+	const body = try readFile(`${headersCacheDir()}/${key}.hi`) catch "";
+	if (!body.startsWith(`${HEADER_ENTRY_MAGIC}\n`)) return "";
+	let pos = HEADER_ENTRY_MAGIC.length + 1;
+	while (true) {
+		const nl = body.indexOf("\n", pos);
+		if (nl < 0) return "";
+		const line = body.slice(pos, nl);
+		pos = nl + 1;
+		if (line === "--") break;
+		if (line.length === 0) continue;
+		if (!verifyHeaderDep(line)) return "";
+	}
+	return body.slice(pos, body.length);
+}
+
+// Publish an inlineHeaderImports output atomically (tmp + rename). Deps are
+// the recorded read set (path+hash / path+absent lines). Deterministic
+// content for a given key, so concurrent publishers write identical bytes.
+export function storeHeaderInline(key: string, deps: string[], output: string): void {
+	if (env.get("MSC_NO_HEADER_CACHE") !== "") return;
+	const dir = headersCacheDir();
+	ensureDir(dir);
+	const body = `${HEADER_ENTRY_MAGIC}\n${deps.join("\n")}\n--\n${output}`;
+	atomicWriteFile(`${dir}/${key}.hi`, body);
+}
+
 // Export getCacheDir for compile.ms to use in -iquote paths.
 export function cacheDir(): string {
 	return getCacheDir();
@@ -818,4 +920,64 @@ test "atomicWriteFile replaces existing content and leaves no tmp siblings" {
 	}
 	assert leftovers === 0;
 	remove(p);
+}
+
+// ===== Header Inline Cache (Layer 5) tests =====
+//
+// Disk mechanics only — wrapper orchestration lives in module/loader.ms
+// tests. Fixtures are real files under /tmp (same convention as bug043).
+
+test "header cache: store → hit, dep content change → miss, restore → hit" {
+	ensureDir("/tmp/mshc");
+	const hpath = "/tmp/mshc/hcx.h";
+	const orig = "extern int hcx(void);\n";
+	writeFile(hpath, orig);
+	const key = headerInlineKey("import { hcx } from \"./hcx.h\";", "/tmp/mshc/m.ms", false);
+	storeHeaderInline(key, [`${hpath}\t${hashContent(orig)}`], "OUT-1");
+	assert lookupHeaderInline(key) === "OUT-1";
+	writeFile(hpath, "extern int hcx2(void);\n");
+	assert lookupHeaderInline(key) === "";
+	writeFile(hpath, orig);
+	assert lookupHeaderInline(key) === "OUT-1";
+}
+
+test "header cache: absent dep stays valid until the file appears" {
+	const gone = "/tmp/mshc/gone.h";
+	if (exists(gone)) remove(gone);
+	const key = headerInlineKey("import { m } from \"./gone.h\";", "/tmp/mshc/gone.ms", false);
+	storeHeaderInline(key, [`${gone}\t-`], "OUT-2");
+	assert lookupHeaderInline(key) === "OUT-2";
+	writeFile(gone, "int x;\n");
+	assert lookupHeaderInline(key) === "";
+	if (exists(gone)) remove(gone);
+}
+
+test "header cache: deps under runtime//vendor/ skip disk re-verification" {
+	const key = headerInlineKey("import { r } from \"./r.h\";", "/tmp/mshc/stamped.ms", false);
+	const stampedPath = `${resolveRuntimeDir()}/runtime/definitely-not-here.h`;
+	storeHeaderInline(key, [`${stampedPath}\tdeadbeef`], "OUT-3");
+	assert lookupHeaderInline(key) === "OUT-3";
+}
+
+test "header cache: malformed dep line is a miss, empty dep list is a hit" {
+	const keyA = headerInlineKey("import { x1 } from \"./x1.h\";", "/tmp/mshc/bad.ms", false);
+	storeHeaderInline(keyA, ["nodep-newline"], "OUT-4");
+	assert lookupHeaderInline(keyA) === "";
+	const keyB = headerInlineKey("import { x2 } from \"./x2.h\";", "/tmp/mshc/empty.ms", false);
+	storeHeaderInline(keyB, [], "OUT-5");
+	assert lookupHeaderInline(keyB) === "OUT-5";
+}
+
+test "header cache: MSC_NO_HEADER_CACHE disables both directions" {
+	const key = headerInlineKey("import { k } from \"./k.h\";", "/tmp/mshc/k.ms", false);
+	storeHeaderInline(key, [], "OUT-6");
+	assert lookupHeaderInline(key) === "OUT-6";
+	env.set("MSC_NO_HEADER_CACHE", "1");
+	try {
+		assert lookupHeaderInline(key) === "";
+		storeHeaderInline(key, [], "OUT-7");
+	} finally {
+		env.delete("MSC_NO_HEADER_CACHE");
+	}
+	assert lookupHeaderInline(key) === "OUT-6";
 }
