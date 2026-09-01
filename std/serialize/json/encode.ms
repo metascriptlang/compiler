@@ -58,6 +58,9 @@ export macro jsonValueOf(t: Node): Node {
 			|| en === "number" || en === "float32" || en === "float64"
 			|| en === "int8" || en === "int16" || en === "int32" || en === "int64"
 			|| en === "uint8" || en === "uint16" || en === "uint32";
+		if (en === "bigint") {
+			error("jsonValueOf: bigint arrays are not JSON-serializable — convert elements with .toString() first", t);
+		}
 
 		// Struct/interface element → generic struct helper (recursive macro re-expansion at mono-time).
 		if (elemIsStruct) {
@@ -262,6 +265,13 @@ export macro jsonValueOf(t: Node): Node {
 			error("jsonValueOf: unsupported field type — only atomic types, atomic arrays, and structs are supported in V1", t);
 		}
 		const tn: string = tt.name;
+		// bigint has no JSON representation — silently wrapping through the
+		// jsonInt int64 carrier corrupts values >= 2^63. JSON.stringify(1n)
+		// throws in Node; the macro knows the static type, so refuse here at
+		// compile time. Escape hatch: .toString().
+		if (tn === "bigint") {
+			error("jsonValueOf: bigint is not JSON-serializable — convert with .toString() first (JSON.stringify throws on BigInt in Node too)", t);
+		}
 		// Unknown Identifier names fall through to jsonInt — mirrors @builtin's
 		// classifyJsonPrimitive treating Enum as int. Primitive aliases (e.g.,
 		// `type UserId = int32`) encode as int via the alias chain.
