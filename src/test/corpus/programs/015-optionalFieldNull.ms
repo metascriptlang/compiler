@@ -1,13 +1,10 @@
-// @skip-js: js narrows the optional union but string-concat prints the
-//   carrier object ("p1=[object Object]") instead of the narrowed field
-//   value — js-backend worklist item, surfaced when the js lane first ran
-//   on this host
-
 // `field?: T` desugars to `(T) | null`: omission stores null, a narrow
 // restores T. This is the TS optional-property surface mapped onto the
 // existing nullable-union model - the requiresInit rule for bare function
 // fields is untouched, `?` is the opt-out. Cross-lane byte compare pins
 // C/JS parity; the SAN lane pins the DRC ledger for the Maybe payloads.
+// (js lane enabled 2026-09-01: copy-on-read now sees through the Maybe
+// carrier to the erased `T | null` payload — no more "[object Object]".)
 
 interface Box { a: int32; cb?: (x: int32) => int32; }
 interface Cfg { title?: string; width?: number; tags?: string[]; }
