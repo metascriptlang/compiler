@@ -127,3 +127,5 @@ import "./bug111CursorNullFit";
 import "./bug112MacroCharCodeAtBridge";
 import "./bug113MacroLiteralValueAccessors";
 import "./bug114AliasedCondDeMorgan";
+import "./bug115EnumDeclDceMangledRef";
+import "./bug116MonoArcTypeName";

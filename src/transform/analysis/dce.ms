@@ -16,7 +16,7 @@
 // before destructorLifting). By this point if(true)/if(false) conditions are already
 // BooleanLiteral nodes from constant folding at step 2.
 
-import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, TypeKind, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, TypeKind, SymbolKind } from "../../ast/node";
 import { TransformContext, createTransformContextWithChecker, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { createFunction, neverType, voidType, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "../../checker/types";
@@ -196,6 +196,28 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 			if (mn === "main") {
 				collectIdentifiers(stmts[mi], refs);
 			}
+		}
+	}
+	// Enum member refs are MANGLED by the checker (`Color.Red` becomes the
+	// identifier `Color_Red`, the enum-member rewrite in callResolve), so an
+	// enum's liveness cannot key on its own name alone: seed it alive when any
+	// member mangle is referenced. The C emitter inlines member values (no
+	// decl needed at link time), but the JS emitter needs the emitted flat
+	// `var Color_Red = 0;` constants — sweeping the decl while a mangled
+	// reference survives emitted `ReferenceError: Color_Red is not defined`
+	// at runtime (corpus 624/700, surfaced by the 2026-09-01 js audit).
+	for (let di = 0; di < stmts.length; di += 1) {
+		if (stmts[di].kind !== NodeKind.EnumDecl) continue;
+		const en = names[di];
+		if (en.length === 0 || nameSetContains(alive, en)) continue;
+		const ed = stmts[di].data as EnumDeclData;
+		let hit = false;
+		for (const m of ed.enumMembers) {
+			if (nameSetContains(refs, en + "_" + m)) { hit = true; break; }
+		}
+		if (hit) {
+			nameSetAdd(alive, en);
+			collectIdentifiers(stmts[di], refs);
 		}
 	}
 	let changed = true;
