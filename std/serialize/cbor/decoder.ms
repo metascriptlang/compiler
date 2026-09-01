@@ -22,12 +22,8 @@ import {
 	cborBool, cborNull, cborUndefined, cborFloat, cborSimple,
 } from "./builder";
 
-// Local extern bindings for the runtime byte allocator — routed through the
-// C symbols directly.
-extern function msBufferAlloc(size: number): string;
-extern function msBufferSet(buf: string, index: number, value: number): void;
-extern function msBufferReadDoubleBE(buf: string, offset: number): float64;
-extern function msBufferReadFloatBE(buf: string, offset: number): float64;
+// Buffer is target-agnostic: alloc/set/readDoubleBE/readFloatBE route to the
+// C runtime externs on native and to DataView templates on js.
 
 const MAX_DEPTH: number = 1000;
 
@@ -41,14 +37,13 @@ const MAX_DEPTH: number = 1000;
 const MAX_COLLECTION_SIZE: number = 100000000;
 
 // Copy `length` bytes from r.buf[start..start+length] into a freshly-
-// allocated Buffer (string alias). Used by both Bytes decoding and the
-// double-precision float decode path; previously inlined in 3 places.
-// NATIVE-ONLY (relies on msBufferAlloc/Set externs).
-function bytesToBuffer(src: number[], start: number, length: number): string {
-	const buf: string = msBufferAlloc(length);
+// allocated Buffer. Used by both Bytes decoding and the double-precision
+// float decode path; previously inlined in 3 places.
+function bytesToBuffer(src: number[], start: number, length: number): Buffer {
+	const buf = Buffer.alloc(length);
 	let i = 0;
 	while (i < length) {
-		msBufferSet(buf, i, src[start + i] & 0xff);
+		buf.set(i, src[start + i] & 0xff);
 		i = i + 1;
 	}
 	return buf;
@@ -375,7 +370,7 @@ function readIndefiniteByteChunks(r: CborReader, expectedMajor: number, label: s
 			setError(r, `indefinite-length ${label}: nested indefinite chunk prohibited (RFC 8949 §3.2.3)`);
 			return out;
 		}
-		const length = head.arg as number;
+		const length = Number(head.arg);
 		if (remaining(r) < length) {
 			setError(r, `indefinite-length ${label}: truncated chunk payload`);
 			return out;
@@ -472,7 +467,7 @@ function decodeSpecial(r: CborReader, info: number, arg: int64): CborValue {
 		21 => cborBool(true),
 		22 => cborNull(),
 		23 => cborUndefined(),
-		24 => cborSimple(arg as number),
+		24 => cborSimple(Number(arg)),
 		25 => decodeHalfFloat(arg),
 		26 => decodeSingleFloat(arg),
 		27 => decodeDoubleFloat(r),
@@ -510,11 +505,11 @@ function pow2(exp: int32): number {
 // Used to produce ±Infinity (0x7FF0…/0xFFF0…) and quiet NaN (0x7FF8…) without
 // relying on `0.0/0.0`-style arithmetic (MS runtime may catch divide-by-zero).
 function bitsToDouble(b0: number, b1: number): number {
-	const buf: string = msBufferAlloc(8);
-	msBufferSet(buf, 0, b0);
-	msBufferSet(buf, 1, b1);
+	const buf = Buffer.alloc(8);
+	buf.set(0, b0);
+	buf.set(1, b1);
 	// bytes 2-7 default to zero — produces the exact IEEE 754 bit pattern
-	return msBufferReadDoubleBE(buf, 0);
+	return buf.readDoubleBE(0);
 }
 
 // Half-precision (binary16) → double per IEEE 754 §3.4 + RFC 8949 §3.4.
@@ -538,25 +533,25 @@ function decodeHalfFloat(arg: int64): CborValue {
 
 	if (exp === 0) {
 		if (mant === 0) return cborFloat(0.0);
-		return cborFloat(signMul * (mant as number) / 16777216.0);
+		return cborFloat(signMul * (mant as float64) / 16777216.0);
 	}
 	if (exp === 31) {
 		if (mant === 0) return cborFloat(bitsToDouble(sign === 0 ? 0x7F : 0xFF, 0xF0));
 		return cborFloat(bitsToDouble(0x7F, 0xF8));
 	}
-	return cborFloat(signMul * pow2(exp - 15) * (1.0 + (mant as number) / 1024.0));
+	return cborFloat(signMul * pow2(exp - 15) * (1.0 + (mant as float64) / 1024.0));
 }
 
 // Single-precision (4 bytes). arg holds the 32-bit IEEE bit pattern in its
 // lower 32 bits.
 function decodeSingleFloat(arg: int64): CborValue {
-	const buf: string = msBufferAlloc(4);
-	const v32 = arg as number;
-	msBufferSet(buf, 0, ((v32 / 16777216) | 0) % 256);
-	msBufferSet(buf, 1, ((v32 / 65536) | 0) % 256);
-	msBufferSet(buf, 2, ((v32 / 256) | 0) % 256);
-	msBufferSet(buf, 3, v32 % 256);
-	return cborFloat(msBufferReadFloatBE(buf, 0));
+	const buf = Buffer.alloc(4);
+	const v32 = Number(arg);
+	buf.set(0, Math.floor(v32 / 16777216) % 256);
+	buf.set(1, Math.floor(v32 / 65536) % 256);
+	buf.set(2, Math.floor(v32 / 256) % 256);
+	buf.set(3, v32 % 256);
+	return cborFloat(buf.readFloatBE(0));
 }
 
 // Double-precision (8 bytes). readHead intentionally left the 8 arg-bytes
@@ -569,7 +564,7 @@ function decodeDoubleFloat(r: CborReader): CborValue {
 	}
 	const buf = bytesToBuffer(r.buf, r.pos, 8);
 	r.pos = r.pos + 8;
-	return cborFloat(msBufferReadDoubleBE(buf, 0));
+	return cborFloat(buf.readDoubleBE(0));
 }
 
 // --- Generic dispatch ---
@@ -595,10 +590,10 @@ export function decodeValue(r: CborReader): CborValue {
 	return match (head.major) {
 		0 => cborInt(head.arg),
 		1 => cborInt(((-1 as int64) - head.arg) as int64),  // -1 - arg per RFC 8949 §3.1
-		2 => decodeBytes(r, head.arg as number),
-		3 => decodeText(r, head.arg as number),
-		4 => decodeArrayLen(r, head.arg as number),
-		5 => decodeMapLen(r, head.arg as number),
+		2 => decodeBytes(r, Number(head.arg)),
+		3 => decodeText(r, Number(head.arg)),
+		4 => decodeArrayLen(r, Number(head.arg)),
+		5 => decodeMapLen(r, Number(head.arg)),
 		6 => decodeTag(r, head.arg),
 		_ => decodeSpecial(r, head.info, head.arg),  // major 7
 	};

@@ -18,13 +18,8 @@
 import { CborKind, CborValue } from "./types";
 import { Buffer } from "std/core/buffer";
 
-// Local externs to runtime byte helpers — see decoder.ms for the same
-// pattern. msBufferAllocUnsafe gives an 8-byte scratch slot we fill via
-// msBufferWriteDoubleBE then read back byte-by-byte to push into the
-// writer.bytes accumulator.
-extern function msBufferAllocUnsafe(size: number): string;
-extern function msBufferWriteDoubleBE(buf: string, value: float64, offset: number): number;
-extern function msBufferReadUint8(buf: string, offset: number): number;
+// Float bytes route through Buffer's writeDoubleBE/readUInt8 — the runtime
+// helper on native, a DataView template on js.
 
 // Public encode entry — lives here (not index.ms) so the encode macro can
 // bindSym("encode") without an encode↔index import cycle.
@@ -75,8 +70,8 @@ function writeBE(w: CborWriter, value: number, byteCount: number): void {
 // 32 + lower 32 via div/mod: bitwise ops on int64 do not wrap correctly on the
 // JS backend.
 function writeInt64BE(w: CborWriter, value: int64): void {
-	const upper = (value / (4294967296 as int64)) as number;
-	const lower = (value % (4294967296 as int64)) as number;
+	const upper = Number(value / (4294967296 as int64));
+	const lower = Number(value % (4294967296 as int64));
 	writeBE(w, upper, 4);
 	writeBE(w, lower, 4);
 }
@@ -93,21 +88,22 @@ function writeInt64BE(w: CborWriter, value: int64): void {
 
 export function writeHead(w: CborWriter, major: number, arg: int64): void {
 	const m = (major & 0x07) << 5;
+	const a = Number(arg);
 	match (true) {
 		_ when (arg < (24 as int64)) => {
-			writeByte(w, m | (arg as number));
+			writeByte(w, m + a);
 		},
 		_ when (arg < (256 as int64)) => {
 			writeByte(w, m | 24);
-			writeByte(w, arg as number);
+			writeByte(w, a);
 		},
 		_ when (arg < (65536 as int64)) => {
 			writeByte(w, m | 25);
-			writeBE(w, arg as number, 2);
+			writeBE(w, a, 2);
 		},
 		_ when (arg < (4294967296 as int64)) => {
 			writeByte(w, m | 26);
-			writeBE(w, arg as number, 4);
+			writeBE(w, a, 4);
 		},
 		_ => {
 			writeByte(w, m | 27);
@@ -130,16 +126,23 @@ export function encodeInt(w: CborWriter, value: int64): void {
 	}
 }
 
-// Push every byte of `s` (a string OR Buffer — they share the type alias)
-// onto the writer. Used by both major-2 (bytes) and major-3 (text) emitters
-// since the wire payload is identical bytes either way; only the head
-// differs. Replaces three near-identical inline loops in encodeText / the
-// dispatcher's Bytes arm / earlier encodeBytes (now removed).
+// Push every byte of `s` onto the writer. The string form is used by the
+// major-3 (text) emitter; the Buffer form by major-2 (raw bytes) — the wire
+// payload is identical bytes either way, only the head differs.
 function pushStringBytes(w: CborWriter, s: string): void {
 	const n = s.byteLength;
 	let i = 0;
 	while (i < n) {
 		w.bytes.push(s.byteAt(i) & 0xff);
+		i = i + 1;
+	}
+}
+
+function pushBufferBytes(w: CborWriter, b: Buffer): void {
+	const n = b.byteLength;
+	let i = 0;
+	while (i < n) {
+		w.bytes.push(b.byteAt(i) & 0xff);
 		i = i + 1;
 	}
 }
@@ -224,11 +227,11 @@ export function encodeSimple(w: CborWriter, n: number): void {
 // inline tests — coverage lives in native probes.
 export function encodeFloat(w: CborWriter, f: float64): void {
 	w.bytes.push(MAJOR7_HEAD | 27);
-	const buf: string = msBufferAllocUnsafe(8);
-	msBufferWriteDoubleBE(buf, f, 0);
+	const buf = Buffer.allocUnsafe(8);
+	buf.writeDoubleBE(f, 0);
 	let i: number = 0;
 	while (i < 8) {
-		w.bytes.push(msBufferReadUint8(buf, i));
+		w.bytes.push(buf.readUInt8(i));
 		i = i + 1;
 	}
 }
@@ -239,10 +242,8 @@ export function encodeValue(w: CborWriter, v: CborValue): void {
 	match (v.kind) {
 		CborKind.Int       => { encodeInt(w, v.intVal); },
 		CborKind.Bytes     => {
-			// Buffer aliases `string` so pushStringBytes covers both major-2
-			// (raw bytes) and major-3 (text) payloads — only the head differs.
 			writeHead(w, 2, v.bytesVal.byteLength as int64);
-			pushStringBytes(w, v.bytesVal);
+			pushBufferBytes(w, v.bytesVal);
 		},
 		CborKind.Text      => { encodeText(w, v.textVal); },
 		CborKind.Array     => { encodeArray(w, v.items); },

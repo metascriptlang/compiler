@@ -33,16 +33,6 @@
 
 import { Buffer } from "std/core/buffer";
 
-// Local extern bindings — std/core/buffer keeps these private but the tar
-// writer needs direct byte-level access without relying on extension-method
-// resolution through the `type Buffer = string` alias. The names match the
-// C runtime symbols so no `from` clause is needed.
-extern function msBufferAlloc(size: number): string;
-extern function msBufferSet(buf: string, index: number, value: number): void;
-extern function msBufferFill(buf: string, value: number, start: number, end: number): string;
-extern function msBufferWriteString(buf: string, str: string, offset: number, length: number, encoding: string): number;
-extern function msBufferCopy(src: string, dst: string, dstStart: number, srcStart: number, srcEnd: number): number;
-
 const BLOCK_SIZE: int32 = 512;
 const NAME_MAX: int32 = 100;
 const PREFIX_MAX: int32 = 155;
@@ -59,10 +49,11 @@ export interface TarEntry {
 
 // Build a USTAR archive. Returns the raw tar bytes or an error string if any
 // entry has a path that cannot fit in name+prefix (very long paths).
-export function writeTar(entries: TarEntry[]): Result<string, string> {
+export function writeTar(entries: TarEntry[]): Result<Buffer, string> {
 	// Two-pass: first compute headers + total size, then allocate once and
 	// copy everything in. O(n) memory traffic, not O(n²).
-	const headers: string[] = [];
+	const headers: Buffer[] = [];
+	const datas: Buffer[] = [];
 
 	let totalSize = 0;
 	let i = 0;
@@ -73,36 +64,37 @@ export function writeTar(entries: TarEntry[]): Result<string, string> {
 		const headerResult = buildHeader(entry);
 		if (!headerResult.ok) return Result.err(headerResult.error);
 		headers.push(headerResult.value);
+		const data = Buffer.fromString(entry.data, "utf8");
+		datas.push(data);
 
 		totalSize = totalSize + BLOCK_SIZE;
 		// Body is padded to next 512-byte boundary.
-		const bodyLen: int32 = entry.data.byteLength as int32;
+		const bodyLen: int32 = data.byteLength as int32;
 		const padded: int32 = bodyLen + ((BLOCK_SIZE - (bodyLen % BLOCK_SIZE)) % BLOCK_SIZE);
 		totalSize = totalSize + padded;
 	}
 	// Two zero end blocks.
 	totalSize = totalSize + BLOCK_SIZE + BLOCK_SIZE;
 
-	// Single allocation; zero-filled by msBufferAlloc.
-	const out = msBufferAlloc(totalSize);
+	// Single allocation; zero-filled by Buffer.alloc.
+	const out = Buffer.alloc(totalSize);
 	let off = 0;
 	let j = 0;
 	while (j < entries.length) {
-		const entry = entries[j];
 		const hdr = headers[j];
-		msBufferCopy(hdr, out, off, 0, BLOCK_SIZE);
+		hdr.copyTo(out, off, 0, BLOCK_SIZE);
 		off = off + BLOCK_SIZE;
-		const bodyLen: int32 = entry.data.byteLength as int32;
+		const data = datas[j];
+		const bodyLen: int32 = data.byteLength as int32;
 		if (bodyLen > 0) {
-			msBufferCopy(entry.data, out, off, 0, bodyLen);
+			data.copyTo(out, off, 0, bodyLen);
 		}
 		const rem: int32 = bodyLen % BLOCK_SIZE;
 		const padded: int32 = rem === 0 ? bodyLen : bodyLen + (BLOCK_SIZE - rem);
 		off = off + padded;
 		j = j + 1;
 	}
-	// End zero blocks are already zero from msBufferAlloc; just advance.
-	// (No-op; out is fully built.)
+	// End zero blocks are already zero from Buffer.alloc; nothing to do.
 
 	return Result.ok(out);
 }
@@ -110,7 +102,7 @@ export function writeTar(entries: TarEntry[]): Result<string, string> {
 // --- Internal helpers ---
 
 function buildHeader(entry: TarEntry): Result<Buffer, string> {
-	const hdr = msBufferAlloc(BLOCK_SIZE);
+	const hdr = Buffer.alloc(BLOCK_SIZE);
 
 	// Split name into prefix + name if it's too long for the 100-byte field.
 	const split = splitPath(entry.name);
@@ -119,7 +111,7 @@ function buildHeader(entry: TarEntry): Result<Buffer, string> {
 	const prefixField = split.value.prefix;
 
 	// Name (offset 0, 100 bytes)
-	msBufferWriteString(hdr, nameField, 0, nameField.byteLength, "binary");
+	hdr.write(nameField, 0, nameField.byteLength, "binary");
 
 	// Mode (offset 100, 8 bytes): 7 octal digits + NUL.
 	writeOctal(hdr, 100, 8, entry.mode);
@@ -138,24 +130,24 @@ function buildHeader(entry: TarEntry): Result<Buffer, string> {
 
 	// Checksum field (offset 148, 8 bytes): fill with 8 spaces FOR the
 	// checksum computation — we'll overwrite it with the real value below.
-	msBufferFill(hdr, 32, 148, 156); // 32 = ' '
+	hdr.fill(32, 148, 156); // 32 = (space)
 
 	// Typeflag (offset 156, 1 byte): "0" for regular file
-	msBufferSet(hdr, 156, 48); // '0'
+	hdr.set(156, 48); // '0'
 
 	// Linkname (offset 157, 100 bytes): already zero
 
 	// Magic "ustar\0" (offset 257, 6 bytes)
-	msBufferSet(hdr, 257, 117); // 'u'
-	msBufferSet(hdr, 258, 115); // 's'
-	msBufferSet(hdr, 259, 116); // 't'
-	msBufferSet(hdr, 260, 97);  // 'a'
-	msBufferSet(hdr, 261, 114); // 'r'
-	msBufferSet(hdr, 262, 0);   // NUL
+	hdr.set(257, 117); // 'u'
+	hdr.set(258, 115); // 's'
+	hdr.set(259, 116); // 't'
+	hdr.set(260, 97);  // 'a'
+	hdr.set(261, 114); // 'r'
+	hdr.set(262, 0);   // NUL
 
 	// Version "00" (offset 263, 2 bytes)
-	msBufferSet(hdr, 263, 48); // '0'
-	msBufferSet(hdr, 264, 48); // '0'
+	hdr.set(263, 48); // '0'
+	hdr.set(264, 48); // '0'
 
 	// uname (offset 265, 32 bytes): empty
 	// gname (offset 297, 32 bytes): empty
@@ -164,7 +156,7 @@ function buildHeader(entry: TarEntry): Result<Buffer, string> {
 
 	// Prefix (offset 345, 155 bytes)
 	if (prefixField.byteLength > 0) {
-		msBufferWriteString(hdr, prefixField, 345, prefixField.byteLength, "binary");
+		hdr.write(prefixField, 345, prefixField.byteLength, "binary");
 	}
 
 	// Compute checksum: sum of all 512 bytes (interpreted as unsigned) with
@@ -178,7 +170,7 @@ function buildHeader(entry: TarEntry): Result<Buffer, string> {
 
 	// Write checksum: 6 octal digits + NUL + space (the canonical GNU format).
 	const cksumStr = padOctal(sum, 6) + "\0 ";
-	msBufferWriteString(hdr, cksumStr, 148, 8, "binary");
+	hdr.write(cksumStr, 148, 8, "binary");
 
 	return Result.ok(hdr);
 }
@@ -228,7 +220,7 @@ function splitPath(path: string): Result<PathSplit, string> {
 // Format: (fieldLen-1) octal digits zero-padded + trailing NUL.
 function writeOctal(buf: Buffer, offset: number, fieldLen: number, value: number): void {
 	const s = padOctal(value, fieldLen - 1) + "\0";
-	msBufferWriteString(buf, s, offset, fieldLen, "binary");
+	buf.write(s, offset, fieldLen, "binary");
 }
 
 // Convert a non-negative integer to an octal string of exactly `width` digits,
