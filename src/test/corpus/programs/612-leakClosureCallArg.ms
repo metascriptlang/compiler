@@ -1,6 +1,5 @@
 // @maxrss: 40
 // @stdout: leak-closure-callarg acc=
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: FIXED (the 5th fresh-owned producer). A closure capturing a local (heap env) passed inline as a non-sink call arg the callee stores leaked the captured env (247MB @ 2M, found by coverage probing). Root, traced by emit-C: the lifted closure-pair (an NF_CLOSURE ObjectLiteral) carried no nodeType, so ensureDestructionIfNeeded bailed on null and never captured it. The 3-part fix: (1) lambdaLifting sets the closure-pair's nodeType (originalNodeType) so the analyzer can classify it; (2) classify.ms TypeKind.Function → needsCleanup=true so it captures + destroys; (3) processObjectLiteral keeps NF_CLOSURE pairs isRefConstr so the env field stays a COPY (incref) — without this, setting nodeType=Function flips the env field to a borrow (no incref) and the pair's msClosureDestroy double-frees the env against the env-var's own lifecycle (the over-free a naive 1-line flip caused, caught here + by paralock-nested). Now flat ~2MB drc+orc; paralock-nested (concurrency closures) green; self-host (heavy closure use) exit 0.
 
 // leak-closure-callarg — fresh CLOSURE (the 5th fresh-owned producer) as a stored call argument.

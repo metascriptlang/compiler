@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: map-guard-ok sum=280 sum2=288 set=4 hmk=6 hs=4
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Positive half of the Map/Set concurrent-access guard (#188, Go writing-flag model). Exercises all four containers + a single-threaded mutate-during-iterate (value-update of each key while ranging m.toItems()). That must NOT fire — Go allows single-threaded mutation during range (the `writing` flag is set only for the duration of one op and clears before the iterator resumes), so this pins that the guard does not over-fire on legitimate sequential code. The guard\'s msMapFatal/exit only runs in the native binary only runs in the native binary.
 
 import { Map, Set, HashMap, HashSet } from "std/core/struct";

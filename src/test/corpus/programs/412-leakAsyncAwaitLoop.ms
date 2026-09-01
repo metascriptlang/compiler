@@ -1,7 +1,6 @@
 // @maxrss: 40
 // @stdout: leak-async-await-loop r=
 // @serial
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: FIXED in C codegen (genWhileStmt/genDoWhileStmt): loops never called pushBlock(p, true), so genBreak/genContinue found no isLoop block and emitted a bare break/continue that SKIPPED pending finally — leaking every DRC temp whose cleanup lived in a finally between the jump and the loop boundary, AND violating the try/finally contract (finally didn't run on break/continue). Root cause of the Photon WS broadcast leak: the async stepper's fast-path `if (finished) continue` skipped the per-iteration temp decref. Was the general bug; manifested here as ~32 B/iter (2M → 64MB), now flat ~2MB. Restores Nim parity (ccgstmts startBlockWith + isLoop=true). Permanent regression guard.
 
 // OPEN BUG (PARALOCK async cooperative path) — async function with `await`

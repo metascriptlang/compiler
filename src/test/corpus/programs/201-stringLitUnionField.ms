@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: strlit-union-field acc=700001
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: String-literal-union interface fields (the yoga FlexStyle shape). Bug 1: pure strlit-union field (aliased/inline) classified RcKind.Named → <Alias>Destroy/<Alias>Copy prototypes for a type codegen represents as msString (genUnionType) → C compile error 'unknown type name'. Fix: classifyType Union arm routes isAllStringLiteralUnion through the String classification (msStringDecref family). Bug 2: `strlit-union | null` — createUnion flattens to [Lit, Lit, Null] so resolveAnnotation's 2-member Maybe detection misses it → codegen builds a real msUnion_* struct while expression sites emit msString ops → C type mismatch. Fix: isMaybeWrappable accepts StringLiteral + all-strlit unions (they are msString at runtime, no spare null bit → Maybe wrapper), maybeCacheKey gets a structural key for anonymous strlit unions. Churn loop guards the DRC side: field init/copy/scope-destroy of msString-repr values stays flat.
 
 // String-literal-union interface fields — the FlexStyle shape (yoga bindings).

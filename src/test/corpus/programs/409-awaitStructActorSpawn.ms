@@ -1,7 +1,6 @@
 // @maxrss: 40
 // @stdout: await-struct-actorspawn acc=2600000
 // @serial
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: GREEN regression guard for the struct-future-layout fix (paired with the RED await-struct-returns). `await` on a struct-with-heap-field (tag: string) return from an actor CALL and from spawn — both BOXED (msSinkBoxStruct → msMsgCompletePtr / spawn box), read by awaitLower's msWaitFor(void*)+msUnboxStruct. Locks the actor/spawn boxed path so the Amendment-F fix (boxing async struct returns) can't silently regress them — the DRC-ownership-transfer surface where a heap string double-frees or leaks if the box mishandles it. acc=2600000 (100000 × ((5+9)+(3+9))).
 
 struct Msg { tag: string; n: number; }

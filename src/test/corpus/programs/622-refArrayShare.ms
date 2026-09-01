@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: ref-array acc=13500000
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Ref<Array<T>> reference semantics (Phase 3 array migration): share-on-assign, mutate-through (direct/param/closure capture), length/index, string-element arrays. Refcounted box via msAllocTyped + per-element-type cell TypeInfo. Flat RSS proves the box frees its payload + the cell once.
 
 // Reference-array (T[] = Ref<Array<T>>) semantics under DRC: share-on-assign,

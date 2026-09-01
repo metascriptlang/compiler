@@ -1,6 +1,5 @@
 // @maxrss: 40
 // @stdout: leak-elseif-cond hits=
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: FIXED by callHoist (b3 audit): a fresh RC call in an `else if` condition (`else if (provide(i).ok)`) leaked — an else-if is the `.alternate` of its parent IfStmt, never a statement-list entry, so expandStmt never reached its condition. Fix wraps a fresh-cond else-if in a block so the walker descends and lowers it (cascading down the chain). Permanent regression guard — was 277MB leaking, now flat.
 
 // FIXED (b3 audit) — a fresh RC call in an `else if` condition leaked per evaluation.

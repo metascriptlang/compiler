@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: macro-helper-isolation PASS
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Macro-path injection isolation (expand.ms clone-at-push). Helper decls reachable from a macro body were injected into the wrapper Program by reference; evalASTFull's destructive pipeline lambda-lifted the closure-bearing helper's REAL body against the synthetic program, so after one expansion the module failed its own check with an unrenderable synthetic-location type error. Pre-fix this case does not build; the marker pins CT value (macro fold) AND runtime helper both at 42. Twin of the @comptime clone fix (comptime.ms inject sites) — the 'isolation:' lang tests cover that path, this covers the macro path natively.
 
 // Native guard for macro-path injection isolation (src/compiler/meta/expand.ms).

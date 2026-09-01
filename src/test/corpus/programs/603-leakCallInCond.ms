@@ -1,6 +1,5 @@
 // @maxrss: 40
 // @stdout: leak-call-in-cond hits=
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: FIXED by the Phase-3 call-hoist pass (transform/lowering/callHoist.ms): a fresh Result-returning call used only for a non-RC read (`const has = provide(p).ok`) is hoisted to `const $t = provide(p); const has = $t.ok` so the analyzer destroys $t at scope exit. Permanent regression guard — was 278MB leaking, now flat.
 
 // OPEN BUG (xfail) — fresh RC call result used for a non-RC read leaks.

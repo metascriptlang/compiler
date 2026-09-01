@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: macro-node-fields PASS
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Locks addKindFields (expand.ms) ↔ bridge.ms nodeToValue parity: a macro reading an ARRAY field of a NodeKind addKindFields didn't serialize used to abort at expansion with 'array handle out of bounds: 0' (e.g. MatchExpr.matchCases). Brought addKindFields to full parity (54 missing kinds added: MatchExpr/MatchCase, all For/Switch/Try/Do stmts, New/Await/Yield/Spread/TryExpr, Class/Interface/Enum/Method/Property/Ctor/Struct/Actor/Import/Export/Macro decls, patterns, etc.). The macros here read matchCases.length, matchCases[0].caseBody.kind, and casePatterns.length — building this program natively re-runs them at compile time, so a regression re-breaks the BUILD (macro abort), not just this assert. Invisible to compileToC tests (isolated module graph can't resolve std/meta).
 
 // Native guard for addKindFields ↔ bridge.ms nodeToValue parity (src/compiler/meta/expand.ms).

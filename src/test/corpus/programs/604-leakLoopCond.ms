@@ -1,6 +1,5 @@
 // @maxrss: 40
 // @stdout: leak-loop-cond i=
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: FIXED by callHoist b3a: a fresh RC call in a LOOP condition (`while (provide(i).ok)`) re-evaluates every iteration, so a preceding hoist would be wrong. Lowered to `while (true) { const $t = provide(i); if (!($t.ok)) break; BODY }` so the per-iteration Result is destroyed at each iteration's scope exit. Permanent regression guard — was 339MB leaking, now flat.
 
 // FIXED (b3a) — a fresh RC call in a LOOP condition leaked once per iteration.

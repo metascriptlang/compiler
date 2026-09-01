@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: raiser-cycle freed=200000 keeperOk=1
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Raiser ORC cycle collector (src/raiser/orc.ms, Bacon trial-deletion) running AS COMPILED C — the only tier that does. ARC (plain refcount) cannot reclaim a reference cycle (a.next=b, b.next=a → each rc=1, reachable only via the other); the collector must. Builds + collects a garbage cycle each of 100k rounds (free-list must recycle → objHeap bounded, RSS flat); a keeper cycle held by an external ref must SURVIVE every round (guards over-collection → UAF). freed=200000 proves every garbage cycle was reclaimed (2/round); flat RSS proves the freed slots recycle (not just counted); keeperOk=1 proves the externally-reachable cycle was kept + its rc restored each scan. If the collector regresses to a no-op the garbage leaks (objHeap grows unbounded → RSS balloons → over bound); if it over-collects the keeper, keeperOk=0. Closes the one native-verification gap for the Raiser ORC memory model.
 
 // Raiser ORC cycle collector (src/raiser/orc.ms) running AS COMPILED C. ARC alone

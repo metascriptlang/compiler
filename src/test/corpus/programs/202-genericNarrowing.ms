@@ -1,6 +1,5 @@
 // @maxrss: 30
 // @stdout: generic-narrowing PASS
-// @skip-js: migrated from native/ — JS-lane audit pending
 // note: Early-return null narrowing inside a monomorphized generic body. monoCloneNode creates nodes via createNodeAt (flowNode=null everywhere), so flow-graph narrowing queries in the instantiation body re-check silently fell back to declared types: `if (cur === null) return 0;` did not narrow the fall-through path (then-branch narrowing uses the checker guard stack and still worked, masking the gap) -> 'got Ptr | null, expected Ptr'. Fix: bindFunctionFlow(clone) rebuilds the flow graph for the cloned body before callCheckFunctionBody (instantiate.ms, both the function and class-ctor paths).
 
 // Early-return null narrowing inside a monomorphized generic body.
