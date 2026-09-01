@@ -137,6 +137,32 @@ export function jsSymbolName(gen: JSGenerator, sym: Symbol | null, name: string)
 	return safeJsName(name);
 }
 
+function moduleCountExporting(gen: JSGenerator, baseName: string): int32 {
+	let count = 0;
+	for (let mi = 0; mi < gen.modExportKeys.length; mi += 1) {
+		const names = gen.modExportVals[mi];
+		for (let ni = 0; ni < names.length; ni += 1) {
+			if (names[ni] === baseName) { count += 1; break; }
+		}
+	}
+	return count;
+}
+
+function exportersBefore(gen: JSGenerator, modulePath: string, baseName: string): int32 {
+	let before = 0;
+	for (let mi = 0; mi < gen.modExportKeys.length; mi += 1) {
+		const names = gen.modExportVals[mi];
+		let exports = false;
+		for (let ni = 0; ni < names.length; ni += 1) {
+			if (names[ni] === baseName) { exports = true; break; }
+		}
+		if (!exports) continue;
+		if (gen.modExportKeys[mi] === modulePath) { return before; }
+		before += 1;
+	}
+	return -1;
+}
+
 // Multi-file naming derives from the module's export surface, NOT from
 // Exported/Imported symbol flags: registry clones on the importing side can
 // arrive with no flags at all, while the declaring side sees flagged symbols —
@@ -160,7 +186,16 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string): string {
 	if (sym.symbolKind === SymbolKind.Function && hasModule) {
 		if (moduleExportsName(gen, sym.modulePath, baseName)) {
 			const inSet = sym.overloadIdx > 0 || (sym.overloads !== null && sym.overloads.length > 0);
-			emitted = inSet ? `${safeJsName(baseName)}_u${sym.overloadIdx}` : safeJsName(baseName);
+			// The declaring side compiles alone, so a set spanning modules
+			// never shows in its symbol state — both sides read the collision
+			// off the export surface instead, the one list they share.
+			let slot = sym.overloadIdx;
+			let suffixed = inSet;
+			if (moduleCountExporting(gen, baseName) > 1) {
+				const before = exportersBefore(gen, sym.modulePath, baseName);
+				if (before >= 0) { slot = before + sym.overloadIdx; suffixed = true; }
+			}
+			emitted = suffixed ? `${safeJsName(baseName)}_u${slot}` : safeJsName(baseName);
 		} else {
 			emitted = mangledFunctionName(sym, name, sym.overloadIdx);
 		}
