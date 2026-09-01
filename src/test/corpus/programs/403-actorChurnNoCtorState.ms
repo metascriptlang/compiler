@@ -1,7 +1,6 @@
 // @maxrss: 40
 // @stdout: actor-churn-noctor done
 // @serial
-// @skip-js: std/actor has no js binding - the actor runtime is C-only (PARALOCK tier 2/3); js audit 2026-09-01
 // note: FIXED (companion to actor-churn-heapstate): the NO-constructor actor teardown path is a distinct codegen branch (Ref-with-field-defaults, expressions.ms ~983) from the with-ctor one. State has a heap number[] field; the no-ctor branch already passed innerType so destroyFn is wired, and runtime msActorDestroyWithReason frees the state — without it the array leaked per teardown. Pins the no-ctor branch against drift.
 
 // Guards the NO-constructor actor teardown path — a distinct codegen branch from the
