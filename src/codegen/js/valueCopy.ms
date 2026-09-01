@@ -25,12 +25,28 @@ function registryFor(gen: JSGenerator): void {
 }
 
 export function needsValueCopy(t: Type | null): boolean {
+	// Maybe<T> is unwrapped first: the C backend wraps non-pointer optionals in
+	// a { value, present } carrier, but the JS backend erases them to a native
+	// `T | null` at every emission site (literals, tests, calls) — so the copy
+	// decision must be made on the payload T, not the carrier. Otherwise a
+	// narrowed `return p.fb` emits a carrier deep-copy for what is a plain
+	// nullable string at runtime (corpus 015 "p1=[object Object]").
+	t = jsValueRepr(t);
 	if (t === null) return false;
 	if (t.kind === TypeKind.Struct) return (t.typeFlags & TypeFlag.IsStruct) !== 0;
 	if (t.kind === TypeKind.Tuple) return true;
 	if (t.kind === TypeKind.Array) return true;
 	if (t.kind === TypeKind.SizedArray) return true;
 	return false;
+}
+
+// The runtime representation a JS value of static type `t` actually has:
+// Maybe<T> carriers are erased to `T | null` (see needsValueCopy).
+function jsValueRepr(t: Type | null): Type | null {
+	if (t !== null && t.kind === TypeKind.Struct && (t.typeFlags & TypeFlag.IsMaybe) !== 0) {
+		return t.typeReturn;
+	}
+	return t;
 }
 
 function typeKey(t: Type): string {
@@ -55,6 +71,7 @@ function typeKey(t: Type): string {
 }
 
 function copyExpr(gen: JSGenerator, t: Type | null, src: string): string {
+	t = jsValueRepr(t);
 	if (!needsValueCopy(t)) return src;
 	return copyFnName(gen, t as Type) + "(" + src + ")";
 }
@@ -158,7 +175,7 @@ function isFreshRvalue(n: Node): boolean {
 }
 
 export function emitCopyOnRead(gen: JSGenerator, node: Node): void {
-	const t = node.nodeType;
+	const t = jsValueRepr(node.nodeType);
 	if (!needsValueCopy(t) || isFreshRvalue(node)) {
 		emitNode(gen, node);
 		return;
