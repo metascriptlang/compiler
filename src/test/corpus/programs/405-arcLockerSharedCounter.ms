@@ -1,7 +1,7 @@
 // @maxrss: 30
 // @stdout: arc-locker total=12000
 // @serial
-// @skip-js: migrated from native/ — JS-lane audit pending
+// @skip-js: Locker/withLock (std/actor) have no js binding; js audit 2026-09-01
 // note: Arc<struct{lock}> shared across spawn — the shipped shared-mutable-state pattern. Arc keeps the heap cell alive race-free (atomic rc); the bare Locker ticket lock serializes the read-modify-write. 3000 rounds × 4 spawn tasks hammer one shared Arc<Shared>; the counter lives in the lock's own slot, mutated ONLY inside withLock. total=12000 (3000×4) proves the ticket lock serializes race-free; flat RSS proves box+lock free once; clean under drc+orc. Replaces the dropped typed inline Mutex<T> (std/core/sync) — a redundant composition: Locker (exclusion) + Arc (cross-thread liveness) + struct (typed data) are orthogonal and compose without a dedicated lock-owns-data primitive, which MS can't make safe anyway (no field privacy / borrow checker to enforce no-unlocked-access). The sizeof-T-monomorphizes fix it was built on stays (general fix with its own regression).
 
 import { Locker, createLocker, withLock, lockerGet, lockerSet } from "std/core/promise";
