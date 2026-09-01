@@ -1,0 +1,579 @@
+// Buffer on the js target is a Uint8Array: `uint8[]` already emits as one,
+// so the alias keeps every array operation native. String methods do not
+// apply here — this module re-provides the byte surface that std/core/buffer
+// adds on top of the C string alias:
+//   - hot paths (set/byteAt/endian reads/search/fill) bind via `from`
+//     templates, emitting native subscripts and DataView calls with zero
+//     wrapper frame;
+//   - encoders (hex/base64/utf8) are pure loops over that surface.
+//
+// Invariant leveraged by the DataView templates: every Buffer value produced
+// by this module is a whole, offset-0 view of its own ArrayBuffer (alloc/
+// fromArray/slice all copy); subarray() appears only transiently inside
+// copyTo, never stored or returned.
+
+export type Buffer = uint8[];
+
+// ===== private native bindings =====
+
+function bufSubView(b: Buffer, s: number, e: number): Buffer {
+	const out = Buffer.alloc(e - s);
+	let i = s;
+	while (i < e) {
+		out.set(i - s, b.byteAt(i));
+		i += 1;
+	}
+	return out;
+}
+function bufCopyInto(dst: Buffer, src: Buffer, at: number): void {
+	let i = 0;
+	while (i < src.length) {
+		dst.set(at + i, src.byteAt(i));
+		i += 1;
+	}
+}
+
+// ===== Free Functions (constructors / static-like) =====
+
+export extern function alloc(this typeof Buffer, size: number): Buffer from "new Uint8Array(#)";
+
+// js has no unsafe allocation; a zero-filled array is a semantic superset.
+export extern function allocUnsafe(this typeof Buffer, size: number): Buffer from "new Uint8Array(#)";
+
+export extern function fromArray(this typeof Buffer, arr: number[]): Buffer from "new Uint8Array(#)";
+
+const HEX_DIGITS: string = "0123456789abcdef";
+const B64_ALPHABET: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function hexVal(c: int32): int32 {
+	if (c >= 48 && c <= 57) return c - 48;
+	if (c >= 97 && c <= 102) return c - 87;
+	if (c >= 65 && c <= 70) return c - 55;
+	return -1;
+}
+
+function b64Val(c: int32): int32 {
+	if (c >= 65 && c <= 90) return c - 65;
+	if (c >= 97 && c <= 122) return c - 71;
+	if (c >= 48 && c <= 57) return c + 4;
+	if (c === 43) return 62;
+	if (c === 47) return 63;
+	return -1;
+}
+
+// utf8 (or binary/latin1 char codes < 128 — identical bytes) of a string.
+function encodeUtf8(s: string): Buffer {
+	const out = Buffer.alloc(s.byteLength);
+	let i = 0;
+	let j = 0;
+	while (i < s.length) {
+		let cp: int32 = s.charCodeAt(i) as int32;
+		if (cp >= 55296 && cp <= 56319 && i + 1 < s.length) {
+			const lo: int32 = s.charCodeAt(i + 1) as int32;
+			if (lo >= 56320 && lo <= 57343) {
+				cp = 65536 + ((cp - 55296) << 10) + (lo - 56320);
+				i += 1;
+			}
+		}
+		i += 1;
+		if (cp < 128) {
+			out.set(j, cp);
+			j += 1;
+		} else if (cp < 2048) {
+			out.set(j, 192 | (cp >> 6));
+			out.set(j + 1, 128 | (cp & 63));
+			j += 2;
+		} else if (cp < 65536) {
+			out.set(j, 224 | (cp >> 12));
+			out.set(j + 1, 128 | ((cp >> 6) & 63));
+			out.set(j + 2, 128 | (cp & 63));
+			j += 3;
+		} else {
+			out.set(j, 240 | (cp >> 18));
+			out.set(j + 1, 128 | ((cp >> 12) & 63));
+			out.set(j + 2, 128 | ((cp >> 6) & 63));
+			out.set(j + 3, 128 | (cp & 63));
+			j += 4;
+		}
+	}
+	return out;
+}
+
+function decodeUtf8Range(b: Buffer, start: number, end: number): string {
+	let out = "";
+	let i = start;
+	while (i < end) {
+		let cp: int32 = b.byteAt(i) as int32;
+		i += 1;
+		if (cp >= 240) {
+			cp = ((cp & 7) << 18) | ((b.byteAt(i) & 63) << 12) | ((b.byteAt(i + 1) & 63) << 6) | (b.byteAt(i + 2) & 63);
+			i += 3;
+		} else if (cp >= 224) {
+			cp = ((cp & 15) << 12) | ((b.byteAt(i) & 63) << 6) | (b.byteAt(i + 1) & 63);
+			i += 2;
+		} else if (cp >= 192) {
+			cp = ((cp & 31) << 6) | (b.byteAt(i) & 63);
+			i += 1;
+		}
+		if (cp >= 65536) {
+			const v = cp - 65536;
+			out = out + fromCharCode(55296 + (v >> 10)) + fromCharCode(56320 + (v & 1023));
+		} else {
+			out = out + fromCharCode(cp);
+		}
+	}
+	return out;
+}
+
+export function fromString(this typeof Buffer, value: string, encoding: string): Buffer {
+	if (encoding === "hex") {
+		let n = 0;
+		let i = 0;
+		while (i + 1 < value.length) {
+			if (hexVal(value.charCodeAt(i)) < 0 || hexVal(value.charCodeAt(i + 1)) < 0) break;
+			n += 1;
+			i += 2;
+		}
+		const out = Buffer.alloc(n);
+		i = 0;
+		let j = 0;
+		while (j < n) {
+			out.set(j, hexVal(value.charCodeAt(i)) * 16 + hexVal(value.charCodeAt(i + 1)));
+			i += 2;
+			j += 1;
+		}
+		return out;
+	}
+	if (encoding === "base64") {
+		let count = 0;
+		let i = 0;
+		while (i < value.length) {
+			const c = value.charCodeAt(i);
+			if (c === 61 || b64Val(c) < 0) break;
+			count += 1;
+			i += 1;
+		}
+		const rem = count % 4;
+		let n = ((count / 4) | 0) * 3;
+		if (rem === 2) n += 1;
+		if (rem === 3) n += 2;
+		const out = Buffer.alloc(n);
+		let acc = 0;
+		let bits = 0;
+		let j = 0;
+		i = 0;
+		while (i < count) {
+			acc = (acc << 6) | b64Val(value.charCodeAt(i));
+			bits += 6;
+			if (bits >= 8) {
+				bits -= 8;
+				if (j < n) {
+					out.set(j, (acc >> bits) & 255);
+					j += 1;
+				}
+			}
+			i += 1;
+		}
+		return out;
+	}
+	// utf8 — and every other name takes the same fallback as the C side.
+	return encodeUtf8(value);
+}
+
+export extern function copy(this typeof Buffer, value: Buffer): Buffer from "#.slice()";
+
+export function compare(this typeof Buffer, a: Buffer, b: Buffer): number {
+	const n = a.length < b.length ? a.length : b.length;
+	let i = 0;
+	while (i < n) {
+		const x = a.byteAt(i);
+		const y = b.byteAt(i);
+		if (x !== y) return x < y ? -1 : 1;
+		i += 1;
+	}
+	if (a.length === b.length) return 0;
+	return a.length < b.length ? -1 : 1;
+}
+
+export function concat(this typeof Buffer, a: Buffer, b: Buffer): Buffer {
+	const out = Buffer.alloc(a.length + b.length);
+	bufCopyInto(out, a, 0);
+	bufCopyInto(out, b, a.length);
+	return out;
+}
+
+export function isAscii(this typeof Buffer, value: Buffer): boolean {
+	let i = 0;
+	while (i < value.length) {
+		if (value.byteAt(i) >= 128) return false;
+		i += 1;
+	}
+	return true;
+}
+
+export function isUtf8(this typeof Buffer, value: Buffer): boolean {
+	let i = 0;
+	const n = value.length;
+	while (i < n) {
+		const b0 = value.byteAt(i);
+		if (b0 < 128) {
+			i += 1;
+			continue;
+		}
+		let need = 0;
+		let min = 128;
+		if (b0 >= 194 && b0 <= 223) { need = 1; }
+		else if (b0 === 224) { need = 2; min = 160; }
+		else if (b0 >= 225 && b0 <= 236) { need = 2; }
+		else if (b0 === 237) { need = 2; }
+		else if (b0 >= 238 && b0 <= 239) { need = 2; }
+		else if (b0 === 240) { need = 3; min = 144; }
+		else if (b0 >= 241 && b0 <= 243) { need = 3; }
+		else if (b0 === 244) { need = 3; }
+		else return false;
+		if (i + need >= n) return false;
+		let cp = b0 & (31 >> (need - 1));
+		let k = 1;
+		while (k <= need) {
+			const bk = value.byteAt(i + k);
+			if ((bk & 192) !== 128) return false;
+			cp = (cp << 6) | (bk & 63);
+			k += 1;
+		}
+		if (cp < min || cp > 1114111 || (cp >= 55296 && cp <= 57343)) return false;
+		i += need + 1;
+	}
+	return true;
+}
+
+export function isBufferEncoding(this typeof Buffer, encoding: string): boolean {
+	if (encoding === "utf8" || encoding === "utf-8" ||
+			encoding === "hex" || encoding === "ascii" ||
+			encoding === "latin1" || encoding === "binary" ||
+			encoding === "base64" || encoding === "base64url" ||
+			encoding === "utf16le" || encoding === "ucs2" || encoding === "ucs-2") {
+		return true;
+	}
+	return false;
+}
+
+export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
+	let total = 0;
+	for (const b of buffers) { total += b.length; }
+	const out = Buffer.alloc(total);
+	let off = 0;
+	for (const b of buffers) {
+		bufCopyInto(out, b, off);
+		off += b.length;
+	}
+	return out;
+}
+
+// ===== Extension Methods =====
+
+export extern function byteAt(this b: Buffer, i: number): int32 from "#[#]";
+export extern function byteLength(this b: Buffer): number from "#.length";
+
+export extern function set(this b: Buffer, i: number, v: number): void from "#[#] = #";
+
+export function toHex(this b: Buffer): string {
+	let out = "";
+	let i = 0;
+	while (i < b.length) {
+		const v = b.byteAt(i);
+		out = out + HEX_DIGITS.charAt((v >> 4) & 15) + HEX_DIGITS.charAt(v & 15);
+		i += 1;
+	}
+	return out;
+}
+
+export function toBase64(this b: Buffer): string {
+	let out = "";
+	const n = b.length;
+	let i = 0;
+	while (i + 2 < n) {
+		const v = (b.byteAt(i) << 16) | (b.byteAt(i + 1) << 8) | b.byteAt(i + 2);
+		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) +
+			B64_ALPHABET.charAt((v >> 6) & 63) + B64_ALPHABET.charAt(v & 63);
+		i += 3;
+	}
+	const rem = n - i;
+	if (rem === 1) {
+		const v = b.byteAt(i) << 16;
+		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) + "==";
+	} else if (rem === 2) {
+		const v = (b.byteAt(i) << 16) | (b.byteAt(i + 1) << 8);
+		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) +
+			B64_ALPHABET.charAt((v >> 6) & 63) + "=";
+	}
+	return out;
+}
+
+export function toStringEncoded(this b: Buffer, encoding: string, start: number, end: number): string {
+	if (encoding === "hex") {
+		const h = b.toHex();
+		return h.slice(start * 2, end * 2);
+	}
+	if (encoding === "base64") {
+		return toBase64Range(b, start, end);
+	}
+	if (encoding === "binary" || encoding === "latin1" || encoding === "ascii") {
+		let out = "";
+		let i = start;
+		while (i < end) {
+			out = out + fromCharCode(b.byteAt(i));
+			i += 1;
+		}
+		return out;
+	}
+	return decodeUtf8Range(b, start, end);
+}
+
+function toBase64Range(b: Buffer, start: number, end: number): string {
+	let out = "";
+	const n = end - start;
+	let i = start;
+	while (i + 2 < end) {
+		const v = (b.byteAt(i) << 16) | (b.byteAt(i + 1) << 8) | b.byteAt(i + 2);
+		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) +
+			B64_ALPHABET.charAt((v >> 6) & 63) + B64_ALPHABET.charAt(v & 63);
+		i += 3;
+	}
+	const rem = n % 3;
+	if (rem === 1) {
+		const v = b.byteAt(i) << 16;
+		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) + "==";
+	} else if (rem === 2) {
+		const v = (b.byteAt(i) << 16) | (b.byteAt(i + 1) << 8);
+		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) +
+			B64_ALPHABET.charAt((v >> 6) & 63) + "=";
+	}
+	return out;
+}
+
+export function copyTo(this b: Buffer, target: Buffer, targetStart: number, sourceStart: number, sourceEnd: number): void {
+	bufCopyInto(target, bufSubView(b, sourceStart, sourceEnd), targetStart);
+}
+
+export extern function fill(this b: Buffer, value: number, start: number, end: number): void from "#.fill(#, #, #)";
+export extern function indexOf(this b: Buffer, value: number, byteOffset: number): number from "#.indexOf(#, #)";
+export extern function lastIndexOf(this b: Buffer, value: number, byteOffset: number): number from "#.lastIndexOf(#, #)";
+export extern function includes(this b: Buffer, value: number, byteOffset: number): boolean from "#.includes(#, #)";
+function bufFind(hay: Buffer, needle: Buffer, from: number, reverse: boolean): number {
+	const n = needle.length;
+	if (n === 0) return from;
+	let i = from;
+	while (i <= hay.length - n) {
+		let k = 0;
+		while (k < n && hay.byteAt(i + k) === needle.byteAt(k)) { k += 1; }
+		if (k === n) return i;
+		if (reverse) { i -= 1; } else { i += 1; }
+	}
+	return -1;
+}
+export function indexOfBuffer(this b: Buffer, needle: Buffer, byteOffset: number): number {
+	return bufFind(b, needle, byteOffset < 0 ? 0 : byteOffset, false);
+}
+export function lastIndexOfBuffer(this b: Buffer, needle: Buffer, byteOffset: number): number {
+	return bufFind(b, needle, byteOffset < 0 ? b.length : byteOffset, true);
+}
+export function includesBuffer(this b: Buffer, needle: Buffer, byteOffset: number): boolean {
+	return indexOfBuffer(b, needle, byteOffset) !== -1;
+}
+export extern function bufReverse(this b: Buffer): void from "#.reverse()";
+
+export extern function swap16(this b: Buffer): void from "(function (u) { for (var i = 0; i + 1 < u.length; i += 2) { var t = u[i]; u[i] = u[i + 1]; u[i + 1] = t; } })(#)";
+export extern function swap32(this b: Buffer): void from "(function (u) { for (var i = 0; i + 3 < u.length; i += 4) { var t = u[i]; u[i] = u[i + 3]; u[i + 3] = t; t = u[i + 1]; u[i + 1] = u[i + 2]; u[i + 2] = t; } })(#)";
+export extern function swap64(this b: Buffer): void from "(function (u) { for (var i = 0; i + 7 < u.length; i += 8) { for (var k = 0; k < 4; k++) { var t = u[i + k]; u[i + k] = u[i + 7 - k]; u[i + 7 - k] = t; } } })(#)";
+
+export function write(this b: Buffer, str: string, offset: number, length: number, encoding: string): number {
+	if (encoding === "binary" || encoding === "latin1" || encoding === "ascii") {
+		let i = 0;
+		while (i < str.length && i < length) {
+			b.set(offset + i, str.charCodeAt(i) & 255);
+			i += 1;
+		}
+		return i;
+	}
+	if (encoding === "hex") {
+		let i = 0;
+		while (i + 1 < str.length && i / 2 < length && hexVal(str.charCodeAt(i)) >= 0 && hexVal(str.charCodeAt(i + 1)) >= 0) {
+			b.set(offset + i / 2, hexVal(str.charCodeAt(i)) * 16 + hexVal(str.charCodeAt(i + 1)));
+			i += 2;
+		}
+		return i / 2;
+	}
+	// utf8 fallback.
+	const enc = encodeUtf8(str);
+	let i = 0;
+	while (i < enc.length && i < length) {
+		b.set(offset + i, enc.byteAt(i));
+		i += 1;
+	}
+	return i;
+}
+
+export function fillString(this b: Buffer, value: string, start: number, end: number, encoding: string): void {
+	const pat = Buffer.fromString(value, encoding);
+	if (pat.length === 0) return;
+	let i = start;
+	let k = 0;
+	while (i < end) {
+		b.set(i, pat.byteAt(k % pat.length));
+		i += 1;
+		k += 1;
+	}
+}
+
+export function fillBuffer(this b: Buffer, value: Buffer, start: number, end: number): void {
+	if (value.length === 0) return;
+	let i = start;
+	let k = 0;
+	while (i < end) {
+		b.set(i, value.byteAt(k % value.length));
+		i += 1;
+		k += 1;
+	}
+}
+
+export extern function readUInt8(this b: Buffer, o: number): int32 from "#[#]";
+export extern function readUInt16BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint16(#, false)";
+export extern function readUInt16LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint16(#, true)";
+export extern function readUInt32BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint32(#, false)";
+export extern function readUInt32LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint32(#, true)";
+export extern function readInt8(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt8(#)";
+export extern function readInt16BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt16(#, false)";
+export extern function readInt16LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt16(#, true)";
+export extern function readInt32BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt32(#, false)";
+export extern function readInt32LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt32(#, true)";
+export extern function readFloatBE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat32(#, false)";
+export extern function readFloatLE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat32(#, true)";
+export extern function readDoubleBE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat64(#, false)";
+export extern function readDoubleLE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat64(#, true)";
+export extern function readBigUInt64LE(this b: Buffer, o: number): number from "Number(new DataView(#.buffer).getBigUint64(#, true))";
+export extern function readBigUInt64BE(this b: Buffer, o: number): number from "Number(new DataView(#.buffer).getBigUint64(#, false))";
+export extern function readBigInt64LE(this b: Buffer, o: number): number from "Number(new DataView(#.buffer).getBigInt64(#, true))";
+export extern function readBigInt64BE(this b: Buffer, o: number): number from "Number(new DataView(#.buffer).getBigInt64(#, false))";
+
+extern function dvSetU16BE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setUint16(#, #, false)";
+extern function dvSetU16LE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setUint16(#, #, true)";
+extern function dvSetU32BE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setUint32(#, #, false)";
+extern function dvSetU32LE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setUint32(#, #, true)";
+extern function dvSetF32LE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setFloat32(#, #, true)";
+extern function dvSetF32BE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setFloat32(#, #, false)";
+extern function dvSetF64LE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setFloat64(#, #, true)";
+extern function dvSetF64BE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setFloat64(#, #, false)";
+
+export function writeUInt8(this b: Buffer, v: number, o: number): number {
+	b.set(o, (v as int32) & 255);
+	return o + 1;
+}
+export function writeUInt16BE(this b: Buffer, v: number, o: number): number {
+	dvSetU16BE(b, o, v);
+	return o + 2;
+}
+export function writeUInt16LE(this b: Buffer, v: number, o: number): number {
+	dvSetU16LE(b, o, v);
+	return o + 2;
+}
+export function writeUInt32BE(this b: Buffer, v: number, o: number): number {
+	dvSetU32BE(b, o, v);
+	return o + 4;
+}
+export function writeUInt32LE(this b: Buffer, v: number, o: number): number {
+	dvSetU32LE(b, o, v);
+	return o + 4;
+}
+export function writeInt8(this b: Buffer, v: number, o: number): number {
+	b.set(o, (v as int32) & 255);
+	return o + 1;
+}
+export function writeInt16BE(this b: Buffer, v: number, o: number): number {
+	dvSetU16BE(b, o, (v as int32) & 65535);
+	return o + 2;
+}
+export function writeInt16LE(this b: Buffer, v: number, o: number): number {
+	dvSetU16LE(b, o, (v as int32) & 65535);
+	return o + 2;
+}
+export function writeInt32BE(this b: Buffer, v: number, o: number): number {
+	dvSetU32BE(b, o, v);
+	return o + 4;
+}
+export function writeInt32LE(this b: Buffer, v: number, o: number): number {
+	dvSetU32LE(b, o, v);
+	return o + 4;
+}
+export function writeFloatLE(this b: Buffer, v: number, o: number): number {
+	dvSetF32LE(b, o, v);
+	return o + 4;
+}
+export function writeFloatBE(this b: Buffer, v: number, o: number): number {
+	dvSetF32BE(b, o, v);
+	return o + 4;
+}
+export function writeDoubleLE(this b: Buffer, v: number, o: number): number {
+	dvSetF64LE(b, o, v);
+	return o + 8;
+}
+export function writeDoubleBE(this b: Buffer, v: number, o: number): number {
+	dvSetF64BE(b, o, v);
+	return o + 8;
+}
+
+export function readUIntLE(this b: Buffer, o: number, byteLength: number): number {
+	let v = 0;
+	let k = 0;
+	while (k < byteLength) {
+		v += b.byteAt(o + k) * Math.pow(2, k * 8);
+		k += 1;
+	}
+	return v;
+}
+export function readUIntBE(this b: Buffer, o: number, byteLength: number): number {
+	let v = 0;
+	let k = 0;
+	while (k < byteLength) {
+		v = v * 256 + b.byteAt(o + k);
+		k += 1;
+	}
+	return v;
+}
+export function readIntLE(this b: Buffer, o: number, byteLength: number): number {
+	const u = readUIntLE(b, o, byteLength);
+	const half = Math.pow(2, byteLength * 8 - 1);
+	return u >= half ? u - half * 2 : u;
+}
+export function readIntBE(this b: Buffer, o: number, byteLength: number): number {
+	const u = readUIntBE(b, o, byteLength);
+	const half = Math.pow(2, byteLength * 8 - 1);
+	return u >= half ? u - half * 2 : u;
+}
+export function writeUIntLE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	let x = v;
+	let k = 0;
+	while (k < byteLength) {
+		b.set(o + k, x % 256);
+		x = Math.floor(x / 256);
+		k += 1;
+	}
+	return o + byteLength;
+}
+export function writeUIntBE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	let x = v;
+	let k = byteLength - 1;
+	while (k >= 0) {
+		b.set(o + k, x % 256);
+		x = Math.floor(x / 256);
+		k -= 1;
+	}
+	return o + byteLength;
+}
+export function writeIntLE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	const bound = Math.pow(2, byteLength * 8);
+	return writeUIntLE(b, v >= 0 ? v : v + bound, o, byteLength);
+}
+export function writeIntBE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	const bound = Math.pow(2, byteLength * 8);
+	return writeUIntBE(b, v >= 0 ? v : v + bound, o, byteLength);
+}
