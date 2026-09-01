@@ -113,6 +113,10 @@ const SAN_PASSL = "-fsanitize=address" + (IS_WIN ? " -pthread" : "");
 // so a weakened lane is never silent.
 const HAS_CLANG = cmdExists("clang");
 const DANGER_CC = HAS_CLANG ? " --cc=clang" : "";
+// Same winpthreads gap as SAN_PASSL (see above): a mingw-targeting clang
+// needs -pthread spelled out on the link line, zig cc bundles it implicitly.
+// Only when clang actually drives the lane — the zig fallback path is fine.
+const DANGER_PASSL = (IS_WIN && HAS_CLANG) ? " --passL=-pthread" : "";
 
 // SAN lane needs a driver that links the ASan runtime itself. zig cc 0.16
 // targeting linux-gnu compiles -fsanitize=address objects fine but its link
@@ -629,14 +633,14 @@ function planJobs(specs: Spec[]): BuildJob[] {
 				jobs.push({ spec, lane: gc, cmd: MSC_CMD + " build " + spec.entry + " --gc=" + gc + " --output=" + bin, cell: makeCell(spec, gc, bin) });
 			}
 			const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
-			jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --danger" + DANGER_CC + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
+			jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --danger" + DANGER_CC + DANGER_PASSL + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
 		} else {
 			const cbin = OUT_DIR + "bin/" + spec.name + ".c";
 			jobs.push({ spec, lane: "c", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --output=" + cbin, cell: makeCell(spec, "c", cbin) });
 			const obin = OUT_DIR + "bin/" + spec.name + ".corc";
 			jobs.push({ spec, lane: "orc", cmd: MSC_CMD + " build " + spec.entry + " --gc=orc --output=" + obin, cell: makeCell(spec, "orc", obin) });
 			const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
-			jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --danger" + DANGER_CC + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
+			jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --danger" + DANGER_CC + DANGER_PASSL + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
 			// HAS_NODE, not laneUniverse: the program's DESIGN lanes still
 			// include js (so @xfail(js) keeps validating), only this host
 			// cannot execute the cell.
