@@ -4,6 +4,9 @@
 // checker-gate pins only, so every negative case must fail BEFORE codegen.
 
 import { compileToC, compileToJS } from "../helpers";
+import { createPrimitive } from "../../checker/types";
+import { mapTypeToAst } from "../../compiler/meta/bridge";
+import { NodeKind, TypeKind, makeLoc, IdentifierData } from "std/meta/node";
 
 // ===== literal + annotation =====
 
@@ -115,4 +118,28 @@ test "bigint literal beyond int64 survives to JS verbatim" {
 	const result = compileToJS("const a: bigint = 123456789012345678901234567890n;");
 	assert result.ok;
 	assert result.value.contains("123456789012345678901234567890n");
+}
+
+// ===== bigint has no JSON representation (Node parity: stringify(1n) throws) =====
+//
+// The refusal itself fires at macro expansion (`jsonValueOf` sees Identifier
+// "bigint" and errors), which only the CLI pipeline instantiates — the
+// in-process compileToC tier does not run generic-macro mono, so it cannot
+// pin this. CLI-verified 2026-09-01: `interface T { v: bigint }` +
+// `JSON.stringify(t)` fails with "bigint is not JSON-serializable". The
+// load-bearing prerequisite pinned here is the bridge name mapping — before
+// it, bigint Types reached codec macros as Identifier "unknown" and silently
+// wrapped through the jsonInt int64 carrier.
+
+test "bridge maps bigint Type to Identifier 'bigint'" {
+	const t = createPrimitive(TypeKind.BigInt);
+	const ast = mapTypeToAst(t, makeLoc(0, 0));
+	assert ast.kind === NodeKind.Identifier;
+	const d = ast.data as IdentifierData;
+	assert d.name === "bigint";
+}
+
+test "JSON.stringify accepts bigint via explicit toString" {
+	const result = compileToC("const v = 9007199254740993n;\nconsole.log(JSON.stringify({ id: v.toString() }));");
+	assert result.ok;
 }

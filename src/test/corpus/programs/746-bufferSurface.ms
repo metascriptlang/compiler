@@ -71,10 +71,18 @@ function main(): void {
 	w.writeFloatLE(1.5, 0);
 	ok = check("wFle", w.readFloatLE(0) === 1.5) && ok;
 
-	// 64-bit read through the number carrier.
+	// 64-bit read/write through the bigint carrier — exact beyond 2^53.
 	const q = Buffer.alloc(8);
 	q.set(7, 1);
-	ok = check("u64le", q.readBigUInt64LE(0) === 72057594037927936) && ok;
+	ok = check("u64le", q.readBigUInt64LE(0) === 72057594037927936n) && ok;
+	const big = Buffer.alloc(16);
+	big.writeBigUInt64LE(0xDEADBEEFCAFEBABEn, 0);
+	big.writeBigUInt64BE(0x0102030405060708n, 8);
+	ok = check("bigU64le", big.readBigUInt64LE(0).toString(16) === "deadbeefcafebabe") && ok;
+	ok = check("bigU64be", big.readBigUInt64BE(8).toString(16) === "102030405060708") && ok;
+	big.writeBigInt64LE(-1234567890123456789n, 0);
+	ok = check("bigI64le", big.readBigInt64LE(0) === -1234567890123456789n) && ok;
+	ok = check("bigI64be", big.readBigInt64BE(0) === -1477718879929115154n) && ok;
 
 	// swap mutates pair-wise / word-wise in place.
 	const s16 = Buffer.fromArray([0x12, 0x34, 0x56, 0x78]);

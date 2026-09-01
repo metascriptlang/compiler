@@ -162,6 +162,16 @@ test "unreachable as exhaustiveness marker" {
 
 // ===== Bitwise operators =====
 
+test "hex literal with e digit is integer" {
+	const a = 0xe0 | 1;
+	assert a === 225;
+	const b = 0xE0 | 1;
+	assert b === 225;
+	assert 0xbeef === 48879;
+	const c: int32 = 0xffee;
+	assert c === 65518;
+}
+
 test "bitwise AND" {
 	const a: int32 = 0xFF;
 	const b: int32 = 0x0F;
