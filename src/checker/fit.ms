@@ -7,7 +7,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { isAnonStructAdoption, isAssignable, isReinterpretUnsafe, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, findUnionVariant, float64Type, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType } from "./types";
+import { booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType } from "./types";
 import { callCheckExpr } from "./checkerCallbacks";
 
 // ===== Operator Inference =====
@@ -491,83 +491,6 @@ function arrayDisplay(t: Type | null): string {
 	return typeDisplayName(t);
 }
 
-// Index of `exprType` among a discriminated union's variants, or -1. Matches
-// codegen's own rule (expressions.ms, "Variant struct → discriminated union")
-// so the checker and the emitter agree on which slot a value belongs in.
-// Non-struct member match. Refuses unions with a Null member (those are the
-// Maybe/nilable family — synthMaybeWrap and nullableLower own them, and their C
-// repr is not a tagged union) and all-string-literal unions (repr = msString).
-function primitiveMemberIndexInUnion(formal: Type, exprType: Type): int32 {
-	if (formal.kind !== TypeKind.Union || formal.typeChildren === null) return -1;
-	const ek = exprType.kind;
-	if (ek === TypeKind.Struct || ek === TypeKind.Union || ek === TypeKind.Null) return -1;
-	let allStrLit = true;
-	for (const child of formal.typeChildren) {
-		if (child === null || child.kind === TypeKind.Null) return -1;
-		if (child.kind !== TypeKind.StringLiteral) allStrLit = false;
-	}
-	if (allStrLit) return -1;
-	let found: int32 = -1;
-	let vi: int32 = 0;
-	for (const child of formal.typeChildren) {
-		let hit = child === exprType;
-		if (!hit && child.kind !== TypeKind.Struct && child.kind !== TypeKind.Ref) {
-			hit = child.kind === ek
-				|| (child.kind === TypeKind.String && ek === TypeKind.StringLiteral);
-		}
-		if (hit) {
-			if (found >= 0) return -1;
-			found = vi;
-		}
-		vi += 1;
-	}
-	return found;
-}
-
-function variantIndexInUnion(formal: Type, exprType: Type): int32 {
-	if (formal.kind !== TypeKind.Union || formal.typeChildren === null) return -1;
-	if (exprType.kind !== TypeKind.Struct) return primitiveMemberIndexInUnion(formal, exprType);
-	// Identity/name first; a named variant resolves there. Union variants are
-	// often ANONYMOUS object types while the value carries a type ALIAS name
-	// (`NodeData`'s variants vs `TypeUnionData`), so fall back to the same
-	// structural match the object-literal path uses to pick its variant.
-	const byIdentity = duVariantIndexOfType(formal, exprType) as int32;
-	if (byIdentity >= 0) return byIdentity;
-	const names = exprType.typeNames;
-	if (names === null || names.length === 0) return -1;
-	// EXACT field-set match only. findUnionVariant accepts a superset, which
-	// picks the wrong slot when one variant's fields contain another's
-	// (`{typExprMembers, …}` vs `{typExprMembers}` → tagged 76, held 77).
-	// Two candidates that survive the type comparison are ambiguous: refuse
-	// rather than guess a slot.
-	const types = exprType.typeChildren;
-	let found: int32 = -1;
-	let vi: int32 = 0;
-	for (const child of formal.typeChildren) {
-		if (child !== null && child.typeNames !== null && child.typeNames.length === names.length) {
-			let same = true;
-			for (let fi = 0; fi < names.length; fi += 1) {
-				if (child.typeNames[fi] !== names[fi]) { same = false; break; }
-			}
-			if (same && types !== null && child.typeChildren !== null
-					&& child.typeChildren.length === types.length) {
-				for (let fi = 0; fi < types.length; fi += 1) {
-					const want = types[fi];
-					const have = child.typeChildren[fi];
-					if (want === null || have === null) continue;
-					if (want.kind !== have.kind || want.typeName !== have.typeName) { same = false; break; }
-				}
-			}
-			if (same) {
-				if (found >= 0) return -1;
-				found = vi;
-			}
-		}
-		vi += 1;
-	}
-	return found;
-}
-
 // A variant value meeting a union formal needs a real conversion: the C layouts
 // differ (variant = plain struct, union = tag + variant slots), and codegen
 // picks a temp's type from the STATIC type — so without this node it passes a
@@ -594,6 +517,22 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 	convNode.nodeType = formal;
 	// Same stamp convention as the object-literal path: codegen reads the slot,
 	// it never re-derives one (+1 so 0 keeps meaning "not set").
+	convNode.flags = convNode.flags | NodeFlag.Sem | (((vi + 1) as int32) << 16);
+	return convNode;
+}
+
+// The nullable twin of widenVariantToUnion: `string | null` meeting
+// `number | string | null` is the same subtyping one level down, under the
+// Maybe carrier. It cannot be a reinterpret — the narrow carrier holds its
+// payload bare where the wide one holds a tagged union — so it takes the same
+// conversion node, stamped with the same slot, and codegen rebuilds the
+// carrier around an injected payload.
+export function widenMaybePayload(expr: Node, formal: Type, exprType: Type): Node {
+	const vi = maybePayloadWidenSlot(exprType, formal);
+	if (vi < 0) return null as unknown as Node;
+	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
+	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: formal }, convTok);
+	convNode.nodeType = formal;
 	convNode.flags = convNode.flags | NodeFlag.Sem | (((vi + 1) as int32) << 16);
 	return convNode;
 }
@@ -748,6 +687,10 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	// `return otherMaybeFn()`).
 	if (isMaybeType(formal) && formal.typeReturn !== null && !isMaybeType(exprType)) {
 		return synthMaybeWrap(expr, formal, exprType);
+	}
+	if (isMaybeType(formal) && isMaybeType(exprType)) {
+		const widenedMaybe = widenMaybePayload(expr, formal, exprType);
+		if (widenedMaybe !== null as unknown as Node) return widenedMaybe;
 	}
 	// A variant value meeting a union formal converts HERE so every fit
 	// position (var init, assign, return, ternary, call arg) shares the one
