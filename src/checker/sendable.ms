@@ -1,6 +1,6 @@
 // Actor sendability + this-write isolation rules. Leaf module: no calls out.
 
-import { ActorDeclData, ArrayAccessData, ArrowFunctionData, BinaryExprData, BlockStmtData, CallExprData, DecoratedDeclData, ExprStmtData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, IfStmtData, MacroInvocationData, MemberExprData, MethodDeclData, MoveExprData, Node, NodeKind, OutExprData, PropertyDeclData, ReturnStmtData, Symbol, Type, TypeKind, UnaryExprData, UpdateExprData } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrowFunctionData, BinaryExprData, CallExprData, DecoratedDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MemberExprData, MethodDeclData, MoveExprData, Node, NodeKind, OutExprData, PropertyDeclData, Symbol, Type, TypeKind, UpdateExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError } from "./context";
 import { SymbolFlag, hasFlag, lookupSymbol } from "./symbol";
@@ -92,6 +92,15 @@ export function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: nu
 		argNode.location.line, argNode.location.column);
 }
 
+// A spawn thunk BORROWS the enclosing env (the lifted closure is handed
+// `_env_main_` itself, not a copy), so a captured mutable binding is one memory
+// cell shared with the parent thread — a read races a later parent write, and a
+// write from the worker lands in the parent's slot. Only a closure created
+// inside a loop body gets a per-iteration env copy, which is why a `for (let i…)`
+// capture is a snapshot and everything else is not.
+// The walk must therefore reach EVERY read position, so it delegates to
+// forEachChild: the earlier hand-written arm list covered 4 shapes and silently
+// let `x++` (UpdateExpr) and any argument wrapped in HiddenStdConv through.
 function walkForMutableCaptures(node: Node | null, params: string[], reported: string[], ctx: CheckerContext): void {
 	if (node === null) return;
 	if (node.kind === NodeKind.FunctionDecl || node.kind === NodeKind.FunctionExpr || node.kind === NodeKind.ArrowFunction) return;
@@ -102,39 +111,30 @@ function walkForMutableCaptures(node: Node | null, params: string[], reported: s
 			for (const p of params) { if (p === d.name) skip = true; }
 			for (const r of reported) { if (r === d.name) skip = true; }
 			if (!skip) {
+				// The lookup is by NAME against the scope of the spawn call site —
+				// the thunk's own scopes are already popped by the time this runs.
+				// A local declared inside the thunk that shadows an outer mutable
+				// would resolve to the outer symbol here, so require the identifier
+				// to actually point at it (resolvedSym is set by the body check that
+				// ran just before; fall back to the name match when it is absent).
 				const sym = lookupSymbol(ctx.table, d.name);
-				if (sym !== null && hasFlag(sym, SymbolFlag.Mutable)) {
+				const shadowed = node.resolvedSym !== null && node.resolvedSym !== sym;
+				if (!shadowed && sym !== null && hasFlag(sym, SymbolFlag.Mutable)) {
 					addError(ctx, "mutable variable '" + d.name + "' cannot be captured by spawn — use const or move", node.location.line, node.location.column);
 					reported.push(d.name);
 				}
 			}
 		},
-		NodeKind.BlockStmt => {
-			for (const stmt of (node.data as BlockStmtData).statements) {
-				walkForMutableCaptures(stmt, params, reported, ctx);
-			}
+		// Binding positions: the identifiers under a pattern DECLARE names, they
+		// do not read the enclosing scope. Walking them would look the name up
+		// outside the thunk and misreport a same-named mutable as captured.
+		NodeKind.ArrayPattern | NodeKind.ObjectPattern | NodeKind.ObjectPatternProp => {},
+		NodeKind.MatchCase => {
+			const d = node.data as MatchCaseData;
+			walkForMutableCaptures(d.caseGuard, params, reported, ctx);
+			walkForMutableCaptures(d.caseBody, params, reported, ctx);
 		},
-		NodeKind.ExprStmt => { walkForMutableCaptures((node.data as ExprStmtData).expr, params, reported, ctx); },
-		NodeKind.ReturnStmt => { walkForMutableCaptures((node.data as ReturnStmtData).argument, params, reported, ctx); },
-		NodeKind.BinaryExpr => {
-			const d = node.data as BinaryExprData;
-			walkForMutableCaptures(d.left, params, reported, ctx);
-			walkForMutableCaptures(d.right, params, reported, ctx);
-		},
-		NodeKind.CallExpr => {
-			const d = node.data as CallExprData;
-			walkForMutableCaptures(d.callee, params, reported, ctx);
-			for (const arg of d.arguments) { walkForMutableCaptures(arg, params, reported, ctx); }
-		},
-		NodeKind.MemberExpr => { walkForMutableCaptures((node.data as MemberExprData).object, params, reported, ctx); },
-		NodeKind.IfStmt | NodeKind.ConditionalExpr => {
-			const d = node.data as IfStmtData;
-			walkForMutableCaptures(d.condition, params, reported, ctx);
-			walkForMutableCaptures(d.consequent, params, reported, ctx);
-			walkForMutableCaptures(d.alternate, params, reported, ctx);
-		},
-		NodeKind.UnaryExpr => { walkForMutableCaptures((node.data as UnaryExprData).operand, params, reported, ctx); },
-		_ => {},
+		_ => { forEachChild(node, (child: Node): void => { walkForMutableCaptures(child, params, reported, ctx); }); },
 	};
 }
 
