@@ -131,3 +131,4 @@ import "./bug115HexLiteralWithE";
 import "./bug115EnumDeclDceMangledRef";
 import "./bug116MonoArcTypeName";
 import "./bug117MaybeRejoinAfterNullCheck";
+import "./bug118ArrowArityPad";
