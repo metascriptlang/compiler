@@ -1902,6 +1902,26 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// cell: the by-value slot has no out-of-band RC header, so `&slot` would
 		// let refcounting stomp neighbouring union bytes.
 		const projSlot = ((node.flags >> 16) & 65535) as int32;
+		// Maybe<A> → Maybe<A|B> (widenMaybePayload): the carrier keeps its shape
+		// and the payload moves into a tagged slot, so the whole carrier is
+		// rebuilt. The operand is read twice — payload and flag — hence the temp.
+		// An absent carrier carries no payload worth injecting, and a garbage one
+		// would hand refcounting a tagged slot to free, so it takes a zeroed union.
+		const srcMaybe = d.convExpr.nodeType;
+		if (kind === NodeKind.HiddenSubConv && projSlot > 0 && isMaybeType(d.convType)
+			&& d.convType.typeReturn !== null && d.convType.typeReturn.kind === TypeKind.Union
+			&& srcMaybe !== null && isMaybeType(srcMaybe)) {
+			const wvi = projSlot - 1;
+			const payloadC = getTypeDesc(g, d.convType.typeReturn);
+			const srcC = getTypeDesc(g, srcMaybe);
+			g.labels += 1;
+			const tmp = `_mwiden${g.labels}_`;
+			emitProcLocalsLine(p, `${srcC} ${tmp};`);
+			emitStmtsLine(p, `${tmp} = ${inner};`);
+			const payload = `(${tmp}.present ? (${payloadC}){._tag=${wvi}, .v${wvi}=${tmp}.value} : (${payloadC}){._tag=${wvi}})`;
+			ctx.results.push(`((${targetC}){.value=${payload}, .present=${tmp}.present})`);
+			return;
+		}
 		if (kind === NodeKind.HiddenSubConv && projSlot > 0 && d.convType.kind !== TypeKind.Union) {
 			const pvi = projSlot - 1;
 			const memberValue = unwrapPointerLikeForVariant(d.convType);

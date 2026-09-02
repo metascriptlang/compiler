@@ -10,7 +10,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
 import { CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
-import { fitJoinedBranch, fitNode, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, trySynthesizeAsCoercion, widenVariantToUnion } from "./fit";
+import { fitJoinedBranch, fitNode, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, trySynthesizeAsCoercion, widenMaybePayload, widenVariantToUnion } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
@@ -1216,6 +1216,16 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 							|| isAssignable(argTypes[pi], paramType.typeReturn))) {
 					d.arguments[pi] = synthMaybeWrap(d.arguments[pi], paramType, argTypes[pi]);
 					argTypes[pi] = paramType;
+				}
+				// `A | null` meeting `A | B | null`. Same reason the wrap above
+				// lives here: an argument never reaches fitNode, so the carrier
+				// widening has to be applied at this site too.
+				if (isMaybeType(paramType) && isMaybeType(argTypes[pi])) {
+					const widenedArg = widenMaybePayload(d.arguments[pi], paramType, argTypes[pi]);
+					if (widenedArg !== null as unknown as Node) {
+						d.arguments[pi] = widenedArg;
+						argTypes[pi] = paramType;
+					}
 				}
 				const adoptedArg = tryAdoptAnonStruct(d.arguments[pi], paramType, argTypes[pi]);
 				if (adoptedArg !== null as unknown as Node) {
