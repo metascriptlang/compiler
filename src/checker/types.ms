@@ -823,6 +823,103 @@ export function duVariantIndexOfType(unionType: Type | null, variantType: Type |
 	return -1;
 }
 
+// Which slot of a union a value belongs in — the checker's half of codegen's
+// own rule (expressions.ms, "Variant struct → discriminated union"), so the two
+// agree on the tag. Lives here rather than beside its callers because the
+// RELATION (compat.isAssignable) and the CONVERSION (fit.widenVariantToUnion,
+// fit.widenMaybePayload) must answer identically: a relation that accepts what
+// no conversion can build reinterprets silently.
+//
+// Non-struct member match. Refuses unions with a Null member (those are the
+// Maybe/nilable family — synthMaybeWrap and nullableLower own them, and their C
+// repr is not a tagged union) and all-string-literal unions (repr = msString).
+export function primitiveMemberIndexInUnion(formal: Type, exprType: Type): int32 {
+	if (formal.kind !== TypeKind.Union || formal.typeChildren === null) return -1;
+	const ek = exprType.kind;
+	if (ek === TypeKind.Struct || ek === TypeKind.Union || ek === TypeKind.Null) return -1;
+	let allStrLit = true;
+	for (const child of formal.typeChildren) {
+		if (child === null || child.kind === TypeKind.Null) return -1;
+		if (child.kind !== TypeKind.StringLiteral) allStrLit = false;
+	}
+	if (allStrLit) return -1;
+	let found: int32 = -1;
+	let vi: int32 = 0;
+	for (const child of formal.typeChildren) {
+		let hit = child === exprType;
+		if (!hit && child.kind !== TypeKind.Struct && child.kind !== TypeKind.Ref) {
+			hit = child.kind === ek
+				|| (child.kind === TypeKind.String && ek === TypeKind.StringLiteral);
+		}
+		if (hit) {
+			if (found >= 0) return -1;
+			found = vi;
+		}
+		vi += 1;
+	}
+	return found;
+}
+
+export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
+	if (formal.kind !== TypeKind.Union || formal.typeChildren === null) return -1;
+	if (exprType.kind !== TypeKind.Struct) return primitiveMemberIndexInUnion(formal, exprType);
+	// Identity/name first; a named variant resolves there. Union variants are
+	// often ANONYMOUS object types while the value carries a type ALIAS name
+	// (`NodeData`'s variants vs `TypeUnionData`), so fall back to the same
+	// structural match the object-literal path uses to pick its variant.
+	const byIdentity = duVariantIndexOfType(formal, exprType) as int32;
+	if (byIdentity >= 0) return byIdentity;
+	const names = exprType.typeNames;
+	if (names === null || names.length === 0) return -1;
+	// EXACT field-set match only. findUnionVariant accepts a superset, which
+	// picks the wrong slot when one variant's fields contain another's
+	// (`{typExprMembers, …}` vs `{typExprMembers}` → tagged 76, held 77).
+	// Two candidates that survive the type comparison are ambiguous: refuse
+	// rather than guess a slot.
+	const types = exprType.typeChildren;
+	let found: int32 = -1;
+	let vi: int32 = 0;
+	for (const child of formal.typeChildren) {
+		if (child !== null && child.typeNames !== null && child.typeNames.length === names.length) {
+			let same = true;
+			for (let fi = 0; fi < names.length; fi += 1) {
+				if (child.typeNames[fi] !== names[fi]) { same = false; break; }
+			}
+			if (same && types !== null && child.typeChildren !== null
+					&& child.typeChildren.length === types.length) {
+				for (let fi = 0; fi < types.length; fi += 1) {
+					const want = types[fi];
+					const have = child.typeChildren[fi];
+					if (want === null || have === null) continue;
+					if (want.kind !== have.kind || want.typeName !== have.typeName) { same = false; break; }
+				}
+			}
+			if (same) {
+				if (found >= 0) return -1;
+				found = vi;
+			}
+		}
+		vi += 1;
+	}
+	return found;
+}
+
+// `A | null` meeting `A | B | null`: the same subtyping one level down, under
+// the Maybe carrier. Returns the payload's slot in the wider union, or -1.
+// A union payload widening into a wider union has no single slot to stamp and
+// is refused here rather than guessed.
+export function maybePayloadWidenSlot(source: Type | null, target: Type | null): int32 {
+	if (source === null || target === null) return -1;
+	if (!isMaybeType(source) || !isMaybeType(target)) return -1;
+	const narrow = source.typeReturn;
+	const wide = target.typeReturn;
+	if (narrow === null || wide === null) return -1;
+	if (wide.kind !== TypeKind.Union || wide.typeChildren === null) return -1;
+	if (narrow.kind === TypeKind.Union) return -1;
+	if (unwrapRefNullUnion(wide) !== null) return -1;
+	return variantIndexInUnion(wide, unwrapRef(narrow));
+}
+
 // Layout name for prefix/field signatures: literal types collapse to their base
 // (a "a" vs "b" string-literal discriminant is the SAME msString layout), while
 // genuinely different widths (int16 vs int32) stay distinct.
