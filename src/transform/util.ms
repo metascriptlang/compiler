@@ -5,6 +5,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind } from "../ast/node";
 import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
+import { mangleQualified, mangleModuleName } from "../codegen/c/names";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
 export function syntheticToken(loc: SourceLocation): Token {
@@ -123,6 +124,26 @@ export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, l
 // Used by enumToStringLower (generation), builtinLower + debugLower (call site rewriting).
 export function enumToStringName(enumName: string): string {
 	return enumName + "_toString";
+}
+
+// Synthetic per-type helpers (enum toString, struct dump) are declared once per
+// requesting module. Two modules may declare the same type name: C keeps the
+// copies apart with static linkage per translation unit, but the JS bundle is
+// one flat scope where the later declaration silently replaces the earlier one
+// (measured: `enum Kind {Alpha,Beta}` in a.ms printed b.ms's member names).
+// The type's declaring module is what tells them apart — the same qualifier
+// every module-level proc already carries. Definition and every call site
+// derive the name from the same Type, so they agree by construction; a type
+// without a declaring symbol (synthetic, test-only) keeps the bare name.
+export function typeHelperName(t: Type, bare: string): string {
+	if (t !== null && t.sym !== null && t.sym.modulePath !== "") {
+		return mangleQualified(bare, mangleModuleName(t.sym.modulePath));
+	}
+	return bare;
+}
+
+export function enumToStringNameFor(t: Type): string {
+	return typeHelperName(t, enumToStringName(t.typeName));
 }
 
 // ===== Literal Builders =====

@@ -19,7 +19,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeIdent, makeCall, makeString, makeNumber, makeMember,
-	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringName,
+	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringNameFor,
 	makeHiddenAddr,
 } from "../util";
 import { rewriteEcho, buildStructToString, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
@@ -115,7 +115,7 @@ function lowerEnumReverseIndex(node: Node, ctx: TransformContext): Node {
 	if (idx.nodeType !== null && idx.nodeType.kind === TypeKind.Number) {
 		idx = makeHiddenStdConv(idx, createPrimitive(TypeKind.Int32), loc);
 	}
-	const call = makeCall(makeIdent(enumToStringName(t.typeName), loc), [idx], loc);
+	const call = makeCall(makeIdent(enumToStringNameFor(t), loc), [idx], loc);
 	call.nodeType = stringType();
 	return call;
 }
@@ -168,7 +168,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	// Enum → EnumName_toString
 	if (tk === TypeKind.Enum && objType.typeName !== "") {
 		if (ctx.checkerCtx !== null) requestEnumToString(ctx.checkerCtx, objType);
-		const call = makeCall(makeIdent(enumToStringName(objType.typeName), loc), [obj], loc);
+		const call = makeCall(makeIdent(enumToStringNameFor(objType), loc), [obj], loc);
 		call.nodeType = stringType();
 		return call;
 	}

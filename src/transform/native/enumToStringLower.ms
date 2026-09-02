@@ -11,7 +11,7 @@ import { Node, NodeKind, ProgramData, EnumDeclData, ExportDeclData, TypeKind, Sy
 import { TransformContext, NameSet, createNameSet, nameSetContains, nameSetAdd } from "../context";
 import {
 	makeSwitch, makeSwitchCase, makeReturn, makeString, makeNumber,
-	makeIdent, makeBlock, makeFnDecl, enumToStringName,
+	makeIdent, makeBlock, makeFnDecl, enumToStringName, enumToStringNameFor,
 } from "../util";
 import { createEnum, stringType, createFunction } from "../../checker/types";
 import { SourceLocation, makeLoc } from "../../ast/node";
@@ -29,7 +29,9 @@ function concatStmts(a: Node[], b: Node[]): Node[] {
 //     switch (v) { case 0: return "Member0"; ... default: return "<unknown>"; }
 //   }
 
-function makeEnumToString(enumName: string, members: string[], loc: SourceLocation): Node {
+// fnName comes from the caller: the checker-owned Type (module-qualified, the
+// spelling every lowering site emits) or the bare name on the ctx-less fallback.
+function makeEnumToString(fnName: string, enumName: string, members: string[], loc: SourceLocation): Node {
 	const cases: Node[] = [];
 	let i = 0;
 	while (i < members.length) {
@@ -42,7 +44,7 @@ function makeEnumToString(enumName: string, members: string[], loc: SourceLocati
 
 	const switchStmt = makeSwitch(makeIdent("v", loc), cases, loc);
 	const body = makeBlock([switchStmt], loc);
-	const fn = makeFnDecl(enumToStringName(enumName), ["v"], ["int32"], body, "", "string", loc);
+	const fn = makeFnDecl(fnName, ["v"], ["int32"], body, "", "string", loc);
 	// Override nodeType with proper enum param type
 	fn.nodeType = createFunction([createEnum(enumName, members, null as unknown as number[])], ["v"], stringType());
 	return fn;
@@ -137,7 +139,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 					const t = sym.symbolType;
 					if (nameSetContains(injected, t.typeName)) continue;
 					nameSetAdd(injected, t.typeName);
-					toStringFns.push(makeEnumToString(t.typeName, t.typeNames, sym.location));
+					toStringFns.push(makeEnumToString(enumToStringNameFor(t), t.typeName, t.typeNames, sym.location));
 				}
 			}
 			scope = scope.parent;
@@ -147,7 +149,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		for (const t of ctx.checkerCtx.pendingEnumToStrings) {
 			if (t.kind !== TypeKind.Enum || nameSetContains(injected, t.typeName)) continue;
 			nameSetAdd(injected, t.typeName);
-			toStringFns.push(makeEnumToString(t.typeName, t.typeNames, program.location));
+			toStringFns.push(makeEnumToString(enumToStringNameFor(t), t.typeName, t.typeNames, program.location));
 		}
 		ctx.checkerCtx.pendingEnumToStrings = [];
 		// Append to program stmts via return-value move (avoids local array aliasing)
@@ -166,7 +168,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		if (enumNode !== null) {
 			const d = enumNode.data as EnumDeclData;
 			const loc = enumNode.location;
-			const toStringFn = makeEnumToString(d.enumName, d.enumMembers, loc);
+			const toStringFn = makeEnumToString(enumToStringName(d.enumName), d.enumName, d.enumMembers, loc);
 			newStmts.push(toStringFn);
 		}
 		i = i + 1;
