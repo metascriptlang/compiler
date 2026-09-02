@@ -1,7 +1,7 @@
 // JavaScript Codegen — Expression Emitters
 
 import {
-	Node, NodeKind, TypeKind, Symbol, SymbolKind,
+	Node, NodeKind, NodeFlag, TypeKind, Symbol, SymbolKind,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BigIntLiteralData, RegexLiteralData,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData,
@@ -443,6 +443,14 @@ export function emitArrayAccess(gen: JSGenerator, node: Node): void {
 
 export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as ObjectLiteralData;
+	if ((node.flags & NodeFlag.Closure) !== 0) {
+		for (let i = 0; i < d.keys.length; i += 1) {
+			if (d.keys[i] === "fn" && i < d.properties.length) {
+				emitNode(gen, d.properties[i]);
+				return;
+			}
+		}
+	}
 	if (d.keys.length === 0) {
 		emit(gen, "{}");
 		return;

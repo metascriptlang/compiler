@@ -1,7 +1,7 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { CallingConvention, Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { inferredType, noneType, isUnresolvedType, charType, float64Type, voidType, nullType, createFunction, createClosureType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
@@ -654,6 +654,15 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	let varType = initType;
 	if (declType !== null) {
 		varType = declType;
+	} else if (initType !== null && initType.kind === TypeKind.Function
+			&& initType.callConv !== CallingConvention.CcClosure
+			&& d.initializer !== null && d.initializer.kind === NodeKind.Identifier
+			&& d.initializer.resolvedSym !== null
+			&& d.initializer.resolvedSym.symbolKind === SymbolKind.Function) {
+		const closRet = initType.typeReturn !== null ? initType.typeReturn : voidType();
+		const closT = createClosureType(initType.typeChildren, initType.typeNames, closRet);
+		d.initializer = fitNode(ctx, d.initializer, closT, initType);
+		varType = closT;
 	}
 	node.nodeType = varType;
 	// If already collected in pass 1 (e.g. export const) OR pre-registered above
