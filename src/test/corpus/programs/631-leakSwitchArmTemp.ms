@@ -1,6 +1,9 @@
 // @maxrss: 40
 // @stdout: leak-switch-arm-temp acc=
-// @skip-js: sibling of 609/610 — C DRC regression guard, no js-lane relevance
+// The DRC half of this guard is C-only (js has no refcounting), but the js lane
+// still earns its place: it re-derives `acc` through an independent backend, so
+// a lowering bug that changed which arms run breaks parity even where the
+// ledger cannot see it.
 //
 // leak-switch-arm-temp — SWITCH-LOWERED match arm variant of 609/610.
 //

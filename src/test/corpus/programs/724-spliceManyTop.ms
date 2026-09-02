@@ -1,5 +1,7 @@
 // @stdout: a+b=3
-// @skip-js: pins the checker-side splice (macro returning SpliceMany at module top)
+// Pins the checker-side splice (a macro returning SpliceMany at module top).
+// The expansion happens in the checker, so it is backend-neutral: every lane,
+// js included, must arrive at the same two constants.
 import { Node, NodeKind, DeclKind } from "std/meta";
 
 macro pair(): Node {
