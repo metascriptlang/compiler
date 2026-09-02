@@ -43,9 +43,12 @@ function main(): void {
 	let check = 0;
 
 	for (let iter = 0; iter < 20000; iter = iter + 1) {
+		// A spawn thunk borrows the enclosing env, so it may only capture const
+		// bindings — snapshot the loop counter before fanning out.
+		const it = iter;
 		// spawn fan-out — parallel compute, awaited as a group
-		const h1 = spawn(() => square(iter % 7));
-		const h2 = spawn(() => square((iter + 1) % 7));
+		const h1 = spawn(() => square(it % 7));
+		const h2 = spawn(() => square((it + 1) % 7));
 		const r1 = await h1;
 		const r2 = await h2;
 
