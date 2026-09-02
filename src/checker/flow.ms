@@ -738,6 +738,25 @@ function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
 	if (parent !== null && parent.kind === TypeKind.Union) {
 		return unionPreservingDiscriminant(parent, members);
 	}
+	// Maybe-carried `T | null`: the halves a null-check produced (`T` on the
+	// true edge, `null` on the false edge) re-join to the DECLARED carrier, the
+	// way re-joining a union's constituents yields the interned union. A fresh
+	// `T | null` Union here would be a second spelling of the same type that
+	// no consumer recognises — the read keeps its carrier layout downstream
+	// (Maybe read materialization, operator lowering both key on the carrier).
+	if (parent !== null && isMaybeType(parent)) {
+		let hasNull = false;
+		let nonNull: Type | null = null;
+		let nonNullCount: int32 = 0;
+		for (const m of members) {
+			if (m.kind === TypeKind.Null) { hasNull = true; continue; }
+			nonNull = m;
+			nonNullCount = nonNullCount + 1;
+		}
+		if (hasNull && nonNullCount === 1 && nonNull !== null && sameType(nonNull, unwrapMaybeType(parent))) {
+			return parent;
+		}
+	}
 	return createUnion(members);
 }
 
