@@ -20,6 +20,8 @@ import {
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isNumeric, isDiscriminatedUnion,
+	createMaybeType, isMaybeWrappable, isPrimitiveUnionMember,
+	isAtomicRef, peelToStructOrUnion,
 } from "./types";
 import { typeRelation, TypeRelation, sameType } from "./compat";
 
@@ -734,30 +736,91 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 // (looser). Our implementation always uses structural dedup, producing a
 // potentially coarser union. This is SOUND (supertype) but less precise.
 // Phase 6 can tighten once we add `initialType` and an `isSubsetOf` helper.
+// ===== Nullable join canonicalization =====
+//
+// THE single oracle for "a join whose members include null". Both join paths
+// use it — `joinBranchTypes` (fit.ms, expression branches) and
+// `joinNarrowedTypes` below (flow merges) — so a nullable produced by either
+// route lands on the SAME canonical type object. Two dedup loops with their own
+// rules is exactly what guard/ptrFirstRefJoinNullUnion.ms exists to forbid.
+//
+// Canonical means a value-typed `T | null` re-enters `createMaybeType`, whose
+// cache hands back the interned carrier the declaration already uses. A bare
+// `createUnion([T, null])` would be a second spelling of the declared type that
+// no consumer recognises (Maybe read materialization and operator lowering both
+// key on the carrier).
+
+function isNonOwningPointerKind(k: TypeKind): boolean {
+	return k === TypeKind.Ptr || k === TypeKind.Cursor;
+}
+
+export function isPointerKindJoinPair(a: Type, b: Type): boolean {
+	if (a === null || b === null) return false;
+	const cross = (a.kind === TypeKind.Ref && isNonOwningPointerKind(b.kind))
+		|| (isNonOwningPointerKind(a.kind) && b.kind === TypeKind.Ref)
+		|| (isNonOwningPointerKind(a.kind) && isNonOwningPointerKind(b.kind) && a.kind !== b.kind);
+	if (!cross) return false;
+	if (isAtomicRef(a) || isAtomicRef(b)) return false;
+	if (a.typeReturn === null || b.typeReturn === null) return false;
+	const pa = peelToStructOrUnion(a);
+	const pb = peelToStructOrUnion(b);
+	if (pa === null || pb === null) return false;
+	if (pa.kind !== TypeKind.Struct && pa.kind !== TypeKind.Union) return false;
+	return pa === pb || sameType(pa, pb);
+}
+
+export function joinedPointerMember(existing: Type, incoming: Type): Type {
+	return isNonOwningPointerKind(existing.kind) && incoming.kind === TypeKind.Ref ? incoming : existing;
+}
+
+export function canonicalizeBranchJoin(t: Type): Type {
+	if (t === null || t.kind !== TypeKind.Union) return t;
+	let sawNull = false;
+	const nonNull: Type[] = [];
+	for (const m of t.typeChildren) {
+		if (m === null) continue;
+		if (m.kind === TypeKind.Null) { sawNull = true; continue; }
+		let member = m;
+		if (isMaybeType(m) && m.typeReturn !== null) {
+			sawNull = true;
+			member = m.typeReturn;
+		}
+		let dup = false;
+		for (let pi = 0; pi < nonNull.length; pi++) {
+			const p = nonNull[pi];
+			if (p === member || sameType(p, member)) { dup = true; break; }
+			if (isPointerKindJoinPair(p, member)) {
+				nonNull[pi] = joinedPointerMember(p, member);
+				dup = true;
+				break;
+			}
+		}
+		if (!dup) nonNull.push(member);
+	}
+	if (!sawNull) return t;
+	if (nonNull.length === 0) return nullType();
+	if (nonNull.length === 1) {
+		if (isMaybeWrappable(nonNull[0])) return createMaybeType(nonNull[0]);
+		return createUnion([nonNull[0], nullType()]);
+	}
+	let allPrim = true;
+	for (const m of nonNull) {
+		if (!isPrimitiveUnionMember(m)) { allPrim = false; break; }
+	}
+	if (allPrim) return createMaybeType(createUnion(nonNull));
+	const rebuilt: Type[] = [];
+	for (const m of nonNull) rebuilt.push(m);
+	rebuilt.push(nullType());
+	return createUnion(rebuilt);
+}
+
 function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
 	if (parent !== null && parent.kind === TypeKind.Union) {
 		return unionPreservingDiscriminant(parent, members);
 	}
-	// Maybe-carried `T | null`: the halves a null-check produced (`T` on the
-	// true edge, `null` on the false edge) re-join to the DECLARED carrier, the
-	// way re-joining a union's constituents yields the interned union. A fresh
-	// `T | null` Union here would be a second spelling of the same type that
-	// no consumer recognises — the read keeps its carrier layout downstream
-	// (Maybe read materialization, operator lowering both key on the carrier).
-	if (parent !== null && isMaybeType(parent)) {
-		let hasNull = false;
-		let nonNull: Type | null = null;
-		let nonNullCount: int32 = 0;
-		for (const m of members) {
-			if (m.kind === TypeKind.Null) { hasNull = true; continue; }
-			nonNull = m;
-			nonNullCount = nonNullCount + 1;
-		}
-		if (hasNull && nonNullCount === 1 && nonNull !== null && sameType(nonNull, unwrapMaybeType(parent))) {
-			return parent;
-		}
-	}
-	return createUnion(members);
+	// A merge of a nullable's narrowed halves (`T` on the true edge, `null` on
+	// the false edge) rebuilds the DECLARED type, not a fresh spelling of it.
+	return canonicalizeBranchJoin(createUnion(members));
 }
 
 export function unionOfTypes(types: Type[], parent: Type | null): Type {

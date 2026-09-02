@@ -6,7 +6,7 @@ import { CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, 
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { isAnonStructAdoption, isAssignable, isReinterpretUnsafe, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType } from "./context";
-import { unionOfTypes } from "./flow";
+import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, findUnionVariant, float64Type, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType } from "./types";
 import { callCheckExpr } from "./checkerCallbacks";
 
@@ -35,29 +35,6 @@ function branchContributesToJoin(t: Type | null): boolean {
 	return t !== null && !isUnresolvedType(t)
 		&& t.kind !== TypeKind.Never && t.kind !== TypeKind.Void
 		&& t.kind !== TypeKind.Error;
-}
-
-function isNonOwningPointerKind(k: TypeKind): boolean {
-	return k === TypeKind.Ptr || k === TypeKind.Cursor;
-}
-
-function isPointerKindJoinPair(a: Type, b: Type): boolean {
-	if (a === null || b === null) return false;
-	const cross = (a.kind === TypeKind.Ref && isNonOwningPointerKind(b.kind))
-		|| (isNonOwningPointerKind(a.kind) && b.kind === TypeKind.Ref)
-		|| (isNonOwningPointerKind(a.kind) && isNonOwningPointerKind(b.kind) && a.kind !== b.kind);
-	if (!cross) return false;
-	if (isAtomicRef(a) || isAtomicRef(b)) return false;
-	if (a.typeReturn === null || b.typeReturn === null) return false;
-	const pa = peelToStructOrUnion(a);
-	const pb = peelToStructOrUnion(b);
-	if (pa === null || pb === null) return false;
-	if (pa.kind !== TypeKind.Struct && pa.kind !== TypeKind.Union) return false;
-	return pa === pb || sameType(pa, pb);
-}
-
-function joinedPointerMember(existing: Type, incoming: Type): Type {
-	return isNonOwningPointerKind(existing.kind) && incoming.kind === TypeKind.Ref ? incoming : existing;
 }
 
 export function joinBranchTypes(types: Type[]): Type {
@@ -95,47 +72,6 @@ export function joinBranchTypes(types: Type[]): Type {
 		return acc;
 	}
 	return canonicalizeBranchJoin(unionOfTypes(prepared, null));
-}
-
-function canonicalizeBranchJoin(t: Type): Type {
-	if (t === null || t.kind !== TypeKind.Union) return t;
-	let sawNull = false;
-	const nonNull: Type[] = [];
-	for (const m of t.typeChildren) {
-		if (m === null) continue;
-		if (m.kind === TypeKind.Null) { sawNull = true; continue; }
-		let member = m;
-		if (isMaybeType(m) && m.typeReturn !== null) {
-			sawNull = true;
-			member = m.typeReturn;
-		}
-		let dup = false;
-		for (let pi = 0; pi < nonNull.length; pi++) {
-			const p = nonNull[pi];
-			if (p === member || sameType(p, member)) { dup = true; break; }
-			if (isPointerKindJoinPair(p, member)) {
-				nonNull[pi] = joinedPointerMember(p, member);
-				dup = true;
-				break;
-			}
-		}
-		if (!dup) nonNull.push(member);
-	}
-	if (!sawNull) return t;
-	if (nonNull.length === 0) return nullType();
-	if (nonNull.length === 1) {
-		if (isMaybeWrappable(nonNull[0])) return createMaybeType(nonNull[0]);
-		return createUnion([nonNull[0], nullType()]);
-	}
-	let allPrim = true;
-	for (const m of nonNull) {
-		if (!isPrimitiveUnionMember(m)) { allPrim = false; break; }
-	}
-	if (allPrim) return createMaybeType(createUnion(nonNull));
-	const rebuilt: Type[] = [];
-	for (const m of nonNull) rebuilt.push(m);
-	rebuilt.push(nullType());
-	return createUnion(rebuilt);
 }
 
 export function fitJoinedBranch(ctx: CheckerContext, expr: Node, joined: Type | null): Node {
