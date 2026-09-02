@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase, isMaybeType, peelTransparentInstance } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance } from "./types";
 
 
 // ===== Assignability =====
@@ -232,6 +232,14 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// narrowing (all union variants handled), the residual type is never.
 	// `return x` where `x: never` must be valid regardless of the return type.
 	if (source.kind === TypeKind.Never) return true;
+
+	// `A | null` into `A | B | null`. MUST precede the same-kind arm below: both
+	// sides are Maybe carriers, so kind equality sends them to the struct
+	// comparison, which reads two different payload types and refuses. Exactly
+	// as narrow as the conversion that backs it — fit.widenMaybePayload reads
+	// the same slot from the same function, so the relation can never accept a
+	// widening the emitter has no tag for.
+	if (maybePayloadWidenSlot(source, target) >= 0) return true;
 
 	// Same kind is always compatible
 	if (source.kind === target.kind) {
