@@ -31,3 +31,9 @@ export function spawn<T>(fn: () => T): Promise<T> {
 	const seed: Promise<T> = Promise.resolve(null as unknown as T);
 	return seed.then(fn);
 }
+
+// sleepAsync — the C twin's msSleepAsync (a timer the exit drain pumps before
+// the process ends). On js the native event loop IS the drain: a pending
+// setTimeout keeps node alive, so a dropped `sleep-then-print` still runs its
+// continuation with the same exit semantics as C.
+export extern function sleepAsync(ms: number): Promise<void> from "new Promise((r) => setTimeout(r, #))";
