@@ -2470,7 +2470,7 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 
 function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 	if (t === null) return false;
-	return t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr || t.kind === TypeKind.Borrow;
+	return t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr || t.kind === TypeKind.Borrow || t.kind === TypeKind.Var;
 }
 
 // Validate object literal construction against a discriminated union type.
@@ -2877,7 +2877,19 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		if (needsDeref && d.object.kind !== NodeKind.HiddenDeref) {
 			const tok = createToken(TokenKind.Ident, "", node.location.line);
 			const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
-			derefNode.nodeType = resolvedObjType;
+			// ONE C-level peel. Field resolution peeled everything (Var AND Ref)
+			// to find the struct, but a single HiddenDeref emits `(*obj)`. The
+			// object's nodeType flavor differs between read sites (checker
+			// already peeled Var) and write sites (still Var) — the SYMBOL's
+			// declared type is the stable anchor for Var params.
+			const symT = d.object.resolvedSym !== null ? d.object.resolvedSym.symbolType : null;
+			if (symT !== null && symT.kind === TypeKind.Var && symT.typeReturn !== null) {
+				derefNode.nodeType = symT.typeReturn;
+			} else if ((objType.kind === TypeKind.Var || objType.kind === TypeKind.Ref) && objType.typeReturn !== null) {
+				derefNode.nodeType = objType.typeReturn;
+			} else {
+				derefNode.nodeType = resolvedObjType;
+			}
 			d.object = derefNode;
 		}
 		// Resolve property symbol: search symbol table for TypeName_propName (named types).

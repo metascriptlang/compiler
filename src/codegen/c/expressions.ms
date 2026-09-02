@@ -1628,7 +1628,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			}
 		}
 		if (walkObj !== d.object) {
-			objIsPtr = false;
+			// HiddenDeref peels exactly ONE pointer level — the emitted operand
+			// is a pointer iff the deref node's own type still is (Var<Ref<T>>).
+			objIsPtr = d.object.nodeType !== null && isPointerType(d.object.nodeType);
 		}
 		if (objIsPtr) {
 			ctx.results.push(`${obj}->${field}`);
@@ -1798,10 +1800,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		const inner = peekResult(ctx, cc, 0);
 		truncResults(ctx, cc);
 		const hd = node.data as ExprStmtData;
-		if (hd.expr.kind === NodeKind.Identifier && isIndirectParam(p, (hd.expr.data as IdentifierData).name)) {
-			ctx.results.push(inner);
-			return;
-		}
 		if (isRefArrayAccessCall(hd.expr) && hd.expr.nodeType !== null) {
 			const elemDesc = getTypeDesc(g, hd.expr.nodeType);
 			if (elemDesc !== "void*" && elemDesc !== "void") {

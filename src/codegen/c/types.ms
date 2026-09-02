@@ -480,7 +480,10 @@ const PTR_THRESHOLD: number = 24;
 
 export function ccgIntroducedPtr(t: Type): boolean {
 	if (t === null) return false;
-	if (t.kind === TypeKind.Var) return true;  // out params always by pointer
+	// Reference parity: tyVar is not tyObject/tyTuple — `else: result = false`.
+	// A var param's `*` comes from mapType/getTypeDesc, never from lfIndirect.
+	// Early exit BEFORE skipModifier: struct-size dispatch must not see through Var.
+	if (t.kind === TypeKind.Var) return false;
 	const inner = skipModifier(t);
 	if (inner === null) return false;
 	if (isStructType(inner)) return getTypeSize(inner) > PTR_THRESHOLD;
@@ -499,6 +502,11 @@ export function ccgIntroducedPtr(t: Type): boolean {
 // Actor lowering sets mutation bits via markValueLayoutParamsAsMutated.
 export function shouldIndirectParam(paramType: Type, isMutated: boolean): boolean {
 	if (paramType === null) return false;
+	// Var params: the `*` is in the type (getTypeDesc); body derefs come from
+	// HiddenDeref nodes. Never indirect — not even when mutated (an out param
+	// is mutated by definition; the struct-mutation branch must not see
+	// through Var via skipModifier).
+	if (paramType.kind === TypeKind.Var) return false;
 	const inner = skipModifier(paramType);
 	if (inner !== null && isStructType(inner)) {
 		if (isMutated) return true;

@@ -1,13 +1,15 @@
 // Var (out/ref) param uses are locations behind a pointer. Materialize the
 // deref in the AST (HiddenDeref) before the analyzer so lifecycle hooks see
 // a location, not a raw pointer-typed identifier (Reference: tyVar use deref).
-// Raw identifiers stay raw in addr contexts: OutExpr operands and args bound
-// to a Var formal (forwarding) — codegen passes those as pointers already.
+// Args bound to a Var formal get the implicit ADDR instead (Reference
+// takeImplicitAddr): HiddenAddr around the lvalue, except forwarding — an
+// arg that already denotes a Var param (user: resolvedSym; synthesized hook
+// bodies: nodeType stamp from destructorLifting) passes its pointer raw.
 
 import { Node, NodeKind, Type, TypeKind, CallExprData, OutExprData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { mapChildren } from "../walker";
-import { makeHiddenDeref } from "../util";
+import { makeHiddenDeref, makeHiddenAddr } from "../util";
 
 function isVarType(t: Type): boolean {
 	return t !== null && t.kind === TypeKind.Var;
@@ -26,10 +28,37 @@ function wrapVarUse(node: Node): Node {
 	const s = node.resolvedSym;
 	if (s === null || !isVarType(s.symbolType)) return node;
 	const hd = makeHiddenDeref(node, node.location);
-	if (hd.nodeType !== null && hd.nodeType.kind === TypeKind.Var && hd.nodeType.typeReturn !== null) {
-		hd.nodeType = hd.nodeType.typeReturn;
+	// ONE peel off the SYMBOL's Var type — the ident's own nodeType may already
+	// be peeled by the checker's read path, and `(*ident)` is exactly one
+	// deref of the T* the ident denotes.
+	if (s.symbolType.typeReturn !== null) {
+		hd.nodeType = s.symbolType.typeReturn;
 	}
 	return hd;
+}
+
+function isForwardingVarIdent(n: Node): boolean {
+	if (n === null || n.kind !== NodeKind.Identifier) return false;
+	if (n.resolvedSym !== null) return isVarType(n.resolvedSym.symbolType);
+	// Unannotated synthetic idents (destructorLifting forwarding args) pass raw;
+	// checker-typed user idents always carry nodeType, so null means synthetic.
+	if (n.nodeType === null) return true;
+	return isVarType(n.nodeType);
+}
+
+function takeImplicitAddr(arg: Node): Node {
+	if (arg.kind === NodeKind.Identifier) {
+		if (isForwardingVarIdent(arg)) return arg;
+		return makeHiddenAddr(arg, arg.location);
+	}
+	if (arg.kind === NodeKind.OutExpr) {
+		const d = arg.data as OutExprData;
+		if (d.outArg === null) return arg;
+		if (isForwardingVarIdent(d.outArg)) return d.outArg;
+		return makeHiddenAddr(visit(d.outArg), arg.location);
+	}
+	if (arg.kind === NodeKind.HiddenAddr) return arg;
+	return makeHiddenAddr(visit(arg), arg.location);
 }
 
 function visit(node: Node): Node {
@@ -49,8 +78,8 @@ function visit(node: Node): Node {
 		while (i < d.arguments.length) {
 			const a = d.arguments[i];
 			const varFormal = formals !== null && i < formals.length && isVarType(formals[i]);
-			if (a !== null && (!varFormal || a.kind !== NodeKind.Identifier)) {
-				d.arguments[i] = visit(a);
+			if (a !== null) {
+				d.arguments[i] = varFormal ? takeImplicitAddr(a) : visit(a);
 			}
 			i += 1;
 		}
