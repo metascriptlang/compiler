@@ -1976,10 +1976,53 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	return createClosureType(types, params, isAsync ? createPromise(voidType()) : voidType());
 }
 
+// TS-parity arity subsumption for LITERAL lambdas: a written arrow may declare
+// FEWER params than the fn-typed slot it flows into (`fire(() => {...})` where
+// fire: (h: (e: Ev) => void) => void). Nim rejects this (procTypeRel,
+// sigmatch.nim:813 exact signatureLen) — DIVERGE-INTENTIONAL for TS semantics,
+// literals only. Without padding the literal keeps its own short type, no
+// conversion is ever materialized, and the C call site casts fn to the
+// DECLARED slot signature (fnSlotReprMismatch invariant) → ABI mismatch,
+// garbage frame, double-free in by-value struct destructors (bug118).
+// Pad the literal's OWN param list with synthetic names left un-annotated so
+// the ctxParamTypes fallback in checkAnonymousFunction types them from the
+// formal — scope, lifter and codegen then all see the slot's full signature.
+// Fn VALUES keep the strict isFunctionAssignable relation — loud mismatch.
+// Only concrete tails pad: a generic/unresolved extra formal leaves the
+// literal untouched (ec38c20 family — never bake half-resolved types).
+function padLiteralParams(params: string[], paramTypes: string[], node: Node, expectedType: Type | null): void {
+	if (expectedType === null) return;
+	let fnExpected = expectedType;
+	if (isMaybeType(fnExpected) && fnExpected.typeReturn !== null) {
+		fnExpected = fnExpected.typeReturn;
+	}
+	if (fnExpected.kind !== TypeKind.Function || fnExpected.typeChildren === null) return;
+	if (params.length >= fnExpected.typeChildren.length) return;
+	let i = params.length;
+	while (i < fnExpected.typeChildren.length) {
+		const pt = fnExpected.typeChildren[i];
+		if (pt === null || isUnresolvedType(pt) || pt.kind === TypeKind.GenericParam || hasGenericParams(pt)) return;
+		i += 1;
+	}
+	while (paramTypes.length < params.length) {
+		paramTypes.push("");
+	}
+	i = params.length;
+	while (i < fnExpected.typeChildren.length) {
+		params.push("__msPad" + String(i));
+		paramTypes.push("");
+		if (node.paramLocations !== null) {
+			node.paramLocations.push(node.location);
+		}
+		i += 1;
+	}
+}
+
 function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as ArrowFunctionData;
 	resolveTypeExpr(node.typeExpr, ctx);
 	resolveTypeExprs(node.typeExprs, ctx);
+	padLiteralParams(d.arrowParams, d.arrowParamTypes, node, expectedType);
 	const fnType = checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody, node.paramLocations!, d.arrowReturnType, expectedType, d.arrowFlags);
 	// The implicit return of an expression body is a fit position like any
 	// ReturnStmt (checkReturnStmt:1229) — reseat the body through fitNode so
@@ -2000,6 +2043,7 @@ function checkFuncExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 	const d = node.data as FunctionExprData;
 	resolveTypeExpr(node.typeExpr, ctx);
 	resolveTypeExprs(node.typeExprs, ctx);
+	padLiteralParams(d.funcExprParams, d.funcExprParamTypes, node, expectedType);
 	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprParamTypes, d.funcExprBody, node.paramLocations!, d.funcExprReturnType, expectedType, d.funcExprFlags);
 }
 
