@@ -3,10 +3,9 @@
 // JS uses native null (maybeUnwrap pass). This program's stdout is the contract:
 // the two backends must print byte-identical output.
 //
-// @xfail(c): bare `number | null` Maybe-carrier miscompiles (double != void*) — open G1 cluster, docs/TSGAP.md "G1-gate" (siblings bug010/bug047). XPASS fires loud when the fix lands.
-// @xfail(san): same G1 carrier — the san cell builds the same C (drc) and fails identically.
-// @xfail(orc): same G1 carrier — the gap is in the C backend, not the GC mode.
-// @xfail(danger): same G1 carrier — the gap is in the C backend, not the opt level.
+// The second null-check on `a`/`b` (ternary, after the if/else join) is the
+// load-bearing line: a joined read must keep its Maybe carrier so the compare
+// lowers to a present-check, not a pointer compare (fixedbugs/bug117).
 
 interface Box { label: string; }
 
