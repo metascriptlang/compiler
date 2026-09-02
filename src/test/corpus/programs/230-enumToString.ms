@@ -1,4 +1,3 @@
-// @skip-js: enum reverse index + Enum_toString injection are C-only (JS emits flat enum constants, no reverse map)
 enum Color { Red, Green, Blue }
 
 function shout(c: Color): string {
