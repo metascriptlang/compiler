@@ -98,11 +98,11 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 
 // ===== Enum Reverse Index =====
 // E[v] → E_toString(v). The checker typed the ArrayAccess as string and
-// verified the base resolves to the enum TYPE symbol. JS keeps the source
-// form (flat-constant enum emission has no reverse map yet — TSGAP).
+// verified the base resolves to the enum TYPE symbol. Backend-neutral: both
+// emitters lower enums to flat integer constants, so neither has a reverse map
+// to index — the generated function IS the reverse map on both.
 
 function lowerEnumReverseIndex(node: Node, ctx: TransformContext): Node {
-	if (ctx.jsBackend) return node;
 	const d = node.data as ArrayAccessData;
 	if (d.array === null || d.index === null || d.array.kind !== NodeKind.Identifier) return node;
 	const sym = d.array.resolvedSym;

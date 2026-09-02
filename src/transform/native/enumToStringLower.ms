@@ -132,17 +132,27 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 	if (ctx !== null && ctx.checkerCtx !== null && ctx.checkerCtx.table !== null) {
 		const toStringFns: Node[] = [];
 		const injected: NameSet = createNameSet();
-		let scope = ctx.checkerCtx.table.current;
-		while (scope !== null) {
-			for (const sym of scope.symbols.values()) {
-				if (sym.symbolKind === SymbolKind.Enum && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Enum) {
-					const t = sym.symbolType;
-					if (nameSetContains(injected, t.typeName)) continue;
-					nameSetAdd(injected, t.typeName);
-					toStringFns.push(makeEnumToString(enumToStringNameFor(t), t.typeName, t.typeNames, sym.location));
+		// Scope scan — C only. Each module is its own translation unit there, so
+		// injecting every enum in scope costs a few unreferenced statics and
+		// covers any lowering site that forgets to request. The JS bundle is ONE
+		// flat scope: the same scan walks the scope chain into the prelude and
+		// re-emits its whole enum set once per module (measured: 55 defs, 20+
+		// copies of JsonKind_toString for a 3-member user enum). JS therefore
+		// injects exactly what the lowering sites requested below — the request
+		// list is complete, every site calls requestEnumToString.
+		if (!ctx.jsBackend) {
+			let scope = ctx.checkerCtx.table.current;
+			while (scope !== null) {
+				for (const sym of scope.symbols.values()) {
+					if (sym.symbolKind === SymbolKind.Enum && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Enum) {
+						const t = sym.symbolType;
+						if (nameSetContains(injected, t.typeName)) continue;
+						nameSetAdd(injected, t.typeName);
+						toStringFns.push(makeEnumToString(enumToStringNameFor(t), t.typeName, t.typeNames, sym.location));
+					}
 				}
+				scope = scope.parent;
 			}
-			scope = scope.parent;
 		}
 		// Lowering sites (builtinLower/debugLower) request enums that are not in
 		// module scope — e.g. reached only through an imported field's type.

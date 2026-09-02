@@ -91,6 +91,7 @@ import { lowerPowerAssert } from "./powerAssert";
 import { lowerRestParams } from "./lowering/restParamLower";
 import { lowerActorPre, lowerActor } from "./lowering/actorLower";
 import { resolveRuntimeIdents } from "./lowering/runtimeIdentResolve";
+import { lowerEnumToString } from "./native/enumToStringLower";
 
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -175,6 +176,13 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = lowerBigIntJS(result, ctx); }
 	if (jsBackend) { result = lowerIntConvJS(result, ctx); }
 	if (jsBackend) { result = lowerIntArithJS(result, ctx); }
+	// Definitions for the `EnumName_toString` calls the lowerings above emit
+	// (enum reverse index + `.toString()`). C injects the same functions at the
+	// tail of its native pipeline (transform/native/index.ms); JS has no native
+	// pipeline, so its injection lands here — last for the same reason: every
+	// pass that can request an enum has already run, and DCE cannot sweep a
+	// definition whose only reference is a call the lowerings just created.
+	if (jsBackend) { result = lowerEnumToString(result, ctx); }
 	if (!jsBackend) { result = liftDestructors(result, ctx); }
 	return result;
 }
