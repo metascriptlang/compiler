@@ -567,6 +567,18 @@ export function stripMacroArgWrappers(node: Node): Node {
 			n = (n.data as HiddenDerefData).expr;
 		} else if (n.kind === NodeKind.HiddenStdConv || n.kind === NodeKind.HiddenSubConv) {
 			n = (n.data as HiddenStdConvData).convExpr;
+		} else if (n.kind === NodeKind.ObjectLiteral && isMaybeType(n.nodeType)) {
+			// synthMaybeWrap (checker/fit.ms) materializes T → Maybe<T> as a
+			// carrier literal { value, present } instead of a Hidden conv, so
+			// the kind test above cannot see it. Unwrap by TYPE: only the
+			// checker can stamp IsMaybe on an object literal — a user cannot
+			// spell the carrier — so this never peels source the author wrote.
+			const d = n.data as ObjectLiteralData;
+			if (d.keys.length === 2 && d.keys[0] === "value" && d.keys[1] === "present") {
+				n = d.properties[0];
+			} else {
+				break;
+			}
 		} else {
 			break;
 		}
