@@ -10,8 +10,8 @@ export function Number(v: boolean): float64 {
 	return v ? 1.0 : 0.0;
 }
 
-export function Number(v: int64): float64 {
-	return v as float64;
+export function Number(v: float64): float64 {
+	return v;
 }
 
 export function isNaN(this typeof Number, x: float64): boolean {

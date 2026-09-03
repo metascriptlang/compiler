@@ -7,10 +7,6 @@ export function Boolean(v: float64): boolean {
 	return v !== 0.0 && v === v;
 }
 
-export function Boolean(v: int64): boolean {
-	return v !== 0;
-}
-
 export function Boolean(v: boolean): boolean {
 	return v;
 }
