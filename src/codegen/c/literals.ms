@@ -75,6 +75,12 @@ export function formatCNumber(value: number, type: Type | null = null): string {
 	const isFloat = type !== null
 		&& (type.kind === TypeKind.Number || type.kind === TypeKind.Float32 || type.kind === TypeKind.Float64);
 
+	// Non-finite doubles have no C literal spelling — emit the C99 math.h
+	// macros (constant expressions, linker/runtime neutral).
+	if (value !== value) return "NAN";
+	if (value > 1.7976931348623157e308) return "INFINITY";
+	if (value < -1.7976931348623157e308) return "-INFINITY";
+
 	// Negative zero — must check before the regular zero branch (1.0 / -0.0 is -Infinity).
 	if (value === 0.0 && (1.0 / value) < 0.0) return isFloat ? "-0.0" : "-0";
 	if (value === 0.0) return isFloat ? "0.0" : "0";

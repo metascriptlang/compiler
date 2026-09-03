@@ -1065,26 +1065,60 @@ export function defineGenericParam(ctx: CheckerContext, paramStr: string): void 
 
 // ===== B. Resolve Declarations (Pass 2) =====
 
+// Callable-namespace attachment (Number.MAX_SAFE_INTEGER): merged statics
+// live on a Function symbol whose ensureShaped resolves only the function
+// signature — the constant members never pass through resolveClass. Resolve
+// their annotations here so member and symbol types are real before codegen.
+export function resolveAttachedStatics(ctx: CheckerContext, sym: Symbol): void {
+	for (const sf of sym.staticFields) {
+		if (sf.state === SymbolState.Shaped || sf.state === SymbolState.Checked) continue;
+		const member = sf.declNode;
+		if (member === null) continue;
+		const pd = member.data as PropertyDeclData;
+		const staticType = pd.propType !== ""
+			? resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column)
+			: createPrimitive(TypeKind.Float64);
+		member.nodeType = staticType;
+		sf.symbolType = staticType;
+		sf.state = SymbolState.Shaped;
+		if (pd.propInitializer !== null
+				&& (pd.propInitializer.nodeType === null
+					|| pd.propInitializer.nodeType.kind === TypeKind.None
+					|| pd.propInitializer.nodeType.kind === TypeKind.Inferred)) {
+			pd.propInitializer.nodeType = staticType;
+		}
+	}
+}
+
 export function resolveDeclarations(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
 	for (const stmt of stmts.programStmts) {
 		const name = getDeclName(stmt);
 		if (name !== "") {
 			const sym = lookupSymbol(ctx.table, name);
-			if (sym !== null) ensureShaped(sym, ctx);
+			if (sym !== null) {
+				ensureShaped(sym, ctx);
+				if (sym.staticFields.length > 0) resolveAttachedStatics(ctx, sym);
+			}
 		} else if (stmt.kind === NodeKind.ExportDecl) {
 			const d = stmt.data as ExportDeclData;
 			const innerName = getDeclName(d.exportedDecl);
 			if (innerName !== "") {
 				const sym = lookupSymbol(ctx.table, innerName);
-				if (sym !== null) ensureShaped(sym, ctx);
+				if (sym !== null) {
+					ensureShaped(sym, ctx);
+					if (sym.staticFields.length > 0) resolveAttachedStatics(ctx, sym);
+				}
 			}
 		} else if (stmt.kind === NodeKind.DecoratedDecl) {
 			const dd = stmt.data as DecoratedDeclData;
 			const innerName = getDeclName(dd.decoratedNode);
 			if (innerName !== "") {
 				const sym = lookupSymbol(ctx.table, innerName);
-				if (sym !== null) ensureShaped(sym, ctx);
+				if (sym !== null) {
+					ensureShaped(sym, ctx);
+					if (sym.staticFields.length > 0) resolveAttachedStatics(ctx, sym);
+				}
 			}
 		}
 	}

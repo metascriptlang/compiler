@@ -6,3 +6,16 @@ export extern function isNaN(this typeof Number, x: float64): boolean from "Numb
 export extern function isFinite(this typeof Number, x: float64): boolean from "Number.isFinite(#)";
 export extern function isInteger(this typeof Number, x: float64): boolean from "Number.isInteger(#)";
 export extern function isSafeInteger(this typeof Number, x: float64): boolean from "Number.isSafeInteger(#)";
+
+// Statics-only attachment onto the callable Number symbol: reads resolve
+// through findStaticField and emit as native member accesses on js / C
+export class Number {
+	static MAX_SAFE_INTEGER: float64 = 9007199254740991;
+	static MIN_SAFE_INTEGER: float64 = -9007199254740991;
+	static MAX_VALUE: float64 = 1.7976931348623157e308;
+	static MIN_VALUE: float64 = 5e-324;
+	static EPSILON: float64 = 2.220446049250313e-16;
+	static POSITIVE_INFINITY: float64 = 1e308 * 10.0;
+	static NEGATIVE_INFINITY: float64 = -1e308 * 10.0;
+	static NaN: float64 = 1e308 * 10.0 - 1e308 * 10.0;
+}

@@ -2,7 +2,7 @@
 
 import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
-	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, createNodeAt,
+	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, createNodeAt, SymbolKind,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
@@ -107,6 +107,13 @@ function emitStaticPropertyDecl(gen: JSGenerator, member: Node): void {
 
 function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as ClassDeclData;
+	// Merged callable-namespace attachment (Number.MAX_SAFE_INTEGER): the
+	// name resolves to a prelude Function bound to the native global —
+	// emitting a class here would shadow it. Reads of its statics emit as
+	// raw native member accesses.
+	if (node.resolvedSym !== null && node.resolvedSym.symbolKind === SymbolKind.Function) {
+		return;
+	}
 	emit(gen, "class ");
 	emit(gen, jsSymbolName(gen, node.resolvedSym, d.className));
 	if (d.classExtends !== "") {

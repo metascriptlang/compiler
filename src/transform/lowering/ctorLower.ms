@@ -12,7 +12,7 @@ import {
 	Node, NodeKind, ClassDeclData, PropertyDeclData, ConstructorDeclData,
 	BlockStmtData, ProgramData, ExportDeclData, DecoratedDeclData,
 	ExprStmtData, CallExprData, IdentifierData, FunctionDeclData,
-	createNodeAt,
+	createNodeAt, SymbolKind,
 } from "../../ast/node";
 import { TransformContext, createTransformContext } from "../context";
 import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeBlock, makeCall, makeIdent } from "../util";
@@ -158,6 +158,13 @@ export function lowerCtorInit(program: Node, ctx: TransformContext): Node {
 			target = (target.data as ExportDeclData).exportedDecl;
 		}
 		if (target !== null && target.kind === NodeKind.ClassDecl) {
+			// Callable-namespace attachment (Number.MAX_SAFE_INTEGER): the
+			// name resolves to a Function, not a type — there is no instance
+			// to construct, so synthesizing/lifting a ctor would emit a
+			// bogus <Name>_init with unresolved receiver types.
+			if (target.resolvedSym !== null && target.resolvedSym.symbolKind === SymbolKind.Function) {
+				continue;
+			}
 			lowerClassNode(target);
 		}
 	}

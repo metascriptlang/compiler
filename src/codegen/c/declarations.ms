@@ -3,7 +3,7 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, TypeKind, Type, Symbol } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
 import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
@@ -374,6 +374,15 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 function genClassDecl(g: CGen, node: Node): void {
 	const d = node.data as ClassDeclData;
 
+	// Merged callable-namespace attachment (Number.MAX_SAFE_INTEGER): the
+	// name is a Function — no struct type exists, so emit only the constant
+	// globals. Reachable because checkClassDecl resolves the class name to
+	// the same-named Function symbol.
+	if (node.resolvedSym !== null && node.resolvedSym.symbolKind === SymbolKind.Function) {
+		genStaticFieldGlobals(g, d);
+		return;
+	}
+
 	// Extern class: type defined externally — emit typedef forward decl only.
 	if ((node.flags & NodeFlag.ExternC) !== 0) {
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${d.className} ${d.className};`);
@@ -417,36 +426,7 @@ function genClassDecl(g: CGen, node: Node): void {
 		}
 		// Static field globals + initializer emission (own decls only — parent's
 		// statics emitted by parent's genClassDecl).
-		for (const member of d.classBody) {
-			if (member.kind === NodeKind.PropertyDecl) {
-				const pd = member.data as PropertyDeclData;
-				if (pd.propIsStatic) {
-					const cType = member.nodeType !== null ? getTypeDesc(g, member.nodeType) : "double";
-					const globalName = staticFieldCName(d.className + "." + pd.propName);
-					addLine(sec(g, CSection.GlobalVars), `${cType} ${globalName};`);
-					if (pd.propInitializer !== null) {
-						match (pd.propInitializer.kind) {
-							NodeKind.NumberLiteral => {
-								const nv = (pd.propInitializer.data as NumberLiteralData).value;
-								addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumber(nv, member.nodeType)};`);
-							},
-							NodeKind.StringLiteral => {
-								const sv = (pd.propInitializer.data as StringLiteralData).value;
-								addLine(sec(g, CSection.DatInit), `${globalName} = msStringFromCStr(${cStringLiteral(sv)});`);
-							},
-							NodeKind.BooleanLiteral => {
-								const bv = (pd.propInitializer.data as BooleanLiteralData).boolValue;
-								addLine(sec(g, CSection.DatInit), `${globalName} = ${cBoolLiteral(bv)};`);
-							},
-							_ => {
-								const initSnippet = genExpr(g, g.initProc, pd.propInitializer);
-								emitStmtsLine(g.initProc, `${globalName} = ${initSnippet};`);
-							},
-						};
-					}
-				}
-			}
-		}
+		genStaticFieldGlobals(g, d);
 
 		let structDef = `struct ${name} {\n`;
 		for (let i = 0; i < fieldTypes.length; i += 1) {
@@ -464,6 +444,47 @@ function genClassDecl(g: CGen, node: Node): void {
 	for (const member of d.classBody) {
 		if (member.kind === NodeKind.MethodDecl) {
 			genMethodAsFunction(g, member, name);
+		}
+	}
+}
+
+// Static field globals + initializer emission for a class body. Shared by the
+// normal class path and the merged callable-namespace attachment.
+function genStaticFieldGlobals(g: CGen, d: ClassDeclData): void {
+	for (const member of d.classBody) {
+		if (member.kind !== NodeKind.PropertyDecl) { continue; }
+		const pd = member.data as PropertyDeclData;
+		if (!pd.propIsStatic) { continue; }
+		const cType = member.nodeType !== null ? getTypeDesc(g, member.nodeType) : "double";
+		const globalName = staticFieldCName(d.className + "." + pd.propName);
+		addLine(sec(g, CSection.GlobalVars), `${cType} ${globalName};`);
+		if (pd.propInitializer !== null) {
+			match (pd.propInitializer.kind) {
+				NodeKind.NumberLiteral => {
+					const nv = (pd.propInitializer.data as NumberLiteralData).value;
+					addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumber(nv, member.nodeType)};`);
+				},
+				NodeKind.StringLiteral => {
+					const sv = (pd.propInitializer.data as StringLiteralData).value;
+					addLine(sec(g, CSection.DatInit), `${globalName} = msStringFromCStr(${cStringLiteral(sv)});`);
+				},
+				NodeKind.BooleanLiteral => {
+					const bv = (pd.propInitializer.data as BooleanLiteralData).boolValue;
+					addLine(sec(g, CSection.DatInit), `${globalName} = ${cBoolLiteral(bv)};`);
+				},
+				_ => {
+					const initSnippet = genExpr(g, g.initProc, pd.propInitializer);
+					emitStmtsLine(g.initProc, `${globalName} = ${initSnippet};`);
+					// g.initProc is a scratch buffer nobody flushes — drain it
+					// into ModuleInit the way genTopLevelStmt does, or the
+					// assignment never runs.
+					const locals = readProcLocals(g.initProc);
+					const stmts = readProcStmts(g.initProc);
+					clearProcBuffers(g.initProc);
+					if (locals.length > 0) { add(sec(g, CSection.ModuleInit), locals); }
+					if (stmts.length > 0) { add(sec(g, CSection.ModuleInit), stmts); }
+				},
+			};
 		}
 	}
 }
