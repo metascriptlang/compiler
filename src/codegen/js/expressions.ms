@@ -172,9 +172,38 @@ function exportersBefore(gen: JSGenerator, modulePath: string, baseName: string)
 // keep the source name. Non-exported module-level symbols keep the bundle
 // mangling — generic instances share a post-mono name (`wrap__int32`) across
 // owners, so the module qualifier is what keeps them unique.
+// Binding names the emitted tree must never claim: a module that exports a
+// class named after a JS global would shadow it file-wide in every importer
+// (ESM imports hoist), breaking native extern patterns like `Math.floor(#)`.
+const jsGlobalNames: string[] = [
+	"Math", "JSON", "Date", "Number", "Boolean", "String", "Object", "Array",
+	"Symbol", "Promise", "Map", "Set", "WeakMap", "WeakSet", "Error",
+	"TypeError", "RangeError", "SyntaxError", "RegExp", "BigInt", "Proxy",
+	"Reflect", "ArrayBuffer", "DataView", "Uint8Array", "Int32Array",
+	"Float64Array", "Function", "globalThis", "console", "process", "Buffer",
+	"fetch", "URL", "URLSearchParams", "TextEncoder", "TextDecoder", "crypto",
+	"performance", "WebSocket", "Blob", "Headers", "Request", "Response",
+	"AbortController", "Event", "EventTarget",
+];
+
+function isJsGlobalName(name: string): boolean {
+	for (const g of jsGlobalNames) {
+		if (g === name) return true;
+	}
+	return false;
+}
+
+function exportedBindingName(baseName: string): string {
+	return isJsGlobalName(baseName) ? `${safeJsName(baseName)}_u0` : safeJsName(baseName);
+}
+
 function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string): string {
 	const baseName = (sym.originalName !== null && sym.originalName !== "") ? sym.originalName : name;
 	const hasModule = sym.modulePath !== null && sym.modulePath !== "";
+	// The declaring side sees its own symbols without a modulePath while the
+	// referencing side sees registry clones that carry one; naming must not
+	// depend on which side asks, so empty resolves to the module being emitted.
+	const effPath = hasModule ? sym.modulePath : gen.currentModulePath;
 	let emitted = "";
 	if (sym.symbolKind === SymbolKind.EnumMember && hasModule) {
 		// Checker lowers E.Member to a flat E_Member identifier; the emitted
@@ -183,8 +212,8 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string): string {
 		if (sym.modulePath !== gen.currentModulePath) recordNeededImport(gen, sym.modulePath, emitted);
 		return emitted;
 	}
-	if (sym.symbolKind === SymbolKind.Function && hasModule) {
-		if (moduleExportsName(gen, sym.modulePath, baseName)) {
+	if (sym.symbolKind === SymbolKind.Function) {
+		if (moduleExportsName(gen, effPath, baseName)) {
 			const inSet = sym.overloadIdx > 0 || (sym.overloads !== null && sym.overloads.length > 0);
 			// The declaring side compiles alone, so a set spanning modules
 			// never shows in its symbol state — both sides read the collision
@@ -192,21 +221,29 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string): string {
 			let slot = sym.overloadIdx;
 			let suffixed = inSet;
 			if (moduleCountExporting(gen, baseName) > 1) {
-				const before = exportersBefore(gen, sym.modulePath, baseName);
+				const before = exportersBefore(gen, effPath, baseName);
 				if (before >= 0) { slot = before + sym.overloadIdx; suffixed = true; }
 			}
-			emitted = suffixed ? `${safeJsName(baseName)}_u${slot}` : safeJsName(baseName);
-		} else {
+			emitted = suffixed ? `${safeJsName(baseName)}_u${slot}` : exportedBindingName(baseName);
+		} else if (hasModule) {
 			emitted = mangledFunctionName(sym, name, sym.overloadIdx);
+		} else {
+			return safeJsName(name);
 		}
-	} else if (sym.symbolKind === SymbolKind.Class && hasModule) {
-		emitted = moduleExportsName(gen, sym.modulePath, baseName) ? safeJsName(baseName) : mangledGlobalName(sym, name);
+	} else if (sym.symbolKind === SymbolKind.Class) {
+		if (moduleExportsName(gen, effPath, baseName)) {
+			emitted = exportedBindingName(baseName);
+		} else if (hasModule) {
+			emitted = mangledGlobalName(sym, name);
+		} else {
+			return safeJsName(name);
+		}
 	} else if (isModuleGlobalVar(sym)) {
 		emitted = moduleExportsName(gen, sym.modulePath, baseName) ? safeJsName(baseName) : mangledGlobalName(sym, name);
 	} else {
 		return safeJsName(name);
 	}
-	if (sym.modulePath !== gen.currentModulePath) recordNeededImport(gen, sym.modulePath, emitted);
+	if (effPath !== gen.currentModulePath) recordNeededImport(gen, effPath, emitted);
 	return emitted;
 }
 
