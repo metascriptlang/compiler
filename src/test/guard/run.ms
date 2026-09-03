@@ -25,7 +25,7 @@
 //   - Probe binaries are resolved with an .exe fallback (msc on Windows writes
 //     <output>.exe); shell paths get backslashes on Windows for cmd.exe's cd.
 //   - Verdict lines stream to stderr; the final line also lands on stdout.
-import { exec, exit, env, platform, cwd } from "std/process";
+import { exec, exit, env, platform, cwd, cmdExists } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, removeAll } from "std/fs";
 import { writeStderr } from "std/io";
 
@@ -73,6 +73,12 @@ function shellPath(p: string): string {
 	}
 	return out;
 }
+
+// The js lane runs its bundle through `node`. Without node installed the cell
+// fails to start and reports a red about the HOST, not about the backend —
+// worse than no lane at all, because it reads like a JS-backend regression.
+// Skip the lane and say so in the header (same call the corpus runner makes).
+const HAS_NODE = cmdExists("node");
 
 const MSC = resolveMsc();
 const ROOT = cwd();
@@ -364,7 +370,15 @@ function runJsLane(probe: Probe, t: Tally): void {
 		fail(t, tag, "build error" + (errs == "" ? "" : ": " + errs));
 		return;
 	}
-	const run = runCapture("node " + maybeQuote(jsOut));
+	// The build half above IS the JS-backend check and runs on every host; only
+	// the GUARD-OK assertion needs node. Without it the cell would report a red
+	// about the HOST, so leave it unscored (the header says the lane is off) —
+	// the errorcheck branch never reaches here, so those cells stay scored.
+	if (!HAS_NODE) {
+		progress("skip " + tag + ": node not found — built only");
+		return;
+	}
+	const run = runCapture("node " + maybeQuote(jsOut) + " 2>&1");
 	const merged = run.output + run.errorOutput;
 	writeFile(LOG_DIR + "/" + probe.name + ".js.out", merged);
 	if (!run.ok || !merged.contains("GUARD-OK")) {
@@ -392,6 +406,9 @@ function main(): void {
 	}
 
 	progress("nim-guard: compiler under test = " + MSC);
+	if (!HAS_NODE) {
+		progress("nim-guard: !! node not found — GUARD-JS probes still BUILD for the js target (the backend half is checked), but their GUARD-OK run is unscored on this host");
+	}
 	const t: Tally = { passes: 0, fails: 0 };
 
 	for (const probe of discoverProbes()) {
