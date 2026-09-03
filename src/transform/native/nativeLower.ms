@@ -12,8 +12,8 @@
 //
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
-import { Node, NodeKind, ArrayAccessData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Type, TypeKind, SymbolKind, createNode } from "../../ast/node";
-import { isNumeric, unwrapRefNullUnion, isAtomicRef } from "../../checker/types";
+import { Node, NodeKind, ArrayAccessData, CallExprData, IdentifierData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Type, TypeKind, SymbolKind, createNode } from "../../ast/node";
+import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -77,8 +77,25 @@ function rewriteAccess(node: Node): Node {
 	if (node.kind === NodeKind.MemberExpr) return rewriteMemberExpr(node);
 	if (node.kind === NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
 	if (node.kind === NodeKind.NewExpr) return rewriteNewExpr(node);
-	if (node.kind === NodeKind.CallExpr) return rewriteExternArrayReturn(node);
+	if (node.kind === NodeKind.CallExpr) return rewriteLockedIntrinsic(rewriteExternArrayReturn(node));
 	return node;
+}
+
+// The Locked<T> payload load/store are declared extern so the std surface can
+// spell them, but no C function of that name exists: the backend rewrites each
+// into a field access on the generated cell struct. Detach the call from its
+// extern symbol so codegen reaches that rewrite — the extern path emits the
+// nativeName call directly and would produce a call to an undeclared function.
+function rewriteLockedIntrinsic(node: Node): Node {
+	if (node.kind !== NodeKind.CallExpr) return node;
+	if (node.resolvedSym === null) return node;
+	const cd = node.data as CallExprData;
+	if (cd.callee === null || cd.callee.kind !== NodeKind.Identifier) return node;
+	const name = (cd.callee.data as IdentifierData).name;
+	if (name !== "msLockedLoad" && name !== "msLockedStore") return node;
+	const call = makeCall(makeIdent(name, node.location), cd.arguments, node.location);
+	call.nodeType = node.nodeType;
+	return call;
 }
 
 // An extern (FFI) function whose return is typed Ref<Array> returns the array BY VALUE at
@@ -104,6 +121,18 @@ function rewriteExternArrayReturn(node: Node): Node {
 // value array (codegen calloc); box it into a refcounted cell, same as an array literal.
 function rewriteNewExpr(node: Node): Node {
 	const refType = node.nodeType;
+	// new Locked(value): the argument is the cell's PAYLOAD, not the pointee —
+	// the pointee is the generated `{ lockNext, lockServing, value }` cell. Checked
+	// before the Arc path, whose predicate (isAtomicRef) also matches a Locked
+	// handle and would box the payload as the whole pointee.
+	if (isLockedRef(refType)) {
+		const ld = node.data as NewExprData;
+		if (ld.newArguments.length === 1) {
+			const cell = makeCall(makeIdent("msBoxLocked", node.location), [ld.newArguments[0]], node.location);
+			cell.nodeType = refType;
+			return cell;
+		}
+	}
 	// new Arc(value): box the argument value into an atomic-rc cell (msAllocArc).
 	// Checked BEFORE the Ref<Array> path so Arc<Array> also takes the atomic box.
 	if (isAtomicRef(refType)) {
