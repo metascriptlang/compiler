@@ -44,3 +44,7 @@ nim-cache/
 # a mis-expanded ~ once created a nested copy of the repo here
 /Users/
 
+# syncthing folder markers, never in git
+docs/.stfolder/
+docs/.stignore
+
