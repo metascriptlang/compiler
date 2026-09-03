@@ -57,6 +57,7 @@ import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
 import { lowerTailCall } from "./lowering/tailCallLower";
+import { retargetJumps } from "./lowering/jumpRetarget";
 import { lowerParamReassign } from "./lowering/paramReassignLower";
 import { lowerJsVarParam } from "./lowering/jsVarParamLower";
 import { lowerAsync } from "./lowering/asyncDesugar";
@@ -121,6 +122,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
+	result = retargetJumps(result, ctx);
 	result = lowerTailCall(result, ctx);
 	if (!jsBackend) { result = lowerParamReassign(result, ctx); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); }
