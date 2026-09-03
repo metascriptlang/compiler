@@ -57,6 +57,7 @@ for ms in "$DIR"/*.ms; do
   balanceOrc=$(grep -oE '// *GUARD-BALANCE-ORC +[A-Za-z0-9_]+' "$ms" | awk '{print $NF}')
   checkfails=$(grep -E '^// GUARD-CHECK-FAIL ' "$ms" | sed -E 's|^// GUARD-CHECK-FAIL ||')
   wantjs=$(grep -cE '^// GUARD-JS' "$ms" || true)
+  testbal=$(grep -oE '// *GUARD-TEST-BALANCE +[A-Za-z0-9_]+' "$ms" | awk '{print $NF}')
   for gc in $MODES; do
     bin="$TMP/$name.$gc"
     if [ -n "$checkfails" ]; then
@@ -135,6 +136,29 @@ for ms in "$DIR"/*.ms; do
         echo "ok   $name [js]"
       fi
     fi
+  fi
+  # // GUARD-TEST-BALANCE <T>: the invariant lives in the TEST lane — run the
+  # file under `msc test` with the ledger on and assert T balances from the
+  # test binary's own output. Guards the analyzer's TestDecl arm: without it
+  # test bodies are never processed and every owned value leaks (alloc>0,
+  # destroy=0), so `msc test` silently ran with different memory semantics
+  # than `msc build`.
+  if [ -n "$testbal" ]; then
+    ( cd "$WORK" && "$MSC" test "$ms" --passC="-DMS_DRC_LEDGER" ) >"$TMP/$name.test.log" 2>&1
+    trc=$?
+    ok=1
+    if [ $trc -ne 0 ]; then
+      echo "FAIL $name [test]: msc test exit=$trc"; ok=0; fail=1
+    fi
+    for t in $testbal; do
+      line=$(grep -E "^LEDGER $t " "$TMP/$name.test.log" | tail -1)
+      a=$(echo "$line" | sed -nE 's/.*alloc=([0-9]+).*/\1/p')
+      d=$(echo "$line" | sed -nE 's/.*destroy=([0-9]+).*/\1/p')
+      if [ -z "$a" ] || [ "$a" != "$d" ]; then
+        echo "FAIL $name [test]: imbalance $t alloc=${a:-?} destroy=${d:-?}"; ok=0; fail=1
+      fi
+    done
+    [ $ok -eq 1 ] && echo "ok   $name [test]"
   fi
 done
 
