@@ -6,7 +6,7 @@
 // Used by DRC injection to determine if a variable use is the last read,
 // enabling MOVE instead of COPY. Handles branches, loops, returns.
 
-import { Node, NodeKind, ProgramData, Symbol, IdentifierData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, MoveExprData, HiddenDerefData, HiddenStdConvData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, ExportDeclData, ForStmtData, ForOfStmtData, SymbolKind } from "../ast/node";
+import { Node, NodeKind, ProgramData, Symbol, IdentifierData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, MoveExprData, HiddenDerefData, HiddenStdConvData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, ExportDeclData, ForStmtData, ForOfStmtData, BreakStmtData, ContinueStmtData, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { AliasKind, aliases, getRootSym } from "./alias";
 import { makeSymbol } from "../checker/symbol";
@@ -41,6 +41,7 @@ export interface Cfg {
 interface LoopInfo {
 	conditionIdx: number;  // index of loop condition start (for continue → loop)
 	breakPatches: number[];  // indices of goto instrs needing patch (for break)
+	label: string;         // loop label — labeled break/continue resolve by it
 }
 
 interface BuildCtx {
@@ -213,6 +214,15 @@ function walkExpr(node: Node | null, ctx: BuildCtx): void {
 // ===== Statement Walker =====
 // Walks statements, emitting CFG instructions for control flow + def/use.
 
+function findLoopByLabel(ctx: BuildCtx, label: string): LoopInfo {
+	if (label !== "") {
+		for (let i = ctx.loops.length - 1; i >= 0; i -= 1) {
+			if (ctx.loops[i].label === label) return ctx.loops[i];
+		}
+	}
+	return ctx.loops[ctx.loops.length - 1];
+}
+
 function walkStmt(node: Node, ctx: BuildCtx): void {
 	if (node === null) return;
 
@@ -305,7 +315,7 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			const loopInfo: LoopInfo = { conditionIdx: ctx.cfg.length, breakPatches: [] };
+			const loopInfo: LoopInfo = { conditionIdx: ctx.cfg.length, breakPatches: [], label: d.whileLabel };
 			ctx.loops.push(loopInfo);
 			walkExpr(d.whileCondition, ctx);
 			const forkIdx = emitFork(ctx);
@@ -320,7 +330,7 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
 			const loopStart = ctx.cfg.length;
-			const loopInfo: LoopInfo = { conditionIdx: loopStart, breakPatches: [] };
+			const loopInfo: LoopInfo = { conditionIdx: loopStart, breakPatches: [], label: d.dwLabel };
 			ctx.loops.push(loopInfo);
 			walkStmt(d.doBody, ctx);
 			walkExpr(d.doCondition, ctx);
@@ -334,13 +344,13 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 		NodeKind.BreakStmt => {
 			if (ctx.loops.length > 0) {
 				const gotoIdx = emitGoto(ctx);
-				const loop = ctx.loops[ctx.loops.length - 1];
+				const loop = findLoopByLabel(ctx, (node.data as BreakStmtData).breakLabel);
 				loop.breakPatches.push(gotoIdx);
 			}
 		},
 		NodeKind.ContinueStmt => {
 			if (ctx.loops.length > 0) {
-				const loop = ctx.loops[ctx.loops.length - 1];
+				const loop = findLoopByLabel(ctx, (node.data as ContinueStmtData).continueLabel);
 				emitLoop(ctx, loop.conditionIdx);
 			}
 		},
@@ -371,7 +381,7 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 			const d = node.data as ForStmtData;
 			walkStmt(d.forInit, ctx);
 			const condIdx = ctx.cfg.length;
-			const loopInfo: LoopInfo = { conditionIdx: condIdx, breakPatches: [] };
+			const loopInfo: LoopInfo = { conditionIdx: condIdx, breakPatches: [], label: "" };
 			ctx.loops.push(loopInfo);
 			walkExpr(d.forCondition, ctx);
 			const forkIdx = emitFork(ctx);
@@ -388,7 +398,7 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 			const d = node.data as ForOfStmtData;
 			walkExpr(d.forOfIterable, ctx);
 			const condIdx = ctx.cfg.length;
-			const loopInfo: LoopInfo = { conditionIdx: condIdx, breakPatches: [] };
+			const loopInfo: LoopInfo = { conditionIdx: condIdx, breakPatches: [], label: "" };
 			ctx.loops.push(loopInfo);
 			const forkIdx = emitFork(ctx);
 			walkStmt(d.forOfBody, ctx);
