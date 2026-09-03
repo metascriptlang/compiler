@@ -7,7 +7,7 @@
 // (src/monomorphize/collect.ms) can use them without a circular import.
 
 import { Node, NodeFlag, makeLocRange, createNodeAt, SourceLocation, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
-import { isResult, getResultOkType, getResultErrType, isAtomicRef, isLockedRef, lockedPayloadType, emptyType } from "../checker/types";
+import { isResult, getResultOkType, getResultErrType, refSubstInner, refWrapperName, emptyType } from "../checker/types";
 import { FieldXform, rebuildNodeData, pkSamples, pkDumpNode } from "../ast/fieldspec";
 
 // ===== Clone Mode =====
@@ -223,14 +223,15 @@ export function monoConcreteTypeName(t: Type | null): string {
 		// resolveAnnotation understands (resolvePass createArc), and stripping
 		// it turned `T := Arc<P>` in `Promise<T>` into bare `Promise<P>`
 		// during generic-body re-check — the 406 spawn-twin mismatch.
-		// Locked<T> is checked first: it is an atomic Ref too, and spelling it
-		// "Arc<msLockedCell_…>" would re-resolve to a different (and unwritable)
-		// type. "Locked<T>" is what resolveAnnotation understands.
-		TypeKind.Ref => isLockedRef(t)
-			? `Locked<${monoConcreteTypeName(lockedPayloadType(t))}>`
-			: (isAtomicRef(t)
-				? `Arc<${monoConcreteTypeName(t.typeReturn)}>`
-				: monoConcreteTypeName(t.typeReturn)),
+		// A Locked<T> spells its PAYLOAD, not its pointee: "Arc<msLockedCell_…>"
+		// would re-resolve to a different (and unwritable) type. Which part is
+		// spelled and which wrapper wraps it are both answered by the checker
+		// (refSubstInner / refWrapperName) so this stays one rule, not two.
+		TypeKind.Ref => {
+			const wrapper = refWrapperName(t);
+			const inner = monoConcreteTypeName(refSubstInner(t));
+			return wrapper === "" ? inner : `${wrapper}<${inner}>`;
+		},
 		TypeKind.Ptr => `Ptr<${monoConcreteTypeName(t.typeReturn)}>`,
 		TypeKind.Array => `Array<${monoConcreteTypeName(t.typeReturn)}>`,
 		TypeKind.Struct | TypeKind.Enum => t.typeName,

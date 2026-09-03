@@ -867,7 +867,19 @@ export function resolveTypeExprs(exprs: (Node | null)[] | null, ctx: CheckerCont
 // ===== Demand-Driven Shaping (Implementation parity) =====
 
 export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
-	if (sym.state === SymbolState.Shaped || sym.state === SymbolState.Checked) return;
+	if (sym.state === SymbolState.Shaped || sym.state === SymbolState.Checked) {
+		// A primary can reach Shaped BEFORE later overloads are appended to it:
+		// one scope shared by several modules (the prelude context) resolves
+		// `set` when the FIRST module declaring it is resolved, and every later
+		// module's `set` lands on that already-shaped symbol as an overload.
+		// resolveDeclarations shapes by NAME, so those arrivals are never
+		// visited and stay Hollow — getExtFnType then falls back to noneType
+		// and isReceiverMatch rejects a perfectly good extension.
+		// Draining here keeps "shaped primary => shaped overloads" true
+		// regardless of arrival order.
+		drainOverloads(sym, ctx);
+		return;
+	}
 	if (sym.state === SymbolState.Shaping) {
 		// Type aliases allow circular references (e.g. DocData refs Doc, Doc refs DocData).
 		// Standard reference implementation handles this via multi-pass type sections. We silently return —
@@ -906,8 +918,14 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 	}
 
 	// Recursively ensure all overloads are shaped (Demand-Driven Completeness)
+	drainOverloads(sym, ctx);
+}
+
+// Shape every overload hanging off `sym`. Split out so the already-shaped
+// early-return above can run it too — see the comment there.
+function drainOverloads(sym: Symbol, ctx: CheckerContext): void {
 	for (const ov of sym.overloads) {
-		ensureShaped(ov, ctx);
+		if (ov.state === SymbolState.Hollow) ensureShaped(ov, ctx);
 	}
 }
 
@@ -2408,4 +2426,43 @@ test "number | null wraps as Maybe<number>" {
 	const t = resolveWith("number | null");
 	assert t.kind === TypeKind.Struct;
 	assert (t.typeFlags & TypeFlag.IsMaybe) !== 0;
+}
+
+// An overload appended AFTER its primary was already shaped must still get
+// shaped. One scope shared by several modules (the prelude context) hits this:
+// `set` is resolved when the first module declaring it resolves, and every
+// later module's `set` lands on that shaped symbol as an overload that
+// resolveDeclarations — which shapes by NAME — never revisits.
+//
+// RED MEANS: the late overload stays Hollow, so its symbolType is not a
+// Function, getExtFnType falls back to noneType and isReceiverMatch rejects
+// the extension — the call site then reports "Property does not exist".
+test "an overload appended after the primary is shaped still gets shaped" {
+	const ctx = createContext();
+	const zl = makeLoc(0, 0);
+
+	const firstSym = makeSymbol("ovlLate", SymbolKind.Function, noneType(), false);
+	const firstNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "ovlLate", params: ["a"], fnParamTypes: ["number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number", fnDefaults: [], nameLocation: zl }, zl);
+	firstNode.resolvedSym = firstSym;
+	firstSym.declNode = firstNode;
+	defineSymbol(ctx.table, firstSym);
+
+	// Primary resolves on its own, before the second declaration exists.
+	ensureShaped(firstSym, ctx);
+	assert firstSym.state === SymbolState.Shaped;
+
+	const lateSym = makeSymbol("ovlLate", SymbolKind.Function, noneType(), false);
+	const lateNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "ovlLate", params: ["s"], fnParamTypes: ["string"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "string", fnDefaults: [], nameLocation: zl }, zl);
+	lateNode.resolvedSym = lateSym;
+	lateSym.declNode = lateNode;
+	defineSymbol(ctx.table, lateSym);
+	assert firstSym.overloads.length === 1;
+	assert lateSym.state === SymbolState.Hollow;
+
+	// Second demand on the same NAME must drain the newcomer.
+	ensureShaped(firstSym, ctx);
+	assert lateSym.state === SymbolState.Shaped, "late overload was left Hollow";
+	assert lateSym.symbolType.kind === TypeKind.Function, "late overload has no function type";
+	assert lateSym.symbolType.typeChildren.length === 1;
+	assert lateSym.symbolType.typeChildren[0].kind === TypeKind.String;
 }

@@ -4,7 +4,7 @@ import { ActorDeclData, ArrayAccessData, ArrowFunctionData, BinaryExprData, Call
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError } from "./context";
 import { SymbolFlag, hasFlag, lookupSymbol } from "./symbol";
-import { isPrimitiveKind, isStructType, isAtomicRef, typeDisplayName } from "./types";
+import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isStructType, isAtomicRef, stringType, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 	if (actorSym.declNode === null || actorSym.declNode.kind !== NodeKind.ActorDecl) return false;
@@ -22,38 +22,55 @@ export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolea
 	return false;
 }
 
-// Type-level check: is the type safe to send (no mutable refs anywhere)?
-// Follows reference isolation check: containsDangerousRefAux — recurse into structure.
-function isTypeSendable(t: Type | null): boolean {
+// The three boundary rules below are ONE deep walk with three leaf policies.
+// Every rule accepts the same structure — primitives, and structs / tuples /
+// generic instances recursively — and a Ref or a Function is never data, so
+// what actually distinguishes them is which leaves they admit. Keeping the
+// walk in one place makes those differences the only thing to read, and stops
+// a fourth rule from arriving as a fourth copy of the traversal.
+enum SendLeaf {
+	String = 1,        // owns memory, but a message COPIES it (msMsgSetString)
+	Array = 2,         // ownership can travel with a MOVE; aliasing it cannot
+	GenericParam = 4,  // unknowable here — re-checked at instantiation
+}
+
+function isDeepSendable(t: Type | null, leaves: int32): boolean {
 	if (t === null) return true;
 	if (isPrimitiveKind(t.kind)) return true;
 	return match (t.kind) {
-		TypeKind.String => true,
+		TypeKind.String => (leaves & SendLeaf.String) !== 0,
+		TypeKind.GenericParam => (leaves & SendLeaf.GenericParam) !== 0,
+		TypeKind.Array => (leaves & SendLeaf.Array) !== 0
+			&& (t.typeReturn === null || isDeepSendable(t.typeReturn, leaves)),
 		TypeKind.Struct when (isStructType(t)) => {
 			for (const ft of t.typeChildren) {
-				if (!isTypeSendable(ft)) return false;
+				if (!isDeepSendable(ft, leaves)) return false;
 			}
 			return true;
 		},
 		TypeKind.Tuple => {
 			for (const et of t.typeChildren) {
-				if (!isTypeSendable(et)) return false;
+				if (!isDeepSendable(et, leaves)) return false;
 			}
 			return true;
 		},
 		TypeKind.GenericInstance => {
-			if (t.typeReturn !== null && !isTypeSendable(t.typeReturn)) return false;
+			if (t.typeReturn !== null && !isDeepSendable(t.typeReturn, leaves)) return false;
 			for (const ta of t.typeChildren) {
-				if (!isTypeSendable(ta)) return false;
+				if (!isDeepSendable(ta, leaves)) return false;
 			}
 			return true;
 		},
-		TypeKind.Array => {
-			return t.typeReturn !== null ? isTypeSendable(t.typeReturn) : true;
-		},
-		TypeKind.Ref | TypeKind.Function => false,
 		_ => false,
 	};
+}
+
+// Type-level check: is the type safe to send (no mutable refs anywhere)?
+// Follows reference isolation check: containsDangerousRefAux — recurse into structure.
+// A string is copied at the boundary and an array's ownership travels with the
+// message, so both are sendable.
+function isTypeSendable(t: Type | null): boolean {
+	return isDeepSendable(t, (SendLeaf.String | SendLeaf.Array) as int32);
 }
 
 // Arc<T> pointee rule (PARALOCK Amendment I): SHARE aliases the pointee across
@@ -63,31 +80,7 @@ function isTypeSendable(t: Type | null): boolean {
 // transfers with it) but stays mutable through an Arc handle, so any array
 // anywhere inside the pointee is rejected; so is any Ref (locks included).
 export function isArcPointeeSendable(t: Type | null): boolean {
-	if (t === null) return true;
-	if (isPrimitiveKind(t.kind)) return true;
-	return match (t.kind) {
-		TypeKind.String => true,
-		TypeKind.Struct when (isStructType(t)) => {
-			for (const ft of t.typeChildren) {
-				if (!isArcPointeeSendable(ft)) return false;
-			}
-			return true;
-		},
-		TypeKind.Tuple => {
-			for (const et of t.typeChildren) {
-				if (!isArcPointeeSendable(et)) return false;
-			}
-			return true;
-		},
-		TypeKind.GenericInstance => {
-			if (t.typeReturn !== null && !isArcPointeeSendable(t.typeReturn)) return false;
-			for (const ta of t.typeChildren) {
-				if (!isArcPointeeSendable(ta)) return false;
-			}
-			return true;
-		},
-		_ => false,
-	};
+	return isDeepSendable(t, SendLeaf.String as int32);
 }
 
 export function checkArcPointeeSendable(ctx: CheckerContext, pointee: Type, line: number, column: number): void {
@@ -104,31 +97,7 @@ export function checkArcPointeeSendable(ctx: CheckerContext, pointee: Type, line
 // A GenericParam is unknowable here; the concrete instantiation is re-checked
 // after monomorphization.
 export function isLockedPayloadSendable(t: Type | null): boolean {
-	if (t === null) return true;
-	if (isPrimitiveKind(t.kind)) return true;
-	return match (t.kind) {
-		TypeKind.GenericParam => true,
-		TypeKind.Struct when (isStructType(t)) => {
-			for (const ft of t.typeChildren) {
-				if (!isLockedPayloadSendable(ft)) return false;
-			}
-			return true;
-		},
-		TypeKind.Tuple => {
-			for (const et of t.typeChildren) {
-				if (!isLockedPayloadSendable(et)) return false;
-			}
-			return true;
-		},
-		TypeKind.GenericInstance => {
-			if (t.typeReturn !== null && !isLockedPayloadSendable(t.typeReturn)) return false;
-			for (const ta of t.typeChildren) {
-				if (!isLockedPayloadSendable(ta)) return false;
-			}
-			return true;
-		},
-		_ => false,
-	};
+	return isDeepSendable(t, SendLeaf.GenericParam as int32);
 }
 
 export function checkLockedPayloadSendable(ctx: CheckerContext, payload: Type, line: number, column: number): void {
@@ -392,5 +361,34 @@ function walkActorSpawnRules(ctx: CheckerContext, node: Node, reportedKeys: stri
 		},
 		_ => { forEachChild(node, (child: Node): void => { walkActorSpawnRules(ctx, child, reportedKeys); }); },
 	};
+}
+
+// ===== Tests =====
+// The three boundary rules share one walk, so the leaf table IS the difference
+// between them. Pin each admitted/refused leaf: a widened leaf would silently
+// let one rule accept what only another may.
+
+test "Arc pointee takes strings but never arrays" {
+	assert isArcPointeeSendable(createStruct("PodS", ["s", "n"], [stringType(), int32Type()], true));
+	assert !isArcPointeeSendable(createStruct("WithArr", ["a"], [createArray(int32Type())], true));
+}
+
+test "Arc pointee rejects a nested reference" {
+	const inner = createStruct("Inner", ["n"], [int32Type()], true);
+	assert !isArcPointeeSendable(createStruct("Holder", ["r"], [createRef(inner)], true));
+}
+
+test "Locked payload is deep-POD — owns nothing" {
+	assert isLockedPayloadSendable(createStruct("Pod", ["n"], [int32Type()], true));
+	assert !isLockedPayloadSendable(stringType());
+	assert !isLockedPayloadSendable(createStruct("Owner", ["s"], [stringType()], true));
+	assert !isLockedPayloadSendable(createArray(int32Type()));
+}
+
+test "a generic param passes the Locked payload rule, not the Arc pointee rule" {
+	// Unknowable before instantiation: the Locked cell re-checks the concrete
+	// payload there, while an Arc pointee has no such second look.
+	assert isLockedPayloadSendable(createGenericParam("T"));
+	assert !isArcPointeeSendable(createGenericParam("T"));
 }
 
