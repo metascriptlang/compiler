@@ -1,13 +1,13 @@
 // Destructuring Lowering — transforms DestructuringDecl → temp var + field access
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation, Type, TypeKind,
-	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, IdentifierData,
+	Node, NodeKind, DeclKind, SourceLocation, Type, TypeKind, createNode,
+	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, IdentifierData, SpreadExprData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { noneType, destrPositionalElemType, destrNamedFieldType } from "../../checker/types";
+import { noneType, int32Type, destrPositionalElemType, destrNamedFieldType, destrRestElemType } from "../../checker/types";
 import { walkExpandBlocks } from "../walker";
-import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind } from "../util";
+import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind, makeIdent, makeWhile, makeBinary, makeAssign, makeExprStmt, makeBlock, makeHiddenAddr, syntheticToken } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -26,7 +26,7 @@ function destrElemType(base: Node, i: number): Type {
 }
 
 // Expand array pattern [a, b, ...rest] → indexed access
-function expandArrayRet(
+export function expandArrayRet(
 	pattern: Node, base: Node, declKind: DeclKind,
 	loc: SourceLocation, ctx: TransformContext
 ): Node[] {
@@ -37,12 +37,58 @@ function expandArrayRet(
 
 		// Rest element: last + hasRestElement
 		if (apd.hasRestElement && i === apd.patternElements.length - 1) {
-			if (elem.kind === NodeKind.Identifier) {
-				const id = elem.data as IdentifierData;
-				const sliceCallee = makeMember(base, "slice", loc);
-				const sliceArg = makeNumber(i, loc);
-				const sliceCall = makeCall(sliceCallee, [sliceArg], loc);
-				items.push(makeVarDecl(id.name, sliceCall, declKind, loc));
+			let idNode: Node | null = null as unknown as Node;
+			if (elem.kind === NodeKind.Identifier) idNode = elem;
+			else if (elem.kind === NodeKind.SpreadExpr) idNode = (elem.data as SpreadExprData).spreadArg;
+			if (idNode !== null && idNode.kind === NodeKind.Identifier && (idNode.data as IdentifierData).name !== "_") {
+				const id = idNode.data as IdentifierData;
+				const restType = destrRestElemType(base.nodeType);
+				if (ctx.jsBackend) {
+					const sliceCallee = makeMember(base, "slice", loc);
+					const sliceCall = makeCall(sliceCallee, [makeNumber(i, loc), makeMember(base, "length", loc)], loc);
+					if (restType !== null) sliceCall.nodeType = restType;
+					items.push(makeVarDecl(id.name, sliceCall, declKind, loc));
+				} else if (restType !== null) {
+					// C backend: slice is a std method the checker resolves at check time;
+					// transform-built member calls bypass that, so mirror lowerArraySpread's
+					// accumulator + msGenericArrayPush loop instead.
+					const accSym = freshTempSym(ctx, "destr", restType);
+					const emptyLit = createNode(NodeKind.ArrayLiteral, { elements: [] }, syntheticToken(loc));
+					emptyLit.nodeType = restType;
+					const accDecl = makeVarDecl(accSym.name, emptyLit, DeclKind.Let, loc);
+					accDecl.resolvedSym = accSym;
+					accDecl.nodeType = restType;
+					items.push(accDecl);
+					const iSym = freshTempSym(ctx, "destri", int32Type());
+					const iDecl = makeVarDecl(iSym.name, makeNumber(i, loc), DeclKind.Let, loc);
+					iDecl.resolvedSym = iSym;
+					iDecl.nodeType = int32Type();
+					items.push(iDecl);
+					const lenMember = makeMember(base, "length", loc);
+					lenMember.nodeType = int32Type();
+					const iv0 = makeIdentResolved(iSym, loc);
+					iv0.nodeType = int32Type();
+					const cond = makeBinary(iv0, "<", lenMember, loc);
+					const iv1 = makeIdentResolved(iSym, loc);
+					iv1.nodeType = int32Type();
+					const elemAccess = makeArrayAccess(base, iv1, loc);
+					elemAccess.nodeType = restType.typeReturn;
+					const accRef = makeIdentResolved(accSym, loc);
+					accRef.nodeType = restType;
+					const pushCall = makeCall(makeIdent("msGenericArrayPush", loc), [makeHiddenAddr(accRef, loc), elemAccess], loc);
+					const pushStmt = makeExprStmt(pushCall, loc);
+					const iv2 = makeIdentResolved(iSym, loc);
+					iv2.nodeType = int32Type();
+					const iv3 = makeIdentResolved(iSym, loc);
+					iv3.nodeType = int32Type();
+					const incr = makeExprStmt(makeAssign(iv2, makeBinary(iv3, "+", makeNumber(1, loc), loc), loc), loc);
+					items.push(makeWhile(cond, makeBlock([pushStmt, incr], loc), loc));
+					const restRef = makeIdentResolved(accSym, loc);
+					restRef.nodeType = restType;
+					const restDecl = makeVarDecl(id.name, restRef, declKind, loc);
+					restDecl.nodeType = restType;
+					items.push(restDecl);
+				}
 			}
 			continue;
 		}

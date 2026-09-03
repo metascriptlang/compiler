@@ -9,6 +9,7 @@
 import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, NodeFlag, Type, TypeKind, Symbol } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { int32Type, noneType, isIterator, getIteratorNextFnType } from "../../checker/types";
+import { expandArrayRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import {
 	makeIdentResolved, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
@@ -170,7 +171,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 			elemAccess.nodeType = elemArrType.typeReturn;
 		}
 		whileStmts.push(elemDecl);
-		const bindings = expandArrayPattern(d.forOfPattern, makeIdentResolved(elemSym, loc), itemDk, loc);
+		const bindings = expandArrayRet(d.forOfPattern, makeIdentResolved(elemSym, loc), itemDk, loc, ctx);
 		let pi = 0;
 		while (pi < bindings.length) {
 			whileStmts.push(bindings[pi]);
@@ -235,23 +236,6 @@ function cloneExpr(node: Node, loc: SourceLocation): Node {
 
 // ===== Pattern Expansion Helper =====
 
-function expandArrayPattern(pattern: Node, baseExpr: Node, dk: DeclKind, loc: SourceLocation): Node[] {
-	const apd = pattern.data as ArrayPatternData;
-	const items: Node[] = [];
-	let i = 0;
-	while (i < apd.patternElements.length) {
-		const elem = apd.patternElements[i];
-		if (elem.kind === NodeKind.Identifier) {
-			const id = elem.data as IdentifierData;
-			if (id.name !== "_") {
-				const access = makeArrayAccess(baseExpr, makeNumber(i, loc), loc);
-				items.push(makeVarDecl(id.name, access, dk, loc));
-			}
-		}
-		i += 1;
-	}
-	return items;
-}
 
 // ===== Tests =====
 test "for-of becomes block" { assert firstStmtKindAfter("for (const x of arr) { use(x); }", lowerForOf) === NodeKind.BlockStmt; }
