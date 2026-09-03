@@ -115,12 +115,13 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerSpread(result, ctx);
 	if (!jsBackend) { result = lowerArrayMethodInline(result, ctx); }
 	if (!jsBackend) { result = lowerForLoop(result, ctx); }
-	if (!jsBackend) { result = lowerForOf(result, ctx); }
+	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
 	if (jsBackend) { result = lowerResultConstructors(result); }
 	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
+	result = retargetJumps(result, ctx);
 	result = lowerTailCall(result, ctx);
 	if (!jsBackend) { result = lowerParamReassign(result, ctx); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); }
