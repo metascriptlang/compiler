@@ -3372,6 +3372,20 @@ IDs skip I20: that name is taken by Amendment I20, which patched I9.
 
 Each step gates on the full suite + corpus lanes; the SAN lane on a Linux host for anything touching msgSetter or the cell layout.
 
+\### Implementation notes (steps 0–1, 2026-09-03)
+
+Step 0 landed (`e03ad1e0` + regression `414-arcPodPointee`): the Arc cell wires destroyFn only when the pointee carries owned refs (the ref-array cell's predicate — a POD pointee's hook is dropped by reachability, so the reference was an undefined symbol at link), and the cell name mangles pointer-shaped pointees (`X*` → `X_star_`) instead of emitting an invalid identifier.
+
+Step 1 landed with two refinements the rule text anticipated only implicitly:
+
+\- \*\*Pointee predicate is stricter than isTypeSendable.\*\* `isArcPointeeSendable` rejects arrays anywhere inside the pointee: an array is sound as a \*moved\* message argument (ownership travels) but stays mutable through an Arc handle, which would break SHARE-immutability from the inside. Same reasoning bans any Ref (locks included) and, today, distinct/alias wrappers (conservative).
+
+\- \*\*SHARE immutability is enforced at the write site.\*\* The checker rejects any write whose member/index chain passes through an Arc handle (`a.f = 1`, `holder.box.n = 1`, `a.arr[i] = 1`, `++a.f`) — peeling through the HiddenDeref the checker inserts for member access on a Ref. Rebinding a handle SLOT (`holder.box = otherArc`) stays legal: its prefixes stop at `holder`.
+
+Mechanics as specified: `msMsgSetPtrShared` (actor.h) takes the message's atomic incref at pack; every generated \_impl — sync and suspending — releases exactly once via a synthesized try/finally (early returns and async suspension both ride the finally). Measured: the 2000-SEND churn probe that read freed memory deterministically (2000 × junk.a) now reports `seen=2000` 5/5-shaped runs; corpus 405 carries `@xfail` on its three lanes until the step-2 `Locked<T>` rewrite flips them (XPASS is the cue). The SEND-class diagnostic and the discarded-CALL borrow diagnostic (via the checker's statement-position tracking) both cite I21.
+
+Known follow-ups outside this landing: `move`-passed Arc/refs still leak one reference per message (pre-existing move-arg accounting, unchanged by the boundary incref); async actor methods with Arc args release correctly via the finally, but the plain-ref BORROW on an async CALL keeps its park-based soundness rather than a reply-edge proof; the SAN lane for the msgSetter touch still needs a Linux host run.
+
 \### Road not taken
 
 Incref-at-boundary for \*\*every\*\* ref — the shared-heap model. Sound only with atomic rc everywhere or a cross-thread tracing collector; it dissolves MOVE (why transfer when sharing is free), taxes every message with rc traffic, and still races contents — a refcount buys liveness, not exclusion. MS's DRC is deliberately single-owner; this amendment keeps atomicity in exactly one place per role: SHARE's boundary/handle, and `Locked`'s handle.
