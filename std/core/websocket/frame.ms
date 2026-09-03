@@ -243,7 +243,7 @@ export function parseFrame(data: number[], offset: int32): Result<ParseFrameResu
 		payloadLen = lenField;
 	} else if (lenField === 126) {
 		if (avail < 4) return Result.ok(needMore());
-		payloadLen = (data[cursor] * 256) + data[cursor + 1];
+		payloadLen = ((data[cursor] * 256) + data[cursor + 1]) as int32;
 		cursor = cursor + 2;
 	} else {
 		// lenField === 127 — 64-bit BE length.
@@ -268,7 +268,7 @@ export function parseFrame(data: number[], offset: int32): Result<ParseFrameResu
 		if (b4 > 1) {
 			return Result.err(wsPayloadTooLarge(MAX_PAYLOAD_BYTES + 1, MAX_PAYLOAD_BYTES));
 		}
-		payloadLen = (b4 * 16777216) + (b5 * 65536) + (b6 * 256) + b7;
+		payloadLen = ((b4 * 16777216) + (b5 * 65536) + (b6 * 256) + b7) as int32;
 		cursor = cursor + 8;
 	}
 
@@ -345,7 +345,7 @@ export function decodeClosePayload(payload: number[]): CloseInfo {
 		// Malformed but be lenient — treat as no code.
 		return { code: 1000, reason: empty, hasCode: false };
 	}
-	const code = (payload[0] * 256) + payload[1];
+	const code = ((payload[0] * 256) + payload[1]) as int32;
 	let reason: number[] = [];
 	for (let i: int32 = 2; i < payload.length; i = i + 1) {
 		reason.push(payload[i]);
