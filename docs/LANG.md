@@ -248,6 +248,42 @@ let y: string = "hello";         // With type annotation
 var z = true;                    // Function-scoped (legacy)
 ```
 
+### Void
+
+`void` is the return type of a function that produces no value. The type
+rules follow TypeScript strict mode; the value follows the machine: a void
+call returns nothing at the C ABI, so the few value positions TypeScript
+forgives observe a materialized carrier instead — and with no `undefined`
+in the language, that carrier is `null`.
+
+Refused (measured against `tsc --strict`):
+
+```typescript
+function f(): void {}
+const a: number = f();      // 'void' is not assignable to type 'number'
+if (f()) {}                 // cannot be tested for truthiness (also while/for/ternary/!/&&/||)
+const n = f();
+const s = n + 1;            // operator '+' cannot be applied to 'void'
+const b = n === 1;          // 'void' and 'number' have no overlap
+```
+
+Forgiven, observing the null carrier — identical output on C and JS:
+
+```typescript
+const n = f();              // bind: n is void, carrier null
+console.log("n=" + n);      // n=null
+const eq = n === null;      // true
+const m = n;                // chained bind carries null too
+let x: void = f(); x = f(); // void slot, re-assignment stays legal
+const aw = await h();       // h(): Promise<void> → aw is null
+```
+
+The bind lowers to `f(); const n = null;` and the binding is retyped to
+null (C representation `void*`), so no `void` local, array element, or
+async env field ever reaches the C emitter. TypeScript's
+`undefined`-flavoured rules translate by one rename: `undefined` is
+assignable to `void` there, `null` is assignable to `void` here.
+
 ### Functions
 ```typescript
 function add(a: number, b: number): number {
