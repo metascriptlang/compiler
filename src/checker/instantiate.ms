@@ -4,9 +4,9 @@
 // immediately clone the function body, substitute types, and register
 // the specialized version. No separate monomorphize pass needed.
 
-import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName } from "./types";
+import { isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, addError } from "./context";
@@ -14,6 +14,7 @@ import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../mon
 import { mangleMonoName } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { getIdentId } from "./idents";
+import { fitJoinedBranch } from "./fit";
 import { bindFunctionFlow } from "../binder/index";
 
 // ===== Global Instance Collection =====
@@ -552,9 +553,34 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		// is a Ref) otherwise keeps its deref and the re-check stacks a second one.
 		clearCheckerState(cd.fnBody);
 		bindFunctionFlow(cloned, cd.fnBody);
+		// Mirror checkFunctionDecl's return-inference setup: seed inferredReturn
+		// from the instance type. checkFunctionBody does NOT reset it — without
+		// this the body's returns mutate a stale slot and an un-annotated return
+		// stays Inferred into codegen (C: internal error kind=48, JS: <object>).
+		const savedReturn = bodyCtx.inferredReturn;
+		const savedReturnStmts = bodyCtx.inferredReturnStmts;
+		bodyCtx.inferredReturn = instType.typeReturn;
+		bodyCtx.inferredReturnStmts = [];
 		const _igb0 = performance.now();
 		callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
 		_igfBodyTime = _igfBodyTime + (performance.now() - _igb0);
+		// Mirror the decl-side apply: an unresolved (un-annotated) return
+		// adopts the body's inferred return so the instance is fully typed.
+		if (instType.kind === TypeKind.Function
+				&& instType.typeReturn !== null
+				&& isUnresolvedType(instType.typeReturn)) {
+			if (bodyCtx.inferredReturn.kind !== TypeKind.Inferred) {
+				instType.typeReturn = bodyCtx.inferredReturn;
+				for (const rs of bodyCtx.inferredReturnStmts) {
+					const rsd = rs.data as ReturnStmtData;
+					if (rsd.argument !== null) rsd.argument = fitJoinedBranch(bodyCtx, rsd.argument, bodyCtx.inferredReturn);
+				}
+			} else {
+				instType.typeReturn = voidType();
+			}
+		}
+		bodyCtx.inferredReturn = savedReturn;
+		bodyCtx.inferredReturnStmts = savedReturnStmts;
 		if (bodyCtx !== ctx && bodyCtx.errors.length > errBefore) {
 			addError(ctx, "in instantiation of '" + sym.name + displayTypeArgs(dedup.types) + "': " + bodyCtx.errors[errBefore].message, callLoc.line, callLoc.column);
 		}
