@@ -307,8 +307,11 @@ function runGcLane(probe: Probe, gc: string, t: Tally): void {
 		fail(t, tag, "build reported success but no binary at " + bin);
 		return;
 	}
-	const run = runCapture(maybeQuote(exe));
-	const errText = run.errorOutput;
+	// The LEDGER dump and the DOUBLE-DESTROY abort land on stderr, and exec's
+	// ok path drops errorOutput — merge stderr into stdout via the shell and
+	// read the combined text, or every GUARD-BALANCE check sees "".
+	const run = runCapture(maybeQuote(exe) + " 2>&1");
+	const errText = run.output;
 	writeFile(LOG_DIR + "/" + probe.name + "." + gc + ".err", errText);
 	writeFile(LOG_DIR + "/" + probe.name + "." + gc + ".out", run.output);
 	const dd = firstLineContaining(errText, "DOUBLE-DESTROY");
