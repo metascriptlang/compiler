@@ -10,7 +10,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
 import { CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
-import { fitJoinedBranch, fitNode, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, trySynthesizeAsCoercion, widenMaybePayload, widenVariantToUnion } from "./fit";
+import { fitJoinedBranch, fitNode, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, trySynthesizeAsCoercion, widenMaybePayload, widenVariantToUnion } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
@@ -1276,10 +1276,16 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				}
 				if (!isAssignable(argTypes[pi], paramType)) {
 					if (needsStdConv(argTypes[pi], paramType)) {
-						// Implicit numeric conversion — warn for float/number → integer narrowing
-						if ((argTypes[pi].kind === TypeKind.Number || isFloatType(argTypes[pi])) && isIntegerType(paramType)) {
+						// float/number → integer: the fractional part would be cut
+						// with no annotation beside the value to warn the reader —
+						// the cut has to be the programmer's word (`as intN`).
+						if ((argTypes[pi].kind === TypeKind.Number || isFloatType(argTypes[pi])) && isIntegerType(paramType)
+							&& !isIntegralNumberLiteral(d.arguments[pi])) {
 							const calleeName = getCalleeName(d.callee);
-							addWarning(ctx, `implicit ${typeDisplayName(argTypes[pi])} → ${typeDisplayName(paramType)} narrowing in '${calleeName}' arg ${pi}`, node.location.line, node.location.column);
+							addError(ctx, "implicit " + typeDisplayName(argTypes[pi]) + " → " + typeDisplayName(paramType)
+								+ " narrowing in '" + calleeName + "' arg " + String(pi)
+								+ " drops the fractional part — write an explicit 'as " + typeDisplayName(paramType) + "'",
+								node.location.line, node.location.column);
 						}
 					} else {
 						// Try `as<TargetType>` protocol coercion before erroring.

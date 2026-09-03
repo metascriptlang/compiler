@@ -715,6 +715,20 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		convNode.flags = convNode.flags | NodeFlag.Sem;
 		return convNode;
 	}
+	// A float reaching an integer slot drops its fractional part, and at the
+	// field / element / return positions there is no annotation beside the
+	// value to warn the reader — so the cut has to be the programmer's word,
+	// spelled `as intN`. An integral literal still flows implicitly because
+	// nothing is lost, which is the line zig draws with "fractional component
+	// prevents float value from coercion".
+	if ((isFloatType(exprType) || exprType.kind === TypeKind.Number)
+		&& isIntegerType(formal)
+		&& !isIntegralNumberLiteral(expr)) {
+		addError(ctx, "implicit " + typeDisplayName(exprType) + " → " + typeDisplayName(formal)
+			+ " narrowing drops the fractional part — write an explicit 'as " + typeDisplayName(formal) + "'",
+			expr.location.line, expr.location.column);
+		return expr;
+	}
 	// Narrowing integer conversion: wrap in HiddenStdConv
 	if (isNarrowingIntConv(exprType, formal)) {
 		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
@@ -744,6 +758,17 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — memory layout differs (pointer vs scalar, array element, shared field, or function signature repr); a raw cast would reinterpret, not convert (convert explicitly or provide an as" + (formal.typeName !== "" ? formal.typeName.slice(0, 1).toUpperCase() + formal.typeName.slice(1, formal.typeName.length) : "X") + " extension)", expr.location.line, expr.location.column);
 	}
 	return expr;
+}
+
+// A float literal whose value has no fractional part converts exactly, so it
+// keeps flowing into an integer slot. The magnitude guard keeps the round-trip
+// itself well defined; anything past it cannot fit an integer slot anyway.
+export function isIntegralNumberLiteral(expr: Node): boolean {
+	if (expr.kind !== NodeKind.NumberLiteral) return false;
+	const v = (expr.data as NumberLiteralData).value;
+	if (v > 9007199254740991.0 || v < -9007199254740991.0) return false;
+	const truncated = v as int64;
+	return (truncated as float64) === v;
 }
 
 // Walk through TypeAssertion chain to check if core expression is NullLiteral.
