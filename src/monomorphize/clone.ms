@@ -6,8 +6,9 @@
 // (src/checker/instantiate.ms) and the monomorphize collect pass
 // (src/monomorphize/collect.ms) can use them without a circular import.
 
-import { Node, NodeKind, NodeData, NodeFlag, makeLoc, createNodeAt, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, FunctionDeclData, ArrowFunctionData, FunctionExprData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, MacroDeclData, VariableDeclData, ReturnStmtData, ThrowStmtData, ExprStmtData, TryCatchStmtData, DeferStmtData, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchStmtData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, TypeAssertionData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, AssertStmtData, ComptimeBlockData, SpliceManyData, QuoteExprData, MacroInvocationData, SymbolKind, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ImportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, PropertyDeclData, ExternDeclData, TypeAnnotationData, BreakStmtData, ContinueStmtData, UnreachableStmtData, BigIntLiteralData, RegexLiteralData, HiddenStdConvData, ProgramData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, Type, TypeKind } from "../ast/node";
-import { isResult, getResultOkType, getResultErrType, isAtomicRef } from "../checker/types";
+import { Node, NodeFlag, makeLocRange, createNodeAt, SourceLocation, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
+import { isResult, getResultOkType, getResultErrType, isAtomicRef, emptyType } from "../checker/types";
+import { FieldXform, rebuildNodeData, pkSamples, pkDumpNode } from "../ast/fieldspec";
 
 // ===== Clone Mode =====
 // Mono: monomorphization (copies nodeType, drops typeExpr — used by generic instantiation)
@@ -41,24 +42,19 @@ export function cloneNodeForCheck(node: Node): Node {
 }
 
 // ===== Clone — deep AST copy =====
-
-function cloneNodeArray(nodes: Node[]): Node[] {
-	const result: Node[] = [];
-	for (const n of nodes) { result.push(cloneNodeImpl(n)); }
-	return result;
-}
-
-function cloneOptionalNodeArray(nodes: (Node | null)[]): (Node | null)[] {
-	const result: (Node | null)[] = [];
-	for (const n of nodes) { result.push(n !== null ? cloneNodeImpl(n) : null); }
-	return result;
-}
-
-function cloneStringArray(strs: string[]): string[] {
-	const result: string[] = [];
-	for (const s of strs) { result.push(s); }
-	return result;
-}
+//
+// The per-kind payload walk lives in ast/fieldspec.ms (rebuildNodeData) — this
+// file only supplies the xform (recursive clone for refs, copies for arrays,
+// identity for scalars) and the mode-dependent node META copy (copyNodeMeta).
+// Unification fixed three latent gaps in the old hand-rolled switch:
+//   - WhileStmt.whileLabel is now carried (was silently dropped)
+//   - PropertyDecl.propInitializer is now cloned (was shared with the original)
+//   - TypeGeneric/TypeArray/TypeUnion/TypeIntersection/TypeFunction/TypeObject/
+//     TestDecl/ActorDecl get real deep clones (fell through to a shared-payload
+//     fallback before)
+// and clone now copies the FULL source location (endLine/endColumn were
+// dropped). All of it is pinned by the exhaustive per-kind payload roundtrip
+// test at the bottom of this file.
 
 // Copy node-level metadata from source to clone. Behavior depends on currentCloneMode.
 //
@@ -135,94 +131,47 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 	return dst;
 }
 
+const cloneXform: FieldXform = {
+	node: (n: Node | null): Node | null => { return n !== null ? cloneNodeImpl(n) : null; },
+	nodes: (a: (Node | null)[] | null): (Node | null)[] => {
+		const out: (Node | null)[] = [];
+		if (a !== null) { for (const x of a) { out.push(x !== null ? cloneNodeImpl(x) : null); } }
+		return out;
+	},
+	nodesNested: (a: (Node | null)[][] | null): (Node | null)[][] => {
+		const out: (Node | null)[][] = [];
+		if (a !== null) { for (const row of a) { const r: (Node | null)[] = []; if (row !== null) { for (const x of row) { r.push(x !== null ? cloneNodeImpl(x) : null); } } out.push(r); } }
+		return out;
+	},
+	typ: (t: Type | null): Type | null => { return t; },
+	str: (s: string): string => { return s; },
+	strArr: (a: string[] | null): string[] => {
+		const out: string[] = [];
+		if (a !== null) { for (const s of a) { out.push(s); } }
+		return out;
+	},
+	integer: (v: int64): int64 => { return v; },
+	float: (v: float64): float64 => { return v; },
+	bool: (b: boolean): boolean => { return b; },
+	loc: (l: SourceLocation | null): SourceLocation | null => { return l; },
+	locs: (l: SourceLocation[] | null): SourceLocation[] => {
+		const out: SourceLocation[] = [];
+		if (l !== null) { for (const x of l) { out.push(x); } }
+		return out;
+	},
+	floats: (a: number[] | null): number[] => {
+		const out: number[] = [];
+		if (a !== null) { for (const v of a) { out.push(v); } }
+		return out;
+	},
+};
+
 function cloneNodeImpl(node: Node | null): Node {
 	if (node === null) return null as unknown as Node;
-	const loc = makeLoc(node.location.line, node.location.column);
-	const kind = node.kind;
-
-	if (kind === NodeKind.NumberLiteral) { const d = node.data as NumberLiteralData; const data: NodeData = { value: d.value, isFloat: d.isFloat, intVal: d.intVal, outOfRangeText: d.outOfRangeText, isBitPattern: d.isBitPattern }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.StringLiteral) { const d = node.data as StringLiteralData; return copyNodeMeta(node, createNodeAt(kind, { value: d.value } as NodeData, loc)); }
-	if (kind === NodeKind.BooleanLiteral) { const d = node.data as BooleanLiteralData; const data: NodeData = { boolValue: d.boolValue }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.NullLiteral) { const data: NodeData = { nullPlaceholder: true }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.BigIntLiteral) { const d = node.data as BigIntLiteralData; const data: NodeData = { bigintValue: d.bigintValue }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.RegexLiteral) { const d = node.data as RegexLiteralData; const data: NodeData = { regexPattern: d.regexPattern }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.Identifier) { const d = node.data as IdentifierData; const data: NodeData = { name: d.name }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.BinaryExpr) { const d = node.data as BinaryExprData; const data: NodeData = { operator: d.operator, left: cloneNodeImpl(d.left), right: cloneNodeImpl(d.right) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.UnaryExpr) { const d = node.data as UnaryExprData; const data: NodeData = { unaryOp: d.unaryOp, operand: cloneNodeImpl(d.operand) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.UpdateExpr) { const d = node.data as UpdateExprData; const data: NodeData = { updateOp: d.updateOp, updateArg: cloneNodeImpl(d.updateArg), isPrefix: d.isPrefix }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.CallExpr) { const d = node.data as CallExprData; const data: NodeData = { callee: cloneNodeImpl(d.callee), arguments: cloneNodeArray(d.arguments), isDirectCall: d.isDirectCall, resolvedOverloadIdx: d.resolvedOverloadIdx }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.MemberExpr) { const d = node.data as MemberExprData; const data: NodeData = { object: cloneNodeImpl(d.object), property: d.property, isOptional: d.isOptional }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ArrayAccess) { const d = node.data as ArrayAccessData; const data: NodeData = { array: cloneNodeImpl(d.array), index: cloneNodeImpl(d.index) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ObjectLiteral) { const d = node.data as ObjectLiteralData; const data: NodeData = { properties: cloneNodeArray(d.properties), keys: cloneStringArray(d.keys), keyLocations: d.keyLocations !== null ? d.keyLocations : [] }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ArrayLiteral) { const d = node.data as ArrayLiteralData; const data: NodeData = { elements: cloneNodeArray(d.elements) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ArrowFunction) { const d = node.data as ArrowFunctionData; const data: NodeData = { arrowParams: cloneStringArray(d.arrowParams), arrowParamTypes: cloneStringArray(d.arrowParamTypes), arrowBody: cloneNodeImpl(d.arrowBody), arrowFlags: d.arrowFlags, arrowReturnType: d.arrowReturnType, arrowDefaults: cloneOptionalNodeArray(d.arrowDefaults !== null ? d.arrowDefaults : []) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.FunctionExpr) { const d = node.data as FunctionExprData; const data: NodeData = { funcExprParams: cloneStringArray(d.funcExprParams), funcExprParamTypes: cloneStringArray(d.funcExprParamTypes), funcExprBody: cloneNodeImpl(d.funcExprBody), funcExprFlags: d.funcExprFlags, funcExprReturnType: d.funcExprReturnType }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.TypeAssertion) { const d = node.data as TypeAssertionData; const data: NodeData = { asExpr: cloneNodeImpl(d.asExpr), asType: d.asType }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ConditionalExpr) { const d = node.data as ConditionalExprData; const data: NodeData = { ternaryCondition: cloneNodeImpl(d.ternaryCondition), ternaryConsequent: cloneNodeImpl(d.ternaryConsequent), ternaryAlternate: cloneNodeImpl(d.ternaryAlternate) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.SpreadExpr) { const d = node.data as SpreadExprData; const data: NodeData = { spreadArg: cloneNodeImpl(d.spreadArg) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.NewExpr) { const d = node.data as NewExprData; const data: NodeData = { newCallee: cloneNodeImpl(d.newCallee), newArguments: cloneNodeArray(d.newArguments) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.TryExpr) { const d = node.data as TryExprData; const data: NodeData = { tryArg: cloneNodeImpl(d.tryArg), hasCatch: d.hasCatch, catchVal: d.hasCatch ? cloneNodeImpl(d.catchVal) : null as unknown as Node }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.MatchExpr) { const d = node.data as MatchExprData; const data: NodeData = { matchDisc: cloneNodeImpl(d.matchDisc), matchCases: cloneNodeArray(d.matchCases) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.MatchCase) { const d = node.data as MatchCaseData; const data: NodeData = { casePatterns: cloneNodeArray(d.casePatterns), caseGuard: d.caseGuard !== null ? cloneNodeImpl(d.caseGuard) : null as unknown as Node, caseBody: cloneNodeImpl(d.caseBody) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.AwaitExpr) { const d = node.data as AwaitExprData; const data: NodeData = { awaitArg: cloneNodeImpl(d.awaitArg) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.YieldExpr) { const d = node.data as YieldExprData; const data: NodeData = { yieldArg: cloneNodeImpl(d.yieldArg), isDelegate: d.isDelegate }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.MoveExpr) { const d = node.data as MoveExprData; const data: NodeData = { moveArg: cloneNodeImpl(d.moveArg) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.OutExpr) { const d = node.data as OutExprData; const data: NodeData = { outArg: cloneNodeImpl(d.outArg) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.SizeofExpr) { const d = node.data as SizeofExprData; const data: NodeData = { sizeofType: d.sizeofType }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.HiddenDeref || kind === NodeKind.HiddenAddr) { const d = node.data as ExprStmtData; const data: NodeData = { expr: cloneNodeImpl(d.expr) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) { const d = node.data as HiddenStdConvData; const data: NodeData = { convExpr: cloneNodeImpl(d.convExpr), convType: d.convType }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.TypeAnnotation) { const d = node.data as TypeAnnotationData; const data: NodeData = { annotationType: d.annotationType }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.DestructuringDecl) { const d = node.data as DestructuringDeclData; const data: NodeData = { destrPattern: cloneNodeImpl(d.destrPattern), destrInit: cloneNodeImpl(d.destrInit), destrIsConst: d.destrIsConst }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ArrayPattern) { const d = node.data as ArrayPatternData; const data: NodeData = { patternElements: cloneNodeArray(d.patternElements), hasRestElement: d.hasRestElement }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ObjectPattern) { const d = node.data as ObjectPatternData; const data: NodeData = { patternProps: cloneNodeArray(d.patternProps), hasRestProp: d.hasRestProp }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ObjectPatternProp) { const d = node.data as ObjectPatternPropData; const data: NodeData = { propKey: d.propKey, propAlias: d.propAlias !== null ? cloneNodeImpl(d.propAlias) : null as unknown as Node }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.AssertStmt) { const d = node.data as AssertStmtData; const data: NodeData = { assertExpr: cloneNodeImpl(d.assertExpr), assertSource: d.assertSource, assertMessage: d.assertMessage, assertMessageExpr: d.assertMessageExpr !== null ? cloneNodeImpl(d.assertMessageExpr) : null as unknown as Node }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ComptimeBlock) { const d = node.data as ComptimeBlockData; const data: NodeData = { comptimeBody: cloneNodeImpl(d.comptimeBody) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.SpliceMany) { const d = node.data as SpliceManyData; const data: NodeData = { spliceNodes: cloneNodeArray(d.spliceNodes) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.VariableDecl) { const d = node.data as VariableDeclData; const data: NodeData = { declName: d.declName, declType: d.declType, initializer: cloneNodeImpl(d.initializer), declKind: d.declKind, nameLocation: d.nameLocation }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.IfStmt) { const d = node.data as IfStmtData; const data: NodeData = { condition: cloneNodeImpl(d.condition), consequent: cloneNodeImpl(d.consequent), alternate: cloneNodeImpl(d.alternate) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.WhileStmt) { const d = node.data as WhileStmtData; const data: NodeData = { whileCondition: cloneNodeImpl(d.whileCondition), whileBody: cloneNodeImpl(d.whileBody) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ForStmt) { const d = node.data as ForStmtData; const data: NodeData = { forInit: cloneNodeImpl(d.forInit), forCondition: cloneNodeImpl(d.forCondition), forUpdate: cloneNodeImpl(d.forUpdate), forBody: cloneNodeImpl(d.forBody) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ForOfStmt) { const d = node.data as ForOfStmtData; const data: NodeData = { forOfBinding: d.forOfBinding, forOfIsConst: d.forOfIsConst, forOfIterable: cloneNodeImpl(d.forOfIterable), forOfBody: cloneNodeImpl(d.forOfBody), forOfPattern: d.forOfPattern !== null ? cloneNodeImpl(d.forOfPattern) : null as unknown as Node, bindingLocation: d.bindingLocation }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ForInStmt) { const d = node.data as ForInStmtData; const data: NodeData = { forInBinding: d.forInBinding, forInIsConst: d.forInIsConst, forInObject: cloneNodeImpl(d.forInObject), forInBody: cloneNodeImpl(d.forInBody) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.DoWhileStmt) { const d = node.data as DoWhileStmtData; const data: NodeData = { doBody: cloneNodeImpl(d.doBody), doCondition: cloneNodeImpl(d.doCondition) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.BlockStmt) { const d = node.data as BlockStmtData; const data: NodeData = { statements: cloneNodeArray(d.statements) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ExprStmt) { const d = node.data as ExprStmtData; const data: NodeData = { expr: cloneNodeImpl(d.expr) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ReturnStmt) { const d = node.data as ReturnStmtData; const data: NodeData = { argument: cloneNodeImpl(d.argument) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.BreakStmt) { const d = node.data as BreakStmtData; const data: NodeData = { breakLabel: d.breakLabel }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ContinueStmt) { const d = node.data as ContinueStmtData; const data: NodeData = { continueLabel: d.continueLabel }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.UnreachableStmt) { const d = node.data as UnreachableStmtData; const data: NodeData = { unreachableMsg: d.unreachableMsg }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.FunctionDecl) { const d = node.data as FunctionDeclData; const data: NodeData = { fnName: d.fnName, params: cloneStringArray(d.params), fnParamTypes: cloneStringArray(d.fnParamTypes), fnBody: cloneNodeImpl(d.fnBody), fnFlags: d.fnFlags, fnReturnType: d.fnReturnType, fnDefaults: cloneNodeArray(d.fnDefaults), nativeName: d.nativeName, nameLocation: d.nameLocation }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.SwitchStmt) { const d = node.data as SwitchStmtData; const data: NodeData = { switchDisc: cloneNodeImpl(d.switchDisc), switchCases: cloneNodeArray(d.switchCases) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.SwitchCase) { const d = node.data as SwitchCaseData; const data: NodeData = { caseTests: cloneNodeArray(d.caseTests), caseStmts: cloneNodeArray(d.caseStmts), isDefault: d.isDefault }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.MatchStmt) { const d = node.data as MatchStmtData; const data: NodeData = { matchStmtDisc: cloneNodeImpl(d.matchStmtDisc), matchStmtCases: cloneNodeArray(d.matchStmtCases) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ImportDecl) { const d = node.data as ImportDeclData; const data: NodeData = { importNames: cloneStringArray(d.importNames), importAliases: cloneStringArray(d.importAliases), importSource: d.importSource, nameLocations: d.nameLocations !== null ? d.nameLocations : [] }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ExportDecl) { const d = node.data as ExportDeclData; const data: NodeData = { exportedDecl: cloneNodeImpl(d.exportedDecl) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.TypeAliasDecl) { const d = node.data as TypeAliasDeclData; const data: NodeData = { aliasName: d.aliasName, aliasType: d.aliasType, aliasIsDistinct: d.aliasIsDistinct, aliasGenericParams: d.aliasGenericParams, discriminantName: d.discriminantName, discriminantType: d.discriminantType, variantKeys: cloneStringArray(d.variantKeys), variantTypes: cloneStringArray(d.variantTypes), nameLocation: d.nameLocation }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.EnumDecl) { const d = node.data as EnumDeclData; const data: NodeData = { enumName: d.enumName, enumMembers: cloneStringArray(d.enumMembers), enumValues: d.enumValues, nameLocation: d.nameLocation, memberLocations: d.memberLocations !== null ? d.memberLocations : [] }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.InterfaceDecl) { const d = node.data as InterfaceDeclData; const data: NodeData = { interfaceName: d.interfaceName, interfaceFields: cloneStringArray(d.interfaceFields), interfaceFieldTypes: cloneStringArray(d.interfaceFieldTypes), interfaceExtends: cloneStringArray(d.interfaceExtends), nameLocation: d.nameLocation }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.StructDecl) { const d = node.data as InterfaceDeclData; const data: NodeData = { interfaceName: d.interfaceName, interfaceFields: cloneStringArray(d.interfaceFields), interfaceFieldTypes: cloneStringArray(d.interfaceFieldTypes), interfaceExtends: cloneStringArray(d.interfaceExtends), nameLocation: d.nameLocation }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ClassDecl) { const d = node.data as ClassDeclData; const data: NodeData = { className: d.className, classExtends: d.classExtends, classBody: cloneNodeArray(d.classBody), nameLocation: d.nameLocation }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.PropertyDecl) { const d = node.data as PropertyDeclData; const data: NodeData = { propName: d.propName, propType: d.propType, propIsStatic: d.propIsStatic, propIsReadonly: d.propIsReadonly, propVisibility: d.propVisibility, propInitializer: d.propInitializer }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.MethodDecl) { const d = node.data as MethodDeclData; const data: NodeData = { methodName: d.methodName, methodParams: cloneStringArray(d.methodParams), methodParamTypes: cloneStringArray(d.methodParamTypes), methodBody: cloneNodeImpl(d.methodBody), methodIsStatic: d.methodIsStatic, methodFlags: d.methodFlags, methodVisibility: d.methodVisibility, methodReturnType: d.methodReturnType, methodDefaults: cloneNodeArray(d.methodDefaults), nativeName: d.nativeName, nameLocation: d.nameLocation }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ConstructorDecl) { const d = node.data as ConstructorDeclData; const data: NodeData = { ctorParams: cloneStringArray(d.ctorParams), ctorParamTypes: cloneStringArray(d.ctorParamTypes), ctorBody: cloneNodeImpl(d.ctorBody), ctorDefaults: cloneNodeArray(d.ctorDefaults) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ThrowStmt) { const d = node.data as ThrowStmtData; const data: NodeData = { throwArg: cloneNodeImpl(d.throwArg) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.TryCatchStmt) { const d = node.data as TryCatchStmtData; const data: NodeData = { tryBody: cloneNodeImpl(d.tryBody), catchName: d.catchName, catchBody: cloneNodeImpl(d.catchBody), finallyBody: cloneNodeImpl(d.finallyBody), catchBindingLocation: d.catchBindingLocation, hasCatchClause: d.hasCatchClause }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.MacroInvocation) { const d = node.data as MacroInvocationData; const data: NodeData = { macroName: d.macroName, macroArgs: cloneNodeArray(d.macroArgs) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.DecoratedDecl) { const d = node.data as DecoratedDeclData; const data: NodeData = { decorators: cloneNodeArray(d.decorators), decoratedNode: cloneNodeImpl(d.decoratedNode) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.DeferStmt) { const d = node.data as DeferStmtData; const data: NodeData = { deferExpr: cloneNodeImpl(d.deferExpr) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.ExternDecl) { const d = node.data as ExternDeclData; const data: NodeData = { externKind: d.externKind, externName: d.externName, nativeName: d.nativeName, externType: d.externType }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.MacroDecl) { const d = node.data as MacroDeclData; const data: NodeData = { macroDeclName: d.macroDeclName, macroDeclParams: cloneStringArray(d.macroDeclParams), macroDeclParamTypes: cloneStringArray(d.macroDeclParamTypes), macroDeclBody: cloneNodeImpl(d.macroDeclBody) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.QuoteExpr) { const d = node.data as QuoteExprData; const data: NodeData = { quoteBody: cloneNodeImpl(d.quoteBody) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.Program) { const d = node.data as ProgramData; const data: NodeData = { programStmts: cloneNodeArray(d.programStmts) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.JSXElement) { const d = node.data as JSXElementData; const data: NodeData = { jsxTag: d.jsxTag, jsxAttrs: cloneNodeArray(d.jsxAttrs), jsxChildren: cloneNodeArray(d.jsxChildren), jsxSelfClosing: d.jsxSelfClosing }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.JSXFragment) { const d = node.data as JSXFragmentData; const data: NodeData = { jsxFragChildren: cloneNodeArray(d.jsxFragChildren) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.JSXText) { const d = node.data as JSXTextData; const data: NodeData = { jsxText: d.jsxText }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.JSXExpressionContainer) { const d = node.data as JSXExpressionContainerData; const data: NodeData = { jsxExpr: cloneNodeImpl(d.jsxExpr) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.JSXAttribute) { const d = node.data as JSXAttributeData; const data: NodeData = { jsxAttrName: d.jsxAttrName, jsxAttrValue: cloneNodeImpl(d.jsxAttrValue) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.JSXSpreadAttribute) { const d = node.data as JSXSpreadAttributeData; const data: NodeData = { jsxSpreadArg: cloneNodeImpl(d.jsxSpreadArg) }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	return copyNodeMeta(node, createNodeAt(kind, node.data, loc));
+	const loc = node.location;
+	return copyNodeMeta(node, createNodeAt(node.kind, rebuildNodeData(node, cloneXform), makeLocRange(loc.line, loc.column, loc.endLine, loc.endColumn)));
 }
+
 
 // ===== Substitute — rewrite generic param names in string-form type annotations =====
 
@@ -366,4 +315,35 @@ export function monoConcreteTypeName(t: Type | null): string {
 		TypeKind.CString => "cstring",
 		_ => "unknown",
 	};
+}
+
+test "clone: exhaustive per-kind payload roundtrip" {
+	// Mirrors the pack's exhaustive test but through monoCloneNode: every
+	// NodeKind sample must survive a deep clone payload-intact (kind +
+	// full location + every per-kind field). Header extras (flags/typeArg/
+	// typeExpr/nodeType/resolvedSym) are skipped — copyNodeMeta legitimately
+	// differs per CloneMode. rootSym is null here because resolvedSym only
+	// prints under withMeta, which this comparison leaves off.
+	const nt = emptyType();
+	nt.kind = TypeKind.Int32;
+	nt.typeName = "int32";
+	const ct = emptyType();
+	ct.kind = TypeKind.Boolean;
+	ct.typeName = "bool";
+	const samples = pkSamples(null as unknown as Symbol, nt, ct);
+	assert samples.length === 91;
+	for (let i = 0; i < samples.length; i += 1) {
+		assert (samples[i].kind as int32) === i;
+	}
+	for (let i = 0; i < samples.length; i += 1) {
+		const c = monoCloneNode(samples[i]);
+		const da = pkDumpNode(samples[i], false);
+		const db = pkDumpNode(c, false);
+		if (da !== db) {
+			console.log(`kind ${i} clone mismatch`);
+			console.log(`  orig: ${da.slice(0, 300)}`);
+			console.log(`  got : ${db.slice(0, 300)}`);
+			assert false;
+		}
+	}
 }

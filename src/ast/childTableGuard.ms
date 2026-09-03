@@ -4,10 +4,13 @@ const NODE_SRC = "std/meta/node.ms";
 
 const TABLE_NAMES: string[] = ["visitor", "walker", "clone", "hash", "printer", "bridge"];
 
+// The per-kind tables. "clone" points at fieldspec.ms since the clone's
+// payload walk moved there (rebuildNodeData + nodeFields mention every
+// Node-typed field); clone.ms itself only carries the xform + meta copy.
 const TABLE_PATHS: string[] = [
 	"src/ast/visitor.ms",
 	"src/transform/walker.ms",
-	"src/monomorphize/clone.ms",
+	"src/ast/fieldspec.ms",
 	"src/compiler/transam/hash.ms",
 	"src/ast/printer.ms",
 	"src/compiler/meta/bridge.ms",
@@ -18,10 +21,6 @@ const KNOWN_GAPS: string[] = [
 	"visitor:decorators", "visitor:fnDefaults", "visitor:methodDefaults",
 	"walker:arrowDefaults", "walker:caseGuard", "walker:ctorDefaults",
 	"walker:decorators", "walker:fnDefaults", "walker:methodDefaults",
-	"clone:actorBody", "clone:testBody", "clone:typExprArgs", "clone:typExprBase",
-	"clone:typExprElement", "clone:typExprFieldDecorators", "clone:typExprFieldTypes",
-	"clone:typExprIndexKey", "clone:typExprIndexValue", "clone:typExprMembers",
-	"clone:typExprParams", "clone:typExprReturn",
 	"hash:arrowDefaults", "hash:ctorDefaults", "hash:typExprFieldDecorators",
 	"printer:arrowDefaults", "printer:assertMessageExpr", "printer:caseGuard",
 	"printer:ctorDefaults", "printer:fnDefaults", "printer:methodDefaults",
