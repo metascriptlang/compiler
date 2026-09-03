@@ -1,3 +1,4 @@
+// @xfail(esm): tree emit: std/process argv module-global never imported into the referencing module
 // @ledger-slack(msStringArrayRefCell): 2
 // std/process argv module-init allocates 2 string arrays never destroyed at
 // exit — TESTGAP T6 (probed: bare `import { argv }` program shows 2/0).

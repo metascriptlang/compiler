@@ -1,3 +1,4 @@
+// @xfail(esm): tree emit: enum member of the instantiating module is referenced inside a mono'd generic body emitted in its declaring module
 // ^ the prelude std/meta/node `nodeCache` module-global box: module-level RC
 // values are never destroyed at exit (open compiler-side question, test
 // CLAUDE.md §3.6). Every native binary carries this survivor; the ledger only

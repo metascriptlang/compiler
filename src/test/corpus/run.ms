@@ -243,7 +243,7 @@ function stalenessWarning(): string {
 
 function laneUniverse(spec: Spec): string[] {
 	const lanes: string[] = spec.maxRssMb >= 0.0 ? ["drc", "orc", "danger", "san"] : ["c", "orc", "danger", "san"];
-	if (!spec.skipJs) { lanes.push("js"); }
+	if (!spec.skipJs) { lanes.push("js"); lanes.push("esm"); }
 	return lanes;
 }
 
@@ -387,6 +387,34 @@ function parseRssMB(output: string): float64 {
 
 // ---- launch / finish ----
 
+// The source→output mapping belongs to the compiler: re-deriving it here would
+// duplicate project-root discovery and resolve to nothing the moment the two
+// disagree, so the entry module is read back out of the emitted manifest. A
+// miss returns a path that does not exist, which node reports loudly — an
+// empty argument would open a REPL and hang the cell instead.
+function esmEntryJs(c: Cell): string {
+	const missing = c.bin + "/_manifest.missing.js";
+	const manifest = readFileOr(c.bin + "/_manifest.json", "");
+	const entryKey = "\"entry\": \"";
+	const ei = manifest.indexOf(entryKey);
+	if (ei < 0) { return missing; }
+	const afterEntry = manifest.slice(ei + entryKey.length, manifest.length);
+	const entryEnd = afterEntry.indexOf("\"");
+	if (entryEnd < 0) { return missing; }
+	const entrySrc = afterEntry.slice(0, entryEnd);
+	const outKey = "\"out\": \"";
+	for (const line of manifest.split("\n")) {
+		if (!line.contains("\"source\": \"" + entrySrc + "\"")) { continue; }
+		const oi = line.indexOf(outKey);
+		if (oi < 0) { return missing; }
+		const afterOut = line.slice(oi + outKey.length, line.length);
+		const outEnd = afterOut.indexOf("\"");
+		if (outEnd < 0) { return missing; }
+		return c.bin + "/" + afterOut.slice(0, outEnd);
+	}
+	return missing;
+}
+
 // The cell body, in whichever shell this platform has. Both spellings run the
 // binary with its output redirected, then publish the exit code through a
 // temp-file rename so a half-written sentinel is never observed.
@@ -408,6 +436,9 @@ function cellInner(c: Cell, q: (p: string) => string): string {
 	}
 	if (c.lane == "js") {
 		return "node " + bin + " > " + q(c.dir + "out.log") + " 2>&1";
+	}
+	if (c.lane == "esm") {
+		return "node " + q(esmEntryJs(c)) + " > " + q(c.dir + "out.log") + " 2>&1";
 	}
 	if (c.spec.maxRssMb >= 0.0) {
 		// wintime prints the `time -l` RSS line to stderr, same as macOS.
@@ -574,9 +605,9 @@ function finishSanCell(c: Cell): void {
 
 function finishCell(c: Cell): void {
 	if (c.lane == "san") { finishSanCell(c); return; }
-	// js lane of an @maxrss program finishes parity-style: no time.log, and
+	// node lanes of an @maxrss program finish parity-style: no time.log, and
 	// the RSS bound is native-only.
-	if (c.spec.maxRssMb >= 0.0 && c.lane != "js") { finishRssCell(c); return; }
+	if (c.spec.maxRssMb >= 0.0 && c.lane != "js" && c.lane != "esm") { finishRssCell(c); return; }
 	finishParityCell(c);
 }
 
@@ -594,7 +625,7 @@ function reportCell(c: Cell, t: Tally): void {
 }
 
 function comparableOutputOf(c: Cell): string {
-	return c.spec.maxRssMb >= 0.0 && c.lane != "js" ? c.dir + "stdout.log" : c.dir + "out.log";
+	return c.spec.maxRssMb >= 0.0 && c.lane != "js" && c.lane != "esm" ? c.dir + "stdout.log" : c.dir + "out.log";
 }
 
 // byte-compare a finished parity group; one extra verdict line per program
@@ -646,6 +677,8 @@ function planJobs(specs: Spec[]): BuildJob[] {
 		if (!spec.skipJs && HAS_NODE) {
 			const jsbin = OUT_DIR + "bin/" + spec.name + ".js";
 			jobs.push({ spec, lane: "js", cmd: MSC_CMD + " build " + spec.entry + " --target=js --output=" + jsbin, cell: makeCell(spec, "js", jsbin) });
+			const esmdir = OUT_DIR + "esm/" + spec.name;
+			jobs.push({ spec, lane: "esm", cmd: MSC_CMD + " build " + spec.entry + " --target=js --split --output=" + esmdir, cell: makeCell(spec, "esm", esmdir) });
 		}
 	} else {
 			const cbin = OUT_DIR + "bin/" + spec.name + ".c";
@@ -660,6 +693,11 @@ function planJobs(specs: Spec[]): BuildJob[] {
 			if (!spec.skipJs && HAS_NODE) {
 				const jsbin = OUT_DIR + "bin/" + spec.name + ".js";
 				jobs.push({ spec, lane: "js", cmd: MSC_CMD + " build " + spec.entry + " --target=js --output=" + jsbin, cell: makeCell(spec, "js", jsbin) });
+				// Same program through the module tree: the bundle collapses
+				// every module into one scope, so it cannot see a name the
+				// declaring and referencing sides spell differently.
+				const esmdir = OUT_DIR + "esm/" + spec.name;
+				jobs.push({ spec, lane: "esm", cmd: MSC_CMD + " build " + spec.entry + " --target=js --split --output=" + esmdir, cell: makeCell(spec, "esm", esmdir) });
 			}
 		}
 	}
@@ -768,11 +806,12 @@ function main(): void {
 	// a success, not a failure (unchanged reruns hit it on every native cell)
 	for (const job of jobs) {
 		let b = runCapture(job.cmd);
-		let builtOk = job.lane == "js" ? b.exitCode === 0 : nativeBuildOk(b.output);
+		const jsLane = job.lane == "js" || job.lane == "esm";
+		let builtOk = jsLane ? b.exitCode === 0 : nativeBuildOk(b.output);
 		if (!builtOk && isToolchainRace(b.output)) {
 			progress("  · flake-retry " + job.spec.name + " [" + job.lane + "]: toolchain race, rebuilding");
 			b = runCapture(job.cmd);
-			builtOk = job.lane == "js" ? b.exitCode === 0 : nativeBuildOk(b.output);
+			builtOk = jsLane ? b.exitCode === 0 : nativeBuildOk(b.output);
 		}
 		if (!builtOk) {
 			ensureDir(job.cell.dir);
