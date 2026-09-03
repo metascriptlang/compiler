@@ -654,6 +654,12 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		return expr;
 	}
 	if (exprType.kind === TypeKind.Never) return expr;
+	if (exprType.kind === TypeKind.Void && formal.kind !== TypeKind.Void
+		&& formal.kind !== TypeKind.GenericParam) {
+		addError(ctx, "type 'void' is not assignable to type '" + typeDisplayName(formal)
+			+ "' — a void call produces no value", expr.location.line, expr.location.column);
+		return expr;
+	}
 	const adopted = tryAdoptAnonStruct(expr, formal, exprType);
 	if (adopted !== null as unknown as Node) return adopted;
 	// Direct function → closure auto-wrap (Reference parity: nkHiddenSubConv → nkClosure).

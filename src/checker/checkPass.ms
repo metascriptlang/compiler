@@ -1155,9 +1155,19 @@ function isDefiniteExit(node: Node): boolean {
 	return false;
 }
 
+function refuseVoidCondition(ctx: CheckerContext, cond: Node): void {
+	if (cond === null as unknown as Node) return;
+	const t = cond.nodeType;
+	if (t !== null && t.kind === TypeKind.Void) {
+		addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
+			cond.location.line, cond.location.column);
+	}
+}
+
 function checkIfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as IfStmtData;
 	checkExpr(ctx, d.condition, null);
+	refuseVoidCondition(ctx, d.condition);
 
 	// Ref parity: trackIf — count table + exhaustiveness for init/affine trackers.
 	// Phase 4: narrowing flows through the flow graph — no fact stack needed.
@@ -1195,6 +1205,7 @@ function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	checkExpr(ctx, d.whileCondition, null);
 	ctx.condEvalDepth = ctx.condEvalDepth - 1;
+	refuseVoidCondition(ctx, d.whileCondition);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
 	// PARALOCK Phase 1: snapshot affine state + outer affine Promise keys before the body
 	const affineSnap = saveConsumeState(ctx.affineTracker);
@@ -1231,6 +1242,7 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 	ctx.stmtPosExpr = prevForStmtPos;
 	ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	checkExpr(ctx, d.forCondition, null);
+	refuseVoidCondition(ctx, d.forCondition);
 	// Ref parity: for loops — conservative, loop may not execute
 	const oldState = saveInitState(ctx.initTracker);
 	ctx.stmtPosExpr = d.forUpdate;
@@ -1401,6 +1413,7 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 	ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	checkExpr(ctx, d.doCondition, null);
+	refuseVoidCondition(ctx, d.doCondition);
 	ctx.condEvalDepth = ctx.condEvalDepth - 1;
 }
 

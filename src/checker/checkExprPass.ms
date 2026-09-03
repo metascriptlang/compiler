@@ -673,6 +673,30 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& d.operator !== "&&=" && d.operator !== "||=" && d.operator !== "??=") {
 				addError(ctx, "operator '" + d.operator + "' cannot be applied to 'unknown' — narrow with an explicit cast", node.location.line, node.location.column);
 			}
+			const voidLeft = effLeft !== null && effLeft.kind === TypeKind.Void;
+			const voidRight = effRight !== null && effRight.kind === TypeKind.Void;
+			if ((voidLeft || voidRight) && d.operator !== "=") {
+				const voidOther = voidLeft ? effRight : effLeft;
+				const isEqOp = d.operator === "===" || d.operator === "!=="
+					|| d.operator === "==" || d.operator === "!=";
+				const otherNullish = voidOther !== null
+					&& (voidOther.kind === TypeKind.Null || voidOther.kind === TypeKind.Void);
+				const concatOk = d.operator === "+" && voidOther !== null && isStringLike(voidOther);
+				const nullishOk = d.operator === "??" || d.operator === "??=";
+				if (d.operator === "&&" || d.operator === "||"
+					|| d.operator === "&&=" || d.operator === "||=") {
+					addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
+						node.location.line, node.location.column);
+				} else if (isEqOp && !otherNullish) {
+					addError(ctx, "comparison of 'void' and '" + typeDisplayName(voidOther!)
+						+ "' — the types have no overlap; a void result only equals null",
+						node.location.line, node.location.column);
+				} else if (!isEqOp && !concatOk && !nullishOk) {
+					addError(ctx, "operator '" + d.operator
+						+ "' cannot be applied to 'void' — a void call produces no value",
+						node.location.line, node.location.column);
+				}
+			}
 			if (isBitwiseBinaryOp(d.operator)) {
 				checkBitwiseOperands(ctx, d.operator, effLeft!, effRight!, node);
 				if (effLeft !== null && effLeft.kind === TypeKind.Number) {
@@ -752,6 +776,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			checkExpr(ctx, d.operand, unaryExpected);
 			const operandType = d.operand.nodeType;
+			if (d.unaryOp === "!" && operandType !== null && operandType.kind === TypeKind.Void) {
+				addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
+					node.location.line, node.location.column);
+				node.nodeType = errorType(); return;
+			}
 			if (d.unaryOp === "+" && operandType !== null && operandType.kind === TypeKind.BigInt) {
 				addError(ctx, "unary '+' is not allowed on bigint — use Number(b) to convert", node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
@@ -1464,6 +1493,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
 			checkExpr(ctx, d.ternaryCondition, null);
+			const ternCondT = d.ternaryCondition.nodeType;
+			if (ternCondT !== null && ternCondT.kind === TypeKind.Void) {
+				addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
+					d.ternaryCondition.location.line, d.ternaryCondition.location.column);
+			}
 			ctx.condEvalDepth = ctx.condEvalDepth + 1;
 			checkExpr(ctx, d.ternaryConsequent, expectedType);
 			checkExpr(ctx, d.ternaryAlternate, expectedType);
