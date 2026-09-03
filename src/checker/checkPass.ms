@@ -1,10 +1,10 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { CallingConvention, Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { CallingConvention, Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { inferredType, noneType, isUnresolvedType, charType, float64Type, voidType, nullType, createFunction, createClosureType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType } from "./types";
+import { inferredType, noneType, isUnresolvedType, charType, float64Type, voidType, nullType, createFunction, createClosureType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords } from "./context";
@@ -1333,6 +1333,20 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 					if (derived !== null) elem.nodeType = derived;
 					defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, derived !== null ? derived : inferredType(), !isConst));
 					markInitialized(ctx.initTracker, id.name);
+				}
+			} else if (elem.kind === NodeKind.SpreadExpr) {
+				const inner = (elem.data as SpreadExprData).spreadArg;
+				if (inner.kind === NodeKind.Identifier) {
+					const id = inner.data as IdentifierData;
+					const derived = destrRestElemType(iterType);
+					if (derived !== null) inner.nodeType = derived;
+					if (id.name !== "_") {
+						if (derived === null && iterType !== null && iterType.kind !== TypeKind.Inferred && iterType.kind !== TypeKind.Error && iterType.kind !== TypeKind.None) {
+							addError(ctx, `rest element '${id.name}' requires an array source`, elem.location.line, elem.location.column);
+						}
+						defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, derived !== null ? derived : inferredType(), !isConst));
+						markInitialized(ctx.initTracker, id.name);
+					}
 				}
 			}
 			i += 1;

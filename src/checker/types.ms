@@ -1589,6 +1589,15 @@ export function destrNamedFieldType(srcType: Type | null, fieldName: string): Ty
 	return null;
 }
 
+export function destrRestElemType(srcType: Type | null): Type | null {
+	let bt = srcType;
+	if (bt === null) return null;
+	if ((bt.kind === TypeKind.Ref || bt.kind === TypeKind.Var) && bt.typeReturn !== null) bt = bt.typeReturn;
+	if (bt.kind === TypeKind.Array && bt.typeReturn !== null) return bt;
+	if (bt.kind === TypeKind.SizedArray && bt.typeReturn !== null) return createArray(bt.typeReturn);
+	return null;
+}
+
 // StringLiteral: a specific string value as a type (TypeScript parity).
 // Not a singleton — each unique value creates a new instance.
 export function createStringLiteral(value: string): Type {
