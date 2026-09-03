@@ -44,5 +44,3 @@ nim-cache/
 # a mis-expanded ~ once created a nested copy of the repo here
 /Users/
 
-# design doc synced via syncthing, not git
-docs/PARALOCK.md
