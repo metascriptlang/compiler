@@ -25,7 +25,7 @@
 //
 // === TODO: Auto-scanner ===
 // This file is currently hand-maintained — each new `extern function msXxx(...)`
-// in std/* must be paired with a `_bridge_msXxx` here. A small compiler-build
+// in std/* must be paired with a `_bridgeMsXxx` here. A small compiler-build
 // tool (~1 day of work) would:
 //   1. Walk the symbol table after the std/* check pass.
 //   2. Filter symbols with `nativeName != ""` (extern decls).
@@ -85,23 +85,23 @@ function _fsResultToInt(ok: boolean, errKind: IoErrorKind): RaiserValue {
 
 // --- File system bridges ---
 
-function _bridge_msFsExists(args: RaiserValue[]): RaiserValue {
+function _bridgeMsFsExists(args: RaiserValue[]): RaiserValue {
 	return boxInt(exists(unboxString(args[0])) ? 1 : 0);
 }
 
-function _bridge_msFsIsFile(args: RaiserValue[]): RaiserValue {
+function _bridgeMsFsIsFile(args: RaiserValue[]): RaiserValue {
 	return boxInt(isFile(unboxString(args[0])) ? 1 : 0);
 }
 
-function _bridge_msFsIsDir(args: RaiserValue[]): RaiserValue {
+function _bridgeMsFsIsDir(args: RaiserValue[]): RaiserValue {
 	return boxInt(isDir(unboxString(args[0])) ? 1 : 0);
 }
 
-function _bridge_msFsFileSize(args: RaiserValue[]): RaiserValue {
+function _bridgeMsFsFileSize(args: RaiserValue[]): RaiserValue {
 	return boxInt(fileSize(unboxString(args[0])));
 }
 
-function _bridge_msFsReadFile(args: RaiserValue[]): RaiserValue {
+function _bridgeMsFsReadFile(args: RaiserValue[]): RaiserValue {
 	const r = readFile(unboxString(args[0]));
 	if (r.ok) {
 		_lastFsErrno = 0;
@@ -111,37 +111,37 @@ function _bridge_msFsReadFile(args: RaiserValue[]): RaiserValue {
 	return boxString("");
 }
 
-function _bridge_msFsLastErrno(args: RaiserValue[]): RaiserValue {
+function _bridgeMsFsLastErrno(args: RaiserValue[]): RaiserValue {
 	return boxInt(_lastFsErrno);
 }
 
-function _bridge_msFsWriteFileMode(args: RaiserValue[]): RaiserValue {
+function _bridgeMsFsWriteFileMode(args: RaiserValue[]): RaiserValue {
 	// args[2] = mode string ("w"/"a"); seed supports overwrite only.
 	const r = writeFile(unboxString(args[0]), unboxString(args[1]));
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
 
-function _bridge_msFsMkdir(args: RaiserValue[]): RaiserValue {
+function _bridgeMsFsMkdir(args: RaiserValue[]): RaiserValue {
 	const r = mkdir(unboxString(args[0]));
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
 
-function _bridge_msFsRmdir(args: RaiserValue[]): RaiserValue {
+function _bridgeMsFsRmdir(args: RaiserValue[]): RaiserValue {
 	const r = rmdir(unboxString(args[0]));
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
 
-function _bridge_msFsRemove(args: RaiserValue[]): RaiserValue {
+function _bridgeMsFsRemove(args: RaiserValue[]): RaiserValue {
 	const r = remove(unboxString(args[0]));
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
 
-function _bridge_msFsRename(args: RaiserValue[]): RaiserValue {
+function _bridgeMsFsRename(args: RaiserValue[]): RaiserValue {
 	const r = rename(unboxString(args[0]), unboxString(args[1]));
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
 
-function _bridge_msFsReadDirEntries(args: RaiserValue[]): RaiserValue {
+function _bridgeMsFsReadDirEntries(args: RaiserValue[]): RaiserValue {
 	// C contract: returns lines separated by "\n", empty on error
 	// (caller polls errno). MS readDir returns string[]; join with "\n".
 	// readDir returns [] silently on failure — pre-check via
@@ -159,15 +159,15 @@ function _bridge_msFsReadDirEntries(args: RaiserValue[]): RaiserValue {
 
 // --- Process bridges ---
 
-function _bridge_msProcessCwd(args: RaiserValue[]): RaiserValue {
+function _bridgeMsProcessCwd(args: RaiserValue[]): RaiserValue {
 	return boxString(cwd());
 }
 
-function _bridge_msProcessPlatform(args: RaiserValue[]): RaiserValue {
+function _bridgeMsProcessPlatform(args: RaiserValue[]): RaiserValue {
 	return boxString(platform);
 }
 
-function _bridge_msProcessGetEnv(args: RaiserValue[]): RaiserValue {
+function _bridgeMsProcessGetEnv(args: RaiserValue[]): RaiserValue {
 	return boxString(env.get(unboxString(args[0])));
 }
 
@@ -204,7 +204,7 @@ function _setSpawnStateErr(
 	_spawnPipeOk = kind === ProcessErrorKind.PipeError ? 0 : 1;
 }
 
-function _bridge_msProcessSpawnSync(args: RaiserValue[]): RaiserValue {
+function _bridgeMsProcessSpawnSync(args: RaiserValue[]): RaiserValue {
 	const r = exec(unboxString(args[0]));
 	if (r.ok) {
 		_resetSpawnStateOk(r.value);
@@ -215,23 +215,23 @@ function _bridge_msProcessSpawnSync(args: RaiserValue[]): RaiserValue {
 	return boxString(_spawnStdout);
 }
 
-function _bridge_msProcSpawnGetOk(args: RaiserValue[]): RaiserValue {
+function _bridgeMsProcSpawnGetOk(args: RaiserValue[]): RaiserValue {
 	return boxInt(_spawnOk);
 }
 
-function _bridge_msProcSpawnGetPipeOk(args: RaiserValue[]): RaiserValue {
+function _bridgeMsProcSpawnGetPipeOk(args: RaiserValue[]): RaiserValue {
 	return boxInt(_spawnPipeOk);
 }
 
-function _bridge_msProcSpawnGetExitCode(args: RaiserValue[]): RaiserValue {
+function _bridgeMsProcSpawnGetExitCode(args: RaiserValue[]): RaiserValue {
 	return boxInt(_spawnExitCode);
 }
 
-function _bridge_msProcSpawnGetSignal(args: RaiserValue[]): RaiserValue {
+function _bridgeMsProcSpawnGetSignal(args: RaiserValue[]): RaiserValue {
 	return boxInt(_spawnSignal);
 }
 
-function _bridge_msProcSpawnGetStderr(args: RaiserValue[]): RaiserValue {
+function _bridgeMsProcSpawnGetStderr(args: RaiserValue[]): RaiserValue {
 	return boxString(_spawnStderr);
 }
 
@@ -287,12 +287,12 @@ function _nodeChildSlots(h: number): RaiserValue[] {
 	return out;
 }
 
-function _bridge_msNodeChildCount(args: RaiserValue[]): RaiserValue {
+function _bridgeMsNodeChildCount(args: RaiserValue[]): RaiserValue {
 	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxInt(0);
 	return boxInt(_nodeChildSlots(args[0].intVal).length);
 }
 
-function _bridge_msNodeChildAt(args: RaiserValue[]): RaiserValue {
+function _bridgeMsNodeChildAt(args: RaiserValue[]): RaiserValue {
 	if (args.length < 2 || args[0].kind !== RaiserValueKind.Object) return raiserNil();
 	const slots = _nodeChildSlots(args[0].intVal);
 	const i = unboxInt(args[1]);
@@ -305,25 +305,25 @@ function _bridge_msNodeChildAt(args: RaiserValue[]): RaiserValue {
 // dispatch through the CallHost path without falling into "Unknown host
 // function" silent-nil. Full catalogue: docs/RAISER-GAP.md Phase 4.
 
-function _bridge_msStringTrim(args: RaiserValue[]): RaiserValue {
+function _bridgeMsStringTrim(args: RaiserValue[]): RaiserValue {
 	return boxString(unboxString(args[0]).trim());
 }
 
-function _bridge_msStringTrimStart(args: RaiserValue[]): RaiserValue {
+function _bridgeMsStringTrimStart(args: RaiserValue[]): RaiserValue {
 	return boxString(unboxString(args[0]).trimStart());
 }
 
-function _bridge_msStringTrimEnd(args: RaiserValue[]): RaiserValue {
+function _bridgeMsStringTrimEnd(args: RaiserValue[]): RaiserValue {
 	return boxString(unboxString(args[0]).trimEnd());
 }
 
 // indexOf: MS declares (s, sub, start: int64 = 0) — handle optional 3rd arg
-function _bridge_msStringIndexOf(args: RaiserValue[]): RaiserValue {
+function _bridgeMsStringIndexOf(args: RaiserValue[]): RaiserValue {
 	const start = args.length > 2 ? args[2].intVal : 0;
 	return boxInt(unboxString(args[0]).indexOf(unboxString(args[1]), start));
 }
 
-function _bridge_msStringCharCodeAt(args: RaiserValue[]): RaiserValue {
+function _bridgeMsStringCharCodeAt(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).charCodeAt(unboxInt(args[1])));
 }
 
@@ -335,7 +335,7 @@ function _bridge_msStringCharCodeAt(args: RaiserValue[]): RaiserValue {
 // for another would have its operands read through the wrong opcode — measured as
 // a value that prints "8" and then compares as 0. One static type, one register
 // kind; ask isFloatLiteral first, exactly as Nim asks the node kind.
-function _bridge_msNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
+function _bridgeMsNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
 	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxBool(false);
 	const objHeapOrNull = activeHostObjectHeap();
 	if (objHeapOrNull === null) return boxBool(false);
@@ -344,7 +344,7 @@ function _bridge_msNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
 	return boxBool(v.kind === RaiserValueKind.Float);
 }
 
-function _bridge_msNodeIntValue(args: RaiserValue[]): RaiserValue {
+function _bridgeMsNodeIntValue(args: RaiserValue[]): RaiserValue {
 	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxInt(0);
 	const objHeapOrNull = activeHostObjectHeap();
 	if (objHeapOrNull === null) return boxInt(0);
@@ -352,7 +352,7 @@ function _bridge_msNodeIntValue(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxInt(heapObjectGetField(objHeap, args[0].intVal, "value")));
 }
 
-function _bridge_msNodeFloatValue(args: RaiserValue[]): RaiserValue {
+function _bridgeMsNodeFloatValue(args: RaiserValue[]): RaiserValue {
 	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxFloat(0.0);
 	const objHeapOrNull = activeHostObjectHeap();
 	if (objHeapOrNull === null) return boxFloat(0.0);
@@ -360,7 +360,7 @@ function _bridge_msNodeFloatValue(args: RaiserValue[]): RaiserValue {
 	return boxFloat(unboxInt(heapObjectGetField(objHeap, args[0].intVal, "value")));
 }
 
-function _bridge_msNodeStringValue(args: RaiserValue[]): RaiserValue {
+function _bridgeMsNodeStringValue(args: RaiserValue[]): RaiserValue {
 	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxString("");
 	const objHeapOrNull = activeHostObjectHeap();
 	if (objHeapOrNull === null) return boxString("");
@@ -383,19 +383,19 @@ function bridgeMsStringContains(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).indexOf(unboxString(args[1])) >= 0 ? 1 : 0);
 }
 
-function _bridge_msStringStartsWith(args: RaiserValue[]): RaiserValue {
+function _bridgeMsStringStartsWith(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).startsWith(unboxString(args[1])) ? 1 : 0);
 }
 
-function _bridge_msStringEndsWith(args: RaiserValue[]): RaiserValue {
+function _bridgeMsStringEndsWith(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).endsWith(unboxString(args[1])) ? 1 : 0);
 }
 
-function _bridge_msStringReplace(args: RaiserValue[]): RaiserValue {
+function _bridgeMsStringReplace(args: RaiserValue[]): RaiserValue {
 	return boxString(unboxString(args[0]).replace(unboxString(args[1]), unboxString(args[2])));
 }
 
-function _bridge_msStringReplaceAll(args: RaiserValue[]): RaiserValue {
+function _bridgeMsStringReplaceAll(args: RaiserValue[]): RaiserValue {
 	return boxString(unboxString(args[0]).replaceAll(unboxString(args[1]), unboxString(args[2])));
 }
 
@@ -421,53 +421,53 @@ export function ensureHostTableLoaded(): void {
 	if (isHostRegistryInitialized()) return;
 
 	// fs predicates
-	registerHostFn("msFsExists",         _bridge_msFsExists);
-	registerHostFn("msFsIsFile",         _bridge_msFsIsFile);
-	registerHostFn("msFsIsDir",          _bridge_msFsIsDir);
-	registerHostFn("msFsFileSize",       _bridge_msFsFileSize);
+	registerHostFn("msFsExists",         _bridgeMsFsExists);
+	registerHostFn("msFsIsFile",         _bridgeMsFsIsFile);
+	registerHostFn("msFsIsDir",          _bridgeMsFsIsDir);
+	registerHostFn("msFsFileSize",       _bridgeMsFsFileSize);
 	// fs read/write/mutate + errno polling
-	registerHostFn("msFsReadFile",       _bridge_msFsReadFile);
-	registerHostFn("msFsLastErrno",      _bridge_msFsLastErrno);
-	registerHostFn("msFsWriteFileMode",  _bridge_msFsWriteFileMode);
-	registerHostFn("msFsMkdir",          _bridge_msFsMkdir);
-	registerHostFn("msFsRmdir",          _bridge_msFsRmdir);
-	registerHostFn("msFsRemove",         _bridge_msFsRemove);
-	registerHostFn("msFsRename",         _bridge_msFsRename);
-	registerHostFn("msFsReadDirEntries", _bridge_msFsReadDirEntries);
+	registerHostFn("msFsReadFile",       _bridgeMsFsReadFile);
+	registerHostFn("msFsLastErrno",      _bridgeMsFsLastErrno);
+	registerHostFn("msFsWriteFileMode",  _bridgeMsFsWriteFileMode);
+	registerHostFn("msFsMkdir",          _bridgeMsFsMkdir);
+	registerHostFn("msFsRmdir",          _bridgeMsFsRmdir);
+	registerHostFn("msFsRemove",         _bridgeMsFsRemove);
+	registerHostFn("msFsRename",         _bridgeMsFsRename);
+	registerHostFn("msFsReadDirEntries", _bridgeMsFsReadDirEntries);
 	// process accessors
-	registerHostFn("msProcessCwd",       _bridge_msProcessCwd);
-	registerHostFn("msProcessPlatform",  _bridge_msProcessPlatform);
-	registerHostFn("msProcessGetEnv",    _bridge_msProcessGetEnv);
+	registerHostFn("msProcessCwd",       _bridgeMsProcessCwd);
+	registerHostFn("msProcessPlatform",  _bridgeMsProcessPlatform);
+	registerHostFn("msProcessGetEnv",    _bridgeMsProcessGetEnv);
 	// process spawn/exec
-	registerHostFn("msProcessSpawnSync",    _bridge_msProcessSpawnSync);
-	registerHostFn("msProcSpawnGetOk",      _bridge_msProcSpawnGetOk);
-	registerHostFn("msProcSpawnGetPipeOk",  _bridge_msProcSpawnGetPipeOk);
-	registerHostFn("msProcSpawnGetExitCode", _bridge_msProcSpawnGetExitCode);
-	registerHostFn("msProcSpawnGetSignal",  _bridge_msProcSpawnGetSignal);
-	registerHostFn("msProcSpawnGetStderr",  _bridge_msProcSpawnGetStderr);
+	registerHostFn("msProcessSpawnSync",    _bridgeMsProcessSpawnSync);
+	registerHostFn("msProcSpawnGetOk",      _bridgeMsProcSpawnGetOk);
+	registerHostFn("msProcSpawnGetPipeOk",  _bridgeMsProcSpawnGetPipeOk);
+	registerHostFn("msProcSpawnGetExitCode", _bridgeMsProcSpawnGetExitCode);
+	registerHostFn("msProcSpawnGetSignal",  _bridgeMsProcSpawnGetSignal);
+	registerHostFn("msProcSpawnGetStderr",  _bridgeMsProcSpawnGetStderr);
 	// macro Node child accessors (std/meta childCount/childAt)
-	registerHostFn("msNodeChildCount",      _bridge_msNodeChildCount);
-	registerHostFn("msNodeChildAt",         _bridge_msNodeChildAt);
+	registerHostFn("msNodeChildCount",      _bridgeMsNodeChildCount);
+	registerHostFn("msNodeChildAt",         _bridgeMsNodeChildAt);
 	// string ops — extension methods called as `s.trim()` etc.
 	// Coverage: trim family + case + indexOf/contains/start/end + replace.
 	// Hot paths (charAt/slice) stay hardcoded in raiser/expressions.ms for
 	// direct-opcode performance.
-	registerHostFn("msStringTrim",          _bridge_msStringTrim);
-	registerHostFn("msStringTrimStart",     _bridge_msStringTrimStart);
-	registerHostFn("msStringTrimEnd",       _bridge_msStringTrimEnd);
-	registerHostFn("msStringIndexOf",       _bridge_msStringIndexOf);
-	registerHostFn("msStringCharCodeAt",    _bridge_msStringCharCodeAt);
-	registerHostFn("msNodeIsFloatLiteral", _bridge_msNodeIsFloatLiteral);
-	registerHostFn("msNodeIntValue",        _bridge_msNodeIntValue);
-	registerHostFn("msNodeFloatValue",      _bridge_msNodeFloatValue);
-	registerHostFn("msNodeStringValue",     _bridge_msNodeStringValue);
+	registerHostFn("msStringTrim",          _bridgeMsStringTrim);
+	registerHostFn("msStringTrimStart",     _bridgeMsStringTrimStart);
+	registerHostFn("msStringTrimEnd",       _bridgeMsStringTrimEnd);
+	registerHostFn("msStringIndexOf",       _bridgeMsStringIndexOf);
+	registerHostFn("msStringCharCodeAt",    _bridgeMsStringCharCodeAt);
+	registerHostFn("msNodeIsFloatLiteral", _bridgeMsNodeIsFloatLiteral);
+	registerHostFn("msNodeIntValue",        _bridgeMsNodeIntValue);
+	registerHostFn("msNodeFloatValue",      _bridgeMsNodeFloatValue);
+	registerHostFn("msNodeStringValue",     _bridgeMsNodeStringValue);
 	registerHostFn("msStringToLower",       bridgeMsStringToLower);
 	registerHostFn("msStringToUpper",       bridgeMsStringToUpper);
 	registerHostFn("msStringContains",      bridgeMsStringContains);
-	registerHostFn("msStringStartsWith",    _bridge_msStringStartsWith);
-	registerHostFn("msStringEndsWith",      _bridge_msStringEndsWith);
-	registerHostFn("msStringReplace",       _bridge_msStringReplace);
-	registerHostFn("msStringReplaceAll",    _bridge_msStringReplaceAll);
+	registerHostFn("msStringStartsWith",    _bridgeMsStringStartsWith);
+	registerHostFn("msStringEndsWith",      _bridgeMsStringEndsWith);
+	registerHostFn("msStringReplace",       _bridgeMsStringReplace);
+	registerHostFn("msStringReplaceAll",    _bridgeMsStringReplaceAll);
 	markHostRegistryInitialized();
 }
 
@@ -501,7 +501,7 @@ test "ensureHostTableLoaded is idempotent" {
 	assert isHostRegistryInitialized();
 }
 
-test "bridge_msFsExists returns 1 for present file" {
+test "bridgeMsFsExists returns 1 for present file" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msFsExists");
@@ -512,7 +512,7 @@ test "bridge_msFsExists returns 1 for present file" {
 	assert result.intVal === 1;
 }
 
-test "bridge_msFsExists returns 0 for missing file" {
+test "bridgeMsFsExists returns 0 for missing file" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msFsExists");
@@ -521,7 +521,7 @@ test "bridge_msFsExists returns 0 for missing file" {
 	assert result.intVal === 0;
 }
 
-test "bridge_msProcessCwd returns non-empty string" {
+test "bridgeMsProcessCwd returns non-empty string" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msProcessCwd");
@@ -530,7 +530,7 @@ test "bridge_msProcessCwd returns non-empty string" {
 	assert result.strVal.length > 0;
 }
 
-test "bridge_msProcessPlatform returns known platform" {
+test "bridgeMsProcessPlatform returns known platform" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msProcessPlatform");
@@ -540,7 +540,7 @@ test "bridge_msProcessPlatform returns known platform" {
 	assert result.strVal.length > 0;
 }
 
-test "bridge_msProcessGetEnv missing var returns empty" {
+test "bridgeMsProcessGetEnv missing var returns empty" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msProcessGetEnv");
@@ -551,7 +551,7 @@ test "bridge_msProcessGetEnv missing var returns empty" {
 
 // --- Phase 7 bridges: errno-poll pattern ---
 
-test "bridge_msFsReadFile present file + errno 0" {
+test "bridgeMsFsReadFile present file + errno 0" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	const read = lookupHostFn("msFsReadFile");
@@ -563,7 +563,7 @@ test "bridge_msFsReadFile present file + errno 0" {
 	assert e.intVal === 0;
 }
 
-test "bridge_msFsReadFile missing file + non-zero errno" {
+test "bridgeMsFsReadFile missing file + non-zero errno" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	const read = lookupHostFn("msFsReadFile");
@@ -574,7 +574,7 @@ test "bridge_msFsReadFile missing file + non-zero errno" {
 	assert e.intVal !== 0;
 }
 
-test "bridge_msFsReadDirEntries returns newline-separated entries" {
+test "bridgeMsFsReadDirEntries returns newline-separated entries" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msFsReadDirEntries");
@@ -583,7 +583,7 @@ test "bridge_msFsReadDirEntries returns newline-separated entries" {
 	assert r.strVal.length > 0;
 }
 
-test "bridge_msProcessSpawnSync registered" {
+test "bridgeMsProcessSpawnSync registered" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	// Just verify registration. Actual subprocess invocation is brittle inside
@@ -592,7 +592,7 @@ test "bridge_msProcessSpawnSync registered" {
 	assert lookupHostFn("msProcessSpawnSync") !== null;
 }
 
-test "bridge_msProcSpawnGet* state slots registered" {
+test "bridgeMsProcSpawnGet* state slots registered" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	assert lookupHostFn("msProcSpawnGetOk") !== null;
