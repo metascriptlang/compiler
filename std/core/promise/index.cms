@@ -55,46 +55,36 @@ export function asyncCheck(fut: Promise<void>): void {
 	// TODO: add error re-raise callback (raise fut.error on failure)
 }
 
-// ===== Locker<T> — Thread-safe shared mutable state (Malebolgia pattern) =====
-// Wraps a value + ticket lock. Access via lock/unlock or withLock callback.
+// ===== Locked<T> — the one sanctioned shared-mutable cell (PARALOCK I22) =====
+// `Locked<T>` is a compiler-known type: ONE allocation holding the atomic-rc
+// header, an inline ticket lock and a typed payload, so the handle IS an atomic
+// reference and needs no second refcount wrapper (`Arc<Locked<T>>` is not a
+// type). The payload is never addressable from the surface — it is reached only
+// inside the callbacks below, which ARE the critical section.
 
-@include("runtime/promise/locker.h");
+@include("runtime/promise/locked.h");
 
-extern function msLockerCreate(dataSize: int32): Locker from "msLockerCreate";
-extern function msLockerLock(loc: Locker): void from "msLockerLock";
-extern function msLockerUnlock(loc: Locker): void from "msLockerUnlock";
-extern function msLockerGetDouble(loc: Locker): number from "msLockerGetDouble";
-extern function msLockerSetDouble(loc: Locker, val: number): void from "msLockerSetDouble";
-extern function msLockerDestroy(loc: Locker): void from "msLockerDestroy";
+extern function msLockedAcquire<T>(cell: Locked<T>): void from "msLockedAcquire";
+extern function msLockedRelease<T>(cell: Locked<T>): void from "msLockedRelease";
+// Payload load/store: rewritten by the C backend into a field access on the
+// generated cell struct, so the payload offset always comes from the struct
+// itself. They are deliberately private — a load outside the critical section
+// would hand out a racy copy.
+extern function msLockedLoad<T>(cell: Locked<T>): T;
+extern function msLockedStore<T>(cell: Locked<T>, value: T): void;
 
-export interface Locker {
-	_ptr: number; // opaque pointer (msLocker*)
+// Read-modify-write under the lock. The callback IS the critical section, so it
+// must stay short and must never await or block (PARALOCK Amendment E).
+export function lockedUpdate<T>(cell: Locked<T>, fn: (value: T) => T): void {
+	msLockedAcquire(cell);
+	defer msLockedRelease(cell);
+	msLockedStore(cell, fn(msLockedLoad(cell)));
 }
 
-export function createLocker(): Locker {
-	return msLockerCreate(8) as unknown as Locker;
-}
-
-export function lockAcquire(loc: Locker): void {
-	msLockerLock(loc);
-}
-
-export function lockRelease(loc: Locker): void {
-	msLockerUnlock(loc);
-}
-
-// Typed data access (caller must hold lock)
-export function lockerGet(loc: Locker): number {
-	return msLockerGetDouble(loc);
-}
-
-export function lockerSet(loc: Locker, val: number): void {
-	msLockerSetDouble(loc, val);
-}
-
-// Malebolgia-aligned: acquire lock, run callback, release (guaranteed via defer)
-export function withLock(loc: Locker, fn: () => void): void {
-	msLockerLock(loc);
-	defer msLockerUnlock(loc);
-	fn();
+// Read under the lock. What leaves the cell is a copy of the payload (or a value
+// derived from it), never a reference into shared mutable state.
+export function lockedRead<T, R>(cell: Locked<T>, fn: (value: T) => R): R {
+	msLockedAcquire(cell);
+	defer msLockedRelease(cell);
+	return fn(msLockedLoad(cell));
 }
