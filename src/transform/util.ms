@@ -379,7 +379,16 @@ export function makeArrayAccess(obj: Node, idx: Node, loc: SourceLocation): Node
 }
 
 export function makeSwitch(disc: Node, cases: Node[], loc: SourceLocation): Node {
-	return createNode(NodeKind.SwitchStmt, { switchDisc: disc, switchCases: cases }, syntheticToken(loc));
+	return createNode(NodeKind.SwitchStmt, { switchDisc: disc, switchCases: cases, switchLowered: true }, syntheticToken(loc));
+}
+
+export function makeSwitchWrapper(stmts: Node[], label: string, loc: SourceLocation): Node {
+	return createNode(NodeKind.DoWhileStmt, {
+		doBody: makeBlock(stmts, loc),
+		doCondition: makeBool(false, loc),
+		dwLabel: label,
+		dwSwitchWrapper: true,
+	}, syntheticToken(loc));
 }
 
 export function makeSwitchCase(tests: Node[], stmts: Node[], isDefault: boolean, loc: SourceLocation): Node {

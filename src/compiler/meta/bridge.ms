@@ -1604,14 +1604,14 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.DoWhileStmt => {
 			const doBody = readNode(objHeap, arrHeap, h, "doBody", loc);
 			const doCondition = readNode(objHeap, arrHeap, h, "doCondition", loc);
-			return createNodeAt(NodeKind.DoWhileStmt, { doBody, doCondition }, loc);
+			return createNodeAt(NodeKind.DoWhileStmt, { doBody, doCondition, dwLabel: "", dwSwitchWrapper: false }, loc);
 		},
 		NodeKind.ForStmt => {
 			const forInit = readNode(objHeap, arrHeap, h, "forInit", loc);
 			const forCondition = readNode(objHeap, arrHeap, h, "forCondition", loc);
 			const forUpdate = readNode(objHeap, arrHeap, h, "forUpdate", loc);
 			const forBody = readNode(objHeap, arrHeap, h, "forBody", loc);
-			return createNodeAt(NodeKind.ForStmt, { forInit, forCondition, forUpdate, forBody }, loc);
+			return createNodeAt(NodeKind.ForStmt, { forInit, forCondition, forUpdate, forBody, forLabel: "" }, loc);
 		},
 		NodeKind.ForOfStmt => {
 			const forOfBinding = readStr(objHeap, h, "forOfBinding");
@@ -1620,7 +1620,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const forOfBody = readNode(objHeap, arrHeap, h, "forOfBody", loc);
 			return createNodeAt(NodeKind.ForOfStmt, {
 				forOfBinding, forOfIsConst, forOfIterable, forOfBody,
-				forOfPattern: null as unknown as Node, bindingLocation: loc,
+				forOfPattern: null as unknown as Node, bindingLocation: loc, forOfLabel: "",
 			}, loc);
 		},
 		NodeKind.ForInStmt => {
@@ -1628,7 +1628,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const forInIsConst = readBool(objHeap, h, "forInIsConst");
 			const forInObject = readNode(objHeap, arrHeap, h, "forInObject", loc);
 			const forInBody = readNode(objHeap, arrHeap, h, "forInBody", loc);
-			return createNodeAt(NodeKind.ForInStmt, { forInBinding, forInIsConst, forInObject, forInBody }, loc);
+			return createNodeAt(NodeKind.ForInStmt, { forInBinding, forInIsConst, forInObject, forInBody, forInLabel: "" }, loc);
 		},
 		NodeKind.BreakStmt => {
 			return createNodeAt(NodeKind.BreakStmt, { breakLabel: readStr(objHeap, h, "breakLabel") }, loc);
@@ -1642,7 +1642,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.SwitchStmt => {
 			const switchDisc = readNode(objHeap, arrHeap, h, "switchDisc", loc);
 			const switchCases = readNodes(objHeap, arrHeap, h, "switchCases", loc);
-			return createNodeAt(NodeKind.SwitchStmt, { switchDisc, switchCases }, loc);
+			return createNodeAt(NodeKind.SwitchStmt, { switchDisc, switchCases, switchLowered: false }, loc);
 		},
 		NodeKind.SwitchCase => {
 			const caseTests = readNodes(objHeap, arrHeap, h, "caseTests", loc);

@@ -352,17 +352,17 @@ export type NodeData =
 	| { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation }  // VariableDecl
 	| { condition: Node, consequent: Node, alternate: Node }       // IfStmt
 	| { whileCondition: Node, whileBody: Node, whileLabel: string } // WhileStmt
-	| { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node } // ForStmt
-	| { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node, bindingLocation: SourceLocation } // ForOfStmt
-	| { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node } // ForInStmt
+	| { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node, forLabel: string } // ForStmt
+	| { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node, bindingLocation: SourceLocation, forOfLabel: string } // ForOfStmt
+	| { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node, forInLabel: string } // ForInStmt
 	| { statements: Node[] }                                       // BlockStmt
 	| { expr: Node }                                               // ExprStmt
 	| { argument: Node | null }                                    // ReturnStmt
 	| { breakLabel: string }                                       // BreakStmt
 	| { continueLabel: string }                                    // ContinueStmt
 	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // FunctionDecl
-	| { doBody: Node, doCondition: Node }                          // DoWhileStmt
-	| { switchDisc: Node, switchCases: Node[] }                    // SwitchStmt
+	| { doBody: Node, doCondition: Node, dwLabel: string, dwSwitchWrapper: boolean } // DoWhileStmt
+	| { switchDisc: Node, switchCases: Node[], switchLowered: boolean } // SwitchStmt
 	| { caseTests: Node[], caseStmts: Node[], isDefault: boolean } // SwitchCase
 	| { unreachableMsg: string }                                   // UnreachableStmt
 	| { matchStmtDisc: Node, matchStmtCases: Node[] }              // MatchStmt
@@ -575,17 +575,17 @@ export type DestructuringDeclData = { destrPattern: Node, destrInit: Node, destr
 export type VariableDeclData = { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation };
 export type IfStmtData = { condition: Node, consequent: Node, alternate: Node };
 export type WhileStmtData = { whileCondition: Node, whileBody: Node, whileLabel: string };
-export type ForStmtData = { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node };
-export type ForOfStmtData = { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node, bindingLocation: SourceLocation };
-export type ForInStmtData = { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node };
+export type ForStmtData = { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node, forLabel: string };
+export type ForOfStmtData = { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node, bindingLocation: SourceLocation, forOfLabel: string };
+export type ForInStmtData = { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node, forInLabel: string };
 export type BlockStmtData = { statements: Node[] };
 export type ExprStmtData = { expr: Node };
 export type ReturnStmtData = { argument: Node | null };
 export type BreakStmtData = { breakLabel: string };
 export type ContinueStmtData = { continueLabel: string };
 export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: Node[], nativeName: string, nameLocation: SourceLocation };
-export type DoWhileStmtData = { doBody: Node, doCondition: Node };
-export type SwitchStmtData = { switchDisc: Node, switchCases: Node[] };
+export type DoWhileStmtData = { doBody: Node, doCondition: Node, dwLabel: string, dwSwitchWrapper: boolean };
+export type SwitchStmtData = { switchDisc: Node, switchCases: Node[], switchLowered: boolean };
 export type SwitchCaseData = { caseTests: Node[], caseStmts: Node[], isDefault: boolean };
 export type UnreachableStmtData = { unreachableMsg: string };
 export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };

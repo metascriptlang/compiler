@@ -2358,6 +2358,7 @@ test "hasUserMacroInvocation detects macro in ForStmt body" {
 		forCondition: null as unknown as Node,
 		forUpdate: null as unknown as Node,
 		forBody: body,
+		forLabel: "",
 	}, synthToken(loc));
 	assert hasUserMacroInvocation(forNode, ctx);
 }
@@ -2488,7 +2489,7 @@ test "preprocessNode rewrites NodeKind.X inside ForOfStmt body" {
 	const forOf = createNodeAt(NodeKind.ForOfStmt, {
 		forOfBinding: "f", forOfIsConst: true,
 		forOfIterable: fields, forOfBody: body,
-		forOfPattern: null as unknown as Node, bindingLocation: loc,
+		forOfPattern: null as unknown as Node, bindingLocation: loc, forOfLabel: "",
 	}, loc);
 
 	preprocessMacroBody(forOf);

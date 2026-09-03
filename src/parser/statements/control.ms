@@ -133,6 +133,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfBody: try parseBodyOrStmt(state),
 					forOfPattern: pattern,
 					bindingLocation: makeLoc(forToken.line, forToken.column),
+					forOfLabel: "",
 				}, forToken));
 			}
 			if (!isAtEnd(state) && current(state).kind === TokenKind.In) {
@@ -147,6 +148,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forInIsConst: forIsConst,
 					forInObject: obj,
 					forInBody: try parseBodyOrStmt(state),
+					forInLabel: "",
 				}, forToken));
 			}
 			return Result.err(`Expected 'of' or 'in' after destructuring pattern at line ${current(state).line}`);
@@ -173,6 +175,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfBody: try parseBodyOrStmt(state),
 					forOfPattern: null as unknown as Node,
 					bindingLocation: makeLoc(nameToken.line, nameToken.column),
+					forOfLabel: "",
 				}, forToken));
 			}
 			if (afterName < state.tokens.length && state.tokens[afterName].kind === TokenKind.In) {
@@ -190,6 +193,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forInIsConst: forIsConst,
 					forInObject: obj,
 					forInBody: try parseBodyOrStmt(state),
+					forInLabel: "",
 				}, forToken));
 			}
 		}
@@ -238,6 +242,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 			forCondition: cond,
 			forUpdate: update,
 			forBody: try parseBodyOrStmt(state),
+			forLabel: "",
 		}, forToken));
 	}
 
@@ -266,6 +271,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 		forCondition: exprCond,
 		forUpdate: exprUpdate,
 		forBody: try parseBodyOrStmt(state),
+		forLabel: "",
 	}, forToken));
 }
 
@@ -333,6 +339,8 @@ export function parseDoWhileStmt(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.DoWhileStmt, {
 		doBody: body,
 		doCondition: condition,
+		dwLabel: "",
+		dwSwitchWrapper: false,
 	}, doToken));
 }
 
@@ -372,6 +380,7 @@ export function parseSwitchStmt(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.SwitchStmt, {
 		switchDisc: disc,
 		switchCases: cases,
+		switchLowered: false,
 	}, switchToken));
 }
 
