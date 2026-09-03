@@ -51,7 +51,11 @@ import {
 } from "../../raiser/marshal";
 import { isNodeWireMetaField } from "./wire";
 
-import { exists, isFile, isDir, fileSize, readFile, writeFile, mkdir, rmdir, remove, rename, readDir } from "std/fs";
+import {
+	exists, isFile, isDir, isExecutable, fileSize,
+	readFile, writeFile, appendFile, chmod,
+	mkdir, rmdir, remove, rename, readDir,
+} from "std/fs";
 import { cwd, platform, env, exec } from "std/process";
 import { IoErrorKind } from "std/io/errors";
 import { ProcessErrorKind } from "std/process/errors";
@@ -72,15 +76,18 @@ function _setFsErrno(ioErrKind: IoErrorKind): void {
 	_lastFsErrno = (ioErrKind as number) + 1;
 }
 
-// Helper: convert Result<void, IoError> into the errno+rv contract used by
-// the C runtime's mutating fs functions (returns 0 on success, non-zero on
-// failure, with errno populated). Shared by mkdir/rmdir/remove/rename/etc.
+// Helper: convert Result<void, IoError> into the rv+errno contract used by the
+// C runtime's mutating fs functions. The C ABI is **1 = ok, 0 = failure** with
+// errno populated (runtime/fs/posix.c, runtime/fs/windows.c: every mutating
+// entry returns 1.0 on success), and the MS wrappers test for exactly that
+// (`if (msFsMkdir(path) === 1)`, std/fs/index.cms). Shared by
+// mkdir/rmdir/remove/rename/chmod/writeFileMode.
 // `errKind` is only consulted when `ok` is false — pass IoErrorKind.NotFound
 // as a placeholder on the success path.
 function _fsResultToInt(ok: boolean, errKind: IoErrorKind): RaiserValue {
-	if (ok) { _lastFsErrno = 0; return boxInt(0); }
+	if (ok) { _lastFsErrno = 0; return boxInt(1); }
 	_setFsErrno(errKind);
-	return boxInt(1);
+	return boxInt(0);
 }
 
 // --- File system bridges ---
@@ -97,8 +104,17 @@ function _bridgeMsFsIsDir(args: RaiserValue[]): RaiserValue {
 	return boxInt(isDir(unboxString(args[0])) ? 1 : 0);
 }
 
+function _bridgeMsFsIsExecutable(args: RaiserValue[]): RaiserValue {
+	return boxInt(isExecutable(unboxString(args[0])) ? 1 : 0);
+}
+
 function _bridgeMsFsFileSize(args: RaiserValue[]): RaiserValue {
 	return boxInt(fileSize(unboxString(args[0])));
+}
+
+function _bridgeMsFsChmod(args: RaiserValue[]): RaiserValue {
+	const r = chmod(unboxString(args[0]), unboxInt(args[1]) as int32);
+	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
 
 function _bridgeMsFsReadFile(args: RaiserValue[]): RaiserValue {
@@ -116,8 +132,15 @@ function _bridgeMsFsLastErrno(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsFsWriteFileMode(args: RaiserValue[]): RaiserValue {
-	// args[2] = mode string ("w"/"a"); seed supports overwrite only.
-	const r = writeFile(unboxString(args[0]), unboxString(args[1]));
+	// args[2] = the fopen mode the C native would use ("wb" overwrite,
+	// "ab" append — std/fs writeFile/appendFile pass exactly those). Honor it:
+	// ignoring the mode made appendFile silently TRUNCATE inside the VM.
+	const path = unboxString(args[0]);
+	const content = unboxString(args[1]);
+	const mode = args.length > 2 ? unboxString(args[2]) : "wb";
+	const r = mode.startsWith("a")
+		? appendFile(path, content)
+		: writeFile(path, content);
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
 
@@ -424,11 +447,13 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsExists",         _bridgeMsFsExists);
 	registerHostFn("msFsIsFile",         _bridgeMsFsIsFile);
 	registerHostFn("msFsIsDir",          _bridgeMsFsIsDir);
+	registerHostFn("msFsIsExecutable",   _bridgeMsFsIsExecutable);
 	registerHostFn("msFsFileSize",       _bridgeMsFsFileSize);
 	// fs read/write/mutate + errno polling
 	registerHostFn("msFsReadFile",       _bridgeMsFsReadFile);
 	registerHostFn("msFsLastErrno",      _bridgeMsFsLastErrno);
 	registerHostFn("msFsWriteFileMode",  _bridgeMsFsWriteFileMode);
+	registerHostFn("msFsChmod",          _bridgeMsFsChmod);
 	registerHostFn("msFsMkdir",          _bridgeMsFsMkdir);
 	registerHostFn("msFsRmdir",          _bridgeMsFsRmdir);
 	registerHostFn("msFsRemove",         _bridgeMsFsRemove);
