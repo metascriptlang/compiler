@@ -1499,6 +1499,29 @@ export function cstringType(): Type { return getSysType(TypeKind.CString); }
 export function int32Type(): Type { return getSysType(TypeKind.Int32); }
 export function float64Type(): Type { return getSysType(TypeKind.Float64); }
 
+// Destructuring binding types — the single derivation, read by BOTH the checker
+// (defineForOfPatternBindings) and the transform (destructuringLower). Nim needs
+// no equivalent: makeVarTupleSection re-sems the generated accesses (semstmts.nim:757).
+export function destrPositionalElemType(srcType: Type | null, i: int32): Type | null {
+	let bt = srcType;
+	if (bt === null) return null;
+	if ((bt.kind === TypeKind.Ref || bt.kind === TypeKind.Var) && bt.typeReturn !== null) bt = bt.typeReturn;
+	if (bt.kind === TypeKind.Tuple && bt.typeChildren !== null && i < bt.typeChildren.length) return bt.typeChildren[i];
+	if ((bt.kind === TypeKind.Array || bt.kind === TypeKind.SizedArray) && bt.typeReturn !== null) return bt.typeReturn;
+	return null;
+}
+
+export function destrNamedFieldType(srcType: Type | null, fieldName: string): Type | null {
+	let bt = srcType;
+	if (bt === null) return null;
+	if ((bt.kind === TypeKind.Ref || bt.kind === TypeKind.Var) && bt.typeReturn !== null) bt = bt.typeReturn;
+	if (bt.kind !== TypeKind.Struct) return null;
+	for (let fi = 0; fi < bt.typeNames.length; fi += 1) {
+		if (bt.typeNames[fi] === fieldName && fi < bt.typeChildren.length) return bt.typeChildren[fi];
+	}
+	return null;
+}
+
 // StringLiteral: a specific string value as a type (TypeScript parity).
 // Not a singleton — each unique value creates a new instance.
 export function createStringLiteral(value: string): Type {

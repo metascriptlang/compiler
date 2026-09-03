@@ -4,7 +4,7 @@
 import { CallingConvention, Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { inferredType, noneType, isUnresolvedType, charType, float64Type, voidType, nullType, createFunction, createClosureType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues } from "./types";
+import { inferredType, noneType, isUnresolvedType, charType, float64Type, voidType, nullType, createFunction, createClosureType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords } from "./context";
@@ -1329,17 +1329,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			if (elem.kind === NodeKind.Identifier) {
 				const id = elem.data as IdentifierData;
 				if (id.name !== "_") {
-					let elemType = inferredType();
-					if (iterType !== null && iterType.kind === TypeKind.Tuple && iterType.typeChildren !== null && i < iterType.typeChildren.length) {
-						elemType = iterType.typeChildren[i];
-					} else if (iterType !== null && (iterType.kind === TypeKind.Array || iterType.kind === TypeKind.SizedArray) && iterType.typeReturn !== null) {
-						// Array of tuples: element type from tuple children
-						const tupleType = iterType.typeReturn;
-						if (tupleType !== null && tupleType.kind === TypeKind.Tuple && tupleType.typeChildren !== null && i < tupleType.typeChildren.length) {
-							elemType = tupleType.typeChildren[i];
-						}
-					}
-					defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, elemType, !isConst));
+					const derived = destrPositionalElemType(iterType, i);
+					if (derived !== null) elem.nodeType = derived;
+					defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, derived !== null ? derived : inferredType(), !isConst));
 					markInitialized(ctx.initTracker, id.name);
 				}
 			}
@@ -1352,7 +1344,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			const p = prop.data as ObjectPatternPropData;
 			if (p.propAlias.kind === NodeKind.Identifier) {
 				const id = p.propAlias.data as IdentifierData;
-				defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, inferredType(), !isConst));
+				const derived = destrNamedFieldType(iterType, p.propKey);
+				if (derived !== null) p.propAlias.nodeType = derived;
+				defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, derived !== null ? derived : inferredType(), !isConst));
 				markInitialized(ctx.initTracker, id.name);
 			}
 		}

@@ -5,7 +5,7 @@ import {
 	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, IdentifierData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { noneType } from "../../checker/types";
+import { noneType, destrPositionalElemType, destrNamedFieldType } from "../../checker/types";
 import { walkExpandBlocks } from "../walker";
 import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -17,17 +17,12 @@ export function lowerDestructuring(program: Node, ctx: TransformContext): Node {
 	return program;
 }
 
-// Element type at index `i` of a destructured base (tuple → per-index, array → element) —
-// mirrors the checker's own derivation (defineForOfPatternBindings). Carried onto the
-// synthetic index access so a later capture (lambda lifting) types the env field concretely;
-// without it a destructured closure element defaults to `double`/void* in the captured env.
+// Carried onto the synthetic index access so a later capture (lambda lifting)
+// types the env field concretely; without it a destructured closure element
+// defaults to `double`/void* in the captured env.
 function destrElemType(base: Node, i: number): Type {
-	let bt = base.nodeType;
-	if (bt === null) return null as unknown as Type;
-	if (bt.kind === TypeKind.Ref && bt.typeReturn !== null) bt = bt.typeReturn;
-	if (bt.kind === TypeKind.Tuple && i < bt.typeChildren.length) return bt.typeChildren[i];
-	if (bt.kind === TypeKind.Array && bt.typeReturn !== null) return bt.typeReturn;
-	return null as unknown as Type;
+	const t = destrPositionalElemType(base.nodeType, i as int32);
+	return t !== null ? t : (null as unknown as Type);
 }
 
 // Expand array pattern [a, b, ...rest] → indexed access
@@ -79,6 +74,8 @@ function expandObjectRet(
 		if (p.propAlias.kind === NodeKind.Identifier) {
 			const id = p.propAlias.data as IdentifierData;
 			const memberAccess = makeMember(base, p.propKey, loc);
+			const fieldType = destrNamedFieldType(base.nodeType, p.propKey);
+			if (fieldType !== null) memberAccess.nodeType = fieldType;
 			items.push(makeVarDecl(id.name, memberAccess, declKind, loc));
 		}
 	}
