@@ -10,7 +10,7 @@
 
 // Default global imports. Returns array (module-level const string[] hits DRC bug).
 export function defaultGlobalImports(): string[] {
-	return ["std/core/system", "std/core/array", "std/core/string", "std/core/bigint", "std/core/json", "std/core/buffer", "std/core/promise", "std/core/struct", "std/core/fetch", "std/core/date", "std/core/performance", "std/core/websocket", "std/core/math", "std/core/number", "std/core/boolean"];
+	return ["std/core/system", "std/core/array", "std/core/string", "std/core/bigint", "std/core/json", "std/core/buffer", "std/core/promise", "std/core/struct", "std/core/fetch", "std/core/date", "std/core/performance", "std/core/websocket", "std/core/math", "std/core/number", "std/core/boolean", "std/core/object"];
 }
 
 let _extraGlobalImports: string[] = [];
@@ -62,9 +62,9 @@ test "isGlobalImport sees extras" {
 	assert !isGlobalImport("/abs/neon/converters");
 }
 
-test "globalImports has system, string, array, bigint, json, buffer, promise, struct, fetch, date, performance, websocket, math, number, boolean" {
+test "globalImports has system, string, array, bigint, json, buffer, promise, struct, fetch, date, performance, websocket, math, number, boolean, object" {
 	const imports = defaultGlobalImports();
-	assert imports.length === 15;
+	assert imports.length === 16;
 	assert imports[0] === "std/core/system";
 	assert imports[1] === "std/core/array";
 	assert imports[2] === "std/core/string";
@@ -80,6 +80,7 @@ test "globalImports has system, string, array, bigint, json, buffer, promise, st
 	assert imports[12] === "std/core/math";
 	assert imports[13] === "std/core/number";
 	assert imports[14] === "std/core/boolean";
+	assert imports[15] === "std/core/object";
 }
 
 test "isGlobalImport matches" {
