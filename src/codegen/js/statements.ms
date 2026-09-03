@@ -180,6 +180,10 @@ export function emitWhileStmt(gen: JSGenerator, node: Node): void {
 export function emitDoWhileStmt(gen: JSGenerator, node: Node): void {
 	const d = node.data as DoWhileStmtData;
 	emitIndent(gen);
+	if (d.dwLabel !== "") {
+		emit(gen, d.dwLabel);
+		emit(gen, ": ");
+	}
 	emit(gen, "do ");
 	emitBlockOrStmt(gen, d.doBody);
 	emit(gen, " while (");
@@ -339,6 +343,10 @@ export function emitTryCatchStmt(gen: JSGenerator, node: Node): void {
 export function emitForStmt(gen: JSGenerator, node: Node): void {
 	const d = node.data as ForStmtData;
 	emitIndent(gen);
+	if (d.forLabel !== "") {
+		emit(gen, d.forLabel);
+		emit(gen, ": ");
+	}
 	emit(gen, "for (");
 	if (d.forInit !== null && d.forInit.kind === NodeKind.VariableDecl) {
 		emitVariableDeclCore(gen, d.forInit);
@@ -362,6 +370,10 @@ export function emitForStmt(gen: JSGenerator, node: Node): void {
 export function emitForOfStmt(gen: JSGenerator, node: Node): void {
 	const d = node.data as ForOfStmtData;
 	emitIndent(gen);
+	if (d.forOfLabel !== "") {
+		emit(gen, d.forOfLabel);
+		emit(gen, ": ");
+	}
 	if (d.forOfIsConst) {
 		emit(gen, "for (const ");
 	} else {

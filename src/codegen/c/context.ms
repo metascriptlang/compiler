@@ -137,6 +137,8 @@ export class CBlock {
 	stmts: Builder;        // cpsStmts for this block
 	isLoop: boolean;
 	nestedFinallyDepth: number;  // snapshot of nestedFinally.length at block entry (reference: TBlock.nestedTryStmts)
+	breakUsed: boolean;    // a labeled break targeted this block — emit the `<label>_x_:` landing after it
+	continueUsed: boolean; // a labeled continue targeted this block — emit the `<label>:` landing inside it
 }
 
 export function createBlock(id: number, isLoop: boolean): CBlock {
@@ -148,6 +150,8 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 		stmts: createBuilder(),
 		isLoop,
 		nestedFinallyDepth: 0,
+		breakUsed: false,
+		continueUsed: false,
 	};
 }
 
