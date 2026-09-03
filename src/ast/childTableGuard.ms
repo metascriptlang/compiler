@@ -4,15 +4,16 @@ const NODE_SRC = "std/meta/node.ms";
 
 const TABLE_NAMES: string[] = ["visitor", "walker", "clone", "hash", "printer", "bridge"];
 
-// The per-kind tables. "clone" points at fieldspec.ms since the clone's
-// payload walk moved there (rebuildNodeData + nodeFields mention every
-// Node-typed field); clone.ms itself only carries the xform + meta copy.
+// The per-kind tables. "clone" and "printer" point at fieldspec.ms since
+// both moved there (rebuildNodeData + nodeFields mention every Node-typed
+// field); clone.ms itself only carries the xform + meta copy, and printer.ms
+// is a generic sink-driven dump.
 const TABLE_PATHS: string[] = [
 	"src/ast/visitor.ms",
 	"src/transform/walker.ms",
 	"src/ast/fieldspec.ms",
 	"src/compiler/transam/hash.ms",
-	"src/ast/printer.ms",
+	"src/ast/fieldspec.ms",
 	"src/compiler/meta/bridge.ms",
 ];
 
@@ -22,9 +23,6 @@ const KNOWN_GAPS: string[] = [
 	"walker:arrowDefaults", "walker:caseGuard", "walker:ctorDefaults",
 	"walker:decorators", "walker:fnDefaults", "walker:methodDefaults",
 	"hash:arrowDefaults", "hash:ctorDefaults", "hash:typExprFieldDecorators",
-	"printer:arrowDefaults", "printer:assertMessageExpr", "printer:caseGuard",
-	"printer:ctorDefaults", "printer:fnDefaults", "printer:methodDefaults",
-	"printer:propInitializer",
 	"bridge:arrowDefaults", "bridge:ctorDefaults",
 	"bridge:fnDefaults", "bridge:forOfPattern", "bridge:methodDefaults",
 	"bridge:propInitializer",
