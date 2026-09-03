@@ -21,9 +21,9 @@ import { makeSymbol } from "../../checker/symbol";
 import {
 	syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
-	isValueLayoutType, makeHiddenAddr,
+	isValueLayoutType, makeHiddenAddr, makeTryFinally,
 } from "../util";
-import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType, instantiateGenericBody, typeDisplayName } from "../../checker/types";
+import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 
 // msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
@@ -169,6 +169,11 @@ function packArgsIntoMsg(stmts: Node[], msgSym: Symbol, params: string[], paramT
 		} else {
 			valueArg = makeIdent(params[ai], loc);
 			setter = msgSetterName(mk);
+			// SHARE boundary rc (PARALOCK Amendment I): Arc<T> args pack with an
+			// atomic incref; the _impl handler releases in its finally.
+			if (mk === "ptr" && paramTypes[ai] !== null && isAtomicRef(paramTypes[ai])) {
+				setter = "msMsgSetPtrShared";
+			}
 		}
 		stmts.push(makeExprStmt(makeCall(makeIdent(setter, loc), [
 			makeIdentResolved(msgSym, loc),
@@ -448,6 +453,27 @@ function emitActorStruct(node: Node, d: ActorDeclData, loc: SourceLocation): Nod
 
 // ===== Emit _impl handlers + proxy functions for each method =====
 
+// SHARE boundary rc (PARALOCK Amendment I): packArgsIntoMsg's msMsgSetPtrShared
+// took the message's atomic incref; the _impl returns it exactly once when the
+// method body finishes. try/finally (not a trailing statement) so early
+// returns AND async suspension (finally rides the async body's completion)
+// both release. Applies to message-dispatched methods only — lifecycle hooks
+// never cross the boundary.
+function wrapImplBodyWithShareRelease(body: Node, params: string[], paramTypes: Type[] | null, loc: SourceLocation): Node {
+	if (paramTypes === null) return body;
+	const releases: Node[] = [];
+	for (let ai = 1; ai < params.length; ai = ai + 1) {
+		const t = ai < paramTypes.length ? paramTypes[ai] : null;
+		if (t === null || t.kind !== TypeKind.Ref) continue;
+		if (!isAtomicRef(t)) continue;
+		const argIdent = makeIdent(params[ai], loc);
+		argIdent.nodeType = t;
+		releases.push(makeExprStmt(makeCall(makeIdent("msAtomicDecref", loc), [argIdent], loc), loc));
+	}
+	if (releases.length === 0) return body;
+	return makeTryFinally(body, makeBlock(releases, loc), loc);
+}
+
 function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext, loc: SourceLocation, result: Node[]): void {
 	let msgKind = 0;
 	for (const member of d.actorBody) {
@@ -499,7 +525,7 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 					fnName: implNativeName,
 					params: md.methodParams,
 					fnParamTypes: md.methodParamTypes,
-					fnBody: md.methodBody,
+					fnBody: wrapImplBodyWithShareRelease(md.methodBody, md.methodParams, m.nodeType !== null ? m.nodeType.typeChildren : null, loc),
 					fnFlags: md.methodFlags,
 					fnReturnType: md.methodReturnType,
 					fnDefaults: [],
@@ -1182,7 +1208,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 				fnName: implNativeName,
 				params: md.methodParams,
 				fnParamTypes: md.methodParamTypes,
-				fnBody: md.methodBody,
+				fnBody: wrapImplBodyWithShareRelease(md.methodBody, md.methodParams, m.nodeType !== null ? m.nodeType.typeChildren : null, actorNode.location),
 				fnFlags: "async",
 				fnReturnType: md.methodReturnType,
 				fnDefaults: [],

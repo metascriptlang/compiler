@@ -17,6 +17,20 @@
 #include <stdbool.h>
 #include <pthread.h>
 
+/* ===== SHARE boundary refcount (PARALOCK Amendment I) ===== */
+
+/* Arc<T> argument packing: the message takes an atomic incref so the shared
+ * cell stays alive while the message is in flight, independent of the
+ * sender's scope. The generated _impl handler returns the reference when the
+ * method body finishes (try/finally), so sync and suspending methods release
+ * exactly once. Plain references keep the raw msMsgSetPtr — the checker
+ * confines those to awaited-CALL borrows; fire-and-forget with a plain ref
+ * is a use-after-free and is rejected at the call site. */
+static inline void msMsgSetPtrShared(msMessage* m, int idx, void* val) {
+    msMsgSetPtr(m, idx, val);
+    msAtomicIncRef(val);
+}
+
 /* ===== Actor Dispatch Function ===== */
 
 /* Dispatch receives state + full message (void* → msMessage*).
