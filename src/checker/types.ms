@@ -1347,6 +1347,34 @@ export function lockedPayloadType(t: Type | null): Type {
 	return cell.typeChildren[2];
 }
 
+// Walking a Ref for substitution needs two things the three Ref classes answer
+// differently: which type underneath carries the parameters, and which
+// constructor rebuilds the wrapper afterwards. A Locked<T> handle points at the
+// generated cell, so its parameter-bearing part is the PAYLOAD, not the
+// pointee; and it must be tested before Arc, since its flag set includes
+// IsAtomic and the Arc branch would drop IsLocked and hand the result a raw
+// cell. Both rules live here so a caller cannot get one of them right and the
+// other wrong.
+export function refSubstInner(t: Type): Type | null {
+	return isLockedRef(t) ? lockedPayloadType(t) : t.typeReturn;
+}
+
+export function rebuildRefLike(t: Type, inner: Type | null): Type {
+	if (isLockedRef(t)) return createLocked(inner);
+	if (isAtomicRef(t)) return createArc(inner);
+	return createRef(inner);
+}
+
+// The annotation spelling that re-resolves to this Ref class, or "" for a plain
+// Ref (a class/interface annotation re-resolves to Ref<Struct> on its own, so
+// the wrapper is not written). Same classification as the two above — kept
+// beside them so the ordering rule has exactly one home.
+export function refWrapperName(t: Type): string {
+	if (isLockedRef(t)) return "Locked";
+	if (isAtomicRef(t)) return "Arc";
+	return "";
+}
+
 export function createPtr(inner: Type | null): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Ptr;
@@ -2186,14 +2214,7 @@ function substituteTypeInner(t: Type | null, paramName: string, concrete: Type):
 				}
 				return copy;
 			},
-			// Locked is checked BEFORE Arc: its flag set includes IsAtomic, and
-			// rebuilding it as a plain Arc would drop IsLocked and hand the
-			// substituted type a raw cell pointee.
-			TypeKind.Ref => isLockedRef(t)
-				? createLocked(substituteType(lockedPayloadType(t), paramName, concrete))
-				: (isAtomicRef(t)
-					? createArc(substituteType(t.typeReturn, paramName, concrete))
-					: createRef(substituteType(t.typeReturn, paramName, concrete))),
+			TypeKind.Ref => rebuildRefLike(t, substituteType(refSubstInner(t), paramName, concrete)),
 			TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Struct => substituteStruct(t, paramName, concrete),
@@ -2279,11 +2300,7 @@ export function substituteAllParams(t: Type | null, names: string[], concretes: 
 				}
 				return copy;
 			},
-			TypeKind.Ref => isLockedRef(t)
-				? createLocked(substituteAllParams(lockedPayloadType(t), names, concretes))
-				: (isAtomicRef(t)
-					? createArc(substituteAllParams(t.typeReturn, names, concretes))
-					: createRef(substituteAllParams(t.typeReturn, names, concretes))),
+			TypeKind.Ref => rebuildRefLike(t, substituteAllParams(refSubstInner(t), names, concretes)),
 			TypeKind.Ptr => createPtr(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Borrow => createBorrow(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Struct => substituteStructAll(t, names, concretes),
@@ -3484,4 +3501,26 @@ test "createMaybeType caches by name" {
 	const m1 = createMaybeType(inner);
 	const m2 = createMaybeType(inner);
 	assert m1 === m2;
+}
+
+// A Locked handle's flags include IsAtomic, so any Arc-first classification
+// rebuilds it as Arc<cell> — the payload stops being reachable and the write
+// block stops applying. These three pin the ordering at its one home.
+test "rebuildRefLike keeps a Locked handle Locked" {
+	const rebuilt = rebuildRefLike(createLocked(int32Type()), stringType());
+	assert isLockedRef(rebuilt);
+	assert lockedPayloadType(rebuilt).kind === TypeKind.String;
+}
+
+test "refSubstInner reads a Locked's payload, not its cell" {
+	const payload = refSubstInner(createLocked(int32Type()));
+	assert payload !== null && payload.kind === TypeKind.Int32;
+	const pointee = refSubstInner(createArc(stringType()));
+	assert pointee !== null && pointee.kind === TypeKind.String;
+}
+
+test "refWrapperName spells the annotation each Ref class re-resolves from" {
+	assert refWrapperName(createLocked(int32Type())) === "Locked";
+	assert refWrapperName(createArc(int32Type())) === "Arc";
+	assert refWrapperName(createRef(int32Type())) === "";
 }
