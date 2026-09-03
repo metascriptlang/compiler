@@ -19,8 +19,8 @@ import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym } from "./template";
-import { UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, createArray, createEnumLiteral, createFunction, createGenericInstance, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isMaybeType, isNumeric, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
-import { checkActorArgSendable, checkArcPointeeSendable, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
+import { UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
+import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
@@ -433,7 +433,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			let pointee = null as unknown as Type;
 			if (typeArgStr !== "") {
 				pointee = resolveAnnotation(typeArgStr.trim(), ctx, d.newCallee.location.line, ltCol + 1);
-			} else if (expected !== null && isAtomicRef(expected) && expected.typeReturn !== null) {
+			} else if (expected !== null && isAtomicRef(expected) && !isLockedRef(expected) && expected.typeReturn !== null) {
 				pointee = expected.typeReturn;
 			}
 		callCheckExpr(ctx, d.newArguments[0], pointee);
@@ -446,6 +446,28 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		const arcType = createArc(pointee);
 			node.nodeType = arcType;
 			return arcType;
+		}
+		// new Locked(value): the one shared-MUTABLE cell (PARALOCK I22). One
+		// allocation — atomic-rc header + inline ticket lock + typed payload —
+		// so the handle is an atomic Ref like Arc and rides every mechanism Arc
+		// already drives. nativeLower boxes it via msBoxLocked.
+		if (id.name === "Locked" && d.newArguments.length === 1) {
+			const ltCol = d.newCallee.location.column + id.name.length;
+			const typeArgStr = getExplicitTypeArg(d.newCallee.location.line, ltCol);
+			let payload = null as unknown as Type;
+			if (typeArgStr !== "") {
+				payload = resolveAnnotation(typeArgStr.trim(), ctx, d.newCallee.location.line, ltCol + 1);
+			} else if (expected !== null && isLockedRef(expected)) {
+				payload = lockedPayloadType(expected);
+			}
+			callCheckExpr(ctx, d.newArguments[0], payload);
+			if (payload === null) { payload = d.newArguments[0].nodeType; }
+			if (payload !== null && payload.kind !== TypeKind.Error) {
+				checkLockedPayloadSendable(ctx, payload, d.newCallee.location.line, d.newCallee.location.column);
+			}
+			const lockedType = createLocked(payload);
+			node.nodeType = lockedType;
+			return lockedType;
 		}
 		// Interface/value type: new HashMap() / new Array(32) with type from variable annotation
 		// Also handle Ref<Struct> and Ref<GenericInstance> (interface types are Ref-wrapped)

@@ -507,6 +507,7 @@ export function getGenericDecl(name: string): string {
 		"Promise" => "T",
 		"Iterator" => "T",
 		"Arc" => "T",
+		"Locked" => "T",
 		_ => "",
 	};
 }
