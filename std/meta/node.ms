@@ -73,6 +73,7 @@ export enum TypeFlag {
 	DuVariant = 4194304,         // bit 22 (high, same rule) — INLINE (nameless) union-variant payload struct; lifecycle owned by the DU machinery, analyzer defers (classify → no RC)
 	OpenClass = 8388608,         // bit 23 (high, same rule) — class is extended (non-final): canFormAcycle returns true unconditionally, the Nim tfFinal rule (types.nim:436-438). Stamped on the PARENT struct in resolveClass; a CBase-typed field may point at a subclass that closes a back-edge
 	BrandWiden = 16777216,       // bit 24 (high, same rule) — TS branded primitive (`Prim & { __brand }`): Distinct that widens implicitly to its base; erased to base after check (brandErase)
+	IsLocked = 33554432,         // bit 25 (high, same rule) — Locked<T> marker, always set together with IsAtomic: the handle IS an atomic Ref whose pointee is the generated `{ lockNext, lockServing, value }` cell (PARALOCK I22)
 }
 
 // ===== Attached Lifecycle Ops =====

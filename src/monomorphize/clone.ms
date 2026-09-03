@@ -7,7 +7,7 @@
 // (src/monomorphize/collect.ms) can use them without a circular import.
 
 import { Node, NodeFlag, makeLocRange, createNodeAt, SourceLocation, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
-import { isResult, getResultOkType, getResultErrType, isAtomicRef, emptyType } from "../checker/types";
+import { isResult, getResultOkType, getResultErrType, isAtomicRef, isLockedRef, lockedPayloadType, emptyType } from "../checker/types";
 import { FieldXform, rebuildNodeData, pkSamples, pkDumpNode } from "../ast/fieldspec";
 
 // ===== Clone Mode =====
@@ -223,9 +223,14 @@ export function monoConcreteTypeName(t: Type | null): string {
 		// resolveAnnotation understands (resolvePass createArc), and stripping
 		// it turned `T := Arc<P>` in `Promise<T>` into bare `Promise<P>`
 		// during generic-body re-check — the 406 spawn-twin mismatch.
-		TypeKind.Ref => isAtomicRef(t)
-			? `Arc<${monoConcreteTypeName(t.typeReturn)}>`
-			: monoConcreteTypeName(t.typeReturn),
+		// Locked<T> is checked first: it is an atomic Ref too, and spelling it
+		// "Arc<msLockedCell_…>" would re-resolve to a different (and unwritable)
+		// type. "Locked<T>" is what resolveAnnotation understands.
+		TypeKind.Ref => isLockedRef(t)
+			? `Locked<${monoConcreteTypeName(lockedPayloadType(t))}>`
+			: (isAtomicRef(t)
+				? `Arc<${monoConcreteTypeName(t.typeReturn)}>`
+				: monoConcreteTypeName(t.typeReturn)),
 		TypeKind.Ptr => `Ptr<${monoConcreteTypeName(t.typeReturn)}>`,
 		TypeKind.Array => `Array<${monoConcreteTypeName(t.typeReturn)}>`,
 		TypeKind.Struct | TypeKind.Enum => t.typeName,

@@ -2533,6 +2533,10 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	}
 	const hasParamTypes = calleeType !== null && calleeType.kind === TypeKind.Function && calleeType.typeChildren !== null;
 	let argsStr = "";
+	// Per-argument snippets, kept alongside the joined string for the intercepts
+	// below that need an argument in isolation (the joined form cannot be split
+	// back apart — an argument may itself contain a comma).
+	const argList: string[] = [];
 	let i = 1;
 	while (i < cc) {
 		if (i > 1) argsStr = argsStr + ", ";
@@ -2547,6 +2551,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 			}
 		}
 		argsStr = argsStr + arg;
+		argList.push(arg);
 		i += 1;
 	}
 	truncResults(ctx, cc);
@@ -2642,6 +2647,39 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		emitStmtsLine(p, `memcpy(${cellTmp.snippet}, &${valTmp.snippet}, sizeof(${cType}));`);
 		emitStmtsLine(p, `memset(&${valTmp.snippet}, 0, sizeof(${cType}));`);
 		ctx.results.push(cellTmp.snippet);
+		return;
+	}
+
+	// msBoxLocked(payload) → the Locked<T> cell: one msAllocArc allocation holding
+	// the inline ticket lock followed by the payload. The lock needs no init — the
+	// allocator zeroes the payload, and a zeroed ticket lock is the unlocked state.
+	// The store goes through the generated struct's own field, so the payload's
+	// offset is never hand-computed.
+	if (callee === "msBoxLocked" && node.nodeType !== null && node.nodeType.typeReturn !== null
+			&& argList.length === 1) {
+		const cellType = node.nodeType.typeReturn;
+		const cellCType = getTypeDesc(g, cellType);
+		const handleCType = getTypeDesc(g, node.nodeType);
+		const tiArg = ensureArcCellTypeInfo(g, cellType, cellCType);
+		const cellTmp = getTemp(p, handleCType);
+		emitStmtsLine(p, `${cellTmp.snippet} = (${handleCType})msAllocArc(sizeof(${cellCType}), ${tiArg});`);
+		emitStmtsLine(p, `${cellTmp.snippet}->value = ${argList[0]};`);
+		ctx.results.push(cellTmp.snippet);
+		return;
+	}
+
+	// Locked<T> payload access. The handle is a pointer to the generated cell
+	// struct `{ lock; value }`, so both ops are a field access on it — the field
+	// offset comes from the generated struct, never from a hand-computed one.
+	// They exist as intercepts because the surface cannot spell them: a bare
+	// `l.value` read escapes the critical section and a write through an atomic
+	// handle is rejected by the checker (PARALOCK Amendment I).
+	if (callee === "msLockedLoad" && argList.length === 1) {
+		ctx.results.push(`(${argList[0]})->value`);
+		return;
+	}
+	if (callee === "msLockedStore" && argList.length === 2) {
+		ctx.results.push(`((${argList[0]})->value = (${argList[1]}))`);
 		return;
 	}
 

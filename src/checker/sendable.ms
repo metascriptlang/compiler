@@ -96,6 +96,47 @@ export function checkArcPointeeSendable(ctx: CheckerContext, pointee: Type, line
 		line, column);
 }
 
+// Locked<T> payload rule (PARALOCK I22). The payload lives INSIDE the cell and
+// is written by a raw store under the lock, so it must own nothing: a store
+// over an owning payload would have to destroy the previous value and take the
+// incoming one, and the egress copy out of `read`/`update` would alias it.
+// Deep-POD only — primitives and structs/tuples of primitives, recursively.
+// A GenericParam is unknowable here; the concrete instantiation is re-checked
+// after monomorphization.
+export function isLockedPayloadSendable(t: Type | null): boolean {
+	if (t === null) return true;
+	if (isPrimitiveKind(t.kind)) return true;
+	return match (t.kind) {
+		TypeKind.GenericParam => true,
+		TypeKind.Struct when (isStructType(t)) => {
+			for (const ft of t.typeChildren) {
+				if (!isLockedPayloadSendable(ft)) return false;
+			}
+			return true;
+		},
+		TypeKind.Tuple => {
+			for (const et of t.typeChildren) {
+				if (!isLockedPayloadSendable(et)) return false;
+			}
+			return true;
+		},
+		TypeKind.GenericInstance => {
+			if (t.typeReturn !== null && !isLockedPayloadSendable(t.typeReturn)) return false;
+			for (const ta of t.typeChildren) {
+				if (!isLockedPayloadSendable(ta)) return false;
+			}
+			return true;
+		},
+		_ => false,
+	};
+}
+
+export function checkLockedPayloadSendable(ctx: CheckerContext, payload: Type, line: number, column: number): void {
+	if (isLockedPayloadSendable(payload)) return;
+	addError(ctx, `Locked<T> payload must be plain data — '${typeDisplayName(payload)}' owns memory (string, array or reference)\nthe cell's payload is stored under the lock by value; an owning payload has no destroy-on-store (PARALOCK I22)`,
+		line, column);
+}
+
 // Call-site check: combines type analysis with expression-level rules (move, const binding).
 // sendClass: true when the sender cannot park on a reply (void method or discarded
 // result) — a plain const ref is a BORROW and needs the park, so it is rejected.

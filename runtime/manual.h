@@ -24,7 +24,7 @@
 #define MS_THREAD_H
 #define MS_COMBINATOR_H
 #define MS_ABORT_H
-#define MS_LOCKER_H
+#define MS_LOCKED_H
 #define MS_POOL_H
 
 #include <stdint.h>
@@ -417,18 +417,11 @@ static inline void* msBoxStruct(const void* val, size_t size) {
     return p;
 }
 
-/* ===== Locker stubs (no threading; layout shared via lockerLayout.h) ===== */
-#include "runtime/promise/lockerLayout.h"
-static inline void* msLockerCreate(int dataSize)             { return msAlloc(sizeof(msLocker) + (size_t)dataSize); }
-static inline void* msLockerCreateFrom(const void* s, int n) { msLocker* c = (msLocker*)msAlloc(sizeof(msLocker) + (size_t)n); memcpy(c->data, s, (size_t)n); return c; }
-static inline void* msLockerData(void* p)                    { return ((msLocker*)p)->data; }
-static inline void  msLockerLock(void* p)                    { (void)p; }
-static inline void  msLockerUnlock(void* p)                  { (void)p; }
-static inline double msLockerGetDouble(void* p)              { return *(double*)((msLocker*)p)->data; }
-static inline void  msLockerSetDouble(void* p, double v)     { *(double*)((msLocker*)p)->data = v; }
-static inline int32_t msLockerGetInt32(void* p)             { return *(int32_t*)((msLocker*)p)->data; }
-static inline void  msLockerSetInt32(void* p, int32_t v)    { *(int32_t*)((msLocker*)p)->data = v; }
-static inline void  msLockerDestroy(void* p)                 { (void)p; }
+/* ===== Locked<T> stubs (--gc=manual has no threading: the lock is a no-op) =====
+ * The cell itself is an ordinary allocation whose payload the backend reaches
+ * through the generated struct's field, so only the lock ops need stubbing. */
+static inline void  msLockedAcquire(void* cell)              { (void)cell; }
+static inline void  msLockedRelease(void* cell)              { (void)cell; }
 
 /* ===== ORC stubs ===== */
 static inline void msOrcCollect(void) {}

@@ -127,7 +127,7 @@ runtime/
 ├── manual.h           -- Manual allocator (arena + no-op RC, --gc=manual)
 ├── types.h            -- msRefHeader, msTypeInfo
 ├── core/              -- core types: system.h/c, string.h/c, array.h/c, buffer.h/c, test.h, abort.h
-├── promise/           -- async: future.h, dispatch.h/c, thread.h, locker.h, selector*.c
+├── promise/           -- async: future.h, dispatch.h/c, thread.h, locked.h, selector*.c
 ├── crypto/            -- hashing + ciphers/ + curves/ + kdf/ + tls/ + rsa/
 ├── io/                -- I/O engines: streams.h, engine.h, engine*.c
 ├── net/               -- networking: socket.h, async.h

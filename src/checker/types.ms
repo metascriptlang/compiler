@@ -1308,6 +1308,45 @@ export function isAtomicRef(t: Type | null): boolean {
 	return t !== null && t.kind === TypeKind.Ref && (t.typeFlags & TypeFlag.IsAtomic) !== 0;
 }
 
+// Locked<T> (PARALOCK I22) — the one sanctioned shared-mutable cell. ONE
+// allocation: atomic-rc header + inline ticket lock + typed payload, so the
+// handle IS an atomic Ref and every mechanism Arc already drives (atomic
+// incref/decref in classify, the boundary incref at the msgSetter, the
+// write-block) applies unchanged. The pointee is a generated struct whose two
+// leading int32 fields ARE the ticket lock: they sit at offset 0, so the
+// runtime's acquire/release cast the handle straight to msTicketLock* and need
+// no knowledge of T. The payload is reached only through the load/store
+// intercepts, which read the field offset off this same struct.
+export function lockedCellName(payload: Type | null): string {
+	return "msLockedCell_" + _stdHashToBase36(payload !== null ? typeKey(payload) : "void");
+}
+
+export function createLockedCell(payload: Type | null): Type {
+	return createStruct(lockedCellName(payload),
+		["lockNext", "lockServing", "value"],
+		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), payload], true);
+}
+
+export function createLocked(payload: Type | null): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Ref;
+	t.typeReturn = createLockedCell(payload);
+	t.typeFlags = (TypeFlag.HasAsgn | TypeFlag.IsAtomic | TypeFlag.IsLocked) as int32;
+	return t;
+}
+
+export function isLockedRef(t: Type | null): boolean {
+	return t !== null && t.kind === TypeKind.Ref && (t.typeFlags & TypeFlag.IsLocked) !== 0;
+}
+
+// The T of a Locked<T> — the cell's third field. Null for anything else.
+export function lockedPayloadType(t: Type | null): Type {
+	if (!isLockedRef(t) || t.typeReturn === null) return null as unknown as Type;
+	const cell = t.typeReturn;
+	if (cell.typeChildren === null || cell.typeChildren.length < 3) return null as unknown as Type;
+	return cell.typeChildren[2];
+}
+
 export function createPtr(inner: Type | null): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Ptr;
@@ -2147,9 +2186,14 @@ function substituteTypeInner(t: Type | null, paramName: string, concrete: Type):
 				}
 				return copy;
 			},
-			TypeKind.Ref => isAtomicRef(t)
-				? createArc(substituteType(t.typeReturn, paramName, concrete))
-				: createRef(substituteType(t.typeReturn, paramName, concrete)),
+			// Locked is checked BEFORE Arc: its flag set includes IsAtomic, and
+			// rebuilding it as a plain Arc would drop IsLocked and hand the
+			// substituted type a raw cell pointee.
+			TypeKind.Ref => isLockedRef(t)
+				? createLocked(substituteType(lockedPayloadType(t), paramName, concrete))
+				: (isAtomicRef(t)
+					? createArc(substituteType(t.typeReturn, paramName, concrete))
+					: createRef(substituteType(t.typeReturn, paramName, concrete))),
 			TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Struct => substituteStruct(t, paramName, concrete),
@@ -2235,9 +2279,11 @@ export function substituteAllParams(t: Type | null, names: string[], concretes: 
 				}
 				return copy;
 			},
-			TypeKind.Ref => isAtomicRef(t)
-				? createArc(substituteAllParams(t.typeReturn, names, concretes))
-				: createRef(substituteAllParams(t.typeReturn, names, concretes)),
+			TypeKind.Ref => isLockedRef(t)
+				? createLocked(substituteAllParams(lockedPayloadType(t), names, concretes))
+				: (isAtomicRef(t)
+					? createArc(substituteAllParams(t.typeReturn, names, concretes))
+					: createRef(substituteAllParams(t.typeReturn, names, concretes))),
 			TypeKind.Ptr => createPtr(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Borrow => createBorrow(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Struct => substituteStructAll(t, names, concretes),
@@ -2868,6 +2914,9 @@ function typeDisplayNameInner(t: Type | null): string {
 	if (t.kind === TypeKind.Varargs && t.typeChildren.length > 0) {
 		return "..." + typeDisplayName(t.typeChildren[0]);
 	}
+	// Locked<T> is a Ref onto the generated cell struct, so typeNameOf would
+	// render the internal cell name. Print the spelling the user wrote.
+	if (isLockedRef(t)) return "Locked<" + typeDisplayName(lockedPayloadType(t)) + ">";
 	const name = typeNameOf(t);
 	// typeNameOf peels Ref and Ptr alike, which renders a pointer and its
 	// pointee with the SAME text ("got QB, expected QB"). Ref stays hidden — an

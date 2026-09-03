@@ -1,27 +1,31 @@
 /*
- * MetaScript Locker<T> — Thread-safe shared mutable state
+ * MetaScript Locked<T> — the one sanctioned shared-mutable cell.
  *
- * Malebolgia-aligned: ticket lock (fair spinlock, no destructor needed).
- * Locker wraps a value + lock. Access only via msLockerLock/msLockerUnlock.
+ * ONE allocation: atomic-rc header (msAllocArc) + inline ticket lock + typed
+ * payload, laid out by the compiler as
  *
- * Usage pattern:
- *   msLocker* loc = msLockerCreate(sizeof(MyData));
- *   msLockerLock(loc);
- *   MyData* data = (MyData*)msLockerData(loc);
- *   data->count += 1;
- *   msLockerUnlock(loc);
+ *     struct LockedCell_T { msTicketLock lock; T value; };
+ *
+ * The lock sits at offset 0, so acquire/release need no knowledge of T — they
+ * cast the handle straight to msTicketLock*. The payload is reached only
+ * through the compiler's load/store intercepts, which know the real field
+ * offset from the generated struct (never a hand-computed one).
+ *
+ * The handle's liveness is its own atomic refcount, which is why a second
+ * refcount wrapper around it is not a type: two cells / two refcounts is the
+ * mixed-rc shape this replaces.
+ *
+ * The ticket lock below is the whole locking runtime — one fair FIFO spinlock
+ * with an adaptive spin→park tail. It has exactly one consumer (this cell), so
+ * it lives here rather than in a header of its own; the --gc=manual stubs in
+ * runtime/manual.h are single-threaded no-ops and do not need the layout.
  */
-#ifndef MS_LOCKER_H
-#define MS_LOCKER_H
+#ifndef MS_LOCKED_H
+#define MS_LOCKED_H
 
 #include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include "runtime/drc.h"
 
-/* ===== Ticket Lock (Malebolgia parity) =====
- * Fair spinlock — threads served in FIFO order.
- * No init/deinit needed (zero-initialized is valid). */
+/* ===== Atomic primitives ===== */
 
 #if defined(__GNUC__) || defined(__clang__)
   #define msAtomicFetchAdd(p, v) __atomic_fetch_add(p, v, __ATOMIC_RELAXED)
@@ -125,7 +129,16 @@
   static inline void msFutexWakeAll(int* addr) { (void)addr; }
 #endif
 
-#include "runtime/promise/lockerLayout.h"
+/* ===== Ticket lock =====
+ * Fair spinlock — threads served in FIFO order, then parked on nowServing.
+ * No init/deinit needed: zero-initialized is a valid unlocked lock, which is
+ * what the cell's zero-filled allocation gives us for free. The two ints ARE
+ * the first two fields the compiler lays out in the cell struct. */
+
+typedef struct {
+	int nextTicket;
+	int nowServing;
+} msTicketLock;
 
 #ifndef MS_LOCK_SPIN_BUDGET
 #define MS_LOCK_SPIN_BUDGET 40
@@ -154,61 +167,14 @@ static inline void msTicketLockRelease(msTicketLock* L) {
 		msFutexWakeAll(&L->nowServing);
 }
 
-/* ===== Locker<T> — value + lock (msLocker layout in lockerLayout.h) ===== */
+/* ===== Locked<T> cell surface ===== */
 
-/* Create a Locker with space for `dataSize` bytes of value data.
- * Allocated via msAlloc so DRC refcount header is present —
- * MetaScript interface variables call msDecref on scope exit.
- * Zero-initialized (ticket lock valid at zero, same as Malebolgia initTicketLock). */
-static inline void* msLockerCreate(int dataSize) {
-	return msAlloc(sizeof(msLocker) + dataSize);
+static inline void msLockedAcquire(void* cell) {
+	msTicketLockAcquire((msTicketLock*)cell);
 }
 
-/* Create a Locker initialized with a copy of `src` data. */
-static inline void* msLockerCreateFrom(const void* src, int dataSize) {
-	msLocker* loc = (msLocker*)msAlloc(sizeof(msLocker) + dataSize);
-	memcpy(loc->data, src, dataSize);
-	return loc;
+static inline void msLockedRelease(void* cell) {
+	msTicketLockRelease((msTicketLock*)cell);
 }
 
-/* Get pointer to the value data (caller must lock first). */
-static inline void* msLockerData(msLocker* loc) {
-	return (void*)loc->data;
-}
-
-/* Acquire the lock. Takes void* for MetaScript interface compatibility. */
-static inline void msLockerLock(void* p) {
-	msTicketLockAcquire(&((msLocker*)p)->lock);
-}
-
-/* Release the lock. */
-static inline void msLockerUnlock(void* p) {
-	msTicketLockRelease(&((msLocker*)p)->lock);
-}
-
-/* Read a double from the locker's data (caller must hold lock). */
-static inline double msLockerGetDouble(void* p) {
-	return *(double*)((msLocker*)p)->data;
-}
-
-/* Write a double to the locker's data (caller must hold lock). */
-static inline void msLockerSetDouble(void* p, double v) {
-	*(double*)((msLocker*)p)->data = v;
-}
-
-/* Read an int32 from the locker's data (caller must hold lock). */
-static inline int32_t msLockerGetInt32(void* p) {
-	return *(int32_t*)((msLocker*)p)->data;
-}
-
-/* Write an int32 to the locker's data (caller must hold lock). */
-static inline void msLockerSetInt32(void* p, int32_t v) {
-	*(int32_t*)((msLocker*)p)->data = v;
-}
-
-/* Destroy the locker — free via ARC header (allocated with msAlloc). */
-static inline void msLockerDestroy(void* p) {
-	msDestroyAndDispose(p);
-}
-
-#endif /* MS_LOCKER_H */
+#endif /* MS_LOCKED_H */
