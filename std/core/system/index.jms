@@ -12,6 +12,14 @@ export extern class process {
 	static extern exit(code: int32): never;
 }
 
+// Timers — the platform globals under the names users already write. Declared
+// extern (no body) so the call site emits the host's own function: defining a
+// wrapper here would shadow the global and recurse forever.
+export extern function setTimeout(fn: () => void, ms: number): number;
+export extern function clearTimeout(id: number): void;
+export extern function setInterval(fn: () => void, ms: number): number;
+export extern function clearInterval(id: number): void;
+
 export class Result<T, E> {
 	ok: boolean;
 	value: T;
