@@ -450,7 +450,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.DoWhileStmt => checkDoWhileStmt(ctx, node),
 		NodeKind.BlockStmt => checkBlock(ctx, node),
 		NodeKind.ReturnStmt => checkReturnStmt(ctx, node),
-		NodeKind.BreakStmt => { if (!ctx.inLoop) { addError(ctx, "break outside of loop", node.location.line, node.location.column); } },
+		NodeKind.BreakStmt => { if (!ctx.inLoop && !ctx.inSwitch) { addError(ctx, "break outside of loop or switch", node.location.line, node.location.column); } },
 		NodeKind.ContinueStmt => { if (!ctx.inLoop) { addError(ctx, "continue outside of loop", node.location.line, node.location.column); } },
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
@@ -1643,7 +1643,10 @@ function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 		restoreInitState(ctx.initTracker, oldState);
 		restoreConsumeState(ctx.affineTracker, oldAffine);
 		for (const t of cd.caseTests) { checkExpr(ctx, t, null); }
+		const savedInSwitch = ctx.inSwitch;
+		ctx.inSwitch = true;
 		for (const s of cd.caseStmts) { checkStmt(ctx, s); }
+		ctx.inSwitch = savedInSwitch;
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 		// Build a block from case stmts to check break state

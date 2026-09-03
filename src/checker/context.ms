@@ -1110,6 +1110,7 @@ export class CheckerContext {
 	currentFunction: Symbol | null;   // innermost function (for return type validation)
 	currentActorName: string;  // non-empty when inside an actor body (isolation checking)
 	inLoop: boolean;           // break/continue validation
+	inSwitch: boolean;         // break-inside-switch validation (TS: break may target a switch)
 	inTestBlock: boolean;      // assert validation — only allowed inside test blocks
 	moduleGraph: ModuleGraph;
 	currentModule: Module;
@@ -1166,6 +1167,7 @@ export function createContext(): CheckerContext {
 		currentFunction: null,
 		currentActorName: "",
 		inLoop: false,
+		inSwitch: false,
 		inTestBlock: false,
 		moduleGraph: null as unknown as ModuleGraph,
 		currentModule: null as unknown as Module,
