@@ -114,7 +114,10 @@ function parseDirectives(probe: Probe, src: string): void {
 	const ORC = "// GUARD-BALANCE-ORC";
 	const CHECK = "// GUARD-CHECK-FAIL ";
 	const JS = "// GUARD-JS";
-	for (const line of src.split("\n")) {
+	// A CRLF source leaves a trailing \r on every split line; riding into the
+	// directive token it breaks the log contains() match against LF diagnostics.
+	for (const rawLine of src.split("\n")) {
+		const line = rawLine.endsWith("\r") ? rawLine.slice(0, rawLine.length - 1) : rawLine;
 		const orcAt = line.indexOf(ORC);
 		if (orcAt >= 0) {
 			const tok = firstWordAfter(line.slice(orcAt + ORC.length, line.length));
