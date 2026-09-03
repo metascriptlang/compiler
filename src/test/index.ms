@@ -64,6 +64,7 @@ import "./c/structuralPrefix";
 import "./c/drcLifecycle";
 import "./c/int64Literal";
 import "./c/bigintChecker";
+import "./c/numericNarrowing";
 import "./js/basic";
 import "./js/result";
 import "./js/int64Literal";
