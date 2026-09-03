@@ -2,6 +2,8 @@ type IntFn = (n: int32) => int32;
 
 interface Slot { cb: IntFn; }
 
+function seed(n: int32): int32 { return n; }
+
 function exprBody(): int32 {
     let f: IntFn = null as unknown as IntFn;
     f = (n: int32) => n * 2;
@@ -59,6 +61,12 @@ function fromVariable(): int32 {
     return f(7);
 }
 
+function fromNamed(): int32 {
+    let f: IntFn = null as unknown as IntFn;
+    f = seed;
+    return f(7);
+}
+
 function main(): void {
     console.log(exprBody());
     console.log(blockBody());
@@ -68,6 +76,7 @@ function main(): void {
     console.log(loopReassign());
     console.log(elementSlot());
     console.log(fromVariable());
+    console.log(fromNamed());
 }
 
 main();
