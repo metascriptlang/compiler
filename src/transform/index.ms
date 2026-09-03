@@ -35,6 +35,7 @@ import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker } from "./context";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
+import { lowerVoidBind } from "./desugar/voidBindLower";
 import { lowerObjectLiteralComplete } from "./coercion/objectLiteralComplete";
 import { lowerStringLengthJS } from "./coercion/stringLengthJS";
 import { lowerIntConvJS } from "./coercion/intConvJS";
@@ -101,6 +102,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = jsBackend ? lowerPowerAssert(result, ctx) : result;
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
+	result = lowerVoidBind(result, ctx);
 	result = lowerObjectSpread(result, ctx);
 	result = ctx.jsBackend ? result : lowerArraySpread(result, ctx);
 	if (ctx.jsBackend) {
