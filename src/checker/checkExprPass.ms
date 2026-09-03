@@ -32,6 +32,42 @@ import { checkBitwiseOperands, checkNegatedIntLiteral, fitJoinedBranch, fitNode,
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
+// PARALOCK Amendment I — SHARE is immutable: no write may reach through an
+// Arc<T> handle. Peels the member/index chain of a write target; the write
+// passes through every prefix's deref, so an Arc at ANY prefix position (the
+// root receiver `a.f = 1`, an interior field `holder.box.n = 1`, an indexed
+// element `a.arr[i] = 1`) makes the whole write shared-state mutation.
+// Writing the handle SLOT itself (`holder.box = otherArc`) is not affected —
+// its prefixes stop at `holder`. Member access through a Ref inserts
+// HiddenDeref (the deref node's type is the pointee), so the Arc test is
+// applied to the deref's inner expression, not the deref node.
+function writeThroughArc(target: Node): boolean {
+	let cur: Node | null = target;
+	while (cur !== null) {
+		if (cur.kind === NodeKind.MemberExpr) {
+			const o = (cur.data as MemberExprData).object;
+			if (o !== null && o.nodeType !== null && isAtomicRef(o.nodeType)) return true;
+			cur = o;
+		} else if (cur.kind === NodeKind.ArrayAccess) {
+			const a = (cur.data as ArrayAccessData).array;
+			if (a !== null && a.nodeType !== null && isAtomicRef(a.nodeType)) return true;
+			cur = a;
+		} else if (cur.kind === NodeKind.HiddenDeref) {
+			const e = (cur.data as HiddenDerefData).expr;
+			if (e !== null && e.nodeType !== null && isAtomicRef(e.nodeType)) return true;
+			cur = e;
+		} else {
+			break;
+		}
+	}
+	return false;
+}
+
+function reportArcWrite(ctx: CheckerContext, target: Node): void {
+	addError(ctx, "cannot write through 'Arc<T>' — SHARE is immutable; shared mutable state is Locked<T> (PARALOCK Amendment I)",
+		target.location.line, target.location.column);
+}
+
 // Phase 4: invalidateFacts / factReferencesVar deleted.
 // Assignments that invalidate narrowing now flow through the binder's
 // FlowAssignment node + getFlowTypeOfReference. Per-use-site queries see
@@ -354,6 +390,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const leftType = d.left.nodeType;
 			if (isAsgn) {
 				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
+			}
+			// SHARE immutability (PARALOCK I): block writes reaching through an Arc handle
+			if (isAsgn && writeThroughArc(d.left)) {
+				reportArcWrite(ctx, d.left);
 			}
 			// Block assignment to read-only properties
 			if (isAsgn && d.left.kind === NodeKind.MemberExpr) {
@@ -742,6 +782,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
 			checkExpr(ctx, d.updateArg, null);
+			if (writeThroughArc(d.updateArg)) {
+				reportArcWrite(ctx, d.updateArg);
+			}
 			if (d.updateArg.kind === NodeKind.MemberExpr) {
 				const umd = d.updateArg.data as MemberExprData;
 				if (umd.property === "length" && umd.object.nodeType !== null &&
