@@ -594,8 +594,24 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 	int64_t now = msMonoTimeMs();
 	while (d->timers.len > 0 && d->timers.data[0].finishAtMs <= now) {
 		msTimer t = msTimerPop(&d->timers);
-		msFutureCompleteVoid(t.fut);
 		*didWork = true;
+		if (t.fut != NULL) { msFutureCompleteVoid(t.fut); continue; }
+		if (t.cancelled || t.cb.fn == NULL) {
+			if (t.cb.env != NULL) msPostEnvRelease(t.cb.env);
+			continue;
+		}
+		if (t.periodMs > 0) {
+			/* Re-arm BEFORE firing so a callback calling clearInterval(id) finds
+			 * the next entry in the heap and can cancel it; the re-armed entry
+			 * inherits the env reference, so no extra incref/release pairs. */
+			msTimer next = t;
+			next.finishAtMs = now + t.periodMs;
+			msTimerPush(&d->timers, next);
+			((void(*)(void*))t.cb.fn)(t.cb.env);
+			continue;
+		}
+		((void(*)(void*))t.cb.fn)(t.cb.env);
+		if (t.cb.env != NULL) msPostEnvRelease(t.cb.env);
 	}
 	if (d->timers.len > 0) {
 		int64_t diff = d->timers.data[0].finishAtMs - now;
@@ -941,6 +957,55 @@ msFuture_void* msSleepAsync(int ms) {
 	msTimerPush(&d->timers, t);
 	return fut;
 }
+
+/* ===== setTimeout / setInterval =====
+ * The callback outlives the call that scheduled it, so the closure's env is
+ * retained here and released once the timer can no longer fire. Cancellation is
+ * lazy: the entry stays on the heap and is skipped (and its env released) when
+ * it comes due — cheaper than an O(n) heap removal for a rare operation. */
+static int64_t gTimerSeq = 0;
+
+static int64_t msArmTimer(msClosure cb, double ms, int64_t periodMs) {
+	msDispatcher* d = msGetDispatcher();
+	if (cb.env != NULL) msIncRef(cb.env);
+	gTimerSeq += 1;
+	int64_t delay = (int64_t)ms;
+	if (delay < 0) delay = 0;
+	msTimer t = {
+		.finishAtMs = msMonoTimeMs() + delay,
+		.fut = NULL,
+		.cb = cb,
+		.id = gTimerSeq,
+		.periodMs = periodMs,
+		.cancelled = false,
+	};
+	msTimerPush(&d->timers, t);
+	return t.id;
+}
+
+static void msCancelTimer(int64_t id) {
+	if (!msHasDispatcher()) return;
+	msDispatcher* d = msGetDispatcher();
+	for (int i = 0; i < d->timers.len; i += 1) {
+		if (d->timers.data[i].id == id) {
+			d->timers.data[i].cancelled = true;
+			d->timers.data[i].periodMs = 0;
+			return;
+		}
+	}
+}
+
+double msSetTimeout(msClosure cb, double ms) { return (double)msArmTimer(cb, ms, 0); }
+
+double msSetInterval(msClosure cb, double ms) {
+	int64_t period = (int64_t)ms;
+	if (period < 1) period = 1;
+	return (double)msArmTimer(cb, ms, period);
+}
+
+void msClearTimeout(double id) { msCancelTimer((int64_t)id); }
+
+void msClearInterval(double id) { msCancelTimer((int64_t)id); }
 
 /* ===== Async Stepper Callback (createCb pattern) ===== */
 

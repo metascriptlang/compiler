@@ -33,7 +33,11 @@ typedef struct msCallbackDeque {
 
 typedef struct msTimer {
 	int64_t finishAtMs;    /* monotonic milliseconds */
-	void* fut;             /* msFuture_void* to complete when timer expires */
+	void* fut;             /* msFuture_void* to complete; NULL for callback timers */
+	msClosure cb;          /* setTimeout/setInterval callback (fut == NULL) */
+	int64_t id;            /* handle returned to the caller; 0 for sleep timers */
+	int64_t periodMs;      /* > 0 → interval: re-armed after each fire */
+	bool cancelled;        /* clearTimeout/clearInterval marks, the loop skips */
 } msTimer;
 
 typedef struct msTimerHeap {
@@ -81,6 +85,12 @@ int msGetDispatcherSelectorFd(void);
 
 int msProcessTimers(msDispatcher* d, bool* didWork);
 void msProcessCallbacks(msDispatcher* d, bool* didWork);
+
+/* ===== Timers (the JS-shaped surface behind std setTimeout/setInterval) ===== */
+double msSetTimeout(msClosure cb, double ms);
+double msSetInterval(msClosure cb, double ms);
+void msClearTimeout(double id);
+void msClearInterval(double id);
 int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs);
 
 /* ===== Exit drain (drain.c) — Node semantics: program ends when the loop is empty ===== */
