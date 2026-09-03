@@ -33,6 +33,7 @@ import { getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, estimateExprEndCol, stampCallSite } from "./callResolve";
 import { fitNode, joinBranchTypes, fitJoinedBranch } from "./fit";
+import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { forEachChild } from "../ast/visitor";
@@ -2467,7 +2468,13 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 // Used by both standalone checkProgram and orchestrator.
 // Creates a shared IdentCache (one cache per compilation)
 // that must be passed to all module contexts in the same compilation.
+//
+// BUILD-PERF Phase A1: a disk pack (checker/preludePack.ms) short-circuits the
+// whole load on a warm stamp — see the pack module for the lazy AST rules.
 export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"): CheckerContext {
+	const packKey = preludePackKey(stdPath, backendExt);
+	const packed = tryLoadPreludePack(packKey);
+	if (packed !== null) return packed;
 	const cache = createIdentCache();
 	const ctx = createContextWithCache(cache);
 	ctx.extensionRegistry = createExtensionRegistry();
@@ -2477,6 +2484,11 @@ export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"
 		loadPreludeOne(ctx, imps[idx], stdPath, backendExt);
 		idx = idx + 1;
 	}
+	// Always write (best-effort): the pack captures whatever scope the fresh
+	// check produced — including its silently-ignored baseCtx errors (e.g. the
+	// pre-existing `Map.set` unresolved-extension diagnostics); the key already
+	// covers every input file, so a broken-environment pack can't go stale.
+	writePreludePack(packKey, ctx);
 	return ctx;
 }
 

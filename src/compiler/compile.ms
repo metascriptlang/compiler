@@ -38,6 +38,7 @@ import { createTransformContextWithChecker, createNameSet } from "../transform/c
 import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, hasModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache } from "../module/loader";
+import { registerPreludeStampFn } from "../checker/preludePack";
 import { ResolverConfig, createDefaultConfig, Backend, resolveImportWithConfig } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
@@ -51,7 +52,7 @@ import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix,
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, hashContent, headerInlineKey, lookupHeaderInline, storeHeaderInline } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, hashContent, headerInlineKey, lookupHeaderInline, storeHeaderInline, toolchainStamp } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
@@ -60,6 +61,10 @@ import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs
 // checker/context → module/graph layering; callbacks pattern). Registered at
 // module load so every later build engages it without an init-order hazard.
 registerHeaderCache(headerInlineKey, lookupHeaderInline, storeHeaderInline);
+// Prelude pack shares the object cache's memoized toolchainStamp — one stamp
+// computation per process instead of two (the pack's local fallback would
+// re-hash the 30MB binary + runtime/ + vendor/ every process).
+registerPreludeStampFn(toolchainStamp);
 
 // ===== Build Helpers =====
 

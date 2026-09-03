@@ -11,6 +11,7 @@ import {
 import { ScopeKind, openScope, addSymbolToScope, hasFlag, SymbolFlag } from "./symbol";
 import { ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { runThreePasses, threePassTimings, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude, setSlowTrace } from "./checkPass";
+import { preludePackStats } from "./preludePack";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { collectTopLevelLocal } from "./collectPass";
 import { isAssignableProfile } from "./compat";
@@ -257,6 +258,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	}
 	if (graphTiming) {
 		console.log(`    prelude=${tPrelude}ms p1parse=${tP1Parse}ms p1collect=${tP1Collect}ms p2parse=${tP2Parse}ms p2inject=${tP2Inject}ms p2passes=${tP2Passes}ms p2directives=${tP2Directives}ms p2mutations=${tP2Mutations}ms p2exports=${tP2Exports}ms`);
+		const pk = preludePackStats();
+		console.log(`    preludePack: hit=${pk[3]} key=${pk[0]}ms load=${pk[1]}ms write=${pk[2]}ms`);
 		const tp = threePassTimings();
 		console.log(`    3pass: collect=${tp[0]}ms resolve=${tp[1]}ms flow=${tp[2]}ms body=${tp[3]}ms unused=${tp[4]}ms`);
 		const ip = instantiateProfile();
