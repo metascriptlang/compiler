@@ -120,6 +120,51 @@ function isBeingDefined(key: string): boolean {
 	return false;
 }
 
+// ===== In-progress unions + deferred struct defs =====
+// genUnionType caches the wrapper's C name BEFORE emitting its definition
+// (re-entry guard). A struct generated while such a union is mid-flight can
+// hold that union BY VALUE — emitting it inline would reference an incomplete
+// type (clang "field has incomplete type"; hit by ast/fieldspec compiled as a
+// dependency of test builds). Those structs defer here and flush once the
+// blocking union's definition completes. Limitation: by-value deps BETWEEN
+// two deferred structs are emitted FIFO — none exist today (deferral only
+// ever waits on unions, whose by-value embedders are plain structs).
+
+let unionsInProgress: string[] = [];
+
+function unionInProgress(cname: string): boolean {
+	for (const n of unionsInProgress) {
+		if (n === cname) return true;
+	}
+	return false;
+}
+
+interface DeferredStructDef {
+	blocker: string;
+	def: string;
+}
+
+let deferredStructs: DeferredStructDef[] = [];
+
+function flushDeferredStructs(g: CGen): void {
+	let emitted = true;
+	while (emitted) {
+		emitted = false;
+		const remaining: DeferredStructDef[] = [];
+		for (const d of deferredStructs) {
+			if (unionInProgress(d.blocker)) {
+				remaining.push(d);
+			} else {
+				const b = sec(g, CSection.Types);
+				add(b, d.def);
+				addNewline(b);
+				emitted = true;
+			}
+		}
+		deferredStructs = remaining;
+	}
+}
+
 // ===== Anonymous Type Naming =====
 // Generates deterministic C struct names for anonymous interfaces (typeName === "").
 // Uses a structural key (field names + types) hashed to a short hex-like string.
@@ -1076,10 +1121,20 @@ function genObjectType(g: CGen, t: Type): string {
 	}
 	structDef = structDef + "};\n#endif\n";
 
-	// Emit struct body directly (reference parity: natural recursion gives correct order)
-	const b = sec(g, CSection.Types);
-	add(b, structDef);
-	addNewline(b);
+	// Emit struct body directly (reference parity: natural recursion gives correct order).
+	// By-value dependency on a union still mid-generation defers to the queue
+	// (see flushDeferredStructs) — emitting now would reference an incomplete type.
+	let blocker = "";
+	for (const ft of fieldTypes) {
+		if (unionInProgress(ft)) { blocker = ft; break; }
+	}
+	if (blocker !== "") {
+		deferredStructs.push({ blocker: blocker, def: structDef });
+	} else {
+		const b = sec(g, CSection.Types);
+		add(b, structDef);
+		addNewline(b);
+	}
 
 	// Remove from cycle tracking
 	typesBeingDefined.pop();
@@ -1126,6 +1181,7 @@ function genUnionType(g: CGen, t: Type): string {
 		typeCacheSet(g.typeCache, "bare:" + name, t.typeName);
 	}
 	ensureForwardDecl(g, name);
+	unionsInProgress.push(name);
 
 	const b = sec(g, CSection.Types);
 
@@ -1246,6 +1302,10 @@ function genUnionType(g: CGen, t: Type): string {
 	addLine(b, "};");
 	addLine(b, "#endif");
 	addNewline(b);
+
+	// Union definition is complete: structs deferred on it can now emit.
+	unionsInProgress.pop();
+	flushDeferredStructs(g);
 
 	return name;
 }
