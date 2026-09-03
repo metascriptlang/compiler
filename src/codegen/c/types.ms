@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, peelToStruct, hasDestructor, getAttachedOp, tupleTypeName } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
@@ -758,16 +758,30 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 // undefined symbol. Returns the TypeInfo address, or "NULL" when no cleanup is needed.
 export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type | null, cType: string): string {
 	if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) return "NULL";
-	const cellName = cType + "Arc";
+	// The cell symbol must be a valid C identifier. A Ref/Ptr pointee's C spelling
+	// ends in `*` (e.g. `Box__M6…*`); a raw `cType + "Arc"` embeds the star and
+	// emits `msTypeInfo Box__M6…*ArcTypeInfo;` — not C. mangle is the established
+	// sanitizer (`*` → `star_`) and is the identity for identifier-safe spellings,
+	// so existing cells keep their names and weak cells still dedupe across modules.
+	const cellName = mangle(cType) + "Arc";
 	const tiRef = `&${cellName}TypeInfo`;
 	const key = "arcCell:" + cellName;
 	if (typeCacheHas(g.forwTypeCache, key)) return tiRef;
 	typeCacheSet(g.forwTypeCache, key, cellName);
 	let destroyHook = "";
-	if (pointeeType !== null && hasDestructor(pointeeType)) {
+	// Wire destroyFn only when the pointee actually carries owned refs — the same
+	// predicate the ref-array cell uses to pick its walker (refArrayDestroyFn).
+	// A POD pointee's hook function is dropped by reachability (no AST call edge
+	// exists — the analyzer injects no destroys for POD temps), so wiring the
+	// name is an undefined symbol at link. types.h documents destroyFn == NULL
+	// as the "no RC fields" convention; the destroy dispatch skips NULL.
+	if (pointeeType !== null && hasDestructor(pointeeType) && arrayElementNeedsCleanup(pointeeType)) {
 		destroyHook = mangle(getAttachedOp(pointeeType, AttachedOp.AttachedDestructor));
-		ensureForwardDecl(g, cType);
-		addLine(sec(g, CSection.ForwardDecls), `void ${destroyHook}(${cType}* self);`);
+		// A pointer-shaped pointee forwards the base struct name — the hook proto
+		// and its forward typedef must not carry the `*` either.
+		const baseName = cType.endsWith("*") ? cType.slice(0, cType.byteLength - 1) : cType;
+		ensureForwardDecl(g, baseName);
+		addLine(sec(g, CSection.ForwardDecls), `void ${destroyHook}(${baseName}* self);`);
 	}
 	addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${cellName}TypeInfo;`);
 	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.name = "${cellName}";`);
