@@ -65,6 +65,7 @@ import "./c/drcLifecycle";
 import "./c/int64Literal";
 import "./c/bigintChecker";
 import "./c/numericNarrowing";
+import "./c/voidValue";
 import "./js/basic";
 import "./js/result";
 import "./js/int64Literal";
