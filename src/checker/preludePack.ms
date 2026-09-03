@@ -32,6 +32,7 @@
 // toolStamp change.
 
 import { Symbol, SymbolKind, SymbolState, Type, TypeKind, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData } from "../ast/node";
+import { FieldSink, nodeFields } from "../ast/fieldspec";
 import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension } from "./context";
 import { createIdentCache, getIdentId } from "./idents";
 import { emptyType, noneType } from "./types";
@@ -562,18 +563,18 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 	// indexes; call order inside nodeFields defines the N-row ordering). All
 	// value fields are ignored.
 	const walkSink: FieldSink = {
-		node: (x: Node | null): void => { enqNode(x); },
-		nodes: (a: (Node | null)[] | null): void => { if (a !== null) { for (const c of a) enqNode(c); } },
-		nodesNested: (a: (Node | null)[][] | null): void => { if (a !== null) { for (const row of a) { if (row !== null) { for (const c of row) enqNode(c); } } } },
-		typ: (t: Type | null): void => { enqType(t); },
-		str: (s: string): void => {},
-		strArr: (a: string[] | null): void => {},
-		integer: (v: int64): void => {},
-		float: (v: float64): void => {},
-		bool: (b: boolean): void => {},
-		loc: (l: SourceLocation | null): void => {},
-		locs: (l: SourceLocation[] | null): void => {},
-		floats: (a: number[] | null): void => {},
+		node: (name: string, x: Node | null): void => { enqNode(x); },
+		nodes: (name: string, a: (Node | null)[] | null): void => { if (a !== null) { for (const c of a) enqNode(c); } },
+		nodesNested: (name: string, a: (Node | null)[][] | null): void => { if (a !== null) { for (const row of a) { if (row !== null) { for (const c of row) enqNode(c); } } } },
+		typ: (name: string, t: Type | null): void => { enqType(t); },
+		str: (name: string, s: string): void => {},
+		strArr: (name: string, a: string[] | null): void => {},
+		integer: (name: string, v: int64): void => {},
+		float: (name: string, v: float64): void => {},
+		bool: (name: string, b: boolean): void => {},
+		loc: (name: string, l: SourceLocation | null): void => {},
+		locs: (name: string, l: SourceLocation[] | null): void => {},
+		floats: (name: string, a: number[] | null): void => {},
 	};
 
 	for (const s of ctx.table.current.symbols.values()) {
@@ -709,155 +710,24 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 	_writeMs = _writeMs + (performance.now() - _w0);
 }
 
-// Per-kind payload field spec — the ONE place that knows a NodeData variant's
-// field order. The writer's walk phase (N-row index assignment) and emit phase
-// (serialization) both drive it through a FieldSink; the reader's
-// buildNodeData is its inverse and stays hand-written (object literals need
-// static field names). KEEP nodeFields IN SYNC with buildNodeData — same
-// kinds, same field order. Field kinds: str=escaped string, strArr=joinCsv,
-// integer=int64, float=shortest round-trip, bool=0/1, node/nodes=node idx,
-// nodesNested=nestedIdxs, typ=type idx, loc=4 ints, locs/floats=csv.
-//
-// MS has no method dispatch, so the sink is function-typed fields (the
-// callbacks.ms pattern); calling V.node(x) loads the field and calls it.
-type SinkNodeFn = (n: Node | null) => void;
-type SinkNodeArrFn = (arr: (Node | null)[] | null) => void;
-type SinkNestedFn = (arrs: (Node | null)[][] | null) => void;
-type SinkTypeFn = (t: Type | null) => void;
-type SinkStrFn = (s: string) => void;
-type SinkStrArrFn = (arr: string[] | null) => void;
-type SinkIntFn = (v: int64) => void;
-type SinkFloatFn = (v: float64) => void;
-type SinkBoolFn = (b: boolean) => void;
-type SinkLocFn = (l: SourceLocation | null) => void;
-type SinkLocsFn = (l: SourceLocation[] | null) => void;
-type SinkFloatsFn = (a: number[] | null) => void;
-
-interface FieldSink {
-	node: SinkNodeFn;
-	nodes: SinkNodeArrFn;
-	nodesNested: SinkNestedFn;
-	typ: SinkTypeFn;
-	str: SinkStrFn;
-	strArr: SinkStrArrFn;
-	integer: SinkIntFn;
-	float: SinkFloatFn;
-	bool: SinkBoolFn;
-	loc: SinkLocFn;
-	locs: SinkLocsFn;
-	floats: SinkFloatsFn;
-}
-
-function nodeFields(n: Node, V: FieldSink): void {
-	const kind = n.kind;
-	if (kind === NodeKind.NumberLiteral) { const d = n.data as NumberLiteralData; V.bool(d.isFloat); V.float(d.value); V.integer(d.intVal); V.str(d.outOfRangeText); V.bool(d.isBitPattern); return; }
-	if (kind === NodeKind.StringLiteral) { const d = n.data as StringLiteralData; V.str(d.value); return; }
-	if (kind === NodeKind.BooleanLiteral) { const d = n.data as BooleanLiteralData; V.bool(d.boolValue); return; }
-	if (kind === NodeKind.NullLiteral) return;
-	if (kind === NodeKind.BigIntLiteral) { const d = n.data as BigIntLiteralData; V.str(d.bigintValue); return; }
-	if (kind === NodeKind.RegexLiteral) { const d = n.data as RegexLiteralData; V.str(d.regexPattern); return; }
-	if (kind === NodeKind.Identifier) { const d = n.data as IdentifierData; V.str(d.name); return; }
-	if (kind === NodeKind.BinaryExpr) { const d = n.data as BinaryExprData; V.str(d.operator); V.node(d.left); V.node(d.right); return; }
-	if (kind === NodeKind.UnaryExpr) { const d = n.data as UnaryExprData; V.str(d.unaryOp); V.node(d.operand); return; }
-	if (kind === NodeKind.UpdateExpr) { const d = n.data as UpdateExprData; V.str(d.updateOp); V.node(d.updateArg); V.bool(d.isPrefix); return; }
-	if (kind === NodeKind.CallExpr) { const d = n.data as CallExprData; V.node(d.callee); V.nodes(d.arguments); V.bool(d.isDirectCall); V.float(d.resolvedOverloadIdx); return; }
-	if (kind === NodeKind.MemberExpr) { const d = n.data as MemberExprData; V.node(d.object); V.str(d.property); V.bool(d.isOptional); return; }
-	if (kind === NodeKind.ArrayAccess) { const d = n.data as ArrayAccessData; V.node(d.array); V.node(d.index); return; }
-	if (kind === NodeKind.ObjectLiteral) { const d = n.data as ObjectLiteralData; V.nodes(d.properties); V.strArr(d.keys); V.locs(d.keyLocations); return; }
-	if (kind === NodeKind.ArrayLiteral) { const d = n.data as ArrayLiteralData; V.nodes(d.elements); return; }
-	if (kind === NodeKind.ArrowFunction) { const d = n.data as ArrowFunctionData; V.strArr(d.arrowParams); V.strArr(d.arrowParamTypes); V.node(d.arrowBody); V.str(d.arrowFlags); V.str(d.arrowReturnType); V.nodes(d.arrowDefaults); return; }
-	if (kind === NodeKind.FunctionExpr) { const d = n.data as FunctionExprData; V.strArr(d.funcExprParams); V.strArr(d.funcExprParamTypes); V.node(d.funcExprBody); V.str(d.funcExprFlags); V.str(d.funcExprReturnType); return; }
-	if (kind === NodeKind.TypeAssertion) { const d = n.data as TypeAssertionData; V.node(d.asExpr); V.str(d.asType); return; }
-	if (kind === NodeKind.ConditionalExpr) { const d = n.data as ConditionalExprData; V.node(d.ternaryCondition); V.node(d.ternaryConsequent); V.node(d.ternaryAlternate); return; }
-	if (kind === NodeKind.SpreadExpr) { const d = n.data as SpreadExprData; V.node(d.spreadArg); return; }
-	if (kind === NodeKind.NewExpr) { const d = n.data as NewExprData; V.node(d.newCallee); V.nodes(d.newArguments); return; }
-	if (kind === NodeKind.TryExpr) { const d = n.data as TryExprData; V.node(d.tryArg); V.bool(d.hasCatch); V.node(d.catchVal); return; }
-	if (kind === NodeKind.MatchExpr) { const d = n.data as MatchExprData; V.node(d.matchDisc); V.nodes(d.matchCases); return; }
-	if (kind === NodeKind.MatchCase) { const d = n.data as MatchCaseData; V.nodes(d.casePatterns); V.node(d.caseGuard); V.node(d.caseBody); return; }
-	if (kind === NodeKind.AwaitExpr) { const d = n.data as AwaitExprData; V.node(d.awaitArg); return; }
-	if (kind === NodeKind.YieldExpr) { const d = n.data as YieldExprData; V.node(d.yieldArg); V.bool(d.isDelegate); return; }
-	if (kind === NodeKind.MoveExpr) { const d = n.data as MoveExprData; V.node(d.moveArg); return; }
-	if (kind === NodeKind.OutExpr) { const d = n.data as OutExprData; V.node(d.outArg); return; }
-	if (kind === NodeKind.SizeofExpr) { const d = n.data as SizeofExprData; V.str(d.sizeofType); return; }
-	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) { const d = n.data as HiddenStdConvData; V.node(d.convExpr); V.typ(d.convType); return; }
-	if (kind === NodeKind.HiddenDeref || kind === NodeKind.HiddenAddr) { const d = n.data as ExprStmtData; V.node(d.expr); return; }
-	if (kind === NodeKind.TypeAnnotation) { const d = n.data as TypeAnnotationData; V.str(d.annotationType); return; }
-	if (kind === NodeKind.ArrayPattern) { const d = n.data as ArrayPatternData; V.nodes(d.patternElements); V.bool(d.hasRestElement); return; }
-	if (kind === NodeKind.ObjectPattern) { const d = n.data as ObjectPatternData; V.nodes(d.patternProps); V.bool(d.hasRestProp); return; }
-	if (kind === NodeKind.ObjectPatternProp) { const d = n.data as ObjectPatternPropData; V.str(d.propKey); V.node(d.propAlias); return; }
-	if (kind === NodeKind.DestructuringDecl) { const d = n.data as DestructuringDeclData; V.node(d.destrPattern); V.node(d.destrInit); V.bool(d.destrIsConst); return; }
-	if (kind === NodeKind.VariableDecl) { const d = n.data as VariableDeclData; V.str(d.declName); V.str(d.declType); V.node(d.initializer); V.integer(d.declKind as int32 as int64); V.loc(d.nameLocation); return; }
-	if (kind === NodeKind.IfStmt) { const d = n.data as IfStmtData; V.node(d.condition); V.node(d.consequent); V.node(d.alternate); return; }
-	if (kind === NodeKind.WhileStmt) { const d = n.data as WhileStmtData; V.node(d.whileCondition); V.node(d.whileBody); V.str(d.whileLabel); return; }
-	if (kind === NodeKind.ForStmt) { const d = n.data as ForStmtData; V.node(d.forInit); V.node(d.forCondition); V.node(d.forUpdate); V.node(d.forBody); return; }
-	if (kind === NodeKind.ForOfStmt) { const d = n.data as ForOfStmtData; V.str(d.forOfBinding); V.bool(d.forOfIsConst); V.node(d.forOfIterable); V.node(d.forOfBody); V.node(d.forOfPattern); V.loc(d.bindingLocation); return; }
-	if (kind === NodeKind.ForInStmt) { const d = n.data as ForInStmtData; V.str(d.forInBinding); V.bool(d.forInIsConst); V.node(d.forInObject); V.node(d.forInBody); return; }
-	if (kind === NodeKind.BlockStmt) { const d = n.data as BlockStmtData; V.nodes(d.statements); return; }
-	if (kind === NodeKind.ExprStmt) { const d = n.data as ExprStmtData; V.node(d.expr); return; }
-	if (kind === NodeKind.ReturnStmt) { const d = n.data as ReturnStmtData; V.node(d.argument); return; }
-	if (kind === NodeKind.BreakStmt) { const d = n.data as BreakStmtData; V.str(d.breakLabel); return; }
-	if (kind === NodeKind.ContinueStmt) { const d = n.data as ContinueStmtData; V.str(d.continueLabel); return; }
-	if (kind === NodeKind.FunctionDecl) { const d = n.data as FunctionDeclData; V.str(d.fnName); V.strArr(d.params); V.strArr(d.fnParamTypes); V.node(d.fnBody); V.str(d.fnFlags); V.str(d.fnReturnType); V.nodes(d.fnDefaults); V.str(d.nativeName); V.loc(d.nameLocation); return; }
-	if (kind === NodeKind.DoWhileStmt) { const d = n.data as DoWhileStmtData; V.node(d.doBody); V.node(d.doCondition); return; }
-	if (kind === NodeKind.SwitchStmt) { const d = n.data as SwitchStmtData; V.node(d.switchDisc); V.nodes(d.switchCases); return; }
-	if (kind === NodeKind.SwitchCase) { const d = n.data as SwitchCaseData; V.nodes(d.caseTests); V.nodes(d.caseStmts); V.bool(d.isDefault); return; }
-	if (kind === NodeKind.UnreachableStmt) { const d = n.data as UnreachableStmtData; V.str(d.unreachableMsg); return; }
-	if (kind === NodeKind.MatchStmt) { const d = n.data as MatchStmtData; V.node(d.matchStmtDisc); V.nodes(d.matchStmtCases); return; }
-	if (kind === NodeKind.ImportDecl) { const d = n.data as ImportDeclData; V.strArr(d.importNames); V.strArr(d.importAliases); V.str(d.importSource); V.locs(d.nameLocations); return; }
-	if (kind === NodeKind.ExportDecl) { const d = n.data as ExportDeclData; V.node(d.exportedDecl); return; }
-	if (kind === NodeKind.TypeAliasDecl) { const d = n.data as TypeAliasDeclData; V.str(d.aliasName); V.str(d.aliasType); V.bool(d.aliasIsDistinct); V.str(d.aliasGenericParams); V.str(d.discriminantName); V.str(d.discriminantType); V.strArr(d.variantKeys); V.strArr(d.variantTypes); V.loc(d.nameLocation); return; }
-	if (kind === NodeKind.EnumDecl) { const d = n.data as EnumDeclData; V.str(d.enumName); V.strArr(d.enumMembers); V.floats(d.enumValues); V.loc(d.nameLocation); V.locs(d.memberLocations); return; }
-	if (kind === NodeKind.InterfaceDecl || kind === NodeKind.StructDecl) { const d = n.data as InterfaceDeclData; V.str(d.interfaceName); V.strArr(d.interfaceFields); V.strArr(d.interfaceFieldTypes); V.strArr(d.interfaceExtends); V.loc(d.nameLocation); return; }
-	if (kind === NodeKind.ClassDecl) { const d = n.data as ClassDeclData; V.str(d.className); V.str(d.classExtends); V.nodes(d.classBody); V.loc(d.nameLocation); return; }
-	if (kind === NodeKind.PropertyDecl) { const d = n.data as PropertyDeclData; V.str(d.propName); V.str(d.propType); V.bool(d.propIsStatic); V.bool(d.propIsReadonly); V.str(d.propVisibility); V.node(d.propInitializer); return; }
-	if (kind === NodeKind.MethodDecl) { const d = n.data as MethodDeclData; V.str(d.methodName); V.strArr(d.methodParams); V.strArr(d.methodParamTypes); V.node(d.methodBody); V.bool(d.methodIsStatic); V.str(d.methodFlags); V.str(d.methodVisibility); V.str(d.methodReturnType); V.nodes(d.methodDefaults); V.str(d.nativeName); V.loc(d.nameLocation); return; }
-	if (kind === NodeKind.ConstructorDecl) { const d = n.data as ConstructorDeclData; V.strArr(d.ctorParams); V.strArr(d.ctorParamTypes); V.node(d.ctorBody); V.nodes(d.ctorDefaults); return; }
-	if (kind === NodeKind.ThrowStmt) { const d = n.data as ThrowStmtData; V.node(d.throwArg); return; }
-	if (kind === NodeKind.TryCatchStmt) { const d = n.data as TryCatchStmtData; V.node(d.tryBody); V.str(d.catchName); V.node(d.catchBody); V.node(d.finallyBody); V.loc(d.catchBindingLocation); V.bool(d.hasCatchClause); return; }
-	if (kind === NodeKind.MacroInvocation) { const d = n.data as MacroInvocationData; V.str(d.macroName); V.nodes(d.macroArgs); return; }
-	if (kind === NodeKind.DecoratedDecl) { const d = n.data as DecoratedDeclData; V.nodes(d.decorators); V.node(d.decoratedNode); return; }
-	if (kind === NodeKind.DeferStmt) { const d = n.data as DeferStmtData; V.node(d.deferExpr); return; }
-	if (kind === NodeKind.TestDecl) { const d = n.data as TestDeclData; V.str(d.testName); V.node(d.testBody); return; }
-	if (kind === NodeKind.AssertStmt) { const d = n.data as AssertStmtData; V.node(d.assertExpr); V.str(d.assertSource); V.str(d.assertMessage); V.node(d.assertMessageExpr); return; }
-	if (kind === NodeKind.ExternDecl) { const d = n.data as ExternDeclData; V.integer(d.externKind as int32 as int64); V.str(d.externName); V.str(d.nativeName); V.str(d.externType); return; }
-	if (kind === NodeKind.MacroDecl) { const d = n.data as MacroDeclData; V.str(d.macroDeclName); V.strArr(d.macroDeclParams); V.strArr(d.macroDeclParamTypes); V.str(d.macroDeclReturnType); V.node(d.macroDeclBody); return; }
-	if (kind === NodeKind.QuoteExpr) { const d = n.data as QuoteExprData; V.node(d.quoteBody); return; }
-	if (kind === NodeKind.ComptimeBlock) { const d = n.data as ComptimeBlockData; V.node(d.comptimeBody); return; }
-	if (kind === NodeKind.TypeGeneric) { const d = n.data as TypeGenericData; V.node(d.typExprBase); V.nodes(d.typExprArgs); return; }
-	if (kind === NodeKind.TypeArray) { const d = n.data as TypeArrayData; V.node(d.typExprElement); V.float(d.typExprSize); return; }
-	if (kind === NodeKind.TypeUnion) { const d = n.data as TypeUnionData; V.nodes(d.typExprMembers); V.str(d.discFieldName); V.strArr(d.variantKeys); V.str(d.discKind); return; }
-	if (kind === NodeKind.TypeIntersection) { const d = n.data as TypeIntersectionData; V.nodes(d.typExprMembers); return; }
-	if (kind === NodeKind.TypeFunction) { const d = n.data as TypeFunctionData; V.nodes(d.typExprParams); V.node(d.typExprReturn); V.strArr(d.typExprParamNames); return; }
-	if (kind === NodeKind.TypeObject) { const d = n.data as TypeObjectData; V.strArr(d.typExprFieldNames); V.nodes(d.typExprFieldTypes); V.node(d.typExprIndexKey); V.node(d.typExprIndexValue); V.nodesNested(d.typExprFieldDecorators); V.str(d.typExprTypeName); return; }
-	if (kind === NodeKind.Program) { const d = n.data as ProgramData; V.nodes(d.programStmts); return; }
-	if (kind === NodeKind.ActorDecl) { const d = n.data as ActorDeclData; V.str(d.actorName); V.nodes(d.actorBody); V.loc(d.nameLocation); return; }
-	if (kind === NodeKind.SpliceMany) { const d = n.data as SpliceManyData; V.nodes(d.spliceNodes); return; }
-	if (kind === NodeKind.JSXElement) { const d = n.data as JSXElementData; V.str(d.jsxTag); V.nodes(d.jsxAttrs); V.nodes(d.jsxChildren); V.bool(d.jsxSelfClosing); return; }
-	if (kind === NodeKind.JSXFragment) { const d = n.data as JSXFragmentData; V.nodes(d.jsxFragChildren); return; }
-	if (kind === NodeKind.JSXText) { const d = n.data as JSXTextData; V.str(d.jsxText); return; }
-	if (kind === NodeKind.JSXExpressionContainer) { const d = n.data as JSXExpressionContainerData; V.node(d.jsxExpr); return; }
-	if (kind === NodeKind.JSXAttribute) { const d = n.data as JSXAttributeData; V.str(d.jsxAttrName); V.node(d.jsxAttrValue); return; }
-	if (kind === NodeKind.JSXSpreadAttribute) { const d = n.data as JSXSpreadAttributeData; V.node(d.jsxSpreadArg); return; }
-}
-
 // Emit-phase sink: appends each field's serialized column. Byte-for-byte the
 // same output the pre-sink emitNodePayload produced (join("\t") === the old
 // template's \t separators) — verified by pack byte-identity.
 let _payloadCols: string[] = [];
 
 const emitSink: FieldSink = {
-	node: (x: Node | null): void => { _payloadCols.push(`${idxNodeP(x)}`); },
-	nodes: (a: (Node | null)[] | null): void => { _payloadCols.push(idxsP(a)); },
-	nodesNested: (a: (Node | null)[][] | null): void => { _payloadCols.push(nestedIdxsP(a)); },
-	typ: (t: Type | null): void => { _payloadCols.push(`${idxTypeP(t)}`); },
-	str: (s: string): void => { _payloadCols.push(escapeP(s)); },
-	strArr: (a: string[] | null): void => { _payloadCols.push(joinCsv(a !== null ? a : [])); },
-	integer: (v: int64): void => { _payloadCols.push(`${v}`); },
-	float: (v: float64): void => { _payloadCols.push(`${v}`); },
-	bool: (b: boolean): void => { _payloadCols.push(b ? "1" : "0"); },
-	loc: (l: SourceLocation | null): void => { _payloadCols.push(locCsv4(l)); },
-	locs: (l: SourceLocation[] | null): void => { _payloadCols.push(locsCsv(l)); },
-	floats: (a: number[] | null): void => { _payloadCols.push(floatsCsv(a)); },
+	node: (name: string, x: Node | null): void => { _payloadCols.push(`${idxNodeP(x)}`); },
+	nodes: (name: string, a: (Node | null)[] | null): void => { _payloadCols.push(idxsP(a)); },
+	nodesNested: (name: string, a: (Node | null)[][] | null): void => { _payloadCols.push(nestedIdxsP(a)); },
+	typ: (name: string, t: Type | null): void => { _payloadCols.push(`${idxTypeP(t)}`); },
+	str: (name: string, s: string): void => { _payloadCols.push(escapeP(s)); },
+	strArr: (name: string, a: string[] | null): void => { _payloadCols.push(joinCsv(a !== null ? a : [])); },
+	integer: (name: string, v: int64): void => { _payloadCols.push(`${v}`); },
+	float: (name: string, v: float64): void => { _payloadCols.push(`${v}`); },
+	bool: (name: string, b: boolean): void => { _payloadCols.push(b ? "1" : "0"); },
+	loc: (name: string, l: SourceLocation | null): void => { _payloadCols.push(locCsv4(l)); },
+	locs: (name: string, l: SourceLocation[] | null): void => { _payloadCols.push(locsCsv(l)); },
+	floats: (name: string, a: number[] | null): void => { _payloadCols.push(floatsCsv(a)); },
 };
 
 function emitNodePayloadViaSink(n: Node): string {
