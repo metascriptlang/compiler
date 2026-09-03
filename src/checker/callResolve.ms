@@ -20,7 +20,7 @@ import { isContextSensitive } from "./speculate";
 import { SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym } from "./template";
 import { UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, createArray, createEnumLiteral, createFunction, createGenericInstance, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isMaybeType, isNumeric, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
-import { checkActorArgSendable, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
+import { checkActorArgSendable, checkArcPointeeSendable, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
@@ -436,9 +436,14 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			} else if (expected !== null && isAtomicRef(expected) && expected.typeReturn !== null) {
 				pointee = expected.typeReturn;
 			}
-			callCheckExpr(ctx, d.newArguments[0], pointee);
-			if (pointee === null) { pointee = d.newArguments[0].nodeType; }
-			const arcType = createArc(pointee);
+		callCheckExpr(ctx, d.newArguments[0], pointee);
+		if (pointee === null) { pointee = d.newArguments[0].nodeType; }
+		// SHARE pointee rule (PARALOCK Amendment I): the pointee is aliased
+		// across threads, so it must be deep-immutable data.
+		if (pointee !== null && pointee.kind !== TypeKind.Error) {
+			checkArcPointeeSendable(ctx, pointee, d.newCallee.location.line, d.newCallee.location.column);
+		}
+		const arcType = createArc(pointee);
 			node.nodeType = arcType;
 			return arcType;
 		}
@@ -1078,8 +1083,17 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		}
 		// Sendable check for extension-resolved actor method calls
 		if (isActorMethodCall) {
+			// SEND-class (void return — no reply to park on) rejects plain refs;
+			// CALL-class borrows them (sound only while awaited — see below).
+			const sendClass = calleeType === null || calleeType.typeReturn === null
+				|| calleeType.typeReturn.kind === TypeKind.Void;
+			let borrowed = false;
 			for (let pi = 0; pi < d.arguments.length; pi += 1) {
-				checkActorArgSendable(ctx, d.arguments[pi], pi);
+				if (checkActorArgSendable(ctx, d.arguments[pi], pi, sendClass)) borrowed = true;
+			}
+			if (borrowed && node === ctx.stmtPosExpr) {
+				addError(ctx, "discarded actor call borrows a plain reference — the reply is what keeps it alive\nawait the call, or pass `move` / `Arc<T>` (PARALOCK I21)",
+					node.location.line, node.location.column);
 			}
 		}
 		return inferGenericReturn(ctx, calleeType!, argTypes, expectedType, node);
@@ -1145,6 +1159,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		}
 		// Type-check provided args (rest args check against element type of rest param)
 		const restParamIdx = hasRest ? calleeType.typeChildren.length - 1 : -1;
+		let actorBorrowReported = false;
 		for (let pi = 0; pi < argTypes.length; pi += 1) {
 			let paramType: Type = null as unknown as Type;
 			if (hasRest && pi >= restParamIdx) {
@@ -1284,7 +1299,14 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				}
 				// Sendable check: actor method args must be safe to cross boundary
 				if (isActorMethodCall && pi < d.arguments.length) {
-					checkActorArgSendable(ctx, d.arguments[pi], pi);
+					const sendClass = calleeType === null || calleeType.typeReturn === null
+						|| calleeType.typeReturn.kind === TypeKind.Void;
+					const borrowed = checkActorArgSendable(ctx, d.arguments[pi], pi, sendClass);
+					if (borrowed && !actorBorrowReported && node === ctx.stmtPosExpr) {
+						actorBorrowReported = true;
+						addError(ctx, "discarded actor call borrows a plain reference — the reply is what keeps it alive\nawait the call, or pass `move` / `Arc<T>` (PARALOCK I21)",
+							node.location.line, node.location.column);
+					}
 				}
 			}
 		}

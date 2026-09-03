@@ -4,7 +4,7 @@ import { ActorDeclData, ArrayAccessData, ArrowFunctionData, BinaryExprData, Call
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError } from "./context";
 import { SymbolFlag, hasFlag, lookupSymbol } from "./symbol";
-import { isPrimitiveKind, isStructType, typeDisplayName } from "./types";
+import { isPrimitiveKind, isStructType, isAtomicRef, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 	if (actorSym.declNode === null || actorSym.declNode.kind !== NodeKind.ActorDecl) return false;
@@ -56,30 +56,85 @@ function isTypeSendable(t: Type | null): boolean {
 	};
 }
 
+// Arc<T> pointee rule (PARALOCK Amendment I): SHARE aliases the pointee across
+// threads, so the pointee must be deep-immutable data — primitives, strings,
+// and structs/tuples of those, recursively. This is STRICTER than
+// isTypeSendable: an array is fine as a moved message argument (ownership
+// transfers with it) but stays mutable through an Arc handle, so any array
+// anywhere inside the pointee is rejected; so is any Ref (locks included).
+export function isArcPointeeSendable(t: Type | null): boolean {
+	if (t === null) return true;
+	if (isPrimitiveKind(t.kind)) return true;
+	return match (t.kind) {
+		TypeKind.String => true,
+		TypeKind.Struct when (isStructType(t)) => {
+			for (const ft of t.typeChildren) {
+				if (!isArcPointeeSendable(ft)) return false;
+			}
+			return true;
+		},
+		TypeKind.Tuple => {
+			for (const et of t.typeChildren) {
+				if (!isArcPointeeSendable(et)) return false;
+			}
+			return true;
+		},
+		TypeKind.GenericInstance => {
+			if (t.typeReturn !== null && !isArcPointeeSendable(t.typeReturn)) return false;
+			for (const ta of t.typeChildren) {
+				if (!isArcPointeeSendable(ta)) return false;
+			}
+			return true;
+		},
+		_ => false,
+	};
+}
+
+export function checkArcPointeeSendable(ctx: CheckerContext, pointee: Type, line: number, column: number): void {
+	if (isArcPointeeSendable(pointee)) return;
+	addError(ctx, `Arc<T> pointee must be deep-immutable data — '${typeDisplayName(pointee)}' contains a reference or array\nSHARE aliases the pointee across threads; shared mutable state is Locked<T> (PARALOCK Amendment I)`,
+		line, column);
+}
+
 // Call-site check: combines type analysis with expression-level rules (move, const binding).
-function isSendable(t: Type, argNode: Node): boolean {
+// sendClass: true when the sender cannot park on a reply (void method or discarded
+// result) — a plain const ref is a BORROW and needs the park, so it is rejected.
+function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 	if (t === null) return true;
 	// move always transfers ownership safely
 	if (argNode !== null && argNode.kind === NodeKind.MoveExpr) return true;
 	// If the type itself contains no refs, it's always sendable (value copy)
 	if (isTypeSendable(t)) return true;
-	// Ref<T> with const binding → SHARE rule (immutable, safe to share)
 	if (t.kind === TypeKind.Ref) {
-		if (argNode !== null && argNode.resolvedSym !== null
+		// SHARE — Arc<T> only: atomic rc at the actor boundary makes the binding's
+		// mutability irrelevant (rebinding the handle never writes the pointee).
+		if (isAtomicRef(t)) return true;
+		// BORROW — a const plain ref stays alive only while the sender parks on
+		// the reply, so it is confined to awaited CALL invocations.
+		if (!sendClass && argNode !== null && argNode.resolvedSym !== null
 			&& !hasFlag(argNode.resolvedSym, SymbolFlag.Mutable)) return true;
 		return false;
 	}
 	return false;
 }
 
-export function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: number): void {
+// Returns true when this arg is a plain-ref BORROW the caller must not discard
+// (the discard itself is diagnosed at the call site via ctx.stmtPosExpr).
+export function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: number, sendClass: boolean): boolean {
 	const t = argNode.nodeType;
-	if (t === null) return;
-	if (isSendable(t, argNode)) return;
+	if (t === null) return false;
+	const isPlainRefBorrow = !sendClass && t.kind === TypeKind.Ref && !isAtomicRef(t)
+		&& argNode.kind !== NodeKind.MoveExpr;
+	if (isSendable(t, argNode, sendClass)) return isPlainRefBorrow;
 	const argLabel = argNode.kind === NodeKind.Identifier
 		? "'" + (argNode.data as IdentifierData).name + "'"
 		: `arg ${pi}`;
 	const typedesc = typeDisplayName(t);
+	if (sendClass && t.kind === TypeKind.Ref) {
+		addError(ctx, `fire-and-forget actor call would share a plain reference across threads\n${typedesc} ${argLabel} — use \`move\`, an \`Arc<T>\` argument, or await the reply (PARALOCK I21)`,
+			argNode.location.line, argNode.location.column);
+		return false;
+	}
 	const hint = match (t.kind) {
 		TypeKind.Ref => {
 			const varName = argNode.kind === NodeKind.Identifier ? " " + (argNode.data as IdentifierData).name : "";
@@ -90,6 +145,7 @@ export function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: nu
 	};
 	addError(ctx, `actor methods only accept value types, \`move\`, or \`const\` references\n${typedesc} ${argLabel} is a mutable reference${hint}`,
 		argNode.location.line, argNode.location.column);
+	return false;
 }
 
 // A spawn thunk BORROWS the enclosing env (the lifted closure is handed
