@@ -9,7 +9,7 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { createPrimitive, isAwaitable, isUnresolvedType } from "../checker/types";
 import { lookupSymbol, hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
@@ -1439,6 +1439,7 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.ClassDecl => processClass(stmt, dctx, sloc),
 		NodeKind.ArrowFunction => processArrow(stmt, dctx, sloc),
 		NodeKind.FunctionExpr => processFuncExpr(stmt, dctx, sloc),
+		NodeKind.TestDecl => processTestDecl(stmt, dctx, sloc),
 		_ => stmt,
 	};
 
@@ -2204,6 +2205,13 @@ function processFuncExpr(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 	const d = stmt.data as FunctionExprData;
 	if (d.funcExprBody === null) return stmt;
 	d.funcExprBody = processFuncBodyWithParams(d.funcExprBody, noSym, "", d.funcExprParams, dctx, loc, stmt.nodeType!);
+	return stmt;
+}
+
+function processTestDecl(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
+	const d = stmt.data as TestDeclData;
+	if (d.testBody === null) return stmt;
+	d.testBody = processFuncBodyWithParams(d.testBody, noSym, "", [], dctx, loc, stmt.nodeType!);
 	return stmt;
 }
 
