@@ -78,7 +78,7 @@ while (round < 60) {
 		b.next = a;
 		i = i + 1;
 	}
-	acc = (acc + (await h1) + (await h2) + (await h3) + (await h4)) % 1000;
+	acc = ((acc + (await h1) + (await h2) + (await h3) + (await h4)) % 1000) as int32;
 	round = round + 1;
 }
 console.log("done", acc);

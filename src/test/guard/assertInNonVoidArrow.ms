@@ -38,7 +38,7 @@ test "2: assert inside a void arrow still works" {
 	let seen = 0;
 	const bump = (v: number): void => {
 		assert v > 0, "positive";
-		seen = seen + v;
+		seen = (seen + v) as int32;
 	};
 	bump(3);
 	assert seen === 3, "ran";

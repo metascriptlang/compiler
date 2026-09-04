@@ -43,7 +43,7 @@ function main(): void {
 
 	// (2) capturing (lifted) arrow — writes a destructured value to an outer local
 	let sum = 0;
-	const compute = (): void => { const [a, b] = pair(); sum = a + b; };
+	const compute = (): void => { const [a, b] = pair(); sum = (a + b) as int32; };
 	compute();
 	if (sum !== 7) { throw "GUARD RED: destructure in lifted (capturing) arrow dropped"; }
 

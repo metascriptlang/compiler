@@ -7,8 +7,9 @@
 // as a real directive, prose or not.
 // Oracle program — integer arithmetic must mean the same thing on every backend.
 // C is the specification: `/` on two integer-typed operands truncates toward
-// zero, unsigned types wrap, and a float assigned into an integer slot is
-// truncated at the boundary.
+// zero, unsigned types wrap, and an explicit `as intN` conversion truncates at
+// the boundary. Implicit number → intN narrowing is a checker ERROR now; the
+// four rejected paths live in guard/jsIntegerModelImplicitPaths.ms.
 //
 // Only cases where C produces a VALUE are in here. Signed overflow, `1 << 31`,
 // `INT32_MIN / -1`, division by zero and out-of-range conversion all TRAP on a
@@ -36,14 +37,9 @@ function check(label: string, ok: boolean): void {
 	console.log(label + "=" + (ok ? "ok" : "BAD"));
 }
 
-// The four implicit float -> int paths the checker accepts. Each is a separate
-// conversion site in the pipeline, so each is probed separately.
-function takesI32(n: int32): int32 { return n; }
-
-function returnsI32(): int32 {
-	const f: float64 = opaqueF64(3.9);
-	return f;
-}
+// The four implicit float -> int paths the checker used to accept are now
+// compile-rejected (fit.ms narrowing rule); each shape is probed as a
+// GUARD-CHECK-FAIL in guard/jsIntegerModelImplicitPaths.ms instead.
 
 function main(): number {
 	// --- integer division truncates toward zero (NOT toward -infinity) ---
@@ -124,17 +120,8 @@ function main(): number {
 	check("convU8", (opaqueF64(3.9) as uint8) === 3);
 	check("convU32", (opaqueF64(3.9) as uint32) === 3);
 
-	// --- the four implicit paths, which carry no `as` at all ---
-	const viaDecl: int32 = opaqueF64(3.9);
-	check("convViaDecl", viaDecl === 3);
-
-	check("convViaParam", takesI32(opaqueF64(3.9)) === 3);
-
-	check("convViaReturn", returnsI32() === 3);
-
-	let viaAssign: int32 = 0;
-	viaAssign = opaqueF64(3.9);
-	check("convViaAssign", viaAssign === 3);
+	// (the four implicit-path checks moved to guard/jsIntegerModelImplicitPaths.ms —
+	// the checker rejects those shapes before codegen now)
 
 	if (failures === 0) {
 		console.log("js-integer-model all-ok");

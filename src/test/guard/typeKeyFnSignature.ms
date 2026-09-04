@@ -44,10 +44,10 @@ function main(): void {
 	let stored = 0;
 	const cell: Cell = { getter: null, setter: null };
 	cell.getter = () => 42;
-	cell.setter = (v: number) => { stored = v; };
+	cell.setter = (v: number) => { stored = v as int32; };
 
 	let got = 0;
-	if (cell.getter !== null) { got = cell.getter(); }
+	if (cell.getter !== null) { got = cell.getter() as int32; }
 	if (cell.setter !== null) { cell.setter(7); }
 
 	if (got !== 42) { throw "GUARD RED: getter signature dropped (arity-0 collision)"; }
