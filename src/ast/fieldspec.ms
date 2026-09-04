@@ -318,7 +318,7 @@ export function pkIdent(name: string): Node {
 	return createNodeAt(NodeKind.Identifier, { name: name } as NodeData, makeLoc(3, 4));
 }
 
-export function pkNum(v: number, iv: int64): Node {
+export function pkNum(v: float64, iv: int64): Node {
 	return createNodeAt(NodeKind.NumberLiteral, { value: v, isFloat: true, intVal: iv, outOfRangeText: "oor", isBitPattern: true } as NodeData, makeLoc(5, 6));
 }
 
