@@ -1,0 +1,11 @@
+// std/core/performance — Raiser tier. Same shape as index.cms: a prelude
+// class with one static. The kernel is a host bridge over the host
+// compiler's own monotonic clock.
+
+extern function msPerformanceNow(): number from "msPerformanceNow";
+
+export class performance {
+	static now(): number {
+		return msPerformanceNow();
+	}
+}
