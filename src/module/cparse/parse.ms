@@ -379,7 +379,7 @@ function arrayDimensions(ctx: ParseCtx, ty: CType): CType {
 	if (!eq(ctx, "]")) {
 		const evalResult = evalConstExpr(ctx.tok, ctx.enumConstants);
 		if (evalResult.ok) {
-			size = evalResult.value as number;
+			size = evalResult.value as int32;
 			ctx.tok = evalResult.tok;
 		}
 	}
@@ -560,7 +560,7 @@ function structMembers(ctx: ParseCtx): CMember[] {
 			let bitWidth = -1;
 			if (consume(ctx, ":")) {
 				if (ctx.tok.kind === CTokenKind.Num) {
-					bitWidth = ctx.tok.intVal as number;
+					bitWidth = ctx.tok.intVal as int32;
 					advance(ctx);
 				}
 			}

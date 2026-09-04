@@ -26,7 +26,7 @@ export interface CliOptions {
 	outputPath: string;
 	showTime: boolean;
 	verbose: boolean;
-	errorMax: number;
+	errorMax: int32;
 	vmIterations: number;    // --max-vm-iterations=<n>: Raiser VM loop budget (0 = VM default, 10M iterations)
 	mode: number;
 	ccCompiler: number;

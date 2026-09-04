@@ -48,7 +48,7 @@ function parseCorpus(): Node {
 
 // Walks the whole tree, counting how many times a callback is handed a null.
 // Dereferences every non-null child so the traversal is real work, not a no-op.
-function countNullChildren(root: Node): number {
+function countNullChildren(root: Node): int32 {
 	let nulls = 0;
 	let kinds = 0;
 	forEachChild(root, (child: Node): void => {
@@ -65,7 +65,7 @@ function countNullChildren(root: Node): number {
 // Vacuity check: the corpus must actually CONTAIN an absent slot, else the
 // guard passes for the wrong reason. Same lesson as childTableGuard's
 // "extractor still finds the AST field set".
-function countAbsentInitializers(root: Node): number {
+function countAbsentInitializers(root: Node): int32 {
 	let absent = 0;
 	if (root.kind === NodeKind.VariableDecl) {
 		const d = root.data as VariableDeclData;

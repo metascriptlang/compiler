@@ -20,9 +20,9 @@ export interface TokenizeResult {
 
 interface ScanState {
 	source: string;
-	pos: number;
-	line: number;
-	col: number;
+	pos: int32;
+	line: int32;
+	col: int32;
 	file: string;
 	atBol: boolean;
 	hasSpace: boolean;
@@ -32,11 +32,11 @@ interface ScanState {
 
 // ===== Byte-level helpers =====
 
-function peek(s: ScanState): number {
+function peek(s: ScanState): int32 {
 	return s.source.byteAt(s.pos);
 }
 
-function peekAt(s: ScanState, offset: number): number {
+function peekAt(s: ScanState, offset: int32): int32 {
 	return s.source.byteAt(s.pos + offset);
 }
 
@@ -251,7 +251,7 @@ function stringLiteralEnd(s: ScanState): number {
 	return p;
 }
 
-function readStringLiteral(s: ScanState, tokenStart: number, startLine: number, startCol: number, quotePos: number, litKind: LitKind): CToken {
+function readStringLiteral(s: ScanState, tokenStart: int32, startLine: int32, startCol: int32, quotePos: int32, litKind: LitKind): CToken {
 	s.pos = quotePos + 1;
 	const endPos = stringLiteralEnd(s);
 
@@ -283,7 +283,7 @@ function readStringLiteral(s: ScanState, tokenStart: number, startLine: number, 
 
 // ===== Character literal =====
 
-function readCharLiteral(s: ScanState, tokenStart: number, startLine: number, startCol: number, quotePos: number, litKind: LitKind): CToken {
+function readCharLiteral(s: ScanState, tokenStart: int32, startLine: int32, startCol: int32, quotePos: int32, litKind: LitKind): CToken {
 	s.pos = quotePos + 1;
 
 	if (s.pos >= s.source.byteLength || peek(s) === "'".code) {

@@ -1334,7 +1334,7 @@ export function sgGetSignatureContext(program: Node, source: string, line: numbe
 // Walks each typed arg's nodeType, compares against each candidate's param type,
 // scores by number of exact matches. Returns 0 (primary) if no callNode or no
 // args typed yet. Used by the LSP to set `activeSignature` for signature help.
-export function sgPickActiveOverload(callNode: Node, sym: Symbol): number {
+export function sgPickActiveOverload(callNode: Node, sym: Symbol): int32 {
 	if (callNode === null || sym === null) return 0;
 	if (sym.overloads === null || sym.overloads.length === 0) return 0;
 	const d = callNode.data as CallExprData;
@@ -2610,11 +2610,11 @@ function sgCollectExceptionHints(
 // Modifiers (bit positions): 0=declaration, 1=definition, 2=readonly, 3=static
 
 export interface SgSemanticToken {
-	line: number;       // 1-indexed (converted to 0-indexed by handler)
-	col: number;        // 1-indexed (converted to 0-indexed by handler)
-	length: number;
-	tokenType: number;  // index into legend
-	modifiers: number;  // bitmask
+	line: int32;       // 1-indexed (converted to 0-indexed by handler)
+	col: int32;        // 1-indexed (converted to 0-indexed by handler)
+	length: int32;
+	tokenType: int32;  // index into legend
+	modifiers: int32;  // bitmask
 }
 
 export function sgCollectSemanticTokens(ctx: CheckerContext, program: Node): SgSemanticToken[] {
@@ -2625,7 +2625,7 @@ export function sgCollectSemanticTokens(ctx: CheckerContext, program: Node): SgS
 }
 
 // Map SymbolKind to semantic token type index
-function sgSymbolToTokenType(kind: SymbolKind): number {
+function sgSymbolToTokenType(kind: SymbolKind): int32 {
 	if (kind === SymbolKind.Function) return 12;
 	if (kind === SymbolKind.Method) return 13;
 	if (kind === SymbolKind.Variable) return 8;

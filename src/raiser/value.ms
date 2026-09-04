@@ -194,8 +194,8 @@ test "array" { assert raiserToString(raiserArray(0)) === "[array]"; }
 
 export interface RaiserArrayData {
 	items: RaiserValue[];
-	rc: number;
-	color: number;
+	rc: int32;
+	color: int32;
 }
 
 export interface RaiserArrayHeap {
@@ -305,8 +305,8 @@ export interface RaiserObjectField {
 
 export interface RaiserObjectData {
 	fields: RaiserObjectField[];
-	rc: number;
-	color: number;
+	rc: int32;
+	color: int32;
 }
 
 export interface RaiserObjectHeap {

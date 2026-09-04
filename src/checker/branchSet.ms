@@ -41,7 +41,7 @@ export function hasName(list: string[], name: string): boolean {
 }
 
 // Collect names appended between oldState and current length.
-export function collectSince(list: string[], oldState: number): string[] {
+export function collectSince(list: string[], oldState: int32): string[] {
 	const result: string[] = [];
 	let i = oldState;
 	while (i < list.length) {
@@ -73,7 +73,7 @@ function addToIntersection(counts: NameCount[], name: string, breakState: BreakS
 // in every non-exiting branch AND the construct is exhaustive.
 export function mergeBranches(
 	list: string[],
-	oldState: number,
+	oldState: int32,
 	branchSets: string[][],
 	branchBreaks: BreakState[],
 	isExhaustive: boolean,

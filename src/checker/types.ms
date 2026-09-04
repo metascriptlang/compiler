@@ -54,16 +54,16 @@ import { Type, TypeKind, TypeFlag, CallingConvention, AttachedOp } from "../ast/
 // ===== Target Configuration (Implementation parity) =====
 // Module-level state set once at startup. Defaults to 64-bit.
 
-let targetPtrSize: number = 8;
-let targetIntSize: number = 8;
+let targetPtrSize: int32 = 8;
+let targetIntSize: int32 = 8;
 
-export function setTargetSizes(ptrSize: number, intSize: number): void {
+export function setTargetSizes(ptrSize: int32, intSize: int32): void {
 	targetPtrSize = ptrSize;
 	targetIntSize = intSize;
 }
 
-export function getTargetPtrSize(): number { return targetPtrSize; }
-export function getTargetIntSize(): number { return targetIntSize; }
+export function getTargetPtrSize(): int32 { return targetPtrSize; }
+export function getTargetIntSize(): int32 { return targetIntSize; }
 
 
 // ===== In-Place Type Upgrade (reference parity: assignType) =====
@@ -195,7 +195,7 @@ export function unwrapVarargs(t: Type): Type {
 	return t;
 }
 
-export function createSizedArray(element: Type | null, size: number): Type {
+export function createSizedArray(element: Type | null, size: int32): Type {
 	const t = emptyType();
 	t.kind = TypeKind.SizedArray;
 	t.typeReturn = element;
@@ -625,7 +625,7 @@ export function duVariantRegistry(): Type[] {
 // When fieldTypes is non-empty, also checks type kind to disambiguate variants with
 // same field names but different types (e.g., { value: number } vs { value: string }).
 // Returns the variant index, or -1 if no variant matches.
-export function findUnionVariant(unionType: Type | null, fieldNames: string[], fieldTypes: Type[]): number {
+export function findUnionVariant(unionType: Type | null, fieldNames: string[], fieldTypes: Type[]): int32 {
 	if (unionType === null || unionType.typeChildren === null || fieldNames.length === 0) return -1;
 	let vi = 0;
 	while (vi < unionType.typeChildren.length) {
@@ -779,14 +779,14 @@ export function detectUnionDiscriminant(unionType: Type | null, fieldName: strin
 let _fvbCount: float64 = 0;
 let _fvbTime: float64 = 0;
 export function findVariantByFieldNameProfile(): float64[] { return [_fvbCount, _fvbTime]; }
-export function findVariantByFieldName(unionType: Type | null, fieldName: string): number {
+export function findVariantByFieldName(unionType: Type | null, fieldName: string): int32 {
 	_fvbCount = _fvbCount + 1;
 	const _v0 = performance.now();
 	const r = findVariantByFieldNameInner(unionType, fieldName);
 	_fvbTime = _fvbTime + (performance.now() - _v0);
 	return r;
 }
-function findVariantByFieldNameInner(unionType: Type | null, fieldName: string): number {
+function findVariantByFieldNameInner(unionType: Type | null, fieldName: string): int32 {
 	if (unionType === null || unionType.typeChildren === null) return -1;
 	let i = 0;
 	while (i < unionType.typeChildren.length) {
@@ -805,7 +805,7 @@ function findVariantByFieldNameInner(unionType: Type | null, fieldName: string):
 // (flow narrowing returns the union's own typeChildren element), then identity
 // after peeling Ref wrappers (TS-style DU variants are Ref<interface>), then
 // typeName (variants are stamped "<Alias>.<Key>" / interface names, unique per union).
-export function duVariantIndexOfType(unionType: Type | null, variantType: Type | null): number {
+export function duVariantIndexOfType(unionType: Type | null, variantType: Type | null): int32 {
 	if (unionType === null || unionType.typeChildren === null || variantType === null) return -1;
 	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
 		if (unionType.typeChildren[i] === variantType) return i;
@@ -1004,7 +1004,7 @@ export function duFieldRequiresNarrowing(unionType: Type | null, fieldName: stri
 // Find variant index by discriminant enum value name (e.g. "NumLit" or "NodeKind.NumLit").
 // typeNames layout: [discFieldName, key0, key1, ...] — keys start at index 1.
 // Matches both qualified ("Kind.A") and unqualified ("A") against stored keys.
-export function findVariantByDiscriminant(unionType: Type | null, enumValue: string): number {
+export function findVariantByDiscriminant(unionType: Type | null, enumValue: string): int32 {
 	if (unionType === null || unionType.typeNames === null || unionType.typeNames.length < 2) return -1;
 	const queryBare = bareAfterDelim(enumValue, ".");
 	// Also handle underscore-mangled form: checkMemberExpr rewrites EnumType.Member to EnumType_Member
@@ -1199,7 +1199,7 @@ export function enumDiscriminantTypeOf(unionType: Type | null, discFieldName: st
 // variant lookups — both encode the literal value in `Type.typeName`
 // (`"circle"`/`"square"` for StringLiteral, `"true"`/`"false"` for
 // BooleanLiteral). Returns -1 when no variant matches.
-function findVariantByLiteralDiscriminant(unionType: Type | null, discFieldName: string, literalKind: TypeKind, litValueName: string): number {
+function findVariantByLiteralDiscriminant(unionType: Type | null, discFieldName: string, literalKind: TypeKind, litValueName: string): int32 {
 	if (unionType === null || unionType.typeChildren === null) return -1;
 	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
 		const variant = peelToStruct(unionType.typeChildren[i]);
@@ -1217,7 +1217,7 @@ function findVariantByLiteralDiscriminant(unionType: Type | null, discFieldName:
 }
 
 // Find variant index by boolean literal discriminator value.
-export function findVariantByBooleanDiscriminant(unionType: Type | null, discFieldName: string, litValue: boolean): number {
+export function findVariantByBooleanDiscriminant(unionType: Type | null, discFieldName: string, litValue: boolean): int32 {
 	return findVariantByLiteralDiscriminant(unionType, discFieldName, TypeKind.BooleanLiteral, litValue ? "true" : "false");
 }
 
@@ -1258,7 +1258,7 @@ export function collectEnumDiscriminantValues(unionType: Type | null, discFieldN
 // Used when the union is string-literal based (type Shape = {kind:"a",...} | {kind:"b",...})
 // and there's no enum-backed discriminant metadata on the union itself.
 // Returns -1 if no variant has a StringLiteral field matching the value.
-export function findVariantByStringDiscriminant(unionType: Type | null, discFieldName: string, litValue: string): number {
+export function findVariantByStringDiscriminant(unionType: Type | null, discFieldName: string, litValue: string): int32 {
 	return findVariantByLiteralDiscriminant(unionType, discFieldName, TypeKind.StringLiteral, litValue);
 }
 
@@ -2085,9 +2085,9 @@ export function skipModifier(t: Type | null): Type | null {
 // ===== Type Size Estimation (Reference: reference codegen utils parity) =====
 // Returns estimated C struct size in bytes for reference pointer introduction threshold.
 // Reference: size threshold = 24 bytes on 64-bit. Objects/tuples larger than this → pass by pointer.
-let _sizeDepth: number = 0;
+let _sizeDepth: int32 = 0;
 
-export function getTypeSize(t: Type): number {
+export function getTypeSize(t: Type): int32 {
 	if (t === null) return 0;
 	// Guard against recursive types (e.g. Type has Type[] fields)
 	if (_sizeDepth > 8) return 64; // assume large → pass by pointer
@@ -2097,7 +2097,7 @@ export function getTypeSize(t: Type): number {
 	return result;
 }
 
-function getTypeSizeInner(t: Type): number {
+function getTypeSizeInner(t: Type): int32 {
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float32 | TypeKind.Float64 => 8,
 		TypeKind.Int8 | TypeKind.Uint8 => 1,
@@ -3086,7 +3086,7 @@ export function isIndexableMapType(t: Type | null): boolean {
 }
 
 // alignTo — round up offset to alignment boundary
-function alignTo(offset: number, align: number): number {
+function alignTo(offset: int32, align: int32): int32 {
 	if (align <= 1) return offset;
 	const rem = offset % align;
 	if (rem === 0) return offset;
@@ -3094,7 +3094,7 @@ function alignTo(offset: number, align: number): number {
 }
 
 // alignOfType — natural alignment for C ABI (target-aware)
-export function alignOfType(t: Type): number {
+export function alignOfType(t: Type): int32 {
 	const ps = targetPtrSize;
 	if (t.kind === TypeKind.Struct || t.kind === TypeKind.Tuple) {
 		return alignOfStruct(t);
@@ -3114,7 +3114,7 @@ export function alignOfType(t: Type): number {
 	};
 }
 
-function alignOfStruct(t: Type): number {
+function alignOfStruct(t: Type): int32 {
 	let maxAlign = 1;
 	if (t.typeChildren !== null) {
 		let i = 0;
@@ -3129,7 +3129,7 @@ function alignOfStruct(t: Type): number {
 
 // sizeOfType — compile-time sizeof for primitive and compound types (target-aware C ABI)
 // Mirrors standard reference implementation for size/alignment: fields are aligned, struct is padded to maxAlign.
-export function sizeOfType(t: Type): number {
+export function sizeOfType(t: Type): int32 {
 	const ps = targetPtrSize;
 	if (t.kind === TypeKind.Struct || t.kind === TypeKind.Tuple) {
 		return sizeOfStruct(t);
@@ -3150,7 +3150,7 @@ export function sizeOfType(t: Type): number {
 	};
 }
 
-function sizeOfStruct(t: Type): number {
+function sizeOfStruct(t: Type): int32 {
 	let offset = 0;
 	let maxAlign = 1;
 	if (t.typeChildren !== null) {

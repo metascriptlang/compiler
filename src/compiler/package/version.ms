@@ -98,7 +98,7 @@ function allDigits(s: string): boolean {
 }
 
 // Return the index of the next `.` in s at or after start, or s.length if none.
-function nextIdEnd(s: string, start: number): number {
+function nextIdEnd(s: string, start: int32): int32 {
 	let i = start;
 	while (i < s.length && s.charAt(i) !== ".") i = i + 1;
 	return i;

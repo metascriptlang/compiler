@@ -120,7 +120,7 @@ export function writeOutput(filePath: string, content: string): void {
 
 // Print checker errors and exit. Used by compile, run, check commands.
 // maxErrors=0 means show all.
-export function printErrorsAndExit(ctx: CheckerContext, prefix: string, maxErrors: number): void {
+export function printErrorsAndExit(ctx: CheckerContext, prefix: string, maxErrors: int32): void {
 	let limit = ctx.errors.length;
 	if (maxErrors > 0 && maxErrors < limit) {
 		limit = maxErrors;

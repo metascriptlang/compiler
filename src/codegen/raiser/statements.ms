@@ -310,7 +310,7 @@ function compileSwitchStmt(s: RaiserCompState, node: Node): void {
 	const discReg = compileExpr(s, d.switchDisc);
 
 	// Collect jump-to-end patches for each matched case (break equivalent)
-	const endPatches: number[] = [];
+	const endPatches: int32[] = [];
 	let defaultCaseIdx = -1;
 
 	// First pass: find default case index

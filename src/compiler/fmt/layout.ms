@@ -12,8 +12,8 @@ const MODE_BREAK = 1;
 
 // Command: a triple pushed onto the print stack.
 interface Cmd {
-	indent: number;
-	mode: number;
+	indent: int32;
+	mode: int32;
 	doc: Doc;
 }
 
@@ -58,7 +58,7 @@ function flushSuffixes(lineSuffixes: Doc[]): string {
 }
 
 // Emit indentation string — tabs when useTabs, spaces otherwise.
-function makeIndentStr(indent: number, options: FormatOptions): string {
+function makeIndentStr(indent: int32, options: FormatOptions): string {
 	if (options.useTabs) {
 		const tabCount = indent / options.tabWidth;
 		let s = "";
@@ -177,7 +177,7 @@ function fits(next: Cmd, restStack: Cmd[], restIdx: number, rem: number): boolea
 }
 
 // Calculate flat width of a doc (used by fits rest-of-line fallback)
-function getFlatWidth(doc: Doc): number {
+function getFlatWidth(doc: Doc): int32 {
 	if (doc === null) return 0;
 	return match (doc.kind) {
 		DocKind.Nil | DocKind.BreakParent | DocKind.LineSuffix => 0,
@@ -203,7 +203,7 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 	let column = 0;
 	const lineSuffixes: Doc[] = [];
 	// Track group break decisions by ID for cross-group IfBreak
-	const groupModes: number[] = []; // groupId → MODE_FLAT or MODE_BREAK
+	const groupModes: int32[] = []; // groupId → MODE_FLAT or MODE_BREAK
 
 	// Command stack — push in reverse order so children pop in correct order
 	const stack: Cmd[] = [{ indent: 0, mode: MODE_BREAK, doc }];
@@ -224,7 +224,7 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 
 		if (d.kind === DocKind.Group) {
 			const children = (d.data as { children: Doc[] }).children;
-			let childMode: number;
+			let childMode: int32;
 			if (d.shouldBreak) {
 				childMode = MODE_BREAK;
 			} else {

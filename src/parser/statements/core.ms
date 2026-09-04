@@ -144,7 +144,7 @@ function isNumericStr(s: string): boolean {
 	return true;
 }
 
-function cmpStr(a: string, b: string): number {
+function cmpStr(a: string, b: string): int32 {
 	const n = a.length < b.length ? a.length : b.length;
 	for (let i = 0; i < n; i += 1) {
 		const ca = a.byteAt(i);

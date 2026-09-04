@@ -92,13 +92,13 @@ export function scanNumber(s: LexerState): void {
 
 // ===== String Scanning =====
 
-function hexDigitValue(b: number): number {
+function hexDigitValue(b: int32): int32 {
 	if (b >= "0".code && b <= "9".code) return b - "0".code;
 	if (b >= "a".code && b <= "f".code) return b - "a".code + 10;
 	return b - "A".code + 10;
 }
 
-function scanHexDigits(s: LexerState, count: number): number {
+function scanHexDigits(s: LexerState, count: int32): int32 {
 	let value = 0;
 	let i = 0;
 	while (i < count) {

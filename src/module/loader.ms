@@ -372,7 +372,7 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 
 // Line number (1-based) of the character at endPos, counting inserted text —
 // callers subtract their own insertion count to recover original-source lines.
-function countLinesBefore(text: string, endPos: number): number {
+function countLinesBefore(text: string, endPos: int32): int32 {
 	let n = 1;
 	for (let i = 0; i < endPos; i += 1) {
 		if (text.charCodeAt(i) === "\n".code) n = n + 1;

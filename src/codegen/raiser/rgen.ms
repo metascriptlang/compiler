@@ -192,7 +192,7 @@ function compileClassConstructor(
 // absolute index assigned to `wantFn` (-1 if not present).
 interface RaiserReservedSlot { idx: number; fnName: string; params: string[]; body: Node; arity: number; }
 
-export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, program: Node, wantFn: string): number {
+export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, program: Node, wantFn: string): int32 {
 	const pd = program.data as ProgramData;
 	let wantIdx = -1;
 
@@ -214,7 +214,7 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 			const ed = enumNode.data as EnumDeclData;
 			for (let ei = 0; ei < ed.enumMembers.length; ei += 1) {
 				const val = (ed.enumValues !== null && ei < ed.enumValues.length) ? ed.enumValues[ei] : ei;
-				const eEntry: RaiserFuncEntry = { name: `${ed.enumName}.${ed.enumMembers[ei]}`, index: val };
+				const eEntry: RaiserFuncEntry = { name: `${ed.enumName}.${ed.enumMembers[ei]}`, index: val as int32 };
 				enumMap.items.push(eEntry);
 			}
 		}
@@ -268,7 +268,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 				const ed = enumNode.data as EnumDeclData;
 				for (let ei = 0; ei < ed.enumMembers.length; ei += 1) {
 					const val = (ed.enumValues !== null && ei < ed.enumValues.length) ? ed.enumValues[ei] : ei;
-					const entry: RaiserFuncEntry = { name: `${ed.enumName}.${ed.enumMembers[ei]}`, index: val };
+					const entry: RaiserFuncEntry = { name: `${ed.enumName}.${ed.enumMembers[ei]}`, index: val as int32 };
 					globalEnumMap.items.push(entry);
 				}
 			}

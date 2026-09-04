@@ -9,7 +9,7 @@
 import { Node, Type, SourceLocation } from "./node";
 import { FieldSink, nodeFields, nodeKindName } from "./fieldspec";
 
-function indent(level: number): string {
+function indent(level: int32): string {
 	let spaces = "";
 	for (let i = 0; i < level; i++) spaces = spaces + "  ";
 	return spaces;
@@ -113,7 +113,7 @@ const printSink: FieldSink = {
 	},
 };
 
-export function printNode(node: Node | null, level: number): void {
+export function printNode(node: Node | null, level: int32): void {
 	if (node === null) return;
 	const saved = _level;
 	_level = level;

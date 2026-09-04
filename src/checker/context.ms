@@ -37,7 +37,7 @@ export interface ExportedSymInfo {
 	overloadBuiltinKinds: string[];
 	defaultParams: Node[];
 	overloadDefaultParamsFlat: Node[];
-	overloadDefaultParamsCounts: number[];
+	overloadDefaultParamsCounts: int32[];
 	definingModule: string;  // Original defining module path (preserved through re-exports)
 	originalName: string;    // Original declared name (used for C mangling, not import alias)
 	headerPath: string;      // @include header path for this extern symbol
@@ -193,7 +193,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	const ovRtNames: string[] = [];
 	const ovBiKinds: string[] = [];
 	const ovDefParamsFlat: Node[] = [];
-	const ovDefParamsCounts: number[] = [];
+	const ovDefParamsCounts: int32[] = [];
 	const ovFlags: int32[] = [];
 
 	const ovDeclNodes: Node[] = [];
@@ -1318,7 +1318,7 @@ export function hasFatalErrors(ctx: CheckerContext): boolean {
 	return false;
 }
 
-export function errorCount(ctx: CheckerContext): number {
+export function errorCount(ctx: CheckerContext): int32 {
 	let count = 0;
 	for (let i = 0; i < ctx.errors.length; i += 1) {
 		if (ctx.errors[i].severity === Severity.Error) count = count + 1;

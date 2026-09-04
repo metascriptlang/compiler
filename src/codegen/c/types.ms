@@ -1062,7 +1062,7 @@ function genEnumType(g: CGen, t: Type): string {
 		const memberName = `${name}_${mangle(t.typeNames[i])}`;
 		let val = i;
 		if (t.typeChildren !== null && i < t.typeChildren.length && t.typeChildren[i] !== null) {
-			val = t.typeChildren[i].typeFlags as number;
+			val = t.typeChildren[i].typeFlags as int32;
 		}
 		addLine(sec(g, CSection.Types), `#define ${memberName} (((${name})${val.toString()}))`);
 	}

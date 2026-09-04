@@ -28,10 +28,10 @@ export interface ResolveSection {
 }
 
 export interface FmtSection {
-	printWidth: number;
-	tabWidth: number;
-	useTabs: number;        // -1 = unset, 0 = false, 1 = true
-	singleQuote: number;    // -1 = unset, 0 = false, 1 = true
+	printWidth: int32;
+	tabWidth: int32;
+	useTabs: int32;        // -1 = unset, 0 = false, 1 = true
+	singleQuote: int32;    // -1 = unset, 0 = false, 1 = true
 }
 
 export function defaultFmtSection(): FmtSection {
@@ -220,7 +220,7 @@ function nodeStringArray(node: Node): string[] {
 }
 
 // Extract a boolean value from a node. Returns -1 if not bool, 0 for false, 1 for true.
-function nodeBool(node: Node): number {
+function nodeBool(node: Node): int32 {
 	if (node === null || node.kind !== NodeKind.BooleanLiteral) return -1;
 	return (node.data as BooleanLiteralData).boolValue ? 1 : 0;
 }
@@ -257,9 +257,9 @@ function extractFmt(fmtNode: Node): FmtSection {
 	const fmt = defaultFmtSection();
 	if (fmtNode === null || fmtNode.kind !== NodeKind.ObjectLiteral) return fmt;
 	const pw = findObjField(fmtNode, "printWidth");
-	if (pw !== null) { const v = nodeNumber(pw); if (v >= 0) { fmt.printWidth = v; } }
+	if (pw !== null) { const v = nodeNumber(pw); if (v >= 0) { fmt.printWidth = v as int32; } }
 	const tw = findObjField(fmtNode, "tabWidth");
-	if (tw !== null) { const v = nodeNumber(tw); if (v >= 0) { fmt.tabWidth = v; } }
+	if (tw !== null) { const v = nodeNumber(tw); if (v >= 0) { fmt.tabWidth = v as int32; } }
 	const ut = findObjField(fmtNode, "useTabs");
 	if (ut !== null) { fmt.useTabs = nodeBool(ut); }
 	const sq = findObjField(fmtNode, "singleQuote");

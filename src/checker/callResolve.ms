@@ -2440,7 +2440,7 @@ function formatCandidateSig(name: string, fnType: Type): string {
 
 // Walk class inheritance chain from sourceType to targetType.
 // Returns depth (1 = direct parent, 2 = grandparent), or -1 if not in chain.
-function inheritanceDepth(sourceType: Type, targetType: Type, ctx: CheckerContext): number {
+function inheritanceDepth(sourceType: Type, targetType: Type, ctx: CheckerContext): int32 {
 	if (sourceType === null || targetType === null) return -1;
 	// Unwrap Ref<Object> to access inner Object's typeName/typeExtra
 	const src = unwrapRef(sourceType);

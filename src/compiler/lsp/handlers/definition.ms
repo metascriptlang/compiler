@@ -19,7 +19,7 @@ import { dbResolveImport } from "../../transam/index";
 
 
 // Find the 0-based column of `name` as a whole word on 0-based `targetLine`.
-function lspFindNameCol(src: string, targetLine: number, name: string): number {
+function lspFindNameCol(src: string, targetLine: int32, name: string): int32 {
 	// Navigate to target line
 	let lineNum = 0;
 	let lineStart = 0;

@@ -30,15 +30,15 @@ export enum CTypeKind {
 
 export interface CType {
 	kind: CTypeKind;
-	size: number;
-	align: number;
+	size: int32;
+	align: int32;
 	isSigned: boolean;
 	isConst: boolean;
 	isVolatile: boolean;
 	isRestrict: boolean;
 	isAtomic: boolean;
 	base: CType;
-	arrayLen: number;
+	arrayLen: int32;
 	returnType: CType;
 	params: CType[];
 	paramNames: string[];
@@ -59,15 +59,15 @@ export interface CType {
 export interface CMember {
 	name: string;
 	type: CType;
-	offset: number;
-	align: number;
-	bitOffset: number;
-	bitWidth: number;
+	offset: int32;
+	align: int32;
+	bitOffset: int32;
+	bitWidth: int32;
 }
 
 // ===== Internal constructor =====
 
-function newType(kind: CTypeKind, size: number, align: number, signed: boolean): CType {
+function newType(kind: CTypeKind, size: int32, align: int32, signed: boolean): CType {
 	return {
 		kind,
 		size,
@@ -167,7 +167,7 @@ export function makePointer(target: TargetInfo, base: CType): CType {
 	return t;
 }
 
-export function makeArray(base: CType, len: number): CType {
+export function makeArray(base: CType, len: int32): CType {
 	const size = len >= 0 ? base.size * len : -1;
 	const t = newType(CTypeKind.Array, size, base.align, false);
 	t.base = base;
@@ -254,7 +254,7 @@ export function copyType(ty: CType): CType {
 
 // ===== Struct / Union layout =====
 
-function alignUp(n: number, align: number): number {
+function alignUp(n: int32, align: int32): int32 {
 	if (align <= 1) return n;
 	const rem = n % align;
 	if (rem === 0) return n;

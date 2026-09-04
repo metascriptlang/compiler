@@ -196,7 +196,7 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 		console.log(`${errStyle("error")}: too many files (${walk.files.length.toString()}), max is ${MAX_FILES.toString()}`);
 		return false;
 	}
-	let uncompressedTotal = 0;
+	let uncompressedTotal: number = 0;
 	let i = 0;
 	while (i < walk.files.length) {
 		uncompressedTotal = uncompressedTotal + walk.files[i].size;

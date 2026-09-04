@@ -123,7 +123,7 @@ function futureChainFnForReturn(retType: Type | null): string {
 }
 
 // "string" = 2 slots (16B inlined); "array"/"struct" = 1 slot (heap-boxed).
-function paramSlotWidth(paramTypes: Type[], idx: number): number {
+function paramSlotWidth(paramTypes: Type[], idx: int32): int32 {
 	const mk = paramMsgKind(paramTypes, idx);
 	return mk === "string" ? 2 : 1;
 }

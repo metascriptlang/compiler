@@ -5,7 +5,7 @@
 
 // Decode one UTF-8 code point starting at byte position `pos`.
 // Returns [codePoint, bytesConsumed]. Invalid sequence → [0xFFFD, 1].
-export function decodeUtf8(source: string, pos: number): number[] {
+export function decodeUtf8(source: string, pos: int32): int32[] {
 	const ch = source.byteAt(pos);
 	if (ch < 0) return [0xFFFD, 1]; // out of range
 	if (ch < 0x80) return [ch, 1];
@@ -68,7 +68,7 @@ export function isIdent2(cp: number): boolean {
 }
 
 // Hex digit value (0-15). Returns -1 for non-hex.
-export function fromHex(ch: number): number {
+export function fromHex(ch: int32): int32 {
 	if (ch >= "0".code && ch <= "9".code) return ch - "0".code;
 	if (ch >= "a".code && ch <= "f".code) return ch - "a".code + 10;
 	if (ch >= "A".code && ch <= "F".code) return ch - "A".code + 10;

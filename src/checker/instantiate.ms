@@ -241,7 +241,7 @@ function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
 // instance is emitted in the defining module's TU, so a private extension
 // would resolve here but fail at link; skipping it surfaces a check-time
 // "no member" error with the instantiation note instead.
-function injectCallerExtensions(bodyCtx: CheckerContext, ctx: CheckerContext): number {
+function injectCallerExtensions(bodyCtx: CheckerContext, ctx: CheckerContext): int32 {
 	if (bodyCtx === ctx) return -1;
 	if (bodyCtx.extensionRegistry === null || ctx.extensionRegistry === null) return -1;
 	const preCount = bodyCtx.extensionRegistry.methods.length;
@@ -260,7 +260,7 @@ function injectCallerExtensions(bodyCtx: CheckerContext, ctx: CheckerContext): n
 	return preCount;
 }
 
-function truncateCallerExtensions(bodyCtx: CheckerContext, preCount: number): void {
+function truncateCallerExtensions(bodyCtx: CheckerContext, preCount: int32): void {
 	if (preCount < 0) return;
 	bodyCtx.extensionRegistry.methods.length = preCount;
 }

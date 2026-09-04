@@ -54,7 +54,7 @@ export function splitTopLevel(s: string, delim: string): string[] {
 	return parts;
 }
 
-export function parseIntStr(s: string): number {
+export function parseIntStr(s: string): int32 {
 	let result = 0;
 	let i = 0;
 	while (i < s.byteLength) {

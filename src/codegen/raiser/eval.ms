@@ -117,7 +117,7 @@ interface ComptimeEngine {
 	funcMap: RaiserFuncMap;
 	enumMap: RaiserFuncMap;
 	vm: RaiserVM;
-	seen: HashMap<string, number>;
+	seen: HashMap<string, int32>;
 }
 
 let _engine: ComptimeEngine = null as unknown as ComptimeEngine;
@@ -134,11 +134,11 @@ function freshEngine(): ComptimeEngine {
 	const funcMap: RaiserFuncMap = { items: [] };
 	const enumMap: RaiserFuncMap = { items: [] };
 	const vm = createVM(image, "arena");
-	const seen: HashMap<string, number> = new HashMap<string, number>();
+	const seen: HashMap<string, int32> = new HashMap<string, int32>();
 	return { image, funcMap, enumMap, vm, seen };
 }
 
-function compileProgramIntoEngine(program: Node, seeds: Symbol[], wantFn: string): number {
+function compileProgramIntoEngine(program: Node, seeds: Symbol[], wantFn: string): int32 {
 	registerSeedSymbols(seeds);
 	const transformed = transformForEngine(program);
 	clearSeedSymbols();
@@ -184,7 +184,7 @@ function seedCtxForSym(sym: Symbol): CheckerContext {
 	return null as unknown as CheckerContext;
 }
 
-function ensureCompiledIntoEngine(sym: Symbol): number {
+function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine === null) return -1;
 	if (!isRoutineSym(sym)) return -1;
 	const name = sym.name;

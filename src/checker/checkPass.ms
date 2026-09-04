@@ -134,7 +134,7 @@ function consumeKeyName(key: string): string {
 // outer scope. The body can legitimately consume inner handles (scope-exit
 // check catches those), but an outer handle consumed inside a loop body would
 // be reused on the next iteration. Reports each offender once.
-function detectLoopReuse(ctx: CheckerContext, outerKeys: string[], bodyStartState: number, line: number, col: number): void {
+function detectLoopReuse(ctx: CheckerContext, outerKeys: string[], bodyStartState: int32, line: number, col: number): void {
 	const newConsumes = collectNewConsumes(ctx.affineTracker, bodyStartState);
 	for (const key of newConsumes) {
 		for (const outerKey of outerKeys) {

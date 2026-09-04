@@ -16,15 +16,15 @@ export enum TargetTriple {
 export interface TargetInfo {
 	triple: TargetTriple;
 	tripleName: string;         // "x86_64-linux-gnu", etc.
-	pointerSize: number;        // 4 or 8
-	pointerAlign: number;
-	shortSize: number;          // almost always 2
-	intSize: number;            // 4 on all mainstream targets
-	longSize: number;           // 4 on Windows LLP64, 8 on LP64
-	longLongSize: number;       // 8 everywhere we care about
-	floatSize: number;          // 4
-	doubleSize: number;         // 8
-	longDoubleSize: number;     // 8, 12, or 16 depending on target
+	pointerSize: int32;        // 4 or 8
+	pointerAlign: int32;
+	shortSize: int32;          // almost always 2
+	intSize: int32;            // 4 on all mainstream targets
+	longSize: int32;           // 4 on Windows LLP64, 8 on LP64
+	longLongSize: int32;       // 8 everywhere we care about
+	floatSize: int32;          // 4
+	doubleSize: int32;         // 8
+	longDoubleSize: int32;     // 8, 12, or 16 depending on target
 	sizeTSigned: boolean;       // size_t signed? (no, but listed for completeness)
 	charSigned: boolean;        // default signedness of bare `char`
 }

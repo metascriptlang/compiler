@@ -350,7 +350,7 @@ export function decodeClosePayload(payload: number[]): CloseInfo {
 	for (let i: int32 = 2; i < payload.length; i = i + 1) {
 		reason.push(payload[i]);
 	}
-	return { code: code, reason: reason, hasCode: true };
+	return { code: code as int32, reason: reason, hasCode: true };
 }
 
 // RFC 6455 §7.4.1 — close-code legality on the wire.

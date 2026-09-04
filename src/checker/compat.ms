@@ -974,13 +974,13 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 
 // Score a candidate function against actual arguments.
 // Returns sum of TypeRelation values, or -1 if any param doesn't match.
-export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): number {
+export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): int32 {
 	if (paramTypes.length !== argTypes.length) return -1;
 	let score = 0;
 	for (let i = 0; i < paramTypes.length; i += 1) {
 		const rel = typeRelation(paramTypes[i], argTypes[i]);
 		if (rel === TypeRelation.None) return -1;
-		score = score + (rel as number);
+		score = score + (rel as int32);
 	}
 	return score;
 }
@@ -1133,7 +1133,7 @@ function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 // Higher depth = more specific overload.
 // GenericParam = 1, Container<T> = 1 + sumGeneric(T)
 let sumGenericDepth = 0;
-function sumGeneric(t: Type | null): number {
+function sumGeneric(t: Type | null): int32 {
 	if (t === null) return 0;
 	if (t.kind === TypeKind.GenericParam || t.kind === TypeKind.Unknown || t.kind === TypeKind.None || t.kind === TypeKind.Inferred) return 1;
 	if (sumGenericDepth > 20) return 0;

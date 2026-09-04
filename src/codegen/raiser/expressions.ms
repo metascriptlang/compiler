@@ -174,7 +174,7 @@ export function exprIsString(s: RaiserCompState, node: Node): boolean {
 // --- Expression compilation ---
 // Returns the register holding the result.
 
-export function compileExpr(s: RaiserCompState, node: Node): number {
+export function compileExpr(s: RaiserCompState, node: Node): int32 {
 	return match (node.kind) {
 		NodeKind.NumberLiteral => {
 			const d = node.data as NumberLiteralData;

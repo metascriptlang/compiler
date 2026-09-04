@@ -26,17 +26,17 @@ function isRef(v: RaiserValue): boolean {
 	return v.kind === RaiserValueKind.Array || v.kind === RaiserValueKind.Object;
 }
 
-function colorOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): number {
+function colorOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): int32 {
 	if (v.kind === RaiserValueKind.Array) return arrHeap.arrays[v.intVal].color;
 	return objHeap.objects[v.intVal].color;
 }
 
-function setColorOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue, col: number): void {
+function setColorOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue, col: int32): void {
 	if (v.kind === RaiserValueKind.Array) { arrHeap.arrays[v.intVal].color = col; }
 	else { objHeap.objects[v.intVal].color = col; }
 }
 
-function rcOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): number {
+function rcOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): int32 {
 	if (v.kind === RaiserValueKind.Array) return arrHeap.arrays[v.intVal].rc;
 	return objHeap.objects[v.intVal].rc;
 }
@@ -113,7 +113,7 @@ function scan(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValu
 // --- Phase 3: collect white — recycle the garbage cycle, release external refs ---
 // White → mark GRAY (in-collect-set) to disambiguate from external BLACK refs.
 
-function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): number {
+function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): int32 {
 	if (colorOf(arrHeap, objHeap, v) !== COL_WHITE) return 0;
 	setColorOf(arrHeap, objHeap, v, COL_GRAY);
 	let freed = 1;
@@ -147,7 +147,7 @@ function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: Ra
 
 // --- Driver: full-heap trial-deletion collect. Returns count of freed objects. ---
 
-export function orcCollectCycles(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap): number {
+export function orcCollectCycles(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap): int32 {
 	for (let h = 0; h < arrHeap.arrays.length; h = h + 1) {
 		if (arrHeap.arrays[h].rc > 0) markGray(arrHeap, objHeap, raiserArray(h));
 	}

@@ -361,7 +361,7 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 	const armBodies: Node[][] = [];
 	// Per-label index for partial-overlap detection.
 	const labelOwners: string[] = [];
-	const labelOwnerGroup: number[] = [];
+	const labelOwnerGroup: int32[] = [];
 
 	for (let i = 0; i < cases.length; i += 1) {
 		const caseData = cases[i].data as MatchCaseData;

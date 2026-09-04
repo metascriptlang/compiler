@@ -15,8 +15,8 @@ export enum ArrowParens {
 }
 
 export interface FormatOptions {
-	printWidth: number;      // Default: 80
-	tabWidth: number;        // Default: 2
+	printWidth: int32;      // Default: 80
+	tabWidth: int32;        // Default: 2
 	useTabs: boolean;        // Default: false
 	semi: boolean;           // Default: true
 	singleQuote: boolean;    // Default: false

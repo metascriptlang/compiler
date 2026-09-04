@@ -48,17 +48,17 @@ export function isConsumedName(t: AffineTracker, name: string): boolean {
 }
 
 // Save current consume state for branch rollback.
-export function saveConsumeState(t: AffineTracker): number {
+export function saveConsumeState(t: AffineTracker): int32 {
 	return t.consumed.length;
 }
 
 // Restore consume state.
-export function restoreConsumeState(t: AffineTracker, state: number): void {
+export function restoreConsumeState(t: AffineTracker, state: int32): void {
 	t.consumed.length = state;
 }
 
 // Collect names consumed between oldState and current state.
-export function collectNewConsumes(t: AffineTracker, oldState: number): string[] {
+export function collectNewConsumes(t: AffineTracker, oldState: int32): string[] {
 	return collectSince(t.consumed, oldState);
 }
 
@@ -68,7 +68,7 @@ export function collectNewConsumes(t: AffineTracker, oldState: number): string[]
 // every non-exiting branch AND the construct is exhaustive (has else / default).
 export function mergeConsumeBranches(
 	t: AffineTracker,
-	oldState: number,
+	oldState: int32,
 	branchConsumes: string[][],
 	branchBreaks: BreakState[],
 	isExhaustive: boolean,

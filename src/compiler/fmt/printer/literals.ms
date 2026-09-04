@@ -51,7 +51,7 @@ function escapeString(s: string, quote: number): string {
 // boundary is preceded by whitespace, punctuation, or start-of-file.
 // If the preceding character is `}` (close of `${...}` interpolation) or
 // `\`` itself, we're inside a template — fall through to re-escape.
-function extractRawStringToken(source: string, line: number, col: number): string {
+function extractRawStringToken(source: string, line: int32, col: int32): string {
 	if (source === "") return "";
 	// Find the byte offset of the target line:col in source
 	let currentLine = 1;

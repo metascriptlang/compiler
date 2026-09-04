@@ -2569,7 +2569,7 @@ test "mapTypeToAst — class wrapped in ExportDecl peels through to find class b
 
 // ===== mapTypeToAst tests — Day 3 (Array / SizedArray / Span → TypeArray) =====
 
-function makeArrayType(kind: TypeKind, element: Type, size: number): Type {
+function makeArrayType(kind: TypeKind, element: Type, size: int32): Type {
 	const t = makePrimType(kind);
 	t.typeReturn = element;
 	t.typeFlags = size;

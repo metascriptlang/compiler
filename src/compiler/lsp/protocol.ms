@@ -190,7 +190,7 @@ export function lspGetObjectField(json: string, field: string): string {
 // ===== Content-Length Framing =====
 
 // Parse Content-Length from a header line. Returns -1 if not a Content-Length header.
-export function lspParseContentLength(headerLine: string): number {
+export function lspParseContentLength(headerLine: string): int32 {
 	const prefix = "Content-Length: ";
 	if (headerLine.byteLength <= prefix.byteLength) return -1;
 	if (headerLine.slice(0, prefix.byteLength) !== prefix) return -1;
@@ -205,7 +205,7 @@ export function lspFormatMessage(json: string): string {
 
 // ===== Helpers =====
 
-function digitValue(c: string): number {
+function digitValue(c: string): int32 {
 	return match (c) {
 		"0" => 0, "1" => 1, "2" => 2, "3" => 3, "4" => 4,
 		"5" => 5, "6" => 6, "7" => 7, "8" => 8, "9" => 9,
@@ -213,7 +213,7 @@ function digitValue(c: string): number {
 	};
 }
 
-function parseSimpleInt(s: string): number {
+function parseSimpleInt(s: string): int32 {
 	let result = 0;
 	for (let i = 0; i < s.byteLength; i = i + 1) {
 		const d = digitValue(s.charAt(i));

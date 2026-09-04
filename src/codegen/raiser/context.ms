@@ -12,7 +12,7 @@ import { Symbol, SymbolKind } from "../../ast/node";
 
 export interface RaiserLocal {
 	name: string;
-	reg: number;
+	reg: int32;
 	isString: boolean;
 }
 
@@ -23,11 +23,11 @@ export interface RaiserLocals {
 // --- Loop tracking ---
 
 export interface RaiserBreakPatches {
-	items: number[];
+	items: int32[];
 }
 
 export interface RaiserLoopInfo {
-	startIp: number;
+	startIp: int32;
 	breakPatches: RaiserBreakPatches;
 	// Each loop kind patches these to its own "re-enter" point: for-of/for-stmt
 	// to the update step (NOT loop start — else continue skips the update and
@@ -44,7 +44,7 @@ export interface RaiserLoopStack {
 
 export interface RaiserFuncEntry {
 	name: string;
-	index: number;
+	index: int32;
 }
 
 export interface RaiserFuncMap {
@@ -56,7 +56,7 @@ export interface RaiserFuncMap {
 
 export interface RaiserBuiltinEntry {
 	name: string;
-	funcIdx: number;
+	funcIdx: int32;
 }
 
 export interface RaiserBuiltinMap {
@@ -66,7 +66,7 @@ export interface RaiserBuiltinMap {
 // --- Float register tracking ---
 
 export interface RaiserRegFlags {
-	isFloat: number[];
+	isFloat: int32[];
 }
 
 // --- Compiler state ---
@@ -75,14 +75,14 @@ export interface RaiserRegFlags {
 export interface RaiserCompState {
 	code: RaiserInstruction[];
 	constants: RaiserValue[];
-	nextReg: number;
+	nextReg: int32;
 	// High-water mark of registers ever allocated. resetTemps shrinks
 	// nextReg back to (max local reg + 1) between statements, so the
 	// final value of nextReg reflects only the live locals, NOT the peak
 	// register count needed at runtime. The VM uses this to size each
 	// function's call frame — without an accurate peak, it would either
 	// over-allocate (waste) or under-allocate (out-of-bounds on temp regs).
-	maxRegSeen: number;
+	maxRegSeen: int32;
 	locals: RaiserLocals;
 	loopStack: RaiserLoopStack;
 	funcMap: RaiserFuncMap;
@@ -104,7 +104,7 @@ export function createCompState(): RaiserCompState {
 	const enumMap: RaiserFuncMap = { items: enumItems };
 	const builtinItems: RaiserBuiltinEntry[] = [];
 	const builtins: RaiserBuiltinMap = { items: builtinItems };
-	const floatFlags: number[] = [];
+	const floatFlags: int32[] = [];
 	for (let i = 0; i < 256; i = i + 1) { floatFlags.push(0); }
 	const regFlags: RaiserRegFlags = { isFloat: floatFlags };
 	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack, funcMap, enumMap, builtins, regFlags };
@@ -114,13 +114,13 @@ export function emitInst(s: RaiserCompState, inst: RaiserInstruction): void {
 	s.code.push(inst);
 }
 
-export function addConst(s: RaiserCompState, val: RaiserValue): number {
+export function addConst(s: RaiserCompState, val: RaiserValue): int32 {
 	const idx = s.constants.length;
 	s.constants.push(val);
 	return idx;
 }
 
-export function allocReg(s: RaiserCompState): number {
+export function allocReg(s: RaiserCompState): int32 {
 	const r = s.nextReg;
 	s.nextReg = s.nextReg + 1;
 	// Track high-water mark — resetTemps() will lower nextReg back, but the
@@ -149,13 +149,13 @@ export function resetTemps(s: RaiserCompState): void {
 
 // --- Typed emit helpers ---
 
-export function emitLoadConst(s: RaiserCompState, reg: number, val: RaiserValue): void {
+export function emitLoadConst(s: RaiserCompState, reg: int32, val: RaiserValue): void {
 	const ci = addConst(s, val);
 	const inst = raiserABx(RaiserOpcode.LoadConst, reg, ci);
 	emitInst(s, inst);
 }
 
-export function emitRet(s: RaiserCompState, reg: number): void {
+export function emitRet(s: RaiserCompState, reg: int32): void {
 	emitInst(s, raiserABC(RaiserOpcode.Ret, reg, 0, 0));
 }
 
@@ -165,12 +165,12 @@ export function emitHalt(s: RaiserCompState): void {
 
 // --- Locals helpers ---
 
-export function declareLocal(s: RaiserCompState, name: string, reg: number): void {
+export function declareLocal(s: RaiserCompState, name: string, reg: int32): void {
 	const local: RaiserLocal = { name, reg, isString: false };
 	s.locals.items.push(local);
 }
 
-export function declareLocalStr(s: RaiserCompState, name: string, reg: number, isString: boolean): void {
+export function declareLocalStr(s: RaiserCompState, name: string, reg: int32, isString: boolean): void {
 	const local: RaiserLocal = { name, reg, isString };
 	s.locals.items.push(local);
 }
@@ -184,7 +184,7 @@ export function isLocalString(s: RaiserCompState, name: string): boolean {
 	return false;
 }
 
-export function resolveLocal(s: RaiserCompState, name: string): number {
+export function resolveLocal(s: RaiserCompState, name: string): int32 {
 	for (let i = s.locals.items.length - 1; i >= 0; i = i - 1) {
 		if (s.locals.items[i].name === name) {
 			return s.locals.items[i].reg;
@@ -193,7 +193,7 @@ export function resolveLocal(s: RaiserCompState, name: string): number {
 	return -1;
 }
 
-export function regIsFixedLocal(s: RaiserCompState, reg: number): boolean {
+export function regIsFixedLocal(s: RaiserCompState, reg: int32): boolean {
 	for (const local of s.locals.items) {
 		if (local.reg === reg) return true;
 	}
@@ -202,7 +202,7 @@ export function regIsFixedLocal(s: RaiserCompState, reg: number): boolean {
 
 // --- Condition helpers ---
 
-export function emitBranchIfFalsy(s: RaiserCompState, condReg: number): number {
+export function emitBranchIfFalsy(s: RaiserCompState, condReg: int32): int32 {
 	const zeroReg = allocReg(s);
 	emitLoadConst(s, zeroReg, raiserInt(0));
 	emitInst(s, raiserABC(RaiserOpcode.BneI64, condReg, zeroReg, 1));
@@ -211,24 +211,24 @@ export function emitBranchIfFalsy(s: RaiserCompState, condReg: number): number {
 
 // --- Jump patching ---
 
-export function emitJumpPlaceholder(s: RaiserCompState): number {
+export function emitJumpPlaceholder(s: RaiserCompState): int32 {
 	const idx = s.code.length;
 	emitInst(s, raiserAx(RaiserOpcode.Jump, 0));
 	return idx;
 }
 
-export function patchJumpTo(s: RaiserCompState, idx: number, target: number): void {
+export function patchJumpTo(s: RaiserCompState, idx: int32, target: int32): void {
 	const offset = target - idx - 1;
 	s.code[idx] = raiserAx(RaiserOpcode.Jump, offset);
 }
 
-export function codeLen(s: RaiserCompState): number {
+export function codeLen(s: RaiserCompState): int32 {
 	return s.code.length;
 }
 
 // --- Loop helpers ---
 
-export function pushLoop(s: RaiserCompState, startIp: number): void {
+export function pushLoop(s: RaiserCompState, startIp: int32): void {
 	const info: RaiserLoopInfo = {
 		startIp,
 		breakPatches: { items: [] },
@@ -255,12 +255,12 @@ export function hasLoop(s: RaiserCompState): boolean {
 
 // --- Function map helpers ---
 
-export function registerFunc(s: RaiserCompState, name: string, index: number): void {
+export function registerFunc(s: RaiserCompState, name: string, index: int32): void {
 	const entry: RaiserFuncEntry = { name, index };
 	s.funcMap.items.push(entry);
 }
 
-export function resolveFunc(s: RaiserCompState, name: string): number {
+export function resolveFunc(s: RaiserCompState, name: string): int32 {
 	for (let i = s.funcMap.items.length - 1; i >= 0; i = i - 1) {
 		if (s.funcMap.items[i].name === name) {
 			return s.funcMap.items[i].index;
@@ -282,7 +282,7 @@ export function declareEnum(s: RaiserCompState, enumName: string, members: strin
 
 // Returns the enumMap entry index for an "EnumName.Member" key (caller reads
 // .index for the value, which may be negative), or -1 if not an enum constant.
-export function findEnumConstant(s: RaiserCompState, key: string): number {
+export function findEnumConstant(s: RaiserCompState, key: string): int32 {
 	for (let i = 0; i < s.enumMap.items.length; i = i + 1) {
 		if (s.enumMap.items[i].name === key) return i;
 	}
@@ -304,23 +304,23 @@ export function isEnumName(s: RaiserCompState, name: string): boolean {
 
 // --- Float register helpers ---
 
-export function markRegFloat(s: RaiserCompState, reg: number): void {
+export function markRegFloat(s: RaiserCompState, reg: int32): void {
 	if (reg >= 0 && reg < 256) { s.regFlags.isFloat[reg] = 1; }
 }
 
-export function isRegFloat(s: RaiserCompState, reg: number): boolean {
+export function isRegFloat(s: RaiserCompState, reg: int32): boolean {
 	if (reg >= 0 && reg < 256) { return s.regFlags.isFloat[reg] !== 0; }
 	return false;
 }
 
 // --- Builtin helpers ---
 
-export function registerBuiltin(s: RaiserCompState, name: string, funcIdx: number): void {
+export function registerBuiltin(s: RaiserCompState, name: string, funcIdx: int32): void {
 	const entry: RaiserBuiltinEntry = { name, funcIdx };
 	s.builtins.items.push(entry);
 }
 
-export function resolveBuiltin(s: RaiserCompState, name: string): number {
+export function resolveBuiltin(s: RaiserCompState, name: string): int32 {
 	for (let i = 0; i < s.builtins.items.length; i = i + 1) {
 		if (s.builtins.items[i].name === name) {
 			return s.builtins.items[i].funcIdx;
@@ -333,7 +333,7 @@ export function resolveBuiltin(s: RaiserCompState, name: string): number {
 // Emit a closure pair object { fn: funcIdx, env: envReg | -1 } into destReg.
 // envVal = -1 sentinel means non-capturing (no env), otherwise envVal is a register holding the env.
 
-export function emitClosurePair(s: RaiserCompState, funcIdx: number, envReg: number): number {
+export function emitClosurePair(s: RaiserCompState, funcIdx: int32, envReg: int32): int32 {
 	const pairReg = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, 0, 0));
 	const fnReg = allocReg(s);
@@ -374,9 +374,9 @@ export function patchLoopContinues(s: RaiserCompState): void {
 	}
 }
 
-type RaiserOnDemandFn = (sym: Symbol) => number;
+type RaiserOnDemandFn = (sym: Symbol) => int32;
 
-let _raiserOnDemandFn: RaiserOnDemandFn = (_sym: Symbol): number => {
+let _raiserOnDemandFn: RaiserOnDemandFn = (_sym: Symbol): int32 => {
 	return -1;
 };
 
@@ -385,7 +385,7 @@ export function registerRaiserOnDemand(fn: RaiserOnDemandFn): void {
 }
 
 export function clearRaiserOnDemand(): void {
-	_raiserOnDemandFn = (_sym: Symbol): number => {
+	_raiserOnDemandFn = (_sym: Symbol): int32 => {
 		return -1;
 	};
 }
@@ -396,7 +396,7 @@ export function isRoutineSym(sym: Symbol): boolean {
 		|| sym.symbolKind === SymbolKind.Macro;
 }
 
-export function callRaiserOnDemand(sym: Symbol): number {
+export function callRaiserOnDemand(sym: Symbol): int32 {
 	if (!isRoutineSym(sym)) return -1;
 	return _raiserOnDemandFn(sym);
 }

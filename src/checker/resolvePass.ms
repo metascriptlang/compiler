@@ -508,7 +508,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 			if (sizeStr === "" || sizeStr === " ") {
 				return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
 			}
-			const size = parseIntStr(sizeStr);
+			const size = parseIntStr(sizeStr) as int32;
 			return createSizedArray(resolveAnnotation(inner, ctx, line, col), size);
 		}
 	}

@@ -34,8 +34,8 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Catch) {
 		advance(state);
 		let catchParam = "";
-		let catchParamLine = 0;
-		let catchParamCol = 0;
+		let catchParamLine: number = 0;
+		let catchParamCol: number = 0;
 		// Optional catch parameter: catch (e)
 		if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
 			advance(state);

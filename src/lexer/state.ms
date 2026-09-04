@@ -30,18 +30,18 @@ export function setLexError(s: LexerState, message: string): void {
 	if (s.lexError === "") s.lexError = `${message} at line ${s.line}, column ${s.column}`;
 }
 
-export function peek(s: LexerState): number {
+export function peek(s: LexerState): int32 {
 	if (s.pos >= s.source.byteLength) return 0;
 	return s.source.byteAt(s.pos);
 }
 
-export function peekAt(s: LexerState, offset: number): number {
+export function peekAt(s: LexerState, offset: int32): int32 {
 	const idx = s.pos + offset;
 	if (idx >= s.source.byteLength) return 0;
 	return s.source.byteAt(idx);
 }
 
-export function advanceChar(s: LexerState): number {
+export function advanceChar(s: LexerState): int32 {
 	const ch = peek(s);
 	s.pos += 1;
 	if (ch === "\n".code) {

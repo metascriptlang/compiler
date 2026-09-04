@@ -51,12 +51,12 @@ export function isInitialized(t: InitTracker, name: string): boolean {
 }
 
 // Reference parity: save init.len for branch merging
-export function saveInitState(t: InitTracker): number {
+export function saveInitState(t: InitTracker): int32 {
 	return t.initialized.length;
 }
 
 // Reference parity: restore init state
-export function restoreInitState(t: InitTracker, state: number): void {
+export function restoreInitState(t: InitTracker, state: int32): void {
 	t.initialized.length = state;
 }
 
@@ -121,7 +121,7 @@ export function breaksBlock(node: Node): BreakState {
 // Reference parity: branch merge for if/match. Delegates to shared branchSet.
 export function mergeInitBranches(
 	t: InitTracker,
-	oldState: number,
+	oldState: int32,
 	branchInits: string[][],
 	branchBreaks: BreakState[],
 	isExhaustive: boolean,
@@ -130,7 +130,7 @@ export function mergeInitBranches(
 }
 
 // Collect names initialized between oldState and current state
-export function collectNewInits(t: InitTracker, oldState: number): string[] {
+export function collectNewInits(t: InitTracker, oldState: int32): string[] {
 	return collectSince(t.initialized, oldState);
 }
 
