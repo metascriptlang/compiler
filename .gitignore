@@ -48,9 +48,11 @@ nim-cache/
 docs/.stfolder/
 docs/.stignore
 
-
 # local compiler build candidates + their debug PDBs (root only)
 /msc.exe
 /msc.pdb
-/msc[GLNW]*
+/mscN*
+/mscW*
+/mscL*
+/mscG*
 /*.pdb
