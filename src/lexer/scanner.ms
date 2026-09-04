@@ -107,7 +107,7 @@ function scanHexDigits(s: LexerState, count: number): number {
 			setLexError(s, "Invalid hexadecimal escape sequence");
 			return -1;
 		}
-		value = value * 16 + hexDigitValue(d);
+		value = (value * 16 + hexDigitValue(d)) as int32;
 		advanceChar(s);
 		i += 1;
 	}
@@ -120,7 +120,7 @@ function scanUnicodeEscape(s: LexerState): string {
 		let cp = 0;
 		let digits = 0;
 		while (isHexDigit(peek(s))) {
-			cp = cp * 16 + hexDigitValue(peek(s));
+			cp = (cp * 16 + hexDigitValue(peek(s))) as int32;
 			advanceChar(s);
 			digits += 1;
 		}

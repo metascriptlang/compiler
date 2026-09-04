@@ -198,7 +198,7 @@ function applyArraySuffix(state: ParserState, result: Node): Node {
 		advance(state); // consume [
 		let size = -1;
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Number) {
-			size = parseFloat(current(state).value);
+			size = parseFloat(current(state).value) as int32;
 			advance(state);
 		}
 		if (!isAtEnd(state) && current(state).kind === TokenKind.RBracket) {

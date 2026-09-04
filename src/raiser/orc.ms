@@ -121,7 +121,7 @@ function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: Ra
 		const data = arrHeap.arrays[v.intVal];
 		for (const child of data.items) {
 			if (isRef(child)) {
-				if (colorOf(arrHeap, objHeap, child) === COL_WHITE) freed = freed + collectWhite(arrHeap, objHeap, child);
+				if (colorOf(arrHeap, objHeap, child) === COL_WHITE) freed = (freed + collectWhite(arrHeap, objHeap, child)) as int32;
 				else if (colorOf(arrHeap, objHeap, child) !== COL_GRAY) rcDecref(arrHeap, objHeap, child);
 			}
 		}
@@ -133,7 +133,7 @@ function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: Ra
 		const data = objHeap.objects[v.intVal];
 		for (const f of data.fields) {
 			if (isRef(f.value)) {
-				if (colorOf(arrHeap, objHeap, f.value) === COL_WHITE) freed = freed + collectWhite(arrHeap, objHeap, f.value);
+				if (colorOf(arrHeap, objHeap, f.value) === COL_WHITE) freed = (freed + collectWhite(arrHeap, objHeap, f.value)) as int32;
 				else if (colorOf(arrHeap, objHeap, f.value) !== COL_GRAY) rcDecref(arrHeap, objHeap, f.value);
 			}
 		}
@@ -162,10 +162,10 @@ export function orcCollectCycles(arrHeap: RaiserArrayHeap, objHeap: RaiserObject
 	}
 	let freed = 0;
 	for (let h = 0; h < arrHeap.arrays.length; h = h + 1) {
-		if (colorOf(arrHeap, objHeap, raiserArray(h)) === COL_WHITE) freed = freed + collectWhite(arrHeap, objHeap, raiserArray(h));
+		if (colorOf(arrHeap, objHeap, raiserArray(h)) === COL_WHITE) freed = (freed + collectWhite(arrHeap, objHeap, raiserArray(h))) as int32;
 	}
 	for (let h = 0; h < objHeap.objects.length; h = h + 1) {
-		if (colorOf(arrHeap, objHeap, raiserObject(h)) === COL_WHITE) freed = freed + collectWhite(arrHeap, objHeap, raiserObject(h));
+		if (colorOf(arrHeap, objHeap, raiserObject(h)) === COL_WHITE) freed = (freed + collectWhite(arrHeap, objHeap, raiserObject(h))) as int32;
 	}
 	return freed;
 }
