@@ -3220,9 +3220,10 @@ test "string DU if-narrowing allows correct variant field" {
 	assert checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): string { if (s.kind === \"b\") { return s.y; } return \"\"; }");
 }
 
-test "string DU no narrowing outside if" {
-	// Outside if-block, s.x is still allowed (getProperty scans all variants — existing behavior)
-	assert checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): number { return s.x; }");
+test "string DU subset field outside if is rejected" {
+	// Outside a narrowed block, s.x reads reinterpreted bytes when the "b"
+	// variant is active — must error demanding discriminant narrowing.
+	assert !checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): number { return s.x; }");
 }
 
 test "string DU match narrows correct variant" {
