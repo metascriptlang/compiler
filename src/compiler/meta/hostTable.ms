@@ -46,7 +46,7 @@ import {
 	activeHostObjectHeap, activeHostArrayHeap,
 } from "../../raiser/hostRegistry";
 import {
-	unboxString, unboxInt,
+	unboxString, unboxInt, unboxFloat, unboxBool,
 	boxString, boxInt, boxFloat, boxBool,
 } from "../../raiser/marshal";
 import { isNodeWireMetaField } from "./wire";
@@ -56,7 +56,8 @@ import {
 	readFile, writeFile, appendFile, chmod,
 	mkdir, rmdir, remove, rename, readDir,
 } from "std/fs";
-import { cwd, platform, env, exec } from "std/process";
+import { cwd, platform, env, exec, argv, execFile, execFileCapture } from "std/process";
+import { performance } from "std/core/performance";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
 import { IoErrorKind } from "std/io/errors";
@@ -260,6 +261,62 @@ function _bridgeMsProcSpawnGetStderr(args: RaiserValue[]): RaiserValue {
 	return boxString(_spawnStderr);
 }
 
+// --- Process bridges (Nim vmops parity: envvars get/exists/put/del all
+// registered; osproc.execCmdEx registered behind the danger flag; quit is
+// deliberately NOT an op in Nim's VM — exit is handled at the codegen tier
+// here, see the Halt intercept) ---
+
+function _bridgeMsProcessArgv(args: RaiserValue[]): RaiserValue {
+	const heapOrNull = activeHostArrayHeap();
+	if (heapOrNull === null) return raiserNil();
+	const heap: RaiserArrayHeap = heapOrNull;
+	const h = heapAllocArray(heap);
+	for (const a of argv) {
+		heapArrayPush(heap, h, boxString(a));
+	}
+	return raiserArray(h);
+}
+
+function _bridgeMsProcessSetEnv(args: RaiserValue[]): RaiserValue {
+	return boxInt(env.set(unboxString(args[0]), unboxString(args[1])) ? 1 : 0);
+}
+
+function _bridgeMsProcessUnsetEnv(args: RaiserValue[]): RaiserValue {
+	return boxInt(env.delete(unboxString(args[0])) ? 1 : 0);
+}
+
+function _unboxStringArrayArg(v: RaiserValue): string[] {
+	const out: string[] = [];
+	if (v.kind !== RaiserValueKind.Array) return out;
+	const heapOrNull = activeHostArrayHeap();
+	if (heapOrNull === null) return out;
+	const heap: RaiserArrayHeap = heapOrNull;
+	const n = heapArrayLen(heap, v.intVal);
+	let i = 0;
+	while (i < n) {
+		out.push(unboxString(heapArrayGet(heap, v.intVal, i)));
+		i = i + 1;
+	}
+	return out;
+}
+
+function _bridgeMsProcessExecFile(args: RaiserValue[]): RaiserValue {
+	const r = execFile(unboxString(args[0]), _unboxStringArrayArg(args[1]));
+	return boxInt(r);
+}
+
+function _bridgeMsProcessSpawnSyncArgv(args: RaiserValue[]): RaiserValue {
+	const r = execFileCapture(unboxString(args[0]), _unboxStringArrayArg(args[1]));
+	if (r.ok) {
+		_resetSpawnStateOk(r.value);
+	} else {
+		const e = r.error;
+		_setSpawnStateErr(e.kind, e.output, e.errorOutput, e.exitCode, e.signal);
+	}
+	return boxString(_spawnStdout);
+}
+
+
 // --- Macro Node child accessors ---
 // childCount/childAt (std/meta) traverse a Node's children BY INDEX on the
 // macro VM's flat wire (the Nim n[i]/n.len analog), so a top-level helper
@@ -383,6 +440,38 @@ function _bridgeMsAsString(args: RaiserValue[]): RaiserValue {
 		i = i + 1;
 	}
 	return boxString(bytes.asString());
+}
+
+// split: the std extension is pure MetaScript (std/core/string/shared.ms) and
+// macros cannot import std, so the raiser dispatches here. The array lands in
+// the active array heap; macro code reads it with .length/[i] as any array.
+function _bridgeMsStringSplit(args: RaiserValue[]): RaiserValue {
+	const parts = unboxString(args[0]).split(unboxString(args[1]));
+	const arrHeapOrNull = activeHostArrayHeap();
+	if (arrHeapOrNull === null) return raiserNil();
+	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
+	const h = heapAllocArray(arrHeap);
+	for (let i = 0; i < parts.length; i = i + 1) {
+		heapArrayPush(arrHeap, h, boxString(parts[i]));
+	}
+	return raiserArray(h);
+}
+
+// Prelude globals. String<T> is the generic conversion on C/JS; here it
+// dispatches on the dynamic value kind. Int/Float go through the number
+// tier's toString — exact for integers up to 2^53 (JS parity), approximate
+// beyond, which no caller in the compiler's messages relies on.
+function _bridgeMsStringFromValue(args: RaiserValue[]): RaiserValue {
+	const v = args[0];
+	if (v.kind === RaiserValueKind.String) return v;
+	if (v.kind === RaiserValueKind.Int) return boxString(unboxInt(v).toString());
+	if (v.kind === RaiserValueKind.Float) return boxString(unboxFloat(v).toString());
+	if (v.kind === RaiserValueKind.Bool) return boxString(unboxBool(v) ? "true" : "false");
+	return boxString("");
+}
+
+function _bridgeMsPerformanceNow(args: RaiserValue[]): RaiserValue {
+	return boxFloat(performance.now());
 }
 
 // Literal value accessors. Each one FIXES the representation of its result the
@@ -517,6 +606,14 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringTrimEnd",       _bridgeMsStringTrimEnd);
 	registerHostFn("msStringIndexOf",       _bridgeMsStringIndexOf);
 	registerHostFn("msStringCharCodeAt",    _bridgeMsStringCharCodeAt);
+	registerHostFn("msStringFromValue",     _bridgeMsStringFromValue);
+	registerHostFn("msPerformanceNow",      _bridgeMsPerformanceNow);
+	registerHostFn("msProcessArgv",         _bridgeMsProcessArgv);
+	registerHostFn("msProcessSetEnv",       _bridgeMsProcessSetEnv);
+	registerHostFn("msProcessUnsetEnv",     _bridgeMsProcessUnsetEnv);
+	registerHostFn("msProcessExecFile",     _bridgeMsProcessExecFile);
+	registerHostFn("msProcessSpawnSyncArgv", _bridgeMsProcessSpawnSyncArgv);
+	registerHostFn("msStringSplit",         _bridgeMsStringSplit);
 	registerHostFn("msNodeIsFloatLiteral", _bridgeMsNodeIsFloatLiteral);
 	registerHostFn("msNodeIntValue",        _bridgeMsNodeIntValue);
 	registerHostFn("msNodeFloatValue",      _bridgeMsNodeFloatValue);
