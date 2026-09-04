@@ -462,6 +462,71 @@ function nestedIdxsP(arrs: (Node | null)[][] | null): string {
 	return out;
 }
 
+// ===== Std-Graph Deps (BUILD-PERF Phase A2) =====
+//
+// The loader half of the pack family: <key>.deps records the std module
+// graph that loadPreludeModules (compile.ms) produced — modules in
+// loadOrder order, their resolved import entries, circular-dep records —
+// so a warm build seeds the graph directly and skips the lex+parse+resolver
+// probe of the ~45 std modules. Same key/root/marker-GC/kill-switches as
+// the .pk closure; this is pure DISCOVERY data (no symbols, no AST), so
+// none of the v1 identity traps apply.
+//
+// Rows (tab-separated, same escaping as the .pk):
+//   G \t path                                                     module; G-row order IS loadOrder
+//   I \t sourcePath \t sourceSpecifier \t namesCsv \t aliasesCsv   import of the last G row
+//   R \t fromPath \t toPath \t cycleCsv \t importLine \t importNamesCsv
+
+export interface DepsImportRow {
+	names: string[];
+	aliases: string[];
+	sourcePath: string;
+	sourceSpecifier: string;
+}
+
+export interface DepsModuleRow {
+	path: string;
+	imports: DepsImportRow[];
+}
+
+export interface DepsCircularRow {
+	fromPath: string;
+	toPath: string;
+	cycle: string[];
+	importLine: int32;
+	importNames: string[];
+}
+
+export interface PreludeDepsSnapshot {
+	mods: DepsModuleRow[];
+	circulars: DepsCircularRow[];
+}
+
+// Set by compile.ms after a FRESH loadPreludeModules run; consumed by
+// writePreludePack (same fresh-prelude gate) to emit <key>.deps alongside
+// the .pk. Null when buildPreludeContext runs without the loader (LSP,
+// standalone checkProgram) — the deps write is then a no-op.
+let _depsSnapshot: PreludeDepsSnapshot | null = null;
+export function setStdGraphDepsSnapshot(s: PreludeDepsSnapshot): void {
+	_depsSnapshot = s;
+}
+
+function writePreludeDeps(root: string, key: string): void {
+	if (_depsSnapshot === null) return;
+	const snap = _depsSnapshot;
+	const lines: string[] = [];
+	for (const m of snap.mods) {
+		lines.push(`G\t${escapeP(m.path)}`);
+		for (const imp of m.imports) {
+			lines.push(`I\t${escapeP(imp.sourcePath)}\t${escapeP(imp.sourceSpecifier)}\t${joinCsv(imp.names)}\t${joinCsv(imp.aliases)}`);
+		}
+	}
+	for (const c of snap.circulars) {
+		lines.push(`R\t${escapeP(c.fromPath)}\t${escapeP(c.toPath)}\t${joinCsv(c.cycle)}\t${c.importLine}\t${joinCsv(c.importNames)}`);
+	}
+	atomicWritePack(`${root}/${key}.deps`, lines.join("\n"));
+}
+
 // ===== Writer =====
 //
 // Line format (tab-separated; \1.. prefixes keep the reader dumb):
@@ -707,6 +772,9 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 	if (packDebug) console.log(`[pack] bytes=${blob.byteLength} at ms=${performance.now() - _w0}`);
 	const okw = atomicWritePack(`${root}/${key}.pk`, blob);
 	if (packDebug) console.log(`[pack] write ok=${okw ? 1 : 0} total ms=${performance.now() - _w0}`);
+	// A2: the deps half rides the same gate (pack enabled, marker ensured).
+	// No-op without a loader snapshot (see setStdGraphDepsSnapshot).
+	writePreludeDeps(root, key);
 	_writeMs = _writeMs + (performance.now() - _w0);
 }
 
@@ -815,6 +883,50 @@ export function tryLoadPreludePack(key: string): CheckerContext | null {
 	_loadMs = _loadMs + (performance.now() - _l0);
 	_lastHit = loaded !== null;
 	return loaded;
+}
+
+// Reader for the deps half. Returns null on any doubt (disabled, missing,
+// empty, unknown/malformed row) — the caller falls back to the fresh parse
+// path, which is always correct, just slower.
+export function tryLoadPreludeDeps(key: string): PreludeDepsSnapshot | null {
+	if (packDisabled()) return null;
+	const root = packRoot();
+	ensureDir(root);
+	ensurePackMarker(root);
+	const body = try readFile(`${root}/${key}.deps`) catch "";
+	if (body === "") return null;
+	const snap: PreludeDepsSnapshot = { mods: [], circulars: [] };
+	const lines = splitPackLines(body);
+	let li = 0;
+	while (li < lines.length) {
+		const line = lines[li];
+		li = li + 1;
+		if (line.length === 0) continue;
+		const f = splitTabs(line);
+		const tag = f[0];
+		if (tag === "G" && f.length >= 2) {
+			snap.mods.push({ path: unescapeP(f[1]), imports: [] });
+		} else if (tag === "I" && f.length >= 5 && snap.mods.length > 0) {
+			snap.mods[snap.mods.length - 1].imports.push({
+				sourcePath: unescapeP(f[1]),
+				sourceSpecifier: unescapeP(f[2]),
+				names: splitCsv(f[3]),
+				aliases: splitCsv(f[4]),
+			});
+		} else if (tag === "R" && f.length >= 6) {
+			snap.circulars.push({
+				fromPath: unescapeP(f[1]),
+				toPath: unescapeP(f[2]),
+				cycle: splitCsv(f[3]),
+				importLine: f[4].parseInt() as int32,
+				importNames: splitCsv(f[5]),
+			});
+		} else {
+			return null;
+		}
+	}
+	if (snap.mods.length === 0) return null;
+	return snap;
 }
 
 // idxs-convention parse: "-" = null, "0" = empty, else comma list of N idx.
@@ -1381,6 +1493,75 @@ test "preludePack: corrupt entry is a miss" {
 			const loaded = tryLoadPreludePack(key);
 			assert loaded === null;
 			remove(`${root}/${key}.pk`);
+		}
+	} finally {
+		env.delete("MSC_PRELUDE_PACK");
+	}
+}
+
+test "preludePack: deps snapshot roundtrip through the .deps file" {
+	env.set("MSC_PRELUDE_PACK", "1");
+	try {
+		// Snapshot with the awkward corners: empty name/alias lists, an
+		// import of the last G row, a circular record with a multi-hop
+		// cycle, and a path containing separator bytes (\t and ,).
+		setStdGraphDepsSnapshot({
+			mods: [
+				{
+					path: "/std/core/a.ms",
+					imports: [
+						{ names: ["x", "y"], aliases: ["x", "y2"], sourcePath: "/std/core/b,ms", sourceSpecifier: "./b\tws" },
+						{ names: [], aliases: [], sourcePath: "/std/sub/c.ms", sourceSpecifier: "std/sub/c" },
+					],
+				},
+				{ path: "/std/core/b,ms", imports: [] },
+			],
+			circulars: [
+				{ fromPath: "/std/core/a.ms", toPath: "/std/core/b.ms", cycle: ["/std/core/a.ms", "/std/core/b.ms", "/std/core/a.ms"], importLine: 3, importNames: ["z"] },
+			],
+		});
+		const key = preludePackKey("deps-roundtrip-probe", ".depstest");
+		writePreludePack(key, makeTestCtx());
+		const loaded = tryLoadPreludeDeps(key);
+		assert loaded !== null;
+		assert loaded.mods.length === 2;
+		assert loaded.mods[0].path === "/std/core/a.ms";
+		assert loaded.mods[0].imports.length === 2;
+		assert loaded.mods[0].imports[0].names.length === 2;
+		assert loaded.mods[0].imports[0].names[1] === "y";
+		assert loaded.mods[0].imports[0].aliases[1] === "y2";
+		assert loaded.mods[0].imports[0].sourcePath === "/std/core/b,ms";
+		assert loaded.mods[0].imports[0].sourceSpecifier === "./b\tws";
+		assert loaded.mods[0].imports[1].names.length === 0;
+		assert loaded.mods[0].imports[1].aliases.length === 0;
+		assert loaded.mods[1].path === "/std/core/b,ms";
+		assert loaded.mods[1].imports.length === 0;
+		assert loaded.circulars.length === 1;
+		assert loaded.circulars[0].fromPath === "/std/core/a.ms";
+		assert loaded.circulars[0].toPath === "/std/core/b.ms";
+		assert loaded.circulars[0].cycle.length === 3;
+		assert loaded.circulars[0].cycle[2] === "/std/core/a.ms";
+		assert loaded.circulars[0].importLine === 3;
+		assert loaded.circulars[0].importNames[0] === "z";
+		remove(`${packRoot()}/${key}.deps`);
+		remove(`${packRoot()}/${key}.pk`);
+	} finally {
+		setStdGraphDepsSnapshot(null as unknown as PreludeDepsSnapshot);
+		env.delete("MSC_PRELUDE_PACK");
+	}
+}
+
+test "preludePack: corrupt deps file is a miss" {
+	env.set("MSC_PRELUDE_PACK", "1");
+	try {
+		const key = preludePackKey("deps-corrupt-probe", ".depstest");
+		const root = packRoot();
+		if (root !== "") {
+			ensureDir(root);
+			writeFile(`${root}/${key}.deps`, "G\t/ok.ms\nQ\tbogus row\n");
+			const loaded = tryLoadPreludeDeps(key);
+			assert loaded === null;
+			remove(`${root}/${key}.deps`);
 		}
 	} finally {
 		env.delete("MSC_PRELUDE_PACK");

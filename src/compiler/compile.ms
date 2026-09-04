@@ -36,9 +36,9 @@ import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet } from "../transform/context";
 import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
-import { createModuleGraph, findModule, hasModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
-import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache } from "../module/loader";
-import { registerPreludeStampFn } from "../checker/preludePack";
+import { createModuleGraph, findModule, hasModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
+import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
+import { registerPreludeStampFn, preludePackKey, tryLoadPreludeDeps, setStdGraphDepsSnapshot, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
 import { ResolverConfig, createDefaultConfig, Backend, resolveImportWithConfig } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
@@ -335,22 +335,24 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	// Split the "graph load+check" phase: this block is the LOADER half
 	// (parse of every module in the closure — prelude tree included), the
 	// orchestrator PROFILE line covers the check half. Build-perf §1.
+	// Backend ext feeds the prelude pack KEY, so it must be known before the
+	// prelude loads (A2 seeds the graph from a key-named deps file).
+	const backendExt = config.extensions.length > 0 ? config.extensions[0] : ".cms";
 	const _gl0 = performance.now();
 	if (config.stdPath !== "") {
-		loadPreludeModules(graph, provider, config);
+		loadPreludeModules(graph, provider, config, backendExt);
 	}
 	const _pl0 = performance.now();
 	const _r = loadModule(graph, entryPath, provider, config, 1);
 	if (graphLoadTiming) {
 		const ih = takeInlineHeaderTimings();
-		console.log(`    graphLoad: preludeMods=${performance.now() - _gl0}ms entryTree=${performance.now() - _pl0}ms modules=${graph.loadOrder.length} inlineHeader=${ih.ms}ms/${ih.n}mods hits=${ih.hits}`);
+		console.log(`    graphLoad: preludeMods=${performance.now() - _gl0}ms entryTree=${performance.now() - _pl0}ms modules=${graph.loadOrder.length} seed=${_preludeSeedHit ? 1 : 0} inlineHeader=${ih.ms}ms/${ih.n}mods hits=${ih.hits}`);
 	}
 
 	reportGraphErrors(graph);
 	exitOnModuleErrors(graph, "error");
 
 	if (verbose) verboseLog("cross-module type check");
-	const backendExt = config.extensions.length > 0 ? config.extensions[0] : ".cms";
 	// Pass targetOs through so @platform("...") directives are filtered against
 	// the build target during collectDirectives. Without this, modules check
 	// with stale ctx.targetOs → mac directives leak into a cross-compile
@@ -376,7 +378,26 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 
 // Load prelude modules (globalImports) into the module graph.
 // Extension resolved by the resolver based on target backend.
-function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
+//
+// BUILD-PERF Phase A2: on a warm key the graph is SEEDED from the deps pack
+// (<key>.deps, written next to the prelude pack). provideSource and
+// inlineHeaderImports still run per module — mod.source and header
+// diagnostics must stay byte-identical to the fresh path — only the
+// lex+parse+resolver-probe discovery of the std closure is skipped. Any
+// doubt (pack off, no snapshot, a source gone missing) falls back to the
+// fresh parse path below, which then re-captures the snapshot for the
+// writer.
+let _preludeSeedHit: boolean = false;
+
+function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig, backendExt: string): void {
+	_preludeSeedHit = false;
+	if (config.stdPath !== "") {
+		const deps = tryLoadPreludeDeps(preludePackKey(config.stdPath, backendExt));
+		if (deps !== null && seedPreludeModules(graph, provider, deps)) {
+			_preludeSeedHit = true;
+			return;
+		}
+	}
 	for (const imp of globalImports()) {
 		const candidates = resolveImportWithConfig(imp, "virtual:prelude", config);
 		for (const candidate of candidates) {
@@ -388,6 +409,89 @@ function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config
 			}
 		}
 	}
+	if (config.stdPath !== "") captureStdGraphDeps(graph);
+}
+
+// Replay a deps snapshot into the graph. All sources are provided UP FRONT —
+// the seed either builds the whole closure or leaves the graph untouched
+// (a half-seeded graph would poison the fresh fallback: modules already in
+// loadOrder). Header-inline runs exactly like the fresh path; module state
+// jumps straight to Ready (no importStack walk — no recursion happens).
+function seedPreludeModules(graph: ModuleGraph, provider: SourceProvider, deps: PreludeDepsSnapshot): boolean {
+	const sources: string[] = [];
+	let mi = 0;
+	while (mi < deps.mods.length) {
+		const raw = provideSource(provider, deps.mods[mi].path);
+		if (!raw.ok) return false;
+		sources.push(raw.value);
+		mi = mi + 1;
+	}
+	mi = 0;
+	while (mi < deps.mods.length) {
+		const row = deps.mods[mi];
+		const mod = createModule(row.path);
+		const headerErrors: ModuleError[] = [];
+		mod.source = inlineHeaderImports(sources[mi], row.path, provider, false, headerErrors);
+		for (const he of headerErrors) mod.errors.push(he);
+		let ii = 0;
+		while (ii < row.imports.length) {
+			const imp = row.imports[ii];
+			mod.imports.push(createImportEntry(imp.names, imp.aliases, imp.sourcePath, imp.sourceSpecifier));
+			ii = ii + 1;
+		}
+		mod.state = ModuleState.Ready;
+		addModule(graph, mod);
+		graph.loadOrder.push(mod.path);
+		mi = mi + 1;
+	}
+	let ci = 0;
+	while (ci < deps.circulars.length) {
+		const c = deps.circulars[ci];
+		graph.circularDeps.push({ fromPath: c.fromPath, toPath: c.toPath, cycle: c.cycle, importLine: c.importLine, importNames: c.importNames });
+		ci = ci + 1;
+	}
+	return true;
+}
+
+// Capture the std closure (this graph's ENTIRE loadOrder — preludeModules
+// runs before the entry tree, so it is exactly the prelude closure) for the
+// deps writer. Element-wise copies: the graph outlives this function and
+// the snapshot outlives the graph — sharing arrays would couple their DRC
+// lifetimes for no gain.
+function captureStdGraphDeps(graph: ModuleGraph): void {
+	const mods: DepsModuleRow[] = [];
+	for (const p of graph.loadOrder) {
+		const m = findModule(graph, p);
+		if (m === null) continue;
+		const imports: DepsImportRow[] = [];
+		let ii = 0;
+		while (ii < m.imports.length) {
+			const ie = m.imports[ii];
+			const names: string[] = [];
+			let ni = 0;
+			while (ni < ie.names.length) { names.push(ie.names[ni]); ni = ni + 1; }
+			const aliases: string[] = [];
+			let ai = 0;
+			while (ai < ie.aliases.length) { aliases.push(ie.aliases[ai]); ai = ai + 1; }
+			imports.push({ names, aliases, sourcePath: ie.sourcePath, sourceSpecifier: ie.sourceSpecifier });
+			ii = ii + 1;
+		}
+		mods.push({ path: p, imports });
+	}
+	const circulars: DepsCircularRow[] = [];
+	let ci = 0;
+	while (ci < graph.circularDeps.length) {
+		const c = graph.circularDeps[ci];
+		const cycle: string[] = [];
+		let yi = 0;
+		while (yi < c.cycle.length) { cycle.push(c.cycle[yi]); yi = yi + 1; }
+		const importNames: string[] = [];
+		let inmi = 0;
+		while (inmi < c.importNames.length) { importNames.push(c.importNames[inmi]); inmi = inmi + 1; }
+		circulars.push({ fromPath: c.fromPath, toPath: c.toPath, cycle, importLine: c.importLine as int32, importNames });
+		ci = ci + 1;
+	}
+	setStdGraphDepsSnapshot({ mods, circulars });
 }
 
 // Parse source or exit with error message.
@@ -1326,8 +1430,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Reset generic instance deduplication (first module to codegen wins).
 	resetEmittedInstances();
 	clearSkippedTypeInfos();
-	let codegenTime = 0;
-	let clangTime = 0;
+	let codegenTime: float64 = 0;
+	let clangTime: float64 = 0;
 	let compiled = 0;
 	let modulesRecompiled = 0;
 	const cd = cacheDir();
