@@ -129,6 +129,14 @@ function main(): void {
 	src.copyTo(dst, 1, 0, 2);
 	ok = check("copyTo", dst.byteAt(1) === 1 && dst.byteAt(2) === 2 && dst.byteAt(0) === 0) && ok;
 
+	// copyTo returns bytes actually copied, clamped like the C runtime.
+	ok = check("copyToReturn", src.copyTo(Buffer.alloc(8), 2, 0, 4) === 4) && ok;
+	ok = check("copyToSrcClamp", src.copyTo(Buffer.alloc(8), 0, 1, 99) === 3) && ok;
+	const cpTight = Buffer.alloc(3);
+	ok = check("copyToDstClamp", src.copyTo(cpTight, 1, 0, 4) === 2 && cpTight.byteAt(1) === 1) && ok;
+	ok = check("copyToEmpty", src.copyTo(cpTight, 0, 3, 3) === 0) && ok;
+	ok = check("copyToNegClamp", src.copyTo(Buffer.alloc(4), -5, -5, 2) === 2) && ok;
+
 	// encoding-aware write returns bytes written.
 	const wr = Buffer.alloc(4);
 	const wrote = wr.write("AB", 0, 2, "binary");
