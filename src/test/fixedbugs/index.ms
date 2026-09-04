@@ -136,3 +136,4 @@ import "./bug119MonoInferredReturn";
 import "./bug120FsBridgeRcContract";
 import "./bug121Int64FloatConv";
 import "./bug122JsTestAwait";
+import "./bug123ArrowExprReturnCheck";
