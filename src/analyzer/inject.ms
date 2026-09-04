@@ -621,11 +621,20 @@ function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 
 function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const md = node.data as MoveExprData;
+	// The consuming position decides the mode — an explicit `move` never
+	// overrides it (reference parity: the call-arg loop passes sinkArg only for
+	// sink params / spawn handoff; everything else is a borrow). MS params are
+	// borrows (ea38c2a): at a Normal call-arg position `move x` compiles exactly
+	// like the implicit pass — raw pointer, caller keeps its scope-exit destroy.
+	// Consuming here unconditionally left the value with no owner on either
+	// side: callee borrows, caller wasMoved — 1 leak per moved RC arg.
+	const consume = mode === DrcMode.Consumed || mode === DrcMode.SinkArg;
 	dctx.inEnsureMove += 1;
-	md.moveArg = processNode(md.moveArg, dctx, DrcMode.Consumed);
+	md.moveArg = processNode(md.moveArg, dctx, consume ? DrcMode.Consumed : DrcMode.Normal);
 	dctx.inEnsureMove -= 1;
 	// Identifiers: the Consumed walk above already blit+zeroed via destructiveMoveVar;
-	// recordMoveInContext stays as bookkeeping for the self-consume assignment gates.
+	// recordMoveInContext stays as bookkeeping for the self-consume assignment gates
+	// (cleanup destroys unconditionally — it never suppresses the scope-exit destroy).
 	// Fields/elements: recordMoveExpr defers wasMoved to the finally, before the container destroy.
 	const moveType = md.moveArg.nodeType;
 	if (moveType !== null) {
@@ -634,15 +643,17 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			if (md.moveArg.kind === NodeKind.Identifier) {
 				const srcName = (md.moveArg.data as IdentifierData).name;
 				recordMoveInContext(dctx, srcName);
-			} else if (md.moveArg.kind === NodeKind.MemberExpr) {
-				const fieldRc = classifyMemberFieldRc(md.moveArg, dctx);
-				if (fieldRc.needsCleanup && fieldRc.wasMovedFn !== "") {
-					recordMoveExpr(dctx, makeWasMovedOnExpr(md.moveArg, fieldRc, node.location));
-				}
-			} else if (md.moveArg.kind === NodeKind.ArrayAccess) {
-				const elemRc = classifyArrayElementRc(md.moveArg, dctx);
-				if (elemRc.needsCleanup && elemRc.wasMovedFn !== "") {
-					recordMoveExpr(dctx, makeWasMovedOnExpr(md.moveArg, elemRc, node.location));
+			} else if (consume) {
+				if (md.moveArg.kind === NodeKind.MemberExpr) {
+					const fieldRc = classifyMemberFieldRc(md.moveArg, dctx);
+					if (fieldRc.needsCleanup && fieldRc.wasMovedFn !== "") {
+						recordMoveExpr(dctx, makeWasMovedOnExpr(md.moveArg, fieldRc, node.location));
+					}
+				} else if (md.moveArg.kind === NodeKind.ArrayAccess) {
+					const elemRc = classifyArrayElementRc(md.moveArg, dctx);
+					if (elemRc.needsCleanup && elemRc.wasMovedFn !== "") {
+						recordMoveExpr(dctx, makeWasMovedOnExpr(md.moveArg, elemRc, node.location));
+					}
 				}
 			}
 		}
