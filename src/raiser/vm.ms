@@ -52,8 +52,8 @@ export interface RaiserVM {
 	callStack: RaiserCallFrames;
 	arrayHeap: RaiserArrayHeap;
 	objectHeap: RaiserObjectHeap;
-	opCount: number;
-	opLimit: number;
+	loopCount: number;   // backward jumps (loop iterations) since the last entry reset
+	loopLimit: number;   // max loop iterations before the VM refuses (reference: maxLoopIterationsVM)
 	error: string;    // Non-empty when VM stopped due to error
 	gcMode: string;   // "arena" (default, no RC) | "orc" (refcount + cycle collector)
 	gcThreshold: number;  // live-object count that triggers a cycle collection (orc)
@@ -75,6 +75,21 @@ export function ensureSlots(regs: RaiserRegFile, count: number): void {
 	}
 }
 
+// Default iteration budget. The unit is the BACKWARD JUMP (loop back-edge),
+// not the raw instruction — same unit the reference VM budgets
+// (maxLoopIterationsVM); recursion has its own guard (MAX_CALL_DEPTH here,
+// maxCallDepthVM there), and straight-line code is finite by construction.
+// A per-instruction budget penalized MS-implemented std by the loop BODY
+// length: identical comptime startsWith folded or blew the budget depending
+// on which tier supplied it (15x measured, 2026-09-04). CLI override:
+// --max-vm-iterations=<n> (options.ms calls setDefaultLoopLimit).
+const DEFAULT_LOOP_LIMIT = 10000000;
+let vmLoopLimitDefault: number = DEFAULT_LOOP_LIMIT;
+
+export function setDefaultLoopLimit(n: number): void {
+	if (n > 0) vmLoopLimitDefault = n;
+}
+
 export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM {
 	const slots: RaiserValue[] = [];
 	const regs: RaiserRegFile = { slots };
@@ -89,7 +104,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const callStack: RaiserCallFrames = { items: callFrames };
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
-	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, opCount: 0, opLimit: 10000000, error: "", gcMode, gcThreshold: 256 };
+	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256 };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -174,7 +189,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	vm.ip = 0;
 	vm.halted = false;
 	vm.error = "";
-	vm.opCount = 0;
+	vm.loopCount = 0;
 	vm.callStack.items.length = 0;
 	ensureSlots(vm.regs, callee.maxRegs);
 	let i = 0;
@@ -191,13 +206,6 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 export function execLoop(vm: RaiserVM): void {
 	const mod = vm.mod;
 	while (!vm.halted) {
-		// Budget check
-		vm.opCount = vm.opCount + 1;
-		if (vm.opCount > vm.opLimit) {
-			vmError(vm, `Instruction budget exceeded (${vm.opLimit} ops)`);
-			break;
-		}
-
 		const func = getModuleFunc(mod, vm.funcIdx);
 		const inst = getFuncInst(func, vm.ip);
 		vm.ip = vm.ip + 1;
@@ -229,6 +237,18 @@ export function execLoop(vm: RaiserVM): void {
 			vm.exitValue = getReg(vm, base + inst.a);
 		} else if (op === RaiserOpcode.Jump) {
 			const offset = getSignedAx(inst);
+			if (offset < 0) {
+				// Loop back-edge: this is ONE iteration. Straight-line code is
+				// finite by construction and recursion is bounded by
+				// MAX_CALL_DEPTH, so back-edges are the only unbounded source
+				// worth budgeting (reference: handleJmpBack decrements
+				// loopIterations only on backward jumps).
+				vm.loopCount = vm.loopCount + 1;
+				if (vm.loopCount > vm.loopLimit) {
+					vmError(vm, `interpretation requires too many iterations (limit ${vm.loopLimit}); if you are sure this is not a bug in your code, raise it with --max-vm-iterations=<n>`);
+					break;
+				}
+			}
 			vm.ip = vm.ip + offset;
 		// --- i64 arithmetic ---
 		} else if (op === RaiserOpcode.AddI64) {
@@ -1429,10 +1449,12 @@ test "two objects bidirectional link in function" {
 
 // --- Phase 5: Safety & Diagnostics tests ---
 
-test "budget exceeded stops VM" {
-	// Infinite loop: Jump(0) → always jumps to self
+test "iteration budget counts loop back-edges, not instructions" {
+	// Tight backward-jump loop: Jump(-1) re-executes itself forever. The
+	// budget counts each backward jump as ONE iteration (reference parity:
+	// maxLoopIterationsVM) and stops with a message naming the escape flag.
 	const code: RaiserInstruction[] = [
-		raiserAx(RaiserOpcode.Jump, -1),  // ip goes 1, then -1 → stays at 0
+		raiserAx(RaiserOpcode.Jump, -1),  // after fetch ip=1, -1 → stays at 0
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	];
 	const consts: RaiserValue[] = [];
@@ -1440,28 +1462,36 @@ test "budget exceeded stops VM" {
 	const funcs: RaiserFunction[] = [func];
 	const mod = createRaiserModule("test", funcs, 0);
 	const vm = createVM(mod);
-	vm.opLimit = 100; // Low budget for fast test
-	// Run manually instead of execModule to use custom budget
-	while (!vm.halted) {
-		vm.opCount = vm.opCount + 1;
-		if (vm.opCount > vm.opLimit) {
-			vm.halted = true;
-			vm.error = `Instruction budget exceeded (${vm.opLimit} ops)`;
-			break;
-		}
-		const f = getModuleFunc(mod, vm.funcIdx);
-		const inst = getFuncInst(f, vm.ip);
-		vm.ip = vm.ip + 1;
-		const op = inst.op;
-		if (op === RaiserOpcode.Jump) {
-			vm.ip = vm.ip + getSignedAx(inst);
-		} else if (op === RaiserOpcode.Halt) {
-			vm.halted = true;
-			vm.exitValue = getReg(vm, vm.baseReg + inst.a);
-		}
-	}
-	assert vm.error !== "";
-	assert vm.opCount === 101;
+	vm.loopLimit = 100;  // low budget for a fast test
+	execLoop(vm);        // custom budget applies — no manual dispatch needed
+	assert vm.halted;
+	assert vm.error.indexOf("too many iterations") >= 0;
+	assert vm.error.indexOf("--max-vm-iterations=") >= 0;
+	assert vm.loopCount === 101;
+}
+
+test "forward jumps are free; only back-edges consume the budget" {
+	// Countdown K=3: the back-edge executes exactly 3 times; the forward
+	// Beq exit and all straight-line instructions cost nothing. Pre-fix
+	// (per-instruction counting) this program spent 20+ budget units.
+	const consts: RaiserValue[] = [raiserInt(3), raiserInt(1), raiserInt(0)];
+	const code: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),   // R0 = 3
+		raiserABx(RaiserOpcode.LoadConst, 1, 1),   // R1 = 1
+		raiserABx(RaiserOpcode.LoadConst, 2, 2),   // R2 = 0
+		raiserABC(RaiserOpcode.BeqI64, 0, 2, 3),   // if R0 == 0 skip 3 → ip 7
+		raiserABC(RaiserOpcode.SubI64, 0, 0, 1),   // R0 -= 1
+		raiserAx(RaiserOpcode.Jump, -3),           // ip 6-3 = 3 — the back-edge
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),     // skipped pad
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),     // exit, R0 = 0
+	];
+	const func = createRaiserFunction("countdown", code, consts, 0, 0, 3);
+	const funcs: RaiserFunction[] = [func];
+	const mod = createRaiserModule("test", funcs, 0);
+	const vm = execModule(mod);
+	assert vm.error === "";
+	assert vm.loopCount === 3;
+	assert vm.exitValue.intVal === 0;
 }
 
 test "unknown opcode sets error" {

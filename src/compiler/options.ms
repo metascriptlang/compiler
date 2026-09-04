@@ -4,6 +4,7 @@ import { argv, exit, platform } from "std/process";
 import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
 import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, formatDefines } from "./defines";
+import { setDefaultLoopLimit } from "../raiser/vm";
 
 // -- Types --
 
@@ -26,6 +27,7 @@ export interface CliOptions {
 	showTime: boolean;
 	verbose: boolean;
 	errorMax: number;
+	vmIterations: number;    // --max-vm-iterations=<n>: Raiser VM loop budget (0 = VM default, 10M iterations)
 	mode: number;
 	ccCompiler: number;
 	ccBinary: string;          // --cc=<path>: explicit C compiler binary (cross-compile)
@@ -73,6 +75,7 @@ export function parseArgs(): CliOptions {
 		showTime: false,
 		verbose: false,
 		errorMax: 0,
+		vmIterations: 0,
 		mode: MODE_DEBUG,
 		ccCompiler: 0,
 		ccBinary: "",
@@ -142,6 +145,11 @@ export function parseArgs(): CliOptions {
 			opts.verbose = true;
 		} else if (arg.startsWith("--error-max=")) {
 			opts.errorMax = parseIntStr(arg.slice(12, arg.length));
+		} else if (arg.startsWith("--max-vm-iterations=")) {
+			opts.vmIterations = parseIntStr(arg.slice(20, arg.length));
+			// Applied at parse time: the comptime engine builds its VM lazily
+			// long after parsing, and createVM reads this default.
+			setDefaultLoopLimit(opts.vmIterations);
 		} else if (arg === "--release") {
 			opts.mode = MODE_RELEASE;
 		} else if (arg === "--danger") {

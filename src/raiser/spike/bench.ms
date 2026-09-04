@@ -189,5 +189,5 @@ runBench("sum(1..60000)", buildSumModule(60000));
 // fibIter — values grow fast: fib(46) ~ 1.8e9 is last fitting int32.
 runBench("fibIter(45)", buildFibIterModule(45));
 
-console.log("\nNote: vm.ms has opLimit=10M. Larger N will hit budget there.");
+console.log("\nNote: vm.ms budgets loop back-edges (10M iterations, not raw instructions).");
 console.log("vmFast runs to 100M for headroom.");
