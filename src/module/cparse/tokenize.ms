@@ -52,30 +52,30 @@ function advance(s: ScanState): void {
 	}
 }
 
-function skipN(s: ScanState, n: number): void {
+function skipN(s: ScanState, n: int32): void {
 	let i = 0;
 	while (i < n) { advance(s); i = i + 1; }
 }
 
 // ===== Character classification =====
 
-function isDigit(ch: number): boolean {
+function isDigit(ch: int32): boolean {
 	return ch >= "0".code && ch <= "9".code;
 }
 
-function isAlpha(ch: number): boolean {
+function isAlpha(ch: int32): boolean {
 	return (ch >= "a".code && ch <= "z".code) || (ch >= "A".code && ch <= "Z".code) || ch === "_".code;
 }
 
-function isAlnum(ch: number): boolean {
+function isAlnum(ch: int32): boolean {
 	return isAlpha(ch) || isDigit(ch);
 }
 
-function isSpace(ch: number): boolean {
+function isSpace(ch: int32): boolean {
 	return ch === " ".code || ch === "\t".code || ch === 11 || ch === 12;
 }
 
-function isPunct(ch: number): boolean {
+function isPunct(ch: int32): boolean {
 	return (ch >= "!".code && ch <= "/".code) ||
 		(ch >= ":".code && ch <= "@".code) ||
 		(ch >= "[".code && ch <= "^".code) ||
@@ -85,7 +85,7 @@ function isPunct(ch: number): boolean {
 
 // ===== Token construction =====
 
-function newToken(s: ScanState, kind: CTokenKind, start: number, startLine: number, startCol: number): CToken {
+function newToken(s: ScanState, kind: CTokenKind, start: int32, startLine: int32, startCol: int32: CToken {
 	const tok: CToken = {
 		kind,
 		next: null,
@@ -111,7 +111,7 @@ function newToken(s: ScanState, kind: CTokenKind, start: number, startLine: numb
 
 // ===== Identifier reader =====
 
-function readIdent(s: ScanState): number {
+function readIdent(s: ScanState): int32 {
 	const start = s.pos;
 	let ch = peek(s);
 
@@ -142,7 +142,7 @@ function readIdent(s: ScanState): number {
 
 // ===== Punctuator reader =====
 
-function readPunct(s: ScanState): number {
+function readPunct(s: ScanState): int32 {
 	const c0 = peek(s);
 	const c1 = peekAt(s, 1);
 	const c2 = peekAt(s, 2);
@@ -234,7 +234,7 @@ function readEscapedChar(s: ScanState): int32 {
 
 // ===== String literal =====
 
-function stringLiteralEnd(s: ScanState): number {
+function stringLiteralEnd(s: ScanState): int32 {
 	let p = s.pos;
 	const len = s.source.byteLength;
 	while (p < len) {
@@ -320,7 +320,7 @@ function readCharLiteral(s: ScanState, tokenStart: int32, startLine: int32, star
 
 // ===== PP-number reader =====
 
-function readPPNumber(s: ScanState, tokenStart: number, startLine: number, startCol: number): CToken {
+function readPPNumber(s: ScanState, tokenStart: int32, startLine: int32, startCol: int32): CToken {
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if ((ch === "e".code || ch === "E".code || ch === "p".code || ch === "P".code) &&
@@ -358,7 +358,7 @@ function isKeyword(lexeme: string): boolean {
 
 // ===== PP-number conversion =====
 
-function toLower(ch: number): number {
+function toLower(ch: int32): int32 {
 	if (ch >= "A".code && ch <= "Z".code) return ch + 32;
 	return ch;
 }

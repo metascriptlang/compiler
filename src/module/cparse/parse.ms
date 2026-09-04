@@ -260,7 +260,7 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 // ===== Balanced-paren skipping =====
 
 // Cursor ends just past the closing `)` that balances `startDepth` opens.
-function skipParens(ctx: ParseCtx, startDepth: number): void {
+function skipParens(ctx: ParseCtx, startDepth: int32): void {
 	let depth = startDepth;
 	while (!isEnd(ctx) && depth > 0) {
 		if (eq(ctx, "(")) depth = depth + 1;

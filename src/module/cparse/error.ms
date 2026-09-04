@@ -10,23 +10,23 @@ export enum DiagSeverity {
 export interface Diagnostic {
 	severity: DiagSeverity;
 	file: string;
-	line: number;
-	col: number;
+	line: int32;
+	col: int32;
 	message: string;
 }
 
 export function makeDiag(
 	severity: DiagSeverity,
 	file: string,
-	line: number,
-	col: number,
+	line: int32,
+	col: int32,
 	message: string
 ): Diagnostic {
 	return { severity, file, line, col, message };
 }
 
 // Comparator for sort-by-source-order.
-export function cmpDiag(a: Diagnostic, b: Diagnostic): number {
+export function cmpDiag(a: Diagnostic, b: Diagnostic): int32 {
 	if (a.file < b.file) return -1;
 	if (a.file > b.file) return 1;
 	if (a.line !== b.line) return a.line - b.line;

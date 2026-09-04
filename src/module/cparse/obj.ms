@@ -23,5 +23,5 @@ export interface Obj {
 	enumValue: int64;
 	// Source location of declaration
 	file: string;
-	line: number;
+	line: int32;
 }

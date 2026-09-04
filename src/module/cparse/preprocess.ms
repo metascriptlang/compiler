@@ -47,7 +47,7 @@ const COND_ELIF = 1;
 const COND_ELSE = 2;
 
 interface CondIncl {
-	ctx: number;              // COND_THEN, COND_ELIF, COND_ELSE
+	ctx: int32;               // COND_THEN, COND_ELIF, COND_ELSE
 	included: boolean;        // whether tokens in this block have been emitted
 	parent: CondIncl;
 }
@@ -62,7 +62,7 @@ interface PPContext {
 	target: TargetInfo;
 	diags: Diagnostic[];
 	file: string;
-	counter: number;          // for __COUNTER__
+	counter: int32;           // for __COUNTER__
 	arena: CToken[];          // owns all tokens this preprocess session creates
 	readLog: string[];        // null normally; when set, every file probe/read is recorded as "<path>\t<hash>" / "<path>\t-" for the caller's dep cache
 }

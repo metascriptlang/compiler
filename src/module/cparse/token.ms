@@ -52,10 +52,10 @@ export interface CToken {
 	                        // string-literal contents with embedded NULs allowed
 	// Source location
 	file: string;           // absolute path of containing file
-	line: number;           // 1-based line number in `file`
-	col: number;            // 1-based column number
-	byteOffset: number;     // byte offset into original source
-	byteLength: number;     // token length in source bytes
+	line: int32;           // 1-based line number in `file`
+	col: int32;            // 1-based column number
+	byteOffset: int32;     // byte offset into original source
+	byteLength: int32;     // token length in source bytes
 	// Preprocessor bookkeeping
 	atBol: boolean;         // token sits at beginning of line (for # directive detection)
 	hasSpace: boolean;      // token was preceded by whitespace (for # stringify spacing)

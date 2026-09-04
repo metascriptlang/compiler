@@ -28,7 +28,7 @@ export function decodeUtf8(source: string, pos: int32): int32[] {
 }
 
 // C11 Annex D identifier-start characters.
-function inRange(ranges: number[], cp: number): boolean {
+function inRange(ranges: int32[], cp: int32): boolean {
 	let i = 0;
 	while (i < ranges.length) {
 		if (cp >= ranges[i] && cp <= ranges[i + 1]) return true;
@@ -37,7 +37,7 @@ function inRange(ranges: number[], cp: number): boolean {
 	return false;
 }
 
-const IDENT1_RANGES: number[] = [
+const IDENT1_RANGES: int32[] = [
 	"_".code, "_".code, "a".code, "z".code, "A".code, "Z".code, "$".code, "$".code,
 	0x00A8, 0x00A8, 0x00AA, 0x00AA, 0x00AD, 0x00AD, 0x00AF, 0x00AF,
 	0x00B2, 0x00B5, 0x00B7, 0x00BA, 0x00BC, 0x00BE, 0x00C0, 0x00D6,
@@ -54,16 +54,16 @@ const IDENT1_RANGES: number[] = [
 	0xD0000, 0xDFFFD, 0xE0000, 0xEFFFD,
 ];
 
-const IDENT2_EXTRA: number[] = [
+const IDENT2_EXTRA: int32[] = [
 	"0".code, "9".code, "$".code, "$".code,
 	0x0300, 0x036F, 0x1DC0, 0x1DFF, 0x20D0, 0x20FF, 0xFE20, 0xFE2F,
 ];
 
-export function isIdent1(cp: number): boolean {
+export function isIdent1(cp: int32): boolean {
 	return inRange(IDENT1_RANGES, cp);
 }
 
-export function isIdent2(cp: number): boolean {
+export function isIdent2(cp: int32): boolean {
 	return isIdent1(cp) || inRange(IDENT2_EXTRA, cp);
 }
 
@@ -76,7 +76,7 @@ export function fromHex(ch: int32): int32 {
 }
 
 // Read a universal character: 4 hex digits for \u, 8 for \U. Returns -1 if invalid.
-export function readUniversalChar(source: string, pos: number, len: number): int32 {
+export function readUniversalChar(source: string, pos: int32, len: int32): int32 {
 	let cp: int32 = 0;
 	let i = 0;
 	while (i < len) {
