@@ -372,8 +372,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		return true;
 	}
 
-	// Integer → float64 widening (lossless for int32 range)
-	if (isIntegerType(source) && target.kind === TypeKind.Float64) {
+	// Integer → float64 widening (lossless for int32 range); Number is the same C double
+	if ((isIntegerType(source) || source.kind === TypeKind.Number) && target.kind === TypeKind.Float64) {
 		return true;
 	}
 
