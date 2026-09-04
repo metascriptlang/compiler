@@ -31,8 +31,8 @@ import { parseInput } from "../transform/testUtil";
 
 // ===== Constants =====
 
-const MAX_TIME: number = 999999;
-const MIN_TIME: number = -1;
+const MAX_TIME: int32 = 999999;
+const MIN_TIME: int32 = -1;
 
 // ===== VarFlag (per-variable analysis flags) =====
 
@@ -48,15 +48,15 @@ const SF_IS_MUTATED: int32 = 1;
 
 // ===== Connection Kind =====
 
-const CK_EMPTY_ROOT: number = 0;
-const CK_DEPENDS_ON: number = 1;
-const CK_ROOT_OF: number = 2;
+const CK_EMPTY_ROOT: int32 = 0;
+const CK_DEPENDS_ON: int32 = 1;
+const CK_ROOT_OF: int32 = 2;
 
 // ===== Data Structures =====
 
 interface Connection {
-	kind: number;
-	target: number; // parent index for DependsOn, graph index for RootOf
+	kind: int32;
+	target: int32; // parent index for DependsOn, graph index for RootOf
 }
 
 interface VarEntry {
@@ -64,25 +64,25 @@ interface VarEntry {
 	con: Connection;
 	flags: int32;
 	reassignedTo: string; // single source name ("" = none or multiple)
-	aliveStart: number;
-	aliveEnd: number;
+	aliveStart: int32;
+	aliveEnd: int32;
 }
 
 interface MutationInfo {
 	flags: int32;
-	maxMutation: number;
-	minConnection: number;
-	mutations: number[];
+	maxMutation: int32;
+	minConnection: int32;
+	mutations: int32[];
 }
 
 interface Partitions {
-	abstractTime: number;
+	abstractTime: int32;
 	vars: VarEntry[];
 	graphs: MutationInfo[];
-	inConstructor: number;
-	inConditional: number;
-	inLoop: number;
-	inAsgnSource: number;
+	inConstructor: int32;
+	inConditional: int32;
+	inLoop: int32;
+	inAsgnSource: int32;
 }
 
 function createPartitions(): Partitions {
@@ -94,7 +94,7 @@ function createPartitions(): Partitions {
 
 // ===== Variable Lookup =====
 
-function variableId(p: Partitions, name: string): number {
+function variableId(p: Partitions, name: string): int32 {
 	let i = 0;
 	while (i < p.vars.length) {
 		if (p.vars[i].name === name) return i;
@@ -118,7 +118,7 @@ function registerVariable(p: Partitions, name: string, isParam: boolean): void {
 
 // ===== Union-Find with Path Compression =====
 
-function ufRoot(p: Partitions, start: number): number {
+function ufRoot(p: Partitions, start: int32): int32 {
 	let r = start;
 	let depth = 0;
 	while (p.vars[r].con.kind === CK_DEPENDS_ON) {
@@ -148,9 +148,9 @@ function ufConnect(p: Partitions, aName: string, bName: string): void {
 
 	// Collect rb's graph info before merging
 	let rbFlags: int32 = 0;
-	let rbMut: number = 0;
-	let rbCon: number = p.abstractTime;
-	let rbMutations: number[] = [];
+	let rbMut: int32 = 0;
+	let rbCon: int32 = p.abstractTime;
+	let rbMutations: int32[] = [];
 	if (p.vars[rb].con.kind === CK_ROOT_OF) {
 		const gb = p.graphs[p.vars[rb].con.target];
 		rbFlags = gb.flags;
@@ -165,7 +165,7 @@ function ufConnect(p: Partitions, aName: string, bName: string): void {
 	if (p.vars[ra].con.kind === CK_EMPTY_ROOT) {
 		// ra becomes root of a new graph
 		p.vars[ra].con = { kind: CK_ROOT_OF, target: p.graphs.length };
-		const muts: number[] = [];
+		const muts: int32[] = [];
 		for (const m of rbMutations) { muts.push(m); }
 		p.graphs.push({
 			flags: rbFlags, maxMutation: rbMut,
@@ -234,7 +234,7 @@ function collectPathRoots(node: Node, result: string[]): void {
 // If dest owns → marked ownsData → cannot be cursor.
 // If dest borrows → connected via union-find → cursor candidate.
 
-function destMightOwn(p: Partitions, destIdx: number, src: Node): void {
+function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 	if (src === null) return;
 
 	match (src.kind) {
@@ -328,7 +328,7 @@ function destMightOwn(p: Partitions, destIdx: number, src: Node): void {
 // Walk AST to register variables and compute alive ranges.
 // Must traverse in the same order as pass 2 for consistent abstractTime.
 
-function markReassigned(p: Partitions, vid: number): void {
+function markReassigned(p: Partitions, vid: int32): void {
 	p.vars[vid].flags = p.vars[vid].flags | VF_IS_REASSIGNED;
 	if (p.inConditional > 0 && p.inLoop > 0) {
 		p.vars[vid].flags = p.vars[vid].flags | VF_IS_COND_REASSIGNED;
