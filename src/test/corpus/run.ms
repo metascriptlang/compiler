@@ -115,7 +115,30 @@ const SAN_PASSL = "-fsanitize=address" + (IS_WIN ? " -pthread" : "");
 // "--danger builds without LTO for zig cc targeting windows" and the lane runs
 // with -O3 minus whole-program DCE. The header prints which of the two it is,
 // so a weakened lane is never silent.
-const HAS_CLANG = cmdExists("clang");
+// Presence on PATH is NOT the same question as "can this driver compile here".
+// A stock Windows scoop install ships an MSVC-targeting clang with no MSVC and
+// no MinGW headers behind it: a two-line hello.c dies with `'string.h' file not
+// found` before reaching a line of generated code. cmdExists() answered yes, so
+// the danger lane pointed msc at that clang and every one of its cells reported
+// "build failed" about the HOST rather than the compiler under test — exactly
+// the failure mode the fallback below exists to prevent. Ask the driver the
+// question the lane actually asks of it: compile a hello world with the two
+// headers the runtime includes first.
+function ccUsable(cc: string): boolean {
+	if (!cmdExists(cc)) { return false; }
+	const dir = OUT_DIR + "ccprobe/";
+	ensureDir(dir);
+	const src = dir + "probe.c";
+	const bin = dir + "probe-" + cc + (IS_WIN ? ".exe" : "");
+	writeFile(src, "#include <string.h>\n#include <stdlib.h>\nint main(void) { return (int)strlen(\"\"); }\n");
+	// A stale probe binary from an earlier run would read as success even if
+	// this driver just failed, so the artifact must not pre-exist the compile.
+	if (exists(bin)) { remove(bin); }
+	const r = runCapture(cc + " " + winPath(src) + " -o " + winPath(bin));
+	return r.exitCode === 0 && exists(bin);
+}
+
+const HAS_CLANG = ccUsable("clang");
 const DANGER_CC = HAS_CLANG ? " --cc=clang" : "";
 // Same winpthreads gap as SAN_PASSL (see above): a mingw-targeting clang
 // needs -pthread spelled out on the link line, zig cc bundles it implicitly.
@@ -133,7 +156,7 @@ const DANGER_PASSC = (IS_WIN && HAS_CLANG) ? " --passC=-Wno-error=incompatible-p
 // self-link it. Prefer clang (parity with the danger lane), fall back to
 // gcc (stock Linux), and only then go driverless (managed zig), which is
 // correct on the hosts where that combination is known to work.
-const SAN_CC = HAS_CLANG ? " --cc=clang" : (cmdExists("gcc") ? " --cc=gcc" : "");
+const SAN_CC = HAS_CLANG ? " --cc=clang" : (ccUsable("gcc") ? " --cc=gcc" : "");
 
 // The js lane runs its binary through `node`. Without node installed the cell
 // launches, fails to start, and reports a red that is about the HOST, not the
@@ -786,7 +809,7 @@ function main(): void {
 	// would read exactly like a full run (docs/TESTGAP.md T9's rule applied to
 	// the host rather than to a directive).
 	if (!HAS_CLANG) {
-		progress("  !! clang not found — the danger" + (SAN ? " and san" : "") + " lane(s) build with the auto-detected compiler instead. On this host that means --danger WITHOUT LTO, so whole-program DCE (the class this lane exists to catch) is not exercised");
+		progress("  !! clang missing, or present but unable to compile a hello world here — the danger" + (SAN ? " and san" : "") + " lane(s) build with the auto-detected compiler instead. On this host that means --danger WITHOUT LTO, so whole-program DCE (the class this lane exists to catch) is not exercised");
 	}
 	if (!HAS_NODE && !SAN) {
 		progress("  !! node not found — the js lane is DISABLED on this host; every parity verdict below is C-only (drc/orc/danger), so C↔JS backend divergence is not covered");
