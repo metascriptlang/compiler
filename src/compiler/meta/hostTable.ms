@@ -57,6 +57,7 @@ import {
 	mkdir, rmdir, remove, rename, readDir,
 } from "std/fs";
 import { cwd, platform, env, exec, argv, execFile, execFileCapture } from "std/process";
+import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { performance } from "std/core/performance";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
@@ -316,6 +317,126 @@ function _bridgeMsProcessSpawnSyncArgv(args: RaiserValue[]): RaiserValue {
 	return boxString(_spawnStdout);
 }
 
+
+// --- std/io bridges (standard streams) ---
+// Same static-inline shims the C tier links from runtime/io/streams.h,
+// reached through msc's own std/io import — writeStdout/Stderr flush
+// immediately (LSP framing), readLine strips \r\n, caps 4 KiB.
+
+function _bridgeMsReadLine(args: RaiserValue[]): RaiserValue {
+	return boxString(readLine());
+}
+
+function _bridgeMsReadBytes(args: RaiserValue[]): RaiserValue {
+	return boxString(readBytes(unboxFloat(args[0])));
+}
+
+function _bridgeMsStdinHasData(args: RaiserValue[]): RaiserValue {
+	return boxInt(stdinHasData() ? 1 : 0);
+}
+
+function _bridgeMsWriteStdout(args: RaiserValue[]): RaiserValue {
+	writeStdout(unboxString(args[0]));
+	return raiserNil();
+}
+
+function _bridgeMsWriteStderr(args: RaiserValue[]): RaiserValue {
+	writeStderr(unboxString(args[0]));
+	return raiserNil();
+}
+
+function _bridgeMsStdinDisableBuffering(args: RaiserValue[]): RaiserValue {
+	stdinDisableBuffering();
+	return raiserNil();
+}
+
+// --- std/compress/zip bridges ---
+// Raw miniz kernels from runtime/compress/zip.c — the same TU set zip.cms
+// @compiles into this binary via the package-manager import chain. Handles
+// are int64 tokens; all Result/object construction lives in the .rms tier.
+
+@include("runtime/compress/zip.h");
+
+extern function msZipReaderOpen(data: string): int64;
+extern function msZipReaderCount(handle: int64): int32;
+extern function msZipReaderEntryName(handle: int64, index: int32): string;
+extern function msZipReaderEntrySize(handle: int64, index: int32): int64;
+extern function msZipReaderEntryIsDir(handle: int64, index: int32): int32;
+extern function msZipReaderExtract(handle: int64, index: int32): string;
+extern function msZipReaderClose(handle: int64): void;
+extern function msZipWriterNew(): int64;
+extern function msZipWriterAdd(handle: int64, name: string, data: string, level: int32): int32;
+extern function msZipWriterFinalize(handle: int64): string;
+extern function msZipWriterClose(handle: int64): void;
+
+function _bridgeMsZipReaderOpen(args: RaiserValue[]): RaiserValue {
+	return boxInt(msZipReaderOpen(unboxString(args[0])));
+}
+
+function _bridgeMsZipReaderCount(args: RaiserValue[]): RaiserValue {
+	return boxInt(msZipReaderCount(unboxInt(args[0]) as int64));
+}
+
+function _bridgeMsZipReaderEntryName(args: RaiserValue[]): RaiserValue {
+	return boxString(msZipReaderEntryName(unboxInt(args[0]) as int64, unboxInt(args[1]) as int32));
+}
+
+function _bridgeMsZipReaderEntrySize(args: RaiserValue[]): RaiserValue {
+	return boxInt(msZipReaderEntrySize(unboxInt(args[0]) as int64, unboxInt(args[1]) as int32));
+}
+
+function _bridgeMsZipReaderEntryIsDir(args: RaiserValue[]): RaiserValue {
+	return boxInt(msZipReaderEntryIsDir(unboxInt(args[0]) as int64, unboxInt(args[1]) as int32));
+}
+
+function _bridgeMsZipReaderExtract(args: RaiserValue[]): RaiserValue {
+	return boxString(msZipReaderExtract(unboxInt(args[0]) as int64, unboxInt(args[1]) as int32));
+}
+
+function _bridgeMsZipReaderClose(args: RaiserValue[]): RaiserValue {
+	msZipReaderClose(unboxInt(args[0]) as int64);
+	return raiserNil();
+}
+
+function _bridgeMsZipWriterNew(args: RaiserValue[]): RaiserValue {
+	return boxInt(msZipWriterNew());
+}
+
+function _bridgeMsZipWriterAdd(args: RaiserValue[]): RaiserValue {
+	return boxInt(msZipWriterAdd(unboxInt(args[0]) as int64, unboxString(args[1]), unboxString(args[2]), unboxInt(args[3]) as int32));
+}
+
+function _bridgeMsZipWriterFinalize(args: RaiserValue[]): RaiserValue {
+	return boxString(msZipWriterFinalize(unboxInt(args[0]) as int64));
+}
+
+function _bridgeMsZipWriterClose(args: RaiserValue[]): RaiserValue {
+	msZipWriterClose(unboxInt(args[0]) as int64);
+	return raiserNil();
+}
+
+// --- std/crypto bridges (hash family) ---
+// runtime/crypto/hash.c + the mbedtls hash TUs are already compiled into
+// this binary through the package-manager import chain (download.ms).
+
+@include("runtime/crypto/hash.h");
+
+extern function msCryptoInit(): boolean;
+extern function msCryptoCleanup(): void;
+extern function msCryptoHashString(algorithm: string, data: string, encoding: string): string;
+
+function _bridgeMsCryptoInit(args: RaiserValue[]): RaiserValue {
+	return boxBool(msCryptoInit());
+}
+
+function _bridgeMsCryptoCleanup(args: RaiserValue[]): RaiserValue {
+	msCryptoCleanup();
+	return raiserNil();
+}
+
+function _bridgeMsCryptoHashString(args: RaiserValue[]): RaiserValue {
+	return boxString(msCryptoHashString(unboxString(args[0]), unboxString(args[1]), unboxString(args[2])));
+}
 
 // --- Macro Node child accessors ---
 // childCount/childAt (std/meta) traverse a Node's children BY INDEX on the
@@ -613,6 +734,26 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcessUnsetEnv",     _bridgeMsProcessUnsetEnv);
 	registerHostFn("msProcessExecFile",     _bridgeMsProcessExecFile);
 	registerHostFn("msProcessSpawnSyncArgv", _bridgeMsProcessSpawnSyncArgv);
+	registerHostFn("msStdinDisableBuffering", _bridgeMsStdinDisableBuffering);
+	registerHostFn("msReadLine",            _bridgeMsReadLine);
+	registerHostFn("msReadBytes",           _bridgeMsReadBytes);
+	registerHostFn("msStdinHasData",        _bridgeMsStdinHasData);
+	registerHostFn("msWriteStdout",         _bridgeMsWriteStdout);
+	registerHostFn("msWriteStderr",         _bridgeMsWriteStderr);
+	registerHostFn("msZipReaderOpen",       _bridgeMsZipReaderOpen);
+	registerHostFn("msZipReaderCount",      _bridgeMsZipReaderCount);
+	registerHostFn("msZipReaderEntryName",  _bridgeMsZipReaderEntryName);
+	registerHostFn("msZipReaderEntrySize",  _bridgeMsZipReaderEntrySize);
+	registerHostFn("msZipReaderEntryIsDir", _bridgeMsZipReaderEntryIsDir);
+	registerHostFn("msZipReaderExtract",    _bridgeMsZipReaderExtract);
+	registerHostFn("msZipReaderClose",      _bridgeMsZipReaderClose);
+	registerHostFn("msZipWriterNew",        _bridgeMsZipWriterNew);
+	registerHostFn("msZipWriterAdd",        _bridgeMsZipWriterAdd);
+	registerHostFn("msZipWriterFinalize",   _bridgeMsZipWriterFinalize);
+	registerHostFn("msZipWriterClose",      _bridgeMsZipWriterClose);
+	registerHostFn("msCryptoInit",          _bridgeMsCryptoInit);
+	registerHostFn("msCryptoCleanup",       _bridgeMsCryptoCleanup);
+	registerHostFn("msCryptoHashString",    _bridgeMsCryptoHashString);
 	registerHostFn("msStringSplit",         _bridgeMsStringSplit);
 	registerHostFn("msNodeIsFloatLiteral", _bridgeMsNodeIsFloatLiteral);
 	registerHostFn("msNodeIntValue",        _bridgeMsNodeIntValue);

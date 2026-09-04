@@ -1,0 +1,34 @@
+// std/io — Raiser tier. Same contract as index.cms: standard streams only,
+// kernels are host bridges (hostTable.ms) over the same static-inline C
+// shims the C tier links from runtime/io/streams.h. File I/O: std/fs.
+
+extern function msStdinDisableBuffering(): void from "msStdinDisableBuffering";
+extern function msReadLine(): string from "msReadLine";
+extern function msReadBytes(n: number): string from "msReadBytes";
+extern function msStdinHasData(): number from "msStdinHasData";
+extern function msWriteStdout(s: string): void from "msWriteStdout";
+extern function msWriteStderr(s: string): void from "msWriteStderr";
+
+export function readLine(): string {
+	return msReadLine();
+}
+
+export function readBytes(n: number): string {
+	return msReadBytes(n);
+}
+
+export function writeStdout(s: string): void {
+	msWriteStdout(s);
+}
+
+export function writeStderr(s: string): void {
+	msWriteStderr(s);
+}
+
+export function stdinDisableBuffering(): void {
+	msStdinDisableBuffering();
+}
+
+export function stdinHasData(): boolean {
+	return msStdinHasData() === 1;
+}
