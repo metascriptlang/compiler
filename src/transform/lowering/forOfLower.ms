@@ -9,7 +9,7 @@
 import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, NodeFlag, Type, TypeKind, Symbol } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { int32Type, noneType, isIterator, getIteratorNextFnType } from "../../checker/types";
-import { expandArrayRet } from "../desugar/destructuringLower";
+import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import {
 	makeIdentResolved, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
@@ -156,7 +156,8 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const whileStmts: Node[] = [];
 	const itemDk = boolToDeclKind(d.forOfIsConst);
 
-	if (d.forOfPattern !== null && d.forOfPattern.kind === NodeKind.ArrayPattern) {
+	const patKind = d.forOfPattern !== null ? d.forOfPattern.kind : NodeKind.Identifier;
+	if (patKind === NodeKind.ArrayPattern || patKind === NodeKind.ObjectPattern) {
 		// Destructured: const $elem = <iter>[$idx]; const a = $elem[0]; const b = $elem[1]; ...
 		const elemType = elemArrType !== null && elemArrType.typeReturn !== null ? elemArrType.typeReturn : noneType();
 		const elemSym = freshTempSym(ctx, "elem", elemType);
@@ -171,7 +172,9 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 			elemAccess.nodeType = elemArrType.typeReturn;
 		}
 		whileStmts.push(elemDecl);
-		const bindings = expandArrayRet(d.forOfPattern, makeIdentResolved(elemSym, loc), itemDk, loc, ctx);
+		const bindings = patKind === NodeKind.ArrayPattern
+			? expandArrayRet(d.forOfPattern, makeIdentResolved(elemSym, loc), itemDk, loc, ctx)
+			: expandObjectRet(d.forOfPattern, makeIdentResolved(elemSym, loc), itemDk, loc, ctx);
 		let pi = 0;
 		while (pi < bindings.length) {
 			whileStmts.push(bindings[pi]);

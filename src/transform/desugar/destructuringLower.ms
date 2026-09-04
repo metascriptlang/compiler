@@ -5,9 +5,9 @@ import {
 	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, IdentifierData, SpreadExprData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { noneType, int32Type, destrPositionalElemType, destrNamedFieldType, destrRestElemType } from "../../checker/types";
+import { noneType, int32Type, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrObjectRestNames } from "../../checker/types";
 import { walkExpandBlocks } from "../walker";
-import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind, makeIdent, makeWhile, makeBinary, makeAssign, makeExprStmt, makeBlock, makeHiddenAddr, syntheticToken } from "../util";
+import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind, makeIdent, makeWhile, makeBinary, makeAssign, makeExprStmt, makeBlock, makeHiddenAddr, makeTypedObjectLiteral, syntheticToken } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -108,13 +108,37 @@ export function expandArrayRet(
 }
 
 // Expand object pattern {x, y: z} → member access
-function expandObjectRet(
+export function expandObjectRet(
 	pattern: Node, base: Node, declKind: DeclKind,
 	loc: SourceLocation, ctx: TransformContext
 ): Node[] {
 	const opd = pattern.data as ObjectPatternData;
 	const items: Node[] = [];
+	const takenKeys: string[] = [];
 	for (const prop of opd.patternProps) {
+		if (prop.kind === NodeKind.ObjectPatternProp) takenKeys.push((prop.data as ObjectPatternPropData).propKey);
+	}
+	for (const prop of opd.patternProps) {
+		if (prop.kind === NodeKind.SpreadExpr) {
+			const inner = (prop.data as SpreadExprData).spreadArg;
+			if (inner.kind !== NodeKind.Identifier) continue;
+			const restId = inner.data as IdentifierData;
+			if (restId.name === "_") continue;
+			const restType = destrObjectRestType(base.nodeType, takenKeys);
+			if (restType === null) continue;
+			const restNames = destrObjectRestNames(base.nodeType, takenKeys);
+			const restValues: Node[] = [];
+			for (const fieldName of restNames) {
+				const fieldAccess = makeMember(base, fieldName, loc);
+				const ft = destrNamedFieldType(base.nodeType, fieldName);
+				if (ft !== null) fieldAccess.nodeType = ft;
+				restValues.push(fieldAccess);
+			}
+			const restDecl = makeVarDecl(restId.name, makeTypedObjectLiteral(restNames, restValues, restType, loc), declKind, loc);
+			restDecl.nodeType = restType;
+			items.push(restDecl);
+			continue;
+		}
 		if (prop.kind !== NodeKind.ObjectPatternProp) continue;
 		const p = prop.data as ObjectPatternPropData;
 		if (p.propAlias.kind === NodeKind.Identifier) {
