@@ -11,7 +11,7 @@ import { ParserState, current, advance, isAtEnd } from "../context";
 import { exprNode, exprKind, parseOk } from "./util";
 
 type ExprResult = Result<Expression, string>;
-type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
+type ExprParser = (state: ParserState, minPrec: int32) => ExprResult;
 
 // Tag/closing name flattened to a string ("Foo.Bar", "svg:rect") — macros split it at expansion
 // time, so member/namespace names need no dedicated NodeKind.

@@ -68,7 +68,7 @@ export function exprOp(input: string): string {
 // ===== Mock Expression Parser for Unit Tests =====
 // Shared by call.ms, object.ms, arrow.ms tests
 
-export function mockExpr(state: ParserState, minPrec: number): ExprResult {
+export function mockExpr(state: ParserState, minPrec: int32): ExprResult {
 	const tok = current(state);
 	if (tok.kind === TokenKind.Number) {
 		advance(state);

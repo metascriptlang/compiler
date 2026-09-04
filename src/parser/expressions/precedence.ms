@@ -7,7 +7,7 @@ import { Token, TokenKind } from "../../lexer/token";
 // JS-aligned precedence: ** > * / % > + - > << >> >>> > < > <= >= >
 // == != === !== > & > ^ > | > && > || > ?? > |> > = += etc.
 
-export function getPrecedence(kind: TokenKind): number {
+export function getPrecedence(kind: TokenKind): int32 {
 	return match (kind) {
 		TokenKind.StarStar => 65,
 		TokenKind.Star | TokenKind.Slash | TokenKind.Percent => 60,

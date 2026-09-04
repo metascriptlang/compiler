@@ -9,7 +9,7 @@ import { parseOk } from "./util";
 
 
 type ExprResult = Result<Expression, string>;
-type PrecParserFn = (state: ParserState, minPrec: number) => ExprResult;
+type PrecParserFn = (state: ParserState, minPrec: int32) => ExprResult;
 
 export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn): ExprResult {
 	const headToken = current(state);

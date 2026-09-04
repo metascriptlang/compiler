@@ -16,7 +16,7 @@ function isIdentLikeToken(token: Token): boolean {
 
 export class ParserState {
 	tokens: Token[];
-	position: number;
+	position: int32;
 	errors: string[];
 	panicMode: boolean;
 	pendingComments: Token[]; // Added for comment preservation
@@ -24,7 +24,7 @@ export class ParserState {
 	// Restricted production (like JS's NoIn): >0 while parsing a match-case
 	// `when` guard, where a bare `ident =>` must NOT start an arrow function —
 	// that `=>` belongs to the match arm. Parenthesized arrows still parse.
-	noBareArrow: number;
+	noBareArrow: int32;
 }
 
 export function createState(tokens: Token[]): ParserState {
@@ -102,7 +102,7 @@ export function isAtEnd(state: ParserState): boolean {
 
 // ===== Lookahead =====
 
-export function peek(state: ParserState, offset: number): Token {
+export function peek(state: ParserState, offset: int32): Token {
 	let pos = state.position;
 	let count = 0;
 	while (pos < state.tokens.length) {
@@ -161,7 +161,7 @@ export function synchronize(state: ParserState): void {
 
 // Collect token text from a raw index range, skipping Comment tokens.
 // Used by type annotation capture, as-type, sizeof, alias, default value reconstruction.
-export function collectTokenText(state: ParserState, start: number, end: number): string {
+export function collectTokenText(state: ParserState, start: int32, end: int32): string {
 	let text = "";
 	for (let i = start; i < end; i += 1) {
 		const tok = state.tokens[i];
@@ -306,7 +306,7 @@ export function captureGenericTypeArgs(state: ParserState): string {
 	// Two-pass: first collect token values with separators, then split.
 	// Avoid `let str = ""; str = "";` — DRC generates msDecref on struct msString.
 	const tokens: string[] = [];
-	const depths: number[] = [];
+	const depths: int32[] = [];
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
 		const tok = current(state);
@@ -390,13 +390,13 @@ export function resetExplicitTypeArgs(): void {
 	_typeArgStore = createTypeArgStore();
 }
 
-export function addExplicitTypeArg(line: number, col: number, typeArgStr: string): void {
+export function addExplicitTypeArg(line: int32, col: int32, typeArgStr: string): void {
 	const key = `${line}:${col}`;
 	const entry: TypeArgEntry = { key, val: typeArgStr };
 	_typeArgStore.items.push(entry);
 }
 
-export function getExplicitTypeArg(line: number, col: number): string {
+export function getExplicitTypeArg(line: int32, col: int32): string {
 	const key = `${line}:${col}`;
 	for (const item of _typeArgStore.items) {
 		if (item.key === key) return item.val;
@@ -579,31 +579,31 @@ export function addGenericTypeInst(baseName: string, typeArgKey: string, mangled
 	_genericTypeInstStore.fieldTypes.push(fieldTypesJoined);
 }
 
-export function getGenericTypeInstCount(): number {
+export function getGenericTypeInstCount(): int32 {
 	return _genericTypeInstStore.keys.length;
 }
 
-export function getGenericTypeInstMangledName(idx: number): string {
+export function getGenericTypeInstMangledName(idx: int32): string {
 	return _genericTypeInstStore.keys[idx];
 }
 
-export function getGenericTypeInstBaseName(idx: number): string {
+export function getGenericTypeInstBaseName(idx: int32): string {
 	return _genericTypeInstStore.baseNames[idx];
 }
 
-export function getGenericTypeInstTypeArgKey(idx: number): string {
+export function getGenericTypeInstTypeArgKey(idx: int32): string {
 	return _genericTypeInstStore.typeArgKeys[idx];
 }
 
-export function getGenericTypeInstFieldNames(idx: number): string {
+export function getGenericTypeInstFieldNames(idx: int32): string {
 	return _genericTypeInstStore.fieldNames[idx];
 }
 
-export function getGenericTypeInstFieldTypes(idx: number): string {
+export function getGenericTypeInstFieldTypes(idx: int32): string {
 	return _genericTypeInstStore.fieldTypes[idx];
 }
 
-export function findGenericTypeInstIdx(baseName: string, typeArgKey: string): number {
+export function findGenericTypeInstIdx(baseName: string, typeArgKey: string): int32 {
 	for (let i = 0; i < _genericTypeInstStore.keys.length; i += 1) {
 		if (_genericTypeInstStore.baseNames[i] === baseName && _genericTypeInstStore.typeArgKeys[i] === typeArgKey) return i;
 	}
@@ -611,7 +611,7 @@ export function findGenericTypeInstIdx(baseName: string, typeArgKey: string): nu
 }
 
 // Count pipe-separated segments in a string
-function pipeCount(s: string): number {
+function pipeCount(s: string): int32 {
 	if (s === "") return 0;
 	let count = 1;
 	for (let i = 0; i < s.length; i += 1) {
@@ -622,7 +622,7 @@ function pipeCount(s: string): number {
 }
 
 // Get the nth pipe-separated segment (0-based)
-function pipeAt(s: string, idx: number): string {
+function pipeAt(s: string, idx: int32): string {
 	let count = 0;
 	let start = 0;
 	for (let i = 0; i < s.length; i += 1) {
@@ -645,15 +645,15 @@ function pipeAt(s: string, idx: number): string {
 	return "";
 }
 
-export function getGenericTypeInstFieldCount(instIdx: number): number {
+export function getGenericTypeInstFieldCount(instIdx: int32): int32 {
 	return pipeCount(_genericTypeInstStore.fieldNames[instIdx]);
 }
 
-export function getGenericTypeInstFieldNameAt(instIdx: number, fieldIdx: number): string {
+export function getGenericTypeInstFieldNameAt(instIdx: int32, fieldIdx: int32): string {
 	return pipeAt(_genericTypeInstStore.fieldNames[instIdx], fieldIdx);
 }
 
-export function getGenericTypeInstFieldTypeAt(instIdx: number, fieldIdx: number): string {
+export function getGenericTypeInstFieldTypeAt(instIdx: int32, fieldIdx: int32): string {
 	return pipeAt(_genericTypeInstStore.fieldTypes[instIdx], fieldIdx);
 }
 

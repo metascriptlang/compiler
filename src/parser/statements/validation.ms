@@ -44,14 +44,14 @@ export function stmtKind(input: string): NodeKind {
 	return stmts.programStmts[0].kind;
 }
 
-export function stmtAt(input: string, index: number): Node {
+export function stmtAt(input: string, index: int32): Node {
 	const pr = parseSource(input);
 	if (!pr.ok) return createNodeAt(NodeKind.ExprStmt, { expr: createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, makeLoc(0, 0)) }, makeLoc(0, 0));
 	const stmts = pr.value.data as ProgramData;
 	return stmts.programStmts[index];
 }
 
-export function stmtCount(input: string): number {
+export function stmtCount(input: string): int32 {
 	const pr = parseSource(input);
 	if (!pr.ok) return -1;
 	const stmts = pr.value.data as ProgramData;
@@ -59,7 +59,7 @@ export function stmtCount(input: string): number {
 }
 
 // Returns the number of parse errors collected during error recovery.
-export function parseErrorCount(input: string): number {
+export function parseErrorCount(input: string): int32 {
 	const lr = lex(input);
 	if (!lr.ok) return -1;
 	const state = createState(lr.value);

@@ -10,7 +10,7 @@ import { isPropertyName, attachComments } from "../util";
 
 
 type ExprResult = Result<Expression, string>;
-type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
+type ExprParser = (state: ParserState, minPrec: int32) => ExprResult;
 
 // ===== Object Literal =====
 // { key: value, ... } or { key, ... } (shorthand)
@@ -110,7 +110,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 
 // ===== Tests =====
 
-function objKeyCount(input: string): number {
+function objKeyCount(input: string): int32 {
 	const lr = lex(input);
 	if (!lr.ok) return -1;
 	const state = createState(lr.value);

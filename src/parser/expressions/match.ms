@@ -11,7 +11,7 @@ import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLit
 
 
 type ExprResult = Result<Expression, string>;
-type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
+type ExprParser = (state: ParserState, minPrec: int32) => ExprResult;
 type BlockParser = (state: ParserState) => ExprResult;
 
 // ===== Match Expression =====

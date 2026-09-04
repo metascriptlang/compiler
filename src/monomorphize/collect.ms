@@ -16,7 +16,7 @@ import {
 // Standard-aligned: monomorphize creates concrete InterfaceDecl nodes so codegen
 // is fully generic-unaware. Reads from GenericTypeInstStore (populated by checker).
 
-function monoEmitOneTypeInst(program: Node, idx: number): void {
+function monoEmitOneTypeInst(program: Node, idx: int32): void {
 	const mangledName = getGenericTypeInstMangledName(idx);
 	const fieldCount = getGenericTypeInstFieldCount(idx);
 	const fieldNames: string[] = [];

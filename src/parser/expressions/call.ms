@@ -9,7 +9,7 @@ import { parseOk, mockExpr } from "./util";
 
 
 type ExprResult = Result<Expression, string>;
-type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
+type ExprParser = (state: ParserState, minPrec: int32) => ExprResult;
 type NodesResult = Result<Node[], string>;
 
 // ===== Comma-Separated Expression List =====
@@ -52,7 +52,7 @@ export function parseCallExpr(state: ParserState, callee: Expression, exprParser
 
 // ===== Tests =====
 
-function callArgCount(input: string): number {
+function callArgCount(input: string): int32 {
 	const lr = lex(`f${input}`);
 	if (!lr.ok) return -1;
 	const state = createState(lr.value);
@@ -65,7 +65,7 @@ function callArgCount(input: string): number {
 	return data.arguments.length;
 }
 
-function listCount(input: string): number {
+function listCount(input: string): int32 {
 	const lr = lex(`[${input}]`);
 	if (!lr.ok) return -1;
 	const state = createState(lr.value);

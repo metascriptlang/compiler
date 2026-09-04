@@ -53,7 +53,7 @@ registerParseExpr((tokens: Token[]): ExprResult => { return parseExpression(toke
 
 // syntax: expr = primary (postfix)* (binop primary (postfix)*)* ('?' expr ':' expr)?
 // syntax: postfix = '(' args ')' | '.' ID | '?.' ID | '[' expr ']' | '++' | '--' | 'as' type
-function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
+function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 	let left = try parsePrimary(state);
 
 	// Postfix operators: call, member access, optional chaining, array indexing, update

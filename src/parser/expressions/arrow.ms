@@ -10,7 +10,7 @@ import { parseOk, mockExpr } from "./util";
 
 
 type ExprResult = Result<Expression, string>;
-type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
+type ExprParser = (state: ParserState, minPrec: int32) => ExprResult;
 type BlockParser = (state: ParserState) => ExprResult;
 
 // syntax: arrow = ('async')? ('(' params ')' | ID) (':' type)? '=>' (expr | block)
@@ -253,7 +253,7 @@ function arrowOk(input: string): boolean {
 	return result.ok;
 }
 
-function arrowParamCount(input: string): number {
+function arrowParamCount(input: string): int32 {
 	const lr = lex(input);
 	if (!lr.ok) return -1;
 	const state = createState(lr.value);
