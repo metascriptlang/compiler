@@ -767,6 +767,7 @@ test "decode 0x83 0x01 0x02 0x03 → array [1, 2, 3]" {
 	assert v.items.length === 3;
 	assert v.items[0].kind === CborKind.Int;
 	assert v.items[0].intVal === (1 as int64);
+	assert v.items[2].kind === CborKind.Int;
 	assert v.items[2].intVal === (3 as int64);
 }
 
@@ -776,8 +777,10 @@ test "decode nested array [1, [2, 3], [4, 5]]" {
 	assert v.items.length === 3;
 	assert v.items[1].kind === CborKind.Array;
 	assert v.items[1].items.length === 2;
+	assert v.items[1].items[0].kind === CborKind.Int;
 	assert v.items[1].items[0].intVal === (2 as int64);
 	assert v.items[2].kind === CborKind.Array;
+	assert v.items[2].items[1].kind === CborKind.Int;
 	assert v.items[2].items[1].intVal === (5 as int64);
 }
 
@@ -797,9 +800,13 @@ test "decode 0xa2 ... → map {1: 2, 3: 4}" {
 	const v = decOk([0xa2, 0x01, 0x02, 0x03, 0x04]);
 	assert v.kind === CborKind.Map;
 	assert v.keys.length === 2;
+	assert v.keys[0].kind === CborKind.Int;
 	assert v.keys[0].intVal === (1 as int64);
+	assert v.values[0].kind === CborKind.Int;
 	assert v.values[0].intVal === (2 as int64);
+	assert v.keys[1].kind === CborKind.Int;
 	assert v.keys[1].intVal === (3 as int64);
+	assert v.values[1].kind === CborKind.Int;
 	assert v.values[1].intVal === (4 as int64);
 }
 
@@ -857,9 +864,13 @@ test "decode 0x98 0x19 + 25 items → array of 25" {
 	const v = decOk(bytes);
 	assert v.kind === CborKind.Array;
 	assert v.items.length === 25;
+	assert v.items[0].kind === CborKind.Int;
 	assert v.items[0].intVal === (1 as int64);
+	assert v.items[22].kind === CborKind.Int;
 	assert v.items[22].intVal === (23 as int64);
+	assert v.items[23].kind === CborKind.Int;
 	assert v.items[23].intVal === (24 as int64);
+	assert v.items[24].kind === CborKind.Int;
 	assert v.items[24].intVal === (25 as int64);
 }
 
@@ -878,10 +889,13 @@ test "decode {\"a\": 1, \"b\": [2, 3]}" {
 	assert v.keys[0].textVal === "a";
 	assert v.values[0].kind === CborKind.Int;
 	assert v.values[0].intVal === (1 as int64);
+	assert v.keys[1].kind === CborKind.Text;
 	assert v.keys[1].textVal === "b";
 	assert v.values[1].kind === CborKind.Array;
 	assert v.values[1].items.length === 2;
+	assert v.values[1].items[0].kind === CborKind.Int;
 	assert v.values[1].items[0].intVal === (2 as int64);
+	assert v.values[1].items[1].kind === CborKind.Int;
 	assert v.values[1].items[1].intVal === (3 as int64);
 }
 
@@ -894,9 +908,12 @@ test "decode [\"a\", {\"b\": \"c\"}]" {
 	const v = decOk([0x82, 0x61, 0x61, 0xa1, 0x61, 0x62, 0x61, 0x63]);
 	assert v.kind === CborKind.Array;
 	assert v.items.length === 2;
+	assert v.items[0].kind === CborKind.Text;
 	assert v.items[0].textVal === "a";
 	assert v.items[1].kind === CborKind.Map;
+	assert v.items[1].keys[0].kind === CborKind.Text;
 	assert v.items[1].keys[0].textVal === "b";
+	assert v.items[1].values[0].kind === CborKind.Text;
 	assert v.items[1].values[0].textVal === "c";
 }
 
@@ -910,6 +927,7 @@ test "decode 5-pair text-keyed map" {
 		0x61, 0x65, 0x61, 0x45]); // "e": "E"
 	assert v.kind === CborKind.Map;
 	assert v.keys.length === 5;
+	assert v.values[4].kind === CborKind.Text;
 	assert v.values[4].textVal === "E";
 }
 
@@ -1133,6 +1151,7 @@ test "round-trip int -100" {
 	encodeValue(w, cborInt(-100 as int64));
 	const r = decodeAll(w.bytes);
 	assert r.ok;
+	assert r.value.kind === CborKind.Int;
 	assert r.value.intVal === (-100 as int64);
 }
 
@@ -1153,7 +1172,9 @@ test "round-trip array [1, 2, 3]" {
 	assert r.ok;
 	assert r.value.kind === CborKind.Array;
 	assert r.value.items.length === 3;
+	assert r.value.items[0].kind === CborKind.Int;
 	assert r.value.items[0].intVal === (1 as int64);
+	assert r.value.items[2].kind === CborKind.Int;
 	assert r.value.items[2].intVal === (3 as int64);
 }
 
@@ -1166,7 +1187,9 @@ test "round-trip map {a: 1, b: 2}" {
 	assert r.ok;
 	assert r.value.kind === CborKind.Map;
 	assert r.value.keys.length === 2;
+	assert r.value.keys[0].kind === CborKind.Text;
 	assert r.value.keys[0].textVal === "a";
+	assert r.value.values[1].kind === CborKind.Int;
 	assert r.value.values[1].intVal === (2 as int64);
 }
 
@@ -1177,5 +1200,6 @@ test "round-trip tagged value" {
 	assert r.ok;
 	assert r.value.kind === CborKind.Tag;
 	assert r.value.tagNum === (123 as int64);
+	assert r.value.tagged.kind === CborKind.Text;
 	assert r.value.tagged.textVal === "x";
 }
