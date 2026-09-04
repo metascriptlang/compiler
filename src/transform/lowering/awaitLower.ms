@@ -32,7 +32,7 @@ import {
 	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData,
 	Type, NodeData, createNodeAt,
 } from "../../ast/node";
-import { TransformContext, freshTempSym } from "../context";
+import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeString, makeIf, makeBinary, unboxVoidPtrToTyped } from "../util";
 import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
@@ -373,9 +373,26 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 		NodeKind.ExprStmt => {
 			const d = stmt.data as ExprStmtData;
 			if (d.expr !== null && d.expr.kind === NodeKind.AwaitExpr) {
-				// Bare `await expr;` — expand and discard result (no stmt appended).
+				// Bare `await expr;` — the awaited value still belongs to this scope: the
+				// await result carries the caller's reference exactly as in `const r = await h`.
+				// Dropping the result ident here left that value with no owner and no
+				// scope-exit destroy (measured: linear RSS growth, ~80 B/iteration, on Arc,
+				// plain refs and strings alike). Bind it to a synthetic local so the ordinary
+				// DRC vardecl path moves + destroys it — the emitted C then matches the bound
+				// form byte-for-byte. freshOwnedSym, NOT freshTempSym: a `$`-prefixed name with
+				// an identifier initializer is read as a cursor by the injector (inject.ms
+				// processVarDecl) and would get no cleanup at all.
 				const ad = d.expr.data as AwaitExprData;
 				const expansion = expandSingleAwait(ad.awaitArg, stmt.location, ctx);
+				const discardedType = getAwaitInnerType(ad.awaitArg);
+				if (discardedType !== null && discardedType.kind !== TypeKind.Void) {
+					const dloc = stmt.location;
+					const dsym = freshOwnedSym(ctx, "disc", discardedType);
+					const ddecl = makeVarDecl(dsym.name, expansion.resultIdent, DeclKind.Const, dloc);
+					ddecl.resolvedSym = dsym;
+					ddecl.nodeType = discardedType;
+					expansion.stmts.push(ddecl);
+				}
 				return expansion.stmts;
 			}
 			const expanded = tryExpandAwaitExpr(d.expr, stmt, ctx);
