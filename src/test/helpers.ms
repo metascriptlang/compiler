@@ -20,7 +20,7 @@ import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
 import { AliveSet, createAliveSet } from "../codegen/c/context";
-import { generateJS } from "../codegen/js/jsgen";
+import { generateJS, generateJSModule } from "../codegen/js/jsgen";
 import { MapEntry, createMapProvider, loadModuleGraph, loadModuleGraphWithConfig, canonicalModulePath } from "../module/loader";
 import { createDefaultConfig, Backend } from "../module/resolver";
 import { resolveRuntimeDir } from "../utils/path";
@@ -164,6 +164,35 @@ export function compileToJS(source: string): CompileResult {
 	// refuses a construct reports it here instead of emitting silently-wrong JS.
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
 	return Result.ok(generateJS(transformed, []));
+}
+
+export function compileTestBuildToJS(source: string): CompileResult {
+	resetAllSideChannels();
+	const modPath = canonicalModulePath("test/e2e.ms");
+	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
+	const provider = createMapProvider(entries);
+	provider.useFileSystem = true;
+	const root = resolveRuntimeDir();
+	const stdPath = root !== "" ? join(root, "std") : "std";
+	const config = createDefaultConfig(Backend.JS, stdPath);
+	const graph = loadModuleGraphWithConfig(modPath, provider, config);
+
+	const registry = checkModuleGraph(graph, stdPath);
+	const preludeCtx = getPreludeContext();
+
+	const mod = findModule(graph, modPath);
+	if (mod === null) return Result.err("module not found");
+
+	const pr = parseSource(mod.source);
+	if (!pr.ok) return Result.err(`parse: ${pr.error}`);
+
+	const checkerCtx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
+
+	const transformed = transformProgram(pr.value, checkerCtx, true);
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
+	const res = generateJSModule(transformed, [], modPath, [], [], [], [], [], [], true, false);
+	return Result.ok(res.code);
 }
 
 // ===== Project compilation (multiple source files with imports) =====
