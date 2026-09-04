@@ -3451,47 +3451,40 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	return propType;
 }
 
-// The macro VM's wire format flattens NodeData payload fields onto the Node
-// object (expand.ms nodeToASTLiteral / bridge.ms). Inside engine compiles,
-// resolve those flat reads against the NodeData union declaration: a field
-// name unique across variants (or shared with one type) types directly;
-// same name with different types must be narrowed first (LANG.md "unique
-// field name" DU access rule).
-export function engineNodeHasVirtualKey(recvType: Type | null, key: string): boolean {
-	if (!isEngineCheckMode()) return false;
-	if (recvType === null || recvType.typeName !== "Node") return false;
-	if (key === "line" || key === "column" || key === "endLine" || key === "endColumn") return true;
-	// bindSym bake splices Identifier literals carrying the bound-symbol handle;
-	// valueToNode consumes it — never a real Node field.
-	if (key === "symHandle") return true;
-	if (recvType.typeNames === null || recvType.typeChildren === null) return false;
-	let dataType: Type | null = null;
-	let fi = 0;
-	while (fi < recvType.typeNames.length) {
-		if (recvType.typeNames[fi] === "data" && fi < recvType.typeChildren.length) {
-			dataType = recvType.typeChildren[fi];
+// The wire flattens SourceLocation onto the node, so these names carry no
+// declaration of their own; their type is SourceLocation's, read from it here
+// rather than spelled again — spelling it as `number` is what let the engine
+// view disagree with the source until a narrowing rule made it fatal.
+function flattenedLocationFieldType(recvType: Type, name: string): Type | null {
+	if (name !== "line" && name !== "column" && name !== "endLine" && name !== "endColumn") return null;
+	if (recvType.typeNames === null || recvType.typeChildren === null) return int32Type();
+	let i = 0;
+	while (i < recvType.typeNames.length) {
+		if (recvType.typeNames[i] === "location" && i < recvType.typeChildren.length) {
+			const loc = peelToStructOrUnion(recvType.typeChildren[i]);
+			if (loc === null || loc.typeNames === null || loc.typeChildren === null) break;
+			let j = 0;
+			while (j < loc.typeNames.length) {
+				if (loc.typeNames[j] === name && j < loc.typeChildren.length) {
+					return loc.typeChildren[j];
+				}
+				j = j + 1;
+			}
 			break;
 		}
-		fi = fi + 1;
+		i = i + 1;
 	}
-	if (dataType === null) return false;
-	const dataUnion = peelToStructOrUnion(dataType);
-	if (dataUnion === null || dataUnion.kind !== TypeKind.Union || dataUnion.typeChildren === null) return false;
-	for (const variantRaw of dataUnion.typeChildren) {
-		const variant = peelToStructOrUnion(variantRaw);
-		if (variant === null || variant.typeNames === null) continue;
-		for (const fn of variant.typeNames) {
-			if (fn === key) return true;
-		}
-	}
-	return false;
+	return int32Type();
 }
 
-function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop: string, node: Node): Type | null {
-	if (!isEngineCheckMode()) return null;
-	if (recvType.typeName !== "Node") return null;
-	if (prop === "line" || prop === "column" || prop === "endLine" || prop === "endColumn") return numberType();
-	if (recvType.typeNames === null || recvType.typeChildren === null) return null;
+interface EngineNodeDataField {
+	fieldType: Type | null;
+	ambiguous: boolean;
+}
+
+function engineNodeDataField(recvType: Type, name: string): EngineNodeDataField {
+	const missing: EngineNodeDataField = { fieldType: null, ambiguous: false };
+	if (recvType.typeNames === null || recvType.typeChildren === null) return missing;
 	let dataType: Type | null = null;
 	let fi = 0;
 	while (fi < recvType.typeNames.length) {
@@ -3501,9 +3494,9 @@ function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop:
 		}
 		fi = fi + 1;
 	}
-	if (dataType === null) return null;
+	if (dataType === null) return missing;
 	const dataUnion = peelToStructOrUnion(dataType);
-	if (dataUnion === null || dataUnion.kind !== TypeKind.Union || dataUnion.typeChildren === null) return null;
+	if (dataUnion === null || dataUnion.kind !== TypeKind.Union || dataUnion.typeChildren === null) return missing;
 	let found: Type | null = null;
 	let conflict = false;
 	for (const variantRaw of dataUnion.typeChildren) {
@@ -3511,7 +3504,7 @@ function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop:
 		if (variant === null || variant.typeNames === null || variant.typeChildren === null) continue;
 		let vi = 0;
 		while (vi < variant.typeNames.length) {
-			if (variant.typeNames[vi] === prop && vi < variant.typeChildren.length) {
+			if (variant.typeNames[vi] === name && vi < variant.typeChildren.length) {
 				const ft = variant.typeChildren[vi];
 				if (found === null) {
 					found = ft;
@@ -3522,8 +3515,34 @@ function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop:
 			vi = vi + 1;
 		}
 	}
+	return { fieldType: found, ambiguous: conflict };
+}
+
+// The macro VM's wire format flattens NodeData payload fields onto the Node
+// object (expand.ms nodeToASTLiteral / bridge.ms). Inside engine compiles,
+// resolve those flat reads against the NodeData union declaration: a field
+// name unique across variants (or shared with one type) types directly;
+// same name with different types must be narrowed first (LANG.md "unique
+// field name" DU access rule).
+export function engineNodeHasVirtualKey(recvType: Type | null, key: string): boolean {
+	if (!isEngineCheckMode()) return false;
+	if (recvType === null || recvType.typeName !== "Node") return false;
+	if (flattenedLocationFieldType(recvType, key) !== null) return true;
+	// bindSym bake splices Identifier literals carrying the bound-symbol handle;
+	// valueToNode consumes it — never a real Node field.
+	if (key === "symHandle") return true;
+	return engineNodeDataField(recvType, key).fieldType !== null;
+}
+
+function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop: string, node: Node): Type | null {
+	if (!isEngineCheckMode()) return null;
+	if (recvType.typeName !== "Node") return null;
+	const locField = flattenedLocationFieldType(recvType, prop);
+	if (locField !== null) return locField;
+	const dataField = engineNodeDataField(recvType, prop);
+	const found = dataField.fieldType;
 	if (found === null) return null;
-	if (conflict) {
+	if (dataField.ambiguous) {
 		addError(ctx, `field '${prop}' has different types across Node variants — narrow with a kind check or '.data as <Kind>Data' before accessing it`, node.location.line, node.location.column);
 		return inferredType();
 	}
