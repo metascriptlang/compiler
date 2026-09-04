@@ -134,3 +134,4 @@ import "./bug117MaybeRejoinAfterNullCheck";
 import "./bug118ArrowArityPad";
 import "./bug119MonoInferredReturn";
 import "./bug120FsBridgeRcContract";
+import "./bug121Int64FloatConv";
