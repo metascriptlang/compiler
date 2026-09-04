@@ -21,3 +21,8 @@ export extern function fill<T>(this arr: T[], value: T): void from "#.fill(#)";
 export extern function join<T>(this arr: T[], sep: string): string from "#.join(#)";
 export extern function splice<T>(this arr: T[], start: number, deleteCount: number): void from "#.splice(#, #)";
 export extern function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void from "#.splice(#, #, #)";
+// Truncate/extend in place, mirroring index.cms. Native `length =` shrinks
+// identically; on the GROW path C zero-fills the new slots while JS leaves
+// holes that read as undefined, so callers that extend must write every new
+// index themselves (std/core/array/index.rms does exactly that).
+export extern function setLength<T>(this arr: T[], newLen: number): void from "#.length = #";

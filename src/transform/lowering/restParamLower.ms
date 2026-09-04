@@ -39,7 +39,7 @@ function isConsoleLogCallee(callee: Node): boolean {
 	return (m.object.data as IdentifierData).name === "console";
 }
 
-function makeArrayLit(elements: Node[], restType: Type, line: number): Node {
+function makeArrayLit(elements: Node[], restType: Type, line: int32): Node {
 	const arr = createNode(NodeKind.ArrayLiteral,
 		{ elements } as unknown as NodeData,
 		createToken(TokenKind.LBracket, "[", line));

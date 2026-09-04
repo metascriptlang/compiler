@@ -53,7 +53,7 @@ export enum TokenKind {
 export interface Token {
 	kind: TokenKind;
 	value: string;
-	line: number;
-	column: number;
+	line: int32;
+	column: int32;
 	rawValue: string;
 }

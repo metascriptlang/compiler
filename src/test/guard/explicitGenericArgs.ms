@@ -47,6 +47,7 @@ function main(): int32 {
     rc += expect(`${d.value}`, "true", "freeFnBothArgs");
 
     const e: Result<int32, string> = Result.ok(7);
+    if (!e.ok) { console.log("GUARD-FAIL annotatedDestination: not ok"); return 1; }
     rc += expect(`${e.value}`, "7", "annotatedDestination");
 
     const f: Vec<int32> = [1, 2, 3];

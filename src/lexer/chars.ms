@@ -1,5 +1,5 @@
 // Character Classification — Pure functions for lexer character tests
-// No imports needed — operates on character codes (numbers)
+// No imports needed — operates on byte codes (int32)
 
 
 

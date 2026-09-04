@@ -2,7 +2,7 @@
 
 import { argv, cwd, env } from "std/process";
 import { exists } from "std/fs";
-import { dirname, join, isAbsolute } from "std/fs/path";
+import { dirname, join, isAbsolute, normalize } from "std/fs/path";
 
 // Find the project root by walking up looking for build.ms.
 // If entryFile is given (absolute path), walks up from its directory first.
@@ -76,6 +76,20 @@ export function resolveArgv0(arg0: string): string {
 	return arg0;
 }
 
+// One spelling per directory. argv[0] decides how the compiler root is spelled,
+// and the same root reached two ways used to produce two different strings:
+// `<root>/./msc` left a trailing "." segment, `<root>\msc` left backslashes.
+// That string is compared against module paths (compile.ms `isUnder`) to decide
+// whether a module is user code; a mismatched spelling classified every stdlib
+// path as user code and added -I<projectRoot> to it. The SAME runtime .c then
+// compiled twice under two cache keys in one build and both objects reached the
+// link line — `duplicate symbol: msPrintln` and ~100 more, with no hint that a
+// path spelling was the cause.
+function canonicalRootDir(dir: string): string {
+	if (dir === "" || dir === ".") return cwd();
+	return normalize(dir);
+}
+
 // Find the compiler root directory (the one containing std/).
 // Walks up from argv[0] (resolved via $PATH if bare), then falls back to cwd().
 export function resolveRuntimeDir(): string {
@@ -83,8 +97,7 @@ export function resolveRuntimeDir(): string {
 	let i = 0;
 	while (i < 4) {
 		if (exists(join(base, "std/core/system/index.ms"))) {
-			if (base === "." || base === "") return cwd();
-			return base;
+			return canonicalRootDir(base);
 		}
 		base = dirname(base);
 		i = i + 1;
@@ -93,4 +106,21 @@ export function resolveRuntimeDir(): string {
 	base = cwd();
 	if (exists(join(base, "std/core/system/index.ms"))) return base;
 	return "";
+}
+
+test "canonicalRootDir — a trailing dot segment is dropped" {
+	assert canonicalRootDir("C:/proj/compiler/.") === "C:/proj/compiler";
+	assert canonicalRootDir("/proj/compiler/.") === "/proj/compiler";
+}
+
+test "canonicalRootDir — separators are unified" {
+	assert canonicalRootDir("C:\\proj\\compiler") === "C:/proj/compiler";
+}
+
+test "canonicalRootDir — the two spellings of one root agree" {
+	assert canonicalRootDir("C:/proj/compiler/.") === canonicalRootDir("C:\\proj\\compiler");
+}
+
+test "canonicalRootDir — an already-clean root is unchanged" {
+	assert canonicalRootDir("C:/proj/compiler") === "C:/proj/compiler";
 }
