@@ -18,7 +18,7 @@ export function emitTestDecl(gen: JSGenerator, node: Node): void {
 	gen.testFuncs.push(funcName);
 
 	emitIndent(gen);
-	emit(gen, `export function ${funcName}() `);
+	emit(gen, `export async function ${funcName}() `);
 	if (d.testBody.kind === NodeKind.BlockStmt) {
 		emitNode(gen, d.testBody);
 	} else {

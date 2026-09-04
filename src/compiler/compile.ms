@@ -2099,7 +2099,7 @@ function jsTestHarnessSource(): string {
 		"    const started = Date.now();",
 		"    let modFailed = 0;",
 		"    for (let i = 0; i < mod.funcs.length; i += 1) {",
-		"      try { ns[mod.funcs[i]](); testsPassed += 1; }",
+		"      try { await ns[mod.funcs[i]](); testsPassed += 1; }",
 		"      catch (e) { testsFailed += 1; modFailed += 1; failures.push({ file: mod.path, name: mod.names[i], err: e }); }",
 		"    }",
 		"    const ms = Date.now() - started;",
