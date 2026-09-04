@@ -299,7 +299,11 @@ function parseObject(input: string, pos: number, depth: number): ParseResult {
 			return errorAt("Expected string key", p);
 		}
 		const keyResult = try parseString(input, p);
-		const key = keyResult.node.strVal;
+		const keyNode = keyResult.node;
+		if (keyNode.kind !== JsonKind.String) {
+			return errorAt("Expected string key", p);
+		}
+		const key = keyNode.strVal;
 		p = skipWs(input, keyResult.pos);
 
 		if (p >= input.byteLength || input.byteAt(p) !== ":".code) {
@@ -356,6 +360,7 @@ test "parse true" {
 test "parse false" {
 	const r = parseJson("false");
 	assert r.ok;
+	assert r.value.kind === JsonKind.Bool;
 	assert r.value.boolVal === false;
 }
 
@@ -374,25 +379,33 @@ test "parse negative" {
 test "parse string" {
 	const r = parseJson("\"hello\"");
 	assert r.ok;
+	assert r.value.kind === JsonKind.String;
 	assert r.value.strVal === "hello";
 }
 
 test "parse string with escapes" {
 	const r = parseJson("\"a\\nb\"");
 	assert r.ok;
+	assert r.value.kind === JsonKind.String;
 	assert r.value.strVal === "a\nb";
 }
 
 test "parse string with utf-8 content" {
 	const r = parseJson("\"vào trận → ok\"");
 	assert r.ok;
+	assert r.value.kind === JsonKind.String;
 	assert r.value.strVal === "vào trận → ok";
 }
 
 test "parse object with utf-8 value" {
 	const r = parseJson("{\"k\":\"5s → crash\"}");
 	assert r.ok;
-	assert r.value.values[0].strVal === "5s → crash";
+	assert r.value.kind === JsonKind.Object;
+	if (r.value.kind === JsonKind.Object) {
+		const v0 = r.value.values[0];
+		assert v0.kind === JsonKind.String;
+		if (v0.kind === JsonKind.String) assert v0.strVal === "5s → crash";
+	}
 }
 
 test "parse empty array" {
@@ -469,12 +482,14 @@ test "parse error invalid" {
 test "parse whitespace" {
 	const r = parseJson("  { \"x\" : 1 }  ");
 	assert r.ok;
+	assert r.value.kind === JsonKind.Object;
 	assert r.value.keys[0] === "x";
 }
 
 test "duplicate keys: last one wins (JS parity)" {
 	const r = parseJson("{\"a\":1,\"a\":2}");
 	assert r.ok;
+	assert r.value.kind === JsonKind.Object;
 	assert r.value.keys.length === 1;
 	const v0 = r.value.values[0];
 	if (v0.kind === JsonKind.Int) assert v0.intVal === (2 as int64);
@@ -483,6 +498,7 @@ test "duplicate keys: last one wins (JS parity)" {
 test "parse keeps object keys in insertion order" {
 	const r = parseJson("{\"b\":1,\"2\":2,\"a\":3,\"1\":4}");
 	assert r.ok;
+	assert r.value.kind === JsonKind.Object;
 	assert r.value.keys[0] === "b";
 	assert r.value.keys[1] === "2";
 	assert r.value.keys[2] === "a";
