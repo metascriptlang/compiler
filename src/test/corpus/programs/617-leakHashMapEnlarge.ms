@@ -26,7 +26,7 @@ function fillAndDrop(n: number): number {
 function main(): void {
 	let acc = 0;
 	for (let r = 0; r < 50000; r = r + 1) {
-		acc = (acc + fillAndDrop(50)) % 1000;
+		acc = ((acc + fillAndDrop(50)) % 1000) as int32;
 	}
 	console.log(`leak-hashmap-enlarge acc=${acc}`);
 }

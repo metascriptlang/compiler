@@ -24,7 +24,7 @@ function main(): void {
 		const s: string[] = ["x", "y"];
 		const t = s;
 		s.push("z");            // string-element array, shared with t
-		acc = acc + a.length + b.length + s.length + t.length + a[5];
+		acc = (acc + a.length + b.length + s.length + t.length + a[5]) as int32;
 		i = i + 1;
 	}
 	console.log("ref-array acc=" + acc.toString());

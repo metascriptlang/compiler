@@ -19,7 +19,7 @@ function main(): void {
 	let i = 0;
 	while (i < 3000000) {
 		const r = makeRow(i);
-		acc = (acc + r.tag + (r.key.length % 13)) % 1000000;
+		acc = ((acc + r.tag + (r.key.length % 13)) % 1000000) as int32;
 		i = i + 1;
 	}
 	console.log(`clean-loop acc=${acc}`);

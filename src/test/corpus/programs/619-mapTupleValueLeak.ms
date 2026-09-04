@@ -28,7 +28,7 @@ function main(): void {
 	for (let n = 0; n < 200000; n = n + 1) {
 		const key = (n % 8) as int32;
 		m.set(key, [big(n), big(n + 1)]);
-		acc = (acc + m.size) % 1000;
+		acc = ((acc + m.size) % 1000) as int32;
 	}
 	console.log(`map-tuple-value done acc=${acc}`);
 }

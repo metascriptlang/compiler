@@ -32,7 +32,7 @@ function main(): void {
 		const b = heapAllocObject(obj);
 		rcIncref(arr, obj, raiserObject(b)); heapObjectSetField(obj, a, "next", raiserObject(b));
 		rcIncref(arr, obj, raiserObject(a)); heapObjectSetField(obj, b, "next", raiserObject(a));
-		totalFreed = totalFreed + orcCollectCycles(arr, obj);
+		totalFreed = (totalFreed + orcCollectCycles(arr, obj)) as int32;
 		round = round + 1;
 	}
 

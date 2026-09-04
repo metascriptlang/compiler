@@ -12,7 +12,7 @@ function run(): void {
 	let i = 0;
 	while (i < 100000) {
 		const q = await amsg();
-		acc = acc + q.n + q.tag.length;
+		acc = (acc + q.n + q.tag.length) as int32;
 		i = i + 1;
 	}
 	console.log("await-struct-returns acc=" + acc.toString());

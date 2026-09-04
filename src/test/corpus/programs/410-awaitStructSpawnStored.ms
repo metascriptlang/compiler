@@ -18,7 +18,7 @@ function run(): void {
 		}
 		for (const f of futs) {
 			const p = await f;
-			acc = acc + p.n + p.tag.length;
+			acc = (acc + p.n + p.tag.length) as int32;
 		}
 		batch = batch + 1;
 	}

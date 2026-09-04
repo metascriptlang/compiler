@@ -48,7 +48,7 @@ function main(): void {
 	let bLast = -1;
 	if (rByt.ok && rByt.value.kind === CborKind.Bytes) {
 		const bb = rByt.value.bytesVal;
-		bLen = bb.byteLength();
+		bLen = bb.byteLength() as int32;
 		bLast = bb.byteAt(2);
 	}
 	ok = check("bytes", bLen === 3 && bLast === 255) && ok;

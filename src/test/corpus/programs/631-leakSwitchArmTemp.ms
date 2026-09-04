@@ -51,7 +51,7 @@ function main(): void {
 	for (let i = 0; i < 100000; i = i + 1) {
 		const ch: int32 = (i % 2) === 0 ? 116 : 110;
 		const r = parseValue(ch, i % 100);
-		if (r.ok) { acc = (acc + r.value.pos) % 1000; }
+		if (r.ok) { acc = ((acc + r.value.pos) % 1000) as int32; }
 	}
 	console.log(`leak-switch-arm-temp acc=${acc}`);
 }

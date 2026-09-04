@@ -15,9 +15,9 @@ function run(): void {
 	let i = 0;
 	while (i < 100000) {
 		const c = await svc.getM();
-		acc = acc + c.n + c.tag.length;
+		acc = (acc + c.n + c.tag.length) as int32;
 		const s = await spawn(() => { let m: Msg = { tag: "spawn-tag", n: 3 }; return m; });
-		acc = acc + s.n + s.tag.length;
+		acc = (acc + s.n + s.tag.length) as int32;
 		i = i + 1;
 	}
 	console.log("await-struct-actorspawn acc=" + acc.toString());

@@ -59,7 +59,7 @@ function main(): void {
 		// async chain — cooperative yield lane
 		const s = await asyncStep((iter % 11) as int32);
 
-		check = (check + (live % 3) + (s as number)) % 100000;
+		check = ((check + (live % 3) + (s as number)) % 100000) as int32;
 	}
 
 	const tag = await acc.getTag();

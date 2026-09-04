@@ -26,7 +26,7 @@ function main(): void {
 	for (let i = 0; i < 2000000; i = i + 1) {
 		const cap = i % 7;
 		const b = wrap(() => cap + 1);
-		acc = (acc + b.f()) % 100;
+		acc = ((acc + b.f()) % 100) as int32;
 	}
 	console.log(`leak-closure-callarg acc=${acc}`);
 }

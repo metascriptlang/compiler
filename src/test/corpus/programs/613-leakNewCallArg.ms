@@ -21,7 +21,7 @@ function main(): void {
 	let acc = 0;
 	for (let i = 0; i < 2000000; i = i + 1) {
 		const b = wrap(new Payload(i % 7));
-		acc = (acc + b.p.v) % 100;
+		acc = ((acc + b.p.v) % 100) as int32;
 	}
 	console.log(`leak-new-callarg acc=${acc}`);
 }

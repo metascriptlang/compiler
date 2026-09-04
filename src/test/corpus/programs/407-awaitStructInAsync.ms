@@ -16,7 +16,7 @@ function run(): void {
 	let acc = 0;
 	let i = 0;
 	while (i < 100000) {
-		acc = acc + await outer();
+		acc = (acc + await outer()) as int32;
 		i = i + 1;
 	}
 	console.log("await-struct-in-async acc=" + acc.toString());

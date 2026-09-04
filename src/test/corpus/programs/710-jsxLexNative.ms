@@ -28,7 +28,7 @@ function countJsxTokens(src: string): number {
 function main(): void {
 	let acc = 0;
 	for (let i = 0; i < 200000; i = i + 1) {
-		acc = (acc + countJsxTokens("<View id=\"x\">Don't {a}<b/></View>")) % 1000000;
+		acc = ((acc + countJsxTokens("<View id=\"x\">Don't {a}<b/></View>")) % 1000000) as int32;
 	}
 	console.log(`jsx-lex-native acc=${acc}`);
 }
