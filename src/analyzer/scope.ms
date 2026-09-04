@@ -83,6 +83,9 @@ export interface DrcContext {
 	                                // await/spawn lowering's stepper owns it — PARALOCK). The
 	                                // existing discarded-call path leaves this false so a genuine
 	                                // fire-and-forget future IS still captured + destroyed.
+	parkedInitDepth: number;        // depth inside an AwaitHandle decl's initializer walk — the
+	                                // initializer call is parked on (msWaitForReady), so actor proxy
+	                                // args there stay borrows instead of SEND-class consumption
 }
 
 // ===== Constructors =====
@@ -102,6 +105,7 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		stmtBorrowReads: [],
 		inEnsureMove: 0,
 		skipAwaitableCapture: false,
+		parkedInitDepth: 0,
 		capturedNodes: [],
 		capturedSyms: [],
 	};

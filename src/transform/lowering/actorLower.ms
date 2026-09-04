@@ -17,7 +17,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	Symbol, SymbolKind, SymbolState, createNode } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { containsExprKind, replaceInExpr } from "../walker";
-import { makeSymbol } from "../../checker/symbol";
+import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
@@ -586,6 +586,10 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 			if (m.resolvedSym !== null) {
 				m.resolvedSym.symbolType = proxyFnType;
 				markValueLayoutParamsAsMutated(m.resolvedSym, proxyParamTypes);
+				// The analyzer reads this to classify UNPARKED calls to the proxy as
+				// SEND-class handoffs (plain-ref args consumed into the message);
+				// parked calls carry NodeFlag.AwaitParked instead and stay borrows.
+				setFlag(m.resolvedSym, SymbolFlag.ActorProxy);
 			}
 			proxyNode.typeExprs = m.typeExprs;
 			proxyNode.paramLocations = m.paramLocations;

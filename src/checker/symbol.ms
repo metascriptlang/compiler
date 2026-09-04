@@ -105,6 +105,10 @@ export enum SymbolFlag {
 	ComptimeNodeAlias = 16777216, // `const x = <jsx>` — x binds a compile-time Node, folded into the consuming macro; emits no runtime decl
 	Imported = 33554432, // symbol imported from another module's export registry (importer-side copy)
 	StaticLocal = 67108864, // `static` decl inside a body: carries Global (module storage) but is named per-site, since a body can hold several and a module may hold several bodies
+	ActorProxy = 134217728, // symbol is an actor-method proxy (actorLower): an UNPARKED call to it is a
+	                       // SEND-class handoff — plain-ref args transfer ownership into the message
+	AwaitHandle = 268435456, // awaitLower's `$fut` hoist temp: the initializer call is PARKED on
+	                         // (msWaitForReady below) — its args pass as borrows; the scope outlives the flight
 }
 
 // Flag helpers

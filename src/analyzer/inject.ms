@@ -11,7 +11,7 @@
 
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { createPrimitive, isAwaitable, isUnresolvedType } from "../checker/types";
+import { createPrimitive, isAwaitable, isUnresolvedType, isAtomicRef } from "../checker/types";
 import { lookupSymbol, hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
@@ -330,6 +330,19 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		if ((cd.callee.data as IdentifierData).name === "msSpawnInto") isSpawnIntoSink = true;
 	}
 
+	// Actor proxy call without a park = SEND-class handoff: the caller never
+	// suspends on a reply, so a plain-ref arg must transfer ownership into the
+	// message (reference parity: `inSpawn > 0` forces sinkArg for spawn args).
+	// Parked calls sit in an AwaitHandle decl's initializer (awaitLower hoists
+	// `$fut = call` + msWaitForReady) — the caller's scope outlives the flight,
+	// so those stay borrows. Arc<T> is excluded: SHARE's boundary incref +
+	// impl-side release already balance it, and an extra consume would strand
+	// the cell at rc=0-alive.
+	let isActorSendHandoff = false;
+	if (sym !== null && hasFlag(sym, SymbolFlag.ActorProxy) && dctx.parkedInitDepth === 0) {
+		isActorSendHandoff = true;
+	}
+
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
 		// Push value arg (index 1, after receiver) is sink
@@ -338,6 +351,13 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		if (isCompleteSink && i === 1) argMode = DrcMode.Consumed;
 		// spawn-into future arg (index 0) is sink — spawn owns the pre-allocated future
 		if (isSpawnIntoSink && i === 0) argMode = DrcMode.Consumed;
+		// actor SEND handoff: plain (non-atomic) ref args are consumed into the message
+		if (isActorSendHandoff && i >= 1 && cd.arguments[i] !== null && cd.arguments[i].nodeType !== null) {
+			const sendRc = classifyType(cd.arguments[i].nodeType, dctx.ctx);
+			if (sendRc.needsCleanup && sendRc.rcKind === RcKind.Ref && !isAtomicRef(cd.arguments[i].nodeType)) {
+				argMode = DrcMode.Consumed;
+			}
+		}
 		cd.arguments[i] = processNode(cd.arguments[i], dctx, argMode);
 
 		// Reference parity (passCopyToSink): when a borrow expression (ArrayAccess/MemberExpr)
@@ -1758,7 +1778,10 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 		// skipped via skipAwaitableCapture; wrappers recursed in processNode). Retires
 		// callHoist's expandVarDecl plain-hoist for this position.
 		if (d.initializer !== null) {
+			const parkedFut = stmt.resolvedSym !== null && hasFlag(stmt.resolvedSym, SymbolFlag.AwaitHandle);
+			if (parkedFut) dctx.parkedInitDepth += 1;
 			d.initializer = processNonRcRead(d.initializer, dctx);
+			if (parkedFut) dctx.parkedInitDepth -= 1;
 		}
 		return stmt;
 	}
@@ -1775,8 +1798,13 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 		return stmt;
 	}
 
-	// Process initializer recursively with Consumed mode
+	// Process initializer recursively with Consumed mode. An AwaitHandle decl
+	// (awaitLower's `$fut = call` hoist) parks the caller on that call — mark the
+	// depth so processCallExpr keeps its args as borrows (scope outlives flight).
+	const parkedFutInit = stmt.resolvedSym !== null && hasFlag(stmt.resolvedSym, SymbolFlag.AwaitHandle);
+	if (parkedFutInit) dctx.parkedInitDepth += 1;
 	d.initializer = processNode(d.initializer, dctx, DrcMode.Consumed);
+	if (parkedFutInit) dctx.parkedInitDepth -= 1;
 	const init = d.initializer;
 
 	// Result field extraction: $result_N.value → wasMoved on source to prevent double-free.

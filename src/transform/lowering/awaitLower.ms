@@ -39,6 +39,8 @@ import { createPtr, createPrimitive, awaitedType, booleanType } from "../../chec
 import { typedFutureReadFn } from "./promiseLower";
 import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
 import { injectCancelSafePoints } from "./cancelSafePoints";
+import { setFlag, SymbolFlag } from "../../checker/symbol";
+import { Symbol } from "../../ast/node";
 
 // ===== Scoped Deferred → msAwaitSlot (Change 1) =====
 // Tracks `const h = spawn(fn);` declarations. When `await h` is later found
@@ -52,13 +54,13 @@ export const VOID_PTR_TYPE: Type = createPtr(createPrimitive(TypeKind.Void));
 
 // P9 DRY: extract the 5-line "temp sym → call → typed VarDecl" pattern that
 // repeats across fused, deferred, and timeout paths.
-export function makeTempDecl(ctx: TransformContext, prefix: string, initExpr: Node, t: Type | null, loc: SourceLocation): { decl: Node, ident: Node } {
+export function makeTempDecl(ctx: TransformContext, prefix: string, initExpr: Node, t: Type | null, loc: SourceLocation): { decl: Node, ident: Node, sym: Symbol } {
 	const sym = freshTempSym(ctx, prefix, t);
 	initExpr.nodeType = t;
 	const decl = makeVarDecl(sym.name, initExpr, DeclKind.Const, loc);
 	decl.nodeType = t;
 	decl.resolvedSym = sym;
-	return { decl, ident: makeIdentResolved(sym, loc) };
+	return { decl, ident: makeIdentResolved(sym, loc), sym };
 }
 
 // ===== Unboxing =====
@@ -236,6 +238,13 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 	let futIdent = handleExpr;
 	if (handleExpr.kind !== NodeKind.Identifier) {
 		const tmp = makeTempDecl(ctx, "fut", handleExpr, handleExpr.nodeType, loc);
+		// Parked-handle marker, on the SYMBOL (survives every later node rewrite —
+		// extension-method and call-hoist passes rebuild the CallExpr node): the
+		// analyzer reads it while walking this decl's initializer and keeps moved
+		// args as borrows — the caller suspends on msWaitForReady below, so its
+		// scope provably outlives the message flight. Unmarked actor proxy calls
+		// are SEND-class handoffs (no park) and consume their plain-ref args.
+		setFlag(tmp.sym, SymbolFlag.AwaitHandle);
 		stmts.push(tmp.decl);
 		futIdent = tmp.ident;
 	}
