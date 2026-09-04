@@ -178,10 +178,11 @@ Open questions deferred until Phase 1 ships:
 
 ## std Access — three tiers, scope is per role
 
-How a std operation gets executed in Raiser. Today four mechanisms answer this
-question and none is the source of truth, which is why 21 of the 38 externs
-declared in `.rms` are dead (they resolve to nothing and the identifier arm
-silently emits `LoadConst nil`). The intended model:
+How a std operation gets executed in Raiser. Four mechanisms answer this
+question; the model below is the source of truth, but enforcing it is still
+manual (see Known gaps). Before 2026-09-04, 21 of the 38 externs declared in
+`.rms` were dead — they resolved to nothing and the identifier arm silently
+emits `LoadConst nil`. The model:
 
 | Tier | What | Admission test |
 |---|---|---|
@@ -208,10 +209,17 @@ stdlib, because they have nothing to delegate to.
 
 **Known gaps** (measured, not guessed):
 
-- `.rms` is the only backend prelude that does not re-export `shared.ms`
-  (`index.cms:156` and `index.jms:263` both do, same 17 names). It redeclares
-  15 of those as its own externs instead, and its own header claims it
-  "Mirrors std/core/string/index.cms".
+- RESOLVED 2026-09-04: `index.rms` now re-exports the same 17 names from
+  `./shared` as `index.cms:156`/`index.jms:263`, on two new kernel bridges
+  `msAsBytes`/`msAsString` (`hostTable.ms` — the only bridges that create or
+  read VM heap arrays) plus the byte trio as MS. Still dead by declaration:
+  `substring`, `padStart`/`padEnd`, `parseFloat`/`parseInt`, `fromCodePoint` —
+  kept for surface parity until each gets a bridge or an MS body.
+- Trap when editing `shared.ms`: the Raiser macro checker pulls a macro's
+  helper closure through the prelude EXPORT surface — a module-private helper
+  called by an exported function reads as "Undefined variable" inside macro
+  bodies even though the C backend compiles it fine. Export the helper and
+  add it to the `index.rms` re-export line (see `asciiLower`).
 - Generic-array methods (`pop`/`at`/`setLength`/`capacity`/`splice`) are blocked
   twice over: their `from "&msGenericArrayX"` spelling keeps the `&` inside
   `Symbol.nativeName` (only the C backend strips it), so the CallHost key can
