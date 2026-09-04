@@ -16,15 +16,6 @@ export type Buffer = uint8[];
 
 // ===== private native bindings =====
 
-function bufSubView(b: Buffer, s: number, e: number): Buffer {
-	const out = Buffer.alloc(e - s);
-	let i = s;
-	while (i < e) {
-		out.set(i - s, b.byteAt(i));
-		i += 1;
-	}
-	return out;
-}
 function bufCopyInto(dst: Buffer, src: Buffer, at: number): void {
 	let i = 0;
 	while (i < src.length) {
@@ -351,8 +342,21 @@ function toBase64Range(b: Buffer, start: number, end: number): string {
 	return out;
 }
 
-export function copyTo(this b: Buffer, target: Buffer, targetStart: number, sourceStart: number, sourceEnd: number): void {
-	bufCopyInto(target, bufSubView(b, sourceStart, sourceEnd), targetStart);
+export function copyTo(this b: Buffer, target: Buffer, targetStart: number, sourceStart: number, sourceEnd: number): number {
+	let s = sourceStart;
+	let e = sourceEnd;
+	let at = targetStart;
+	if (s < 0) s = 0;
+	if (e > b.length) e = b.length;
+	if (at < 0) at = 0;
+	if (s >= e) return 0;
+	let len = e - s;
+	if (at + len > target.length) len = target.length - at;
+	if (len <= 0) return 0;
+	for (let i = 0; i < len; i += 1) {
+		target.set(at + i, b.byteAt(s + i));
+	}
+	return len;
 }
 
 export extern function fill(this b: Buffer, value: number, start: number, end: number): void from "#.fill(#, #, #)";
