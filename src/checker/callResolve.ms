@@ -19,7 +19,7 @@ import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym } from "./template";
-import { UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
+import { UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
@@ -2919,11 +2919,13 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				&& narrowedObjType.kind === TypeKind.Struct) {
 			const fieldInVariant = findFieldInVariant(narrowedObjType, d.property);
 			if (fieldInVariant === null) {
-				// Field not in narrowed variant — only error if we ALSO didn't find
-				// it via the union-wide getProperty above. Otherwise propType is
-				// already valid (a union of variant field types), and the user's
-				// intent is to use it without further narrowing — let it through.
-				if (isUnresolvedType(propType)) {
+				// The flow graph pinned the reference to ONE variant. Reading a
+				// payload field of some OTHER variant through the pinned reference
+				// reinterprets bytes — reject. The discriminant itself stays
+				// readable: variant structs do not re-declare it (it lives in the
+				// union's metadata at a fixed offset), and disc re-reads inside a
+				// narrowed block were always legal.
+				if (getDiscriminantName(resolvedObjType) !== d.property) {
 					addError(ctx, `Property '${d.property}' does not exist on type '${typeDisplayName(narrowedObjType)}'. Available: ${narrowedObjType.typeNames.join(", ")}`,
 						node.location.line, node.location.column);
 					return propType;
@@ -2943,7 +2945,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			}
 		} else if (narrowedObjType !== null && narrowedObjType !== resolvedObjType
 				&& narrowedObjType.kind === TypeKind.Union
-				&& !duSharedFieldOffsetDiffers(narrowedObjType, d.property)) {
+				&& !duFieldRequiresNarrowing(narrowedObjType, d.property)) {
 			// Narrowed to a sub-union whose remaining variants lay the field at ONE
 			// offset — any of their slots in the full union is byte-correct; use the first.
 			const subIdx = findVariantByFieldName(narrowedObjType, d.property);
@@ -2960,15 +2962,21 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				}
 			}
 		}
-		// Un-narrowed access to a field that variants lay at DIFFERENT offsets has no
-		// single correct read — reject instead of silently reading another variant's
-		// bytes. Same-offset shared fields (identical type prefix) stay legal. No
-		// disc gate: structural no-disc unions route through v<N> in C just the same,
-		// and the helper only fires on a real cross-variant layout conflict.
+		// Un-narrowed access has no single correct read unless EVERY variant
+		// declares the field with an identical layout: differing offsets across
+		// declaring variants, or a field only a strict subset declares, both
+		// reinterpret the active variant's bytes. Reject instead of reading
+		// another variant's storage. No disc gate: structural no-disc unions
+		// route through v<N> in C just the same.
 		if (narrowedSlot === 0 && !isUnresolvedType(propType)
-				&& duSharedFieldOffsetDiffers(resolvedObjType, d.property)) {
-			addError(ctx, `field '${d.property}' sits at different offsets across variants of '${typeDisplayName(resolvedObjType)}' — narrow with match/if on the discriminant before accessing it`,
-				node.location.line, node.location.column);
+				&& duFieldRequiresNarrowing(resolvedObjType, d.property)) {
+			if (duSharedFieldOffsetDiffers(resolvedObjType, d.property)) {
+				addError(ctx, `field '${d.property}' sits at different offsets across variants of '${typeDisplayName(resolvedObjType)}' — narrow with match/if on the discriminant before accessing it`,
+					node.location.line, node.location.column);
+			} else {
+				addError(ctx, `field '${d.property}' exists only on some variants of '${typeDisplayName(resolvedObjType)}' — narrow with match/if on the discriminant before accessing it`,
+					node.location.line, node.location.column);
+			}
 		}
 		// A DU-typed field must carry a per-site property sym whose symbolType is the
 		// DECLARED field type: a chained access (x.f.g where f is a DU) recovers its
