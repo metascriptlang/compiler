@@ -39,7 +39,7 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
 	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
-	heapArrayLen, heapArrayGet,
+	heapArrayLen, heapArrayGet, heapAllocArray, heapArrayPush, raiserArray,
 } from "../../raiser/value";
 import {
 	registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized,
@@ -350,6 +350,39 @@ function _bridgeMsStringCharCodeAt(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).charCodeAt(unboxInt(args[1])));
 }
 
+// Tier 1 — string ↔ VM-heap byte-array kernels. These cross the VM-heap
+// boundary (host zero-copy view vs VM heap array), which MS cannot express
+// from either side; every derived string algorithm is Tier 2
+// (std/core/string/shared.ms). The only bridges that CREATE a VM heap value.
+function _bridgeMsAsBytes(args: RaiserValue[]): RaiserValue {
+	const bytes = unboxString(args[0]).asBytes();
+	const heapOrNull = activeHostArrayHeap();
+	if (heapOrNull === null) return raiserNil();
+	const heap: RaiserArrayHeap = heapOrNull;
+	const handle = heapAllocArray(heap);
+	let i = 0;
+	while (i < bytes.length) {
+		heapArrayPush(heap, handle, boxInt(bytes[i]));
+		i = i + 1;
+	}
+	return raiserArray(handle);
+}
+
+function _bridgeMsAsString(args: RaiserValue[]): RaiserValue {
+	const heapOrNull = activeHostArrayHeap();
+	if (heapOrNull === null) return raiserNil();
+	const heap: RaiserArrayHeap = heapOrNull;
+	const handle = args[0].intVal;
+	const len = heapArrayLen(heap, handle);
+	const bytes: uint8[] = [];
+	let i = 0;
+	while (i < len) {
+		bytes.push(heapArrayGet(heap, handle, i).intVal as uint8);
+		i = i + 1;
+	}
+	return boxString(bytes.asString());
+}
+
 // Literal value accessors. Each one FIXES the representation of its result the
 // way Nim's opcNIntVal/opcNFloatVal do (vm.nim:1867-1881, decodeB(rkInt/rkFloat)):
 // the VM's arithmetic and compare opcodes are typed (AddI64 vs AddF64, BltI64 vs
@@ -493,6 +526,8 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringEndsWith",      _bridgeMsStringEndsWith);
 	registerHostFn("msStringReplace",       _bridgeMsStringReplace);
 	registerHostFn("msStringReplaceAll",    _bridgeMsStringReplaceAll);
+	registerHostFn("msAsBytes",             _bridgeMsAsBytes);
+	registerHostFn("msAsString",            _bridgeMsAsString);
 	markHostRegistryInitialized();
 }
 

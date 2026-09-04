@@ -1,7 +1,9 @@
 // MetaScript String Prelude — Raiser Backend
-// Extern declarations resolve to CallHost "<name>" in the Raiser VM (host fns
-// registered in src/raiser/). Pure-MS derived operators compile to bytecode.
-// Mirrors std/core/string/index.cms (C backend) minus C-only @include/@compile.
+// Shape-mirrors std/core/string/index.cms minus the C-only surface
+// (@include/@compile, in-place mutation, capacity). Kernels only where the
+// Raiser side has a real fast path: charAt/slice are opcode-intercepted,
+// charCodeAt/asBytes/asString go through host bridges, everything else is
+// the shared Tier-2 byte-loop source (same 17 names as index.cms).
 
 // ===== Operators =====
 export extern function `==`(this a: string, b: string): boolean from "msStringEquals";
@@ -12,41 +14,48 @@ export function `<=`(this a: string, b: string): boolean { return !(b < a); }
 export function `>=`(this a: string, b: string): boolean { return !(a < b); }
 
 // ===== Comparison =====
-export extern function equals(this s: string, other: string): boolean from "msStringEquals";
-export extern function equalsIgnoreCase(this s: string, other: string): boolean from "msStringEqualsIgnoreCase";
-export extern function startsWith(this s: string, prefix: string): boolean from "msStringStartsWith";
-export extern function endsWith(this s: string, suffix: string): boolean from "msStringEndsWith";
-export extern function contains(this s: string, sub: string): boolean from "msStringContains";
+export function equals(this s: string, other: string): boolean { return s == other; }
 
 // ===== Search =====
-export extern function indexOf(this s: string, sub: string, start: int32 = 0): int32 from "msStringIndexOf";
-export extern function lastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 from "msStringLastIndexOf";
-export extern function count(this s: string, sub: string): int32 from "msStringCount";
+export function indexOf(this s: string, sub: string, start: int32 = 0): int32 {
+	return s.byteIndexOf(sub, start);
+}
+export function lastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 {
+	return s.byteLastIndexOf(sub, startIdx);
+}
 
 // ===== Extraction =====
 export extern function charAt(this s: string, idx: int32): string from "msStringCharAt";
 export extern function charCodeAt(this s: string, idx: int32): int32 from "msStringCharCodeAt";
-export extern function byteLength(this s: string): int32 from "msStringByteLength";
-export extern function byteAt(this s: string, idx: int32): int32 from "msStringByteAt";
-export extern function byteSlice(this s: string, start: int32, end: int32): string from "msStringByteSlice";
 export extern function slice(this s: string, start: int32, end: int32): string from "msStringSlice";
 export extern function substring(this s: string, start: int32, end: int32): string from "msStringSubstring";
 
+// ===== Zero-Copy Bridge (string → uint8[]) =====
+
+export extern function asBytes(this s: string): uint8[] from "msAsBytes";
+
+// ===== Shared Byte-Loop Algorithms (single source, both backends) =====
+export function byteLength(this s: string): int32 {
+	return s.asBytes().length;
+}
+
+export function byteAt(this s: string, idx: int32): int32 {
+	const b = s.asBytes();
+	if (idx < 0 || idx >= b.length) return -1;
+	return b[idx] as int32;
+}
+
+export function byteSlice(this s: string, start: int32, end: int32): string {
+	const b = s.asBytes();
+	const result: uint8[] = [];
+	let i = start;
+	while (i < end && i < b.length) { result.push(b[i]); i = i + 1; }
+	return result.asString();
+}
+
 // ===== Transformation =====
-export extern function toLowerCase(this s: string): string from "msStringToLower";
-export extern function toUpperCase(this s: string): string from "msStringToUpper";
-export extern function trim(this s: string): string from "msStringTrim";
-export extern function trimStart(this s: string): string from "msStringTrimStart";
-export extern function trimEnd(this s: string): string from "msStringTrimEnd";
-export extern function repeat(this s: string, count: int32): string from "msStringRepeat";
-export extern function replace(this s: string, search: string, replacement: string): string from "msStringReplace";
-export extern function replaceAll(this s: string, search: string, replacement: string): string from "msStringReplaceAll";
-export extern function reverse(this s: string): string from "msStringReverse";
 export extern function padStart(this s: string, targetLen: int32, pad: string): string from "msStringPadStart";
 export extern function padEnd(this s: string, targetLen: int32, pad: string): string from "msStringPadEnd";
-
-// ===== Splitting =====
-export extern function split(this s: string, delimiter: string): string[] from "msStringSplit";
 
 // ===== Parsing =====
 export extern function parseFloat(this s: string): number from "msStringParseFloat";
@@ -54,3 +63,5 @@ export extern function parseInt(this s: string): int64 from "msStringParseInt";
 
 // ===== Character Construction =====
 export extern function fromCodePoint(cp: number): string from "msStringFromCodePoint";
+
+export { byteIndexOf, byteLastIndexOf, startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase, asciiLower, asciiUpper, isSpaceByte } from "./shared";

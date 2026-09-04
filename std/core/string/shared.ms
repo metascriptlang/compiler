@@ -231,12 +231,15 @@ export function equalsIgnoreCase(this s: string, other: string): boolean {
 	return true;
 }
 
-function asciiLower(b: int32): int32 {
+// Module-private in spirit, but exported: the Raiser macro checker pulls a
+// macro's helper closure by export boundary, so non-exported helpers leave
+// these exported algorithms unresolvable inside macro bodies.
+export function asciiLower(b: int32): int32 {
 	if (b >= "A".code && b <= "Z".code) return b + 32;
 	return b;
 }
 
-function asciiUpper(b: int32): int32 {
+export function asciiUpper(b: int32): int32 {
 	if (b >= "a".code && b <= "z".code) return b - 32;
 	return b;
 }
