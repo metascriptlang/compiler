@@ -1235,7 +1235,7 @@ function readLocs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number
 }
 
 function readLoc(objHeap: RaiserObjectHeap, h: number): SourceLocation {
-	const loc = makeLoc(readInt(objHeap, h, "line"), readInt(objHeap, h, "column"));
+	const loc = makeLoc(readInt(objHeap, h, "line") as int32, readInt(objHeap, h, "column") as int32);
 	const el = readInt(objHeap, h, "endLine");
 	if (el > 0) {
 		loc.endLine = el as int32;

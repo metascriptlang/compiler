@@ -296,8 +296,8 @@ export interface SourceLocation {
 	endColumn: int32;  // 0 = unknown (falls back to column + 1)
 }
 
-export function makeLoc(line: number, column: number): SourceLocation {
-	return { line: line as int32, column: column as int32, endLine: 0 as int32, endColumn: 0 as int32 };
+export function makeLoc(line: int32, column: int32): SourceLocation {
+	return { line, column, endLine: 0 as int32, endColumn: 0 as int32 };
 }
 
 export function makeLocRange(line: int32, column: int32, endLine: int32, endColumn: int32): SourceLocation {

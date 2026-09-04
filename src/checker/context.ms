@@ -1027,9 +1027,9 @@ export function isCancelled(cancel: CancelCtx, startVersion: number): boolean {
 // Reference-aligned: equivalent to SymInfoPair / suggestSym() / markUsed().
 
 export interface SgSymRecord {
-	line: number;          // 1-based (parser convention)
-	col: number;           // 1-based (parser convention)
-	colEnd: number;        // col + token length
+	line: int32;           // 1-based (parser convention)
+	col: int32;            // 1-based (parser convention)
+	colEnd: int32;         // col + token length
 	sym: Symbol | null;    // resolved symbol; null for synthetic records
 	symType: Type | null;  // type at this use site; null when not yet resolved
 	kind: SymbolKind;      // may override sym.symbolKind (e.g. Method for class functions)
@@ -1039,7 +1039,7 @@ export interface SgSymRecord {
 }
 
 export function sgRecordSym(
-	ctx: CheckerContext, line: number, col: number, colEnd: number,
+	ctx: CheckerContext, line: int32, col: int32, colEnd: int32,
 	sym: Symbol | null, symType: Type | null, kind: SymbolKind,
 	name: string, containerName: string, isDecl: boolean
 ): void {

@@ -1515,7 +1515,7 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 // Compute the column where the type arg name starts (after '<') in a call expression.
 // For `foo<T>(...)`: callee.col + "foo".length + 1 (skip '<')
 // For `obj.method<T>(...)`: callee.col + 1 + "method".length + 1 (skip '.' and '<')
-function computeTypeArgCol(node: Node): number {
+function computeTypeArgCol(node: Node): int32 {
 	const cd = node.data as CallExprData;
 	if (cd.callee === null) return 0;
 	if (cd.callee.kind === NodeKind.Identifier) {
