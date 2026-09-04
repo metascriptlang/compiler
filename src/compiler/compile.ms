@@ -16,7 +16,9 @@ import { generateJS, generateJSBundleModule, generateJSModule } from "../codegen
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
 import { escapeJSString } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
+import { takeRaiserCompileErrors } from "../codegen/raiser/context";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
+import { RaiserValueKind } from "../raiser/value";
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
 import { mangleModuleName } from "../codegen/c/names";
 import { resetEmittedInstances } from "../codegen/c/declarations";
@@ -2309,14 +2311,24 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		modules.push(input);
 	}
 
+	// Before bytecodegen: the coverage check inside generateRaiserProject
+	// resolves every extern's bridge at the call site, and execution dispatches
+	// through the same registry — load it first or both see an empty table.
+	ensureHostTableLoaded();
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
 	const raiserMod = generateRaiserProject(modules);
+	// Comptime parity: queued bytecode-compile errors are collected and
+	// reported, not fatal — std module bodies the program never calls can
+	// contain unbridgeable externs or unresolved helpers. A nil that leaks
+	// into live code is visible here as a "cannot evaluate" line.
+	for (const e of takeRaiserCompileErrors()) {
+		console.log(`${yellow("raiser warning")}: ${e.message} at ${e.line}:${e.column}`);
+	}
 
 	if (opts.showTime) printTiming("compiled", t0);
 
 	const ctx = createRaiserContext();
 	ctx.gcMode = "orc";
-	ensureHostTableLoaded();
 	raiserLoad(ctx, raiserMod);
 	const ranOk = raiserExecute(ctx);
 
@@ -2332,5 +2344,10 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 
 	if (!ranOk && ctx.lastError !== "") {
 		console.log(`${error("raiser runtime error")}: ${ctx.lastError}`);
+	}
+
+	// C-target parity: the program's exit code becomes msc's own.
+	if (ranOk && ctx.lastResult.kind === RaiserValueKind.Int) {
+		exit(ctx.lastResult.intVal);
 	}
 }
