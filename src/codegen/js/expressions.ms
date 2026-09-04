@@ -537,7 +537,13 @@ export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 		emit(gen, ")");
 	}
 	emit(gen, " => ");
-	emitNode(gen, d.arrowBody);
+	if (d.arrowBody.kind === NodeKind.ObjectLiteral) {
+		emit(gen, "(");
+		emitNode(gen, d.arrowBody);
+		emit(gen, ")");
+	} else {
+		emitNode(gen, d.arrowBody);
+	}
 }
 
 // ===== Function Expression =====

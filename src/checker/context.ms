@@ -301,6 +301,12 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 			if (methodCarriesMonoBody(sym.symbolType)) exportDeclNode = sym.declNode;
 		} else if (sym.declNode.kind === NodeKind.EnumDecl) {
 			exportDeclNode = sym.declNode;
+		} else if (sym.declNode.kind === NodeKind.VariableDecl) {
+			// Exported consts: the defining AST reaches importers so backend
+			// passes can compile the initializer at the use site (Raiser
+			// const inlining). Consumers keyed on ImportDecl for imported
+			// variables see the real decl instead — nothing branches on that.
+			exportDeclNode = sym.declNode;
 		}
 	}
 
