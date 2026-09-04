@@ -138,3 +138,4 @@ import "./bug121Int64FloatConv";
 import "./bug122JsTestAwait";
 import "./bug123ArrowExprReturnCheck";
 import "./bug123RmsSharedStringTier";
+import "./bug124RaiserSilentNil";

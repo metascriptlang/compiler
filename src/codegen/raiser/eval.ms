@@ -21,7 +21,7 @@ import { moduleScopeSymbols } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
-import { registerRaiserOnDemand, isRoutineSym } from "./context";
+import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, getMacroDeclModulePath } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
@@ -165,10 +165,12 @@ export function compileMacroIntoEngine(program: Node, token: CheckerContext, mac
 		}
 	}
 	_pendingHelperErrors = [];
+	takeRaiserCompileErrors(); // reset: stale entries from an earlier compile must not leak in
 	const funcIdx = compileProgramIntoEngine(program, seeds, macroFnName);
 	const errors: CheckerError[] = [];
 	for (const e of _lastEngineCheckErrors) errors.push(e);
 	for (const e of _pendingHelperErrors) errors.push(e);
+	for (const e of takeRaiserCompileErrors()) errors.push(e);
 	_pendingHelperErrors = [];
 	return { vm: _engine.vm, funcIdx, errors };
 }

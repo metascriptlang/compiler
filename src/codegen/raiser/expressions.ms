@@ -17,7 +17,7 @@ import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
 	resolveFunc, isLocalString, isEnumName, findEnumConstant,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
-	markRegFloat, isRegFloat, callRaiserOnDemand
+	markRegFloat, isRegFloat, callRaiserOnDemand, queueRaiserCompileError
 } from "./context";
 
 // --- Float detection ---
@@ -248,6 +248,12 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 				emitLoadConst(s, r, raiserInt(funcIdx));
 				return r;
 			}
+			// Nothing the bytecode compiler can execute bound this name (module-
+			// level consts and other non-routine symbols land here). Report it
+			// instead of silently splicing nil into the macro's output.
+			queueRaiserCompileError(
+				`cannot evaluate '${d.name}' at comptime: no local, function, enum constant, or builtin binding reached the bytecode compiler`,
+				node.location.line, node.location.column);
 			const fallback = allocReg(s);
 			emitLoadConst(s, fallback, raiserNil());
 			return fallback;
@@ -285,6 +291,10 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			return compileExpr(s, hd.convExpr);
 		},
 		_ => {
+			// Unsupported node kind: report instead of silently splicing nil.
+			queueRaiserCompileError(
+				`cannot compile node kind ${node.kind} at comptime: unsupported by the Raiser bytecode compiler`,
+				node.location.line, node.location.column);
 			const reg = allocReg(s);
 			emitLoadConst(s, reg, raiserNil());
 			return reg;

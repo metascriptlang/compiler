@@ -7,6 +7,35 @@ import {
 } from "../../raiser/bytecode";
 import { RaiserValue, raiserInt, raiserString } from "../../raiser/value";
 import { Symbol, SymbolKind } from "../../ast/node";
+import { CheckerError, Severity } from "../../checker/context";
+
+// --- Bytecode-compiler error queue ---
+// The expression/statement compilers used to silently emit LoadConst nil
+// for constructs they could not compile, hiding comptime failures until
+// they misbehaved at macro-expansion time. The queue collects those; the
+// macro engine drains it into EngineMacroResult.errors after each compile
+// (eval.ms), where expand.ms renders them with span.
+
+let _raiserCompileErrors: CheckerError[] = [];
+
+export function queueRaiserCompileError(message: string, line: number, column: number): void {
+	_raiserCompileErrors.push({
+		message: message,
+		line: line,
+		column: column,
+		endLine: 0,
+		endColumn: 0,
+		fatal: false,
+		severity: Severity.Error,
+		tags: 0,
+	});
+}
+
+export function takeRaiserCompileErrors(): CheckerError[] {
+	const out = _raiserCompileErrors;
+	_raiserCompileErrors = [];
+	return out;
+}
 
 // --- Locals ---
 
