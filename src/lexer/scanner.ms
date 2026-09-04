@@ -9,7 +9,7 @@ import { isDigit, isLetter, isHexDigit, isOctalDigit, isBinaryDigit } from "./ch
 
 // `0xffn` / `0b1111n` / `0o17n` are bigint literals like `255n` — the radix
 // prefixes reach the same suffix check as the decimal tail.
-function addNumericToken(s: LexerState, val: string, line: number, column: number): void {
+function addNumericToken(s: LexerState, val: string, line: int32, column: int32): void {
 	if (peek(s) === "n".code) {
 		advanceChar(s);
 		addToken(s, TokenKind.BigInt, val + "n", line, column);
@@ -213,7 +213,7 @@ function scanEscape(s: LexerState): string {
 	};
 }
 
-export function scanString(s: LexerState, quote: number): void {
+export function scanString(s: LexerState, quote: int32): void {
 	const startLine = s.line;
 	const startCol = s.column;
 	let val = "";
@@ -319,7 +319,7 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 }
 
 // Check if a backtick-quoted string is an operator name.
-function isOperatorChar(ch: number): boolean {
+function isOperatorChar(ch: int32): boolean {
 	return ch === "|".code || ch === ">".code || ch === "<".code || ch === "=".code
 		|| ch === "+".code || ch === "-".code || ch === "*".code || ch === "/".code
 		|| ch === "%".code || ch === "&".code || ch === "^".code || ch === "~".code

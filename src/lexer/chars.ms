@@ -1,39 +1,39 @@
 // Character Classification — Pure functions for lexer character tests
-// No imports needed — operates on character codes (numbers)
+// No imports needed — operates on byte codes (int32)
 
 
 
 // ===== Character Classifiers =====
 
-export function isWhitespace(ch: number): boolean {
+export function isWhitespace(ch: int32): boolean {
 	return ch === " ".code || ch === "\t".code || ch === "\r".code;
 }
 
-export function isNewline(ch: number): boolean {
+export function isNewline(ch: int32): boolean {
 	return ch === "\n".code;
 }
 
-export function isDigit(ch: number): boolean {
+export function isDigit(ch: int32): boolean {
 	return ch >= "0".code && ch <= "9".code;
 }
 
-export function isHexDigit(ch: number): boolean {
+export function isHexDigit(ch: int32): boolean {
 	return (ch >= "0".code && ch <= "9".code) || (ch >= "A".code && ch <= "F".code) || (ch >= "a".code && ch <= "f".code);
 }
 
-export function isLetter(ch: number): boolean {
+export function isLetter(ch: int32): boolean {
 	return (ch >= "A".code && ch <= "Z".code) || (ch >= "a".code && ch <= "z".code) || ch === "_".code;
 }
 
-export function isAlphanumeric(ch: number): boolean {
+export function isAlphanumeric(ch: int32): boolean {
 	return isLetter(ch) || isDigit(ch);
 }
 
-export function isBinaryDigit(ch: number): boolean {
+export function isBinaryDigit(ch: int32): boolean {
 	return ch === "0".code || ch === "1".code;
 }
 
-export function isOctalDigit(ch: number): boolean {
+export function isOctalDigit(ch: int32): boolean {
 	return ch >= "0".code && ch <= "7".code;
 }
 

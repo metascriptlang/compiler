@@ -80,7 +80,7 @@ function lexOk(input: string): boolean {
 	return result.ok;
 }
 
-function lexCount(input: string): number {
+function lexCount(input: string): int32 {
 	const result = lex(input);
 	if (!result.ok) return 0;
 	const tokens = result.value;
@@ -104,7 +104,7 @@ function lexFirstVal(input: string): string {
 	return tokens[0].value;
 }
 
-function lexKindAt(input: string, index: number): TokenKind {
+function lexKindAt(input: string, index: int32): TokenKind {
 	const result = lex(input);
 	if (!result.ok) return TokenKind.Eof;
 	const tokens = result.value;
@@ -112,7 +112,7 @@ function lexKindAt(input: string, index: number): TokenKind {
 	return tokens[index].kind;
 }
 
-function lexValAt(input: string, index: number): string {
+function lexValAt(input: string, index: int32): string {
 	const result = lex(input);
 	if (!result.ok) return "";
 	const tokens = result.value;
@@ -120,13 +120,13 @@ function lexValAt(input: string, index: number): string {
 	return tokens[index].value;
 }
 
-function lexLen(input: string): number {
+function lexLen(input: string): int32 {
 	const result = lex(input);
 	if (!result.ok) return 0;
 	return result.value.length;
 }
 
-function lexLineAt(input: string, index: number): number {
+function lexLineAt(input: string, index: int32): int32 {
 	const result = lex(input);
 	if (!result.ok) return 0;
 	const tokens = result.value;
@@ -134,7 +134,7 @@ function lexLineAt(input: string, index: number): number {
 	return tokens[index].line;
 }
 
-function lexColAt(input: string, index: number): number {
+function lexColAt(input: string, index: int32): int32 {
 	const result = lex(input);
 	if (!result.ok) return 0;
 	const tokens = result.value;

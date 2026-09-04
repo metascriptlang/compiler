@@ -10,13 +10,13 @@ export enum JsxMode { Tag, Children, Closing, Brace }
 
 export interface LexerState {
 	source: string;
-	pos: number;
-	line: number;
-	column: number;
+	pos: int32;
+	line: int32;
+	column: int32;
 	tokens: Token[];
 	comments: Token[]; // Added for comment preservation
-	templateDepth: number;
-	braceStack: number[];
+	templateDepth: int32;
+	braceStack: int32[];
 	lastToken: TokenKind;
 	jsxStack: JsxMode[];
 	lexError: string;
@@ -53,13 +53,13 @@ export function advanceChar(s: LexerState): int32 {
 	return ch;
 }
 
-export function skip(s: LexerState, n: number): void {
+export function skip(s: LexerState, n: int32): void {
 	for (let i = 0; i < n; i++) {
 		advanceChar(s);
 	}
 }
 
-export function addToken(s: LexerState, kind: TokenKind, value: string, line: number, column: number): Token {
+export function addToken(s: LexerState, kind: TokenKind, value: string, line: int32, column: int32): Token {
 	const tok: Token = { kind, value, line, column, rawValue: "" };
 	s.tokens.push(tok);
 	s.lastToken = kind;
@@ -70,7 +70,7 @@ export function addToken(s: LexerState, kind: TokenKind, value: string, line: nu
 // Note: do NOT also push to s.comments — that creates shared string ownership between
 // two arrays. When lex() moves s.tokens out, LexerState_destroy frees s.comments,
 // which frees the shared string buffers still referenced by the moved tokens (UAF).
-export function addComment(s: LexerState, value: string, line: number, column: number): void {
+export function addComment(s: LexerState, value: string, line: int32, column: int32): void {
 	const tok: Token = { kind: TokenKind.Comment, value, line, column };
 	s.tokens.push(tok);
 }

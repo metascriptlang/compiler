@@ -4,7 +4,7 @@
 export * from "std/meta/token";
 import { TokenKind, Token } from "std/meta/token";
 
-export function createToken(kind: TokenKind, tokenValue: string, lineNum: number): Token {
+export function createToken(kind: TokenKind, tokenValue: string, lineNum: int32): Token {
 	return { kind, value: tokenValue, line: lineNum, column: 0, rawValue: "" };
 }
 
