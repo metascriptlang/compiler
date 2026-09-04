@@ -13,12 +13,12 @@
 // kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { isNumeric, createResult, createArray, createPrimitive, stringType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType } from "../../checker/types";
+import { isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType } from "../../checker/types";
 import { findExtension, requestEnumToString } from "../../checker/context";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import {
-	makeIdent, makeCall, makeString, makeNumber, makeMember,
+	makeIdent, makeCall, makeString, makeNumber, makeMember, makeConditional,
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringNameFor,
 	makeHiddenAddr,
 } from "../util";
@@ -175,6 +175,21 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	// String → identity (return self)
 	if (tk === TypeKind.String) {
 		return obj;
+	}
+	// Value-carried nullable → stringify the payload, never the carrier. `.present`
+	// and `.value` are real fields on C; the js backend rewrites them back to
+	// `x !== null` and `x` (native/maybeUnwrap.ms), so one shape serves both.
+	if (isMaybeType(objType)) {
+		const payload = unwrapMaybeType(objType);
+		const val = makeMember(obj, "value", loc);
+		val.nodeType = payload;
+		const present = makeMember(obj, "present", loc);
+		present.nodeType = booleanType();
+		const absent = makeString("null", loc);
+		absent.nodeType = stringType();
+		const cond = makeConditional(present, lowerToString(callNode, val, payload, loc, ctx), absent, loc);
+		cond.nodeType = stringType();
+		return cond;
 	}
 	// Struct/Class → plain JSON string (reuses console.log's struct→string path)
 	const inner = unwrapRef(objType);

@@ -5,11 +5,11 @@
 // json builders (jsonObject/jsonString/jsonNumber/jsonBool) + stringify from std/core/json.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, createNode } from "../../ast/node";
-import { isNumeric, isWideInteger, stringType, createPtr, voidType, createArray, unwrapRef } from "../../checker/types";
+import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, isMaybeType, unwrapMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension, requestEnumToString } from "../../checker/context";
-import { makeIdent, makeCall, makeString, makeBool, makeBinary, makeMember, enumToStringNameFor, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl } from "../util";
+import { makeIdent, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringNameFor, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl } from "../util";
 import { anonTypeName, isAnonTypeName } from "../../codegen/c/types";
 import { makeSymbol } from "../../checker/symbol";
 import { SymbolKind } from "../../ast/node";
@@ -54,6 +54,20 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		const call = makeCall(makeIdent("msBoolToString", loc), [arg], loc);
 		call.nodeType = stringType();
 		return call;
+	}
+	// Value-carried nullable → the payload, or "null" when absent. Without this the
+	// carrier itself reaches the struct dump and the Maybe fields leak to stdout.
+	if (isMaybeType(t)) {
+		const payload = unwrapMaybeType(t);
+		const val = makeMember(arg, "value", loc);
+		val.nodeType = payload;
+		const present = makeMember(arg, "present", loc);
+		present.nodeType = booleanType();
+		const absent = makeString("null", loc);
+		absent.nodeType = stringType();
+		const cond = makeConditional(present, echoCoerceArg(val, loc, ctx), absent, loc);
+		cond.nodeType = stringType();
+		return cond;
 	}
 	// Struct/Class/Union → check toString() extension first, then fall back to JSON debug format
 	const inner = unwrapRef(t);
