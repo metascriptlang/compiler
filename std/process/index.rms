@@ -1,0 +1,156 @@
+// std/process — Raiser tier. Same surface as index.cms: kernels are host
+// bridges (hostTable.ms), everything else is portable MS carried verbatim.
+// exit() is the one exception — Tier 0, not Tier 1: the call site is
+// intercepted by the Raiser codegen and emits Halt (Nim's VM likewise has
+// no quit op), so the declaration below exists for the checker only,
+// mirroring the push/setLength pattern.
+
+export { ProcessError, ProcessErrorKind } from "./errors";
+export { processError, spawnFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
+
+import { isExecutable } from "../fs";
+
+extern function msProcessCwd(): string from "msProcessCwd";
+extern function msProcessPlatform(): string from "msProcessPlatform";
+extern function msProcessGetEnv(name: string): string from "msProcessGetEnv";
+extern function msProcessSetEnv(name: string, value: string): number from "msProcessSetEnv";
+extern function msProcessUnsetEnv(name: string): number from "msProcessUnsetEnv";
+extern function msProcessArgv(): string[] from "msProcessArgv";
+extern function msProcessSpawnSync(command: string): string from "msProcessSpawnSync";
+extern function msProcessSpawnSyncArgv(path: string, args: string[]): string from "msProcessSpawnSyncArgv";
+extern function msProcessExecFile(path: string, args: string[]): number from "msProcessExecFile";
+extern function msProcSpawnGetExitCode(): int32 from "msProcSpawnGetExitCode";
+extern function msProcSpawnGetSignal(): int32 from "msProcSpawnGetSignal";
+extern function msProcSpawnGetStderr(): string from "msProcSpawnGetStderr";
+extern function msProcSpawnGetOk(): int32 from "msProcSpawnGetOk";
+extern function msProcSpawnGetPipeOk(): int32 from "msProcSpawnGetPipeOk";
+
+// Intercepted by the codegen to Halt(code) — never executed as a call.
+export function exit(code: number): void {}
+
+export const argv: string[] = msProcessArgv();
+
+export function cwd(): string {
+	return msProcessCwd();
+}
+
+export function exec(command: string): Result<string, ProcessError> {
+	const stdoutText = msProcessSpawnSync(command);
+	const ok = msProcSpawnGetOk();
+	if (ok === 0) {
+		return Result.err(spawnFailed(command, "fork/exec failed"));
+	}
+	const pipeOk = msProcSpawnGetPipeOk();
+	if (pipeOk === 0) {
+		return Result.err(pipeError(command, "failed to drain stdout/stderr from child"));
+	}
+	const signal = msProcSpawnGetSignal();
+	const exitCode = msProcSpawnGetExitCode();
+	const stderrText = msProcSpawnGetStderr();
+	if (signal !== 0) {
+		return Result.err(signalTerminated(command, signal, stdoutText, stderrText));
+	}
+	if (exitCode !== 0) {
+		if (exitCode === 127) {
+			return Result.err(notFound(command));
+		}
+		return Result.err(nonZeroExit(command, exitCode, stdoutText, stderrText));
+	}
+	return Result.ok(stdoutText);
+}
+
+export function execFile(path: string, args: string[] = []): number {
+	return msProcessExecFile(path, args);
+}
+
+export function execFileCapture(path: string, args: string[] = []): Result<string, ProcessError> {
+	const stdoutText = msProcessSpawnSyncArgv(path, args);
+	const ok = msProcSpawnGetOk();
+	if (ok === 0) {
+		return Result.err(spawnFailed(path, "fork/exec failed"));
+	}
+	const pipeOk = msProcSpawnGetPipeOk();
+	if (pipeOk === 0) {
+		return Result.err(pipeError(path, "failed to drain stdout/stderr from child"));
+	}
+	const signal = msProcSpawnGetSignal();
+	const exitCode = msProcSpawnGetExitCode();
+	const stderrText = msProcSpawnGetStderr();
+	if (signal !== 0) {
+		return Result.err(signalTerminated(path, signal, stdoutText, stderrText));
+	}
+	if (exitCode !== 0) {
+		return Result.err(nonZeroExit(path, exitCode, stdoutText, stderrText));
+	}
+	return Result.ok(stdoutText);
+}
+
+export class env {
+	static get(name: string): string {
+		return msProcessGetEnv(name);
+	}
+
+	static set(name: string, value: string): boolean {
+		return msProcessSetEnv(name, value) !== 0.0;
+	}
+
+	static delete(name: string): boolean {
+		return msProcessUnsetEnv(name) !== 0.0;
+	}
+}
+
+export const platform: string = msProcessPlatform();
+
+const WIN_EXE_EXTS: string[] = [".exe", ".cmd", ".bat"];
+
+function hasWinExeSuffix(cmd: string): boolean {
+	if (cmd.length < 4) return false;
+	const tail = cmd.slice(cmd.length - 4, cmd.length).toLowerCase();
+	for (const ext of WIN_EXE_EXTS) {
+		if (tail === ext) return true;
+	}
+	return false;
+}
+
+export function findOnPath(cmd: string): string {
+	if (cmd === "") return "";
+	const isWin = platform === "windows";
+
+	if (cmd.indexOf("/") >= 0 || cmd.indexOf("\\") >= 0) {
+		if (isExecutable(cmd)) return cmd;
+		if (isWin && !hasWinExeSuffix(cmd)) {
+			for (const ext of WIN_EXE_EXTS) {
+				const candidate = cmd + ext;
+				if (isExecutable(candidate)) return candidate;
+			}
+		}
+		return "";
+	}
+
+	const pathEnv = env.get("PATH");
+	if (pathEnv === "") return "";
+	const sep = isWin ? ";" : ":";
+	const alreadyHasExt = isWin && hasWinExeSuffix(cmd);
+	for (const dir of pathEnv.split(sep)) {
+		if (dir === "") continue;
+		if (isWin) {
+			if (alreadyHasExt) {
+				const candidate = dir + "/" + cmd;
+				if (isExecutable(candidate)) return candidate;
+			} else {
+				for (const ext of WIN_EXE_EXTS) {
+					const candidate = dir + "/" + cmd + ext;
+					if (isExecutable(candidate)) return candidate;
+				}
+			}
+		} else {
+			const candidate = dir + "/" + cmd;
+			if (isExecutable(candidate)) return candidate;
+		}
+	}
+	return "";
+}
+
+export function cmdExists(cmd: string): boolean {
+	return findOnPath(cmd) !== "";
+}
