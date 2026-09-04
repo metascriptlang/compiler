@@ -2,7 +2,7 @@
 // AST expression nodes → typed bytecode instructions.
 
 import {
-	Node, NodeKind, NodeFlag, TypeKind, SymbolKind,
+	Node, NodeKind, NodeFlag, TypeKind, SymbolKind, Symbol,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BinaryExprData, UnaryExprData,
 	CallExprData, IdentifierData, MemberExprData,
@@ -13,6 +13,7 @@ import {
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC } from "../../raiser/bytecode";
 import { raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
+import { lookupHostFn } from "../../raiser/hostRegistry";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
 	resolveFunc, isLocalString, isEnumName, findEnumConstant,
@@ -30,6 +31,19 @@ function numberIsFloat(v: number): boolean {
 		if (s.slice(i, i + 1) === ".") return true;
 	}
 	return false;
+}
+
+// A CallHost the registry cannot serve would only fail at macro RUN time
+// ("Unknown host function"). The host table is loaded before bytecodegen
+// (transformForEngine), so resolve the bridge NOW and report a missing one
+// at the call site with a span — the procIsCallback-resolved-at-codegen
+// shape, one phase earlier than the reference needs it.
+function checkHostBridgeCoverage(sym: Symbol, callee: Node): void {
+	if (lookupHostFn(sym.nativeName) === null) {
+		queueRaiserCompileError(
+			`no host bridge for '${sym.nativeName}' — the extern is declared in std but nothing registers it (hostTable.ms)`,
+			callee.location.line, callee.location.column);
+	}
 }
 
 // --- Operator → Opcode mapping ---
@@ -637,9 +651,12 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 	// (extern decl) becomes a CallHost lookup at the registered name. New
 	// stdlib externs need zero codegen edits — they self-register through
 	// hostTable.ms which feeds the registry consulted at dispatch time.
+	// An extern nobody registered would only die at runtime ("Unknown host
+	// function") — catch it here, at the call site, with a span.
 	if (d.callee.kind === NodeKind.Identifier && d.callee.resolvedSym !== null) {
 		const sym = d.callee.resolvedSym;
 		if (sym.nativeName !== "") {
+			checkHostBridgeCoverage(sym, d.callee);
 			const dest = allocReg(s);
 			emitCallArgs(s, dest, d.arguments);
 			const nameIdx = addConst(s, raiserString(sym.nativeName));
@@ -658,6 +675,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 	if (d.callee.kind === NodeKind.MemberExpr && d.callee.resolvedSym !== null) {
 		const sym = d.callee.resolvedSym;
 		if (sym.nativeName !== "") {
+			checkHostBridgeCoverage(sym, d.callee);
 			const isStatic = (node.flags & NodeFlag.ExtStatic) !== 0;
 			const md = d.callee.data as MemberExprData;
 			const allArgs: Node[] = [];

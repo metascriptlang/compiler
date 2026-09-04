@@ -139,3 +139,4 @@ import "./bug122JsTestAwait";
 import "./bug123ArrowExprReturnCheck";
 import "./bug123RmsSharedStringTier";
 import "./bug124RaiserSilentNil";
+import "./bug125RaiserMissingBridgeSpan";
