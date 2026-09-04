@@ -252,11 +252,23 @@ stdlib, because they have nothing to delegate to.
   whose `seen.join("; ")` had no raiser-tier `join`. One Tier-2 `join` in
   `index.rms` unblocked the entire target: `console.log`, functions, `for..of`,
   interfaces, `match`+enum, `Result`+`try`, classes, closure capture and
-  generics all run. Next wall is **`std/fs` — no `.ms` and no `.rms`**, only
-  `index.cms`/`index.jms`, so `Cannot resolve import 'std/fs'` stops every
-  compiler module above the lexer even though all 14 `msFs*` bridges already
-  exist in `hostTable.ms`. `process.exit` is a second hole: it routes to
-  `msExit`, which is not in the host table (`Unknown host function: msExit`).
+  generics all run. `std/fs` and `std/process` now carry full raiser tiers
+  over their host bridges; `exit` is intercepted at the call site into a
+  `Halt` (Nim's VM has no quit op) and `cmdRunRaiser` propagates the VM exit
+  value as msc's exit code. `cmdRunRaiser` also loads the host table BEFORE
+  `generateRaiserProject` (the bridge-coverage check resolves at the call
+  site) and prints queued bytecode-compile errors as warnings — comptime
+  parity: std bodies the program never calls can contain unbridgeable
+  externs, so they are reported, not fatal. `src/checker/checkPass.ms`
+  compiles and runs clean this way. Next wall for the whole compiler:
+  **`std/io` (no bridge at all), `std/compress/zip`, `std/crypto`** —
+  "Cannot resolve import".
+- **Cross-module const inlining drops bridge calls** (measured 2026-09-04):
+  `export const platform = msProcessPlatform()` inlines to nil at a
+  cross-module use site (warning: "cannot evaluate 'platform'"), while the
+  same const works same-module and a wrapper function works cross-module.
+  `argv` (array const) survives; the string const does not. Unfixed — every
+  raiser-tier const initialized from an extern is affected.
 
 ## Execution budget — back-edges, not instructions
 
