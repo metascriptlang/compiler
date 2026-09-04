@@ -136,6 +136,15 @@ Implement I32/U32/U64/F32 variants currently only on paper. Compiler `kind` info
 
 Tighten `vmDispatch.c` to direct-threaded code (next-instruction loaded inside each handler, no central `while` loop). Expected speedup: 1.3×.
 
+### Phase 5 — Call-path work (PLANNED; folded from the retired docs/RAISER.md HashLink-era list)
+
+- `Call0`–`Call4` specialized opcodes — arity-specialized call entries, less
+  argument-marshalling overhead in the dispatch loop.
+- `CallExtern` — call linked C natives directly via function pointers,
+  replacing the per-name MS bridge wrappers for true externs. This is the
+  build-time-generated `{name, fnPtr, sigTag}` table docs/PIPELINE.md
+  originally sketched; see its §CallHost for the current mechanism.
+
 ---
 
 ## Light Table IDE Backend (PLANNED)
@@ -167,13 +176,75 @@ Open questions deferred until Phase 1 ships:
 
 ---
 
+## std Access — three tiers, scope is per role
+
+How a std operation gets executed in Raiser. Today four mechanisms answer this
+question and none is the source of truth, which is why 21 of the 38 externs
+declared in `.rms` are dead (they resolve to nothing and the identifier arm
+silently emits `LoadConst nil`). The intended model:
+
+| Tier | What | Admission test |
+|---|---|---|
+| 0 | VM opcode | not expressible in MS — string identity/length/index, array index/len/push, arithmetic. Chosen for **representation**, never for speed |
+| 1 | Host bridge (`CallHost`) | needs host **state or representation** — fs, process, env, string↔bytes. One hand-maintained table, every entry carries a written reason |
+| 2 | Portable MS (`std/core/string/shared.ms`) | everything derivable — shared **structurally** with the C and JS backends |
+
+Rule: an operation lands in the **lowest tier that can express it**; Tier 1
+needs a written justification.
+
+**Scope is per role, not global.** The bridge table lives in
+`src/compiler/meta/hostTable.ms` — compiler-side, not VM-side — so it is
+role-1 infrastructure by construction:
+
+| Role | Tier 1 surface |
+|---|---|
+| 1 (comptime) | wide — fs (14/14), process, env. The host compiler is always present |
+| 2 (IDE eval) | same host is present; surface follows role 1 |
+| 3 (sandbox), 4 (game logic) | **minimal, supplied by the embedder** — there is no host compiler to borrow std from. This is the AngelScript/Squirrel shape already chosen for role 4 |
+
+Consequence: any design that answers "Raiser needs operation X" with "add a
+bridge" is a role-1-only answer. Roles 3/4 need Tier 2 to actually carry the
+stdlib, because they have nothing to delegate to.
+
+**Known gaps** (measured, not guessed):
+
+- `.rms` is the only backend prelude that does not re-export `shared.ms`
+  (`index.cms:156` and `index.jms:263` both do, same 17 names). It redeclares
+  15 of those as its own externs instead, and its own header claims it
+  "Mirrors std/core/string/index.cms".
+- Generic-array methods (`pop`/`at`/`setLength`/`capacity`/`splice`) are blocked
+  twice over: their `from "&msGenericArrayX"` spelling keeps the `&` inside
+  `Symbol.nativeName` (only the C backend strips it), so the CallHost key can
+  never match; and the VM heap exposes only `Len/Get/Set/Push` — no shrink
+  primitive, so they cannot be written in MS either.
+- Nothing checks that `.rms` externs are covered by the registry or the opcode
+  intercepts, so a new extern goes dead silently.
+
+## Execution budget — back-edges, not instructions
+
+The VM refuses programs that exceed `loopLimit` (default 10M) **loop
+iterations** — backward `Jump` instructions — not raw instructions. Recursion
+is bounded separately (`MAX_CALL_DEPTH` = 1024) and straight-line code is
+finite by construction, so back-edges are the only unbounded source worth
+budgeting. Reference parity: `maxLoopIterationsVM` decrements only inside
+`handleJmpBack`, with `maxCallDepthVM` beside it.
+
+Why the unit matters: a per-instruction budget taxes MS-implemented std by the
+loop BODY length — an identical comptime `startsWith` folded at N=450k via a
+host bridge but died at N=35k as pure MS (15×, measured 2026-09-04), making
+"foldable" depend on which tier supplied a function. Escape hatch:
+`--max-vm-iterations=<n>` (options.ms → `setDefaultLoopLimit`), named in the
+error message. `vmCallFunction` resets the counter per entry, so each macro
+invocation gets a fresh budget.
+
 ## Out of scope (intentional)
 
 | Feature | Why skipped |
 |---|---|
 | JIT (x64/aarch64 codegen) | 18–30 month investment; static types close most of the perf gap without it |
 | Tracing GC | Diverges from the C backend's deterministic destruction (`defer`/destructors fire at different times) → breaks multi-target parity. Long-lived roles (2, 4) use **ORC** instead — see Memory Model |
-| Threading runtime, sockets, regex, file I/O | Use C/JS backends — Raiser is not a general runtime |
+| Threading runtime, sockets, regex | Use C/JS backends — Raiser is not a general runtime |
+| File I/O **for roles 2/3/4** | Role 1 DOES get fs (a macro must read files at compile time) — see "std Access" below. Scope is per role, not global |
 | Async/await event loop | Synchronous eval is sufficient for comptime + IDE eval-form |
 | 60fps render loop | Wrong target — needs JIT. Role #4 is the game-*logic* scripting layer (Lua niche), not the render loop |
 | Bytecode binary (`.rsr` files) | Defer until opcode numbering stabilizes after Phase 1–3 |
