@@ -1423,6 +1423,59 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expectedType: Type | null, explicitArg: string, ctx: CheckerContext, node: Node): Type {
 	let returnType = fnType.typeReturn;
 	if (returnType === null) return inferredType();
+	// Multi-arg form `f<A, B>(...)` binds generic params positionally (parity:
+	// explicitGenericInstantiation → setGenericParams + matchGenericParams in
+	// the reference). The single-arg path below only binds the first generic
+	// param found in the return type, so route multi-arg through explicit
+	// positional bindings instead — `Result.ok<int32, string>(5)` needs both.
+	const argNames = splitTopLevel(explicitArg, ",");
+	if (argNames.length > 1) {
+		let genericNames: string[] = [];
+		if (node.resolvedSym !== null) {
+			genericNames = extractGenericNames(getGenericDeclFlags(node.resolvedSym.declNode));
+		}
+		if (genericNames.length === 0) {
+			const cd = node.data as CallExprData;
+			if (cd.callee !== null && cd.callee.kind === NodeKind.MemberExpr) {
+				const me = cd.callee.data as MemberExprData;
+				if (me.object !== null && me.object.kind === NodeKind.Identifier) {
+					const classParams = getGenericDecl((me.object.data as IdentifierData).name);
+					if (classParams !== "") {
+						genericNames = extractGenericNames("gen:" + classParams);
+					}
+				}
+			}
+		}
+		if (genericNames.length === 0) {
+			return inferGenericReturn(ctx, fnType, argTypes, expectedType, node);
+		}
+		const eb = createUnifyBindings();
+		for (let i = 0; i < argNames.length && i < genericNames.length; i += 1) {
+			const argName = argNames[i].trim();
+			if (argName === "") continue;
+			const resolved = resolveAnnotation(argName, ctx, node.location.line, node.location.column);
+			if (resolved !== null && !isUnresolvedType(resolved)) {
+				eb.names.push(genericNames[i]);
+				eb.types.push(resolved);
+			}
+		}
+		if (eb.names.length === 0) {
+			return inferGenericReturn(ctx, fnType, argTypes, expectedType, node);
+		}
+		returnType = applySubstitutions(returnType, eb);
+		if (returnType.kind === TypeKind.GenericInstance && returnType.typeReturn === null) {
+			const declParams = getGenericDecl(returnType.typeName);
+			if (declParams !== "") {
+				instantiateGenericBody(returnType, declParams);
+			}
+		}
+		if (ctx.inGenericContext === 0 && hasGenericParams(returnType)) {
+			const unbound = findFirstGenericParamName(returnType);
+			addError(ctx, "cannot instantiate: '" + unbound + "' — annotate the destination type or pass an explicit type argument", node.location.line, node.location.column);
+			return errorType();
+		}
+		return returnType;
+	}
 	// Resolve the explicit type arg to an actual type
 	const resolvedSym = lookupSymbol(ctx.table, explicitArg);
 	if (resolvedSym === null) return inferGenericReturn(ctx, fnType, argTypes, expectedType, node);
