@@ -4,7 +4,7 @@
 // formatHover, collectDiagnostics. No I/O, no protocol knowledge.
 // Called by src/lsp/handlers.ms.
 
-import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, ArrayAccessData, BinaryExprData, ConditionalExprData, TypeAssertionData, UpdateExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, HiddenDerefData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, ArrayAccessData, BinaryExprData, ConditionalExprData, TypeAssertionData, UpdateExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, HiddenDerefData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, DecoratedDeclData, MacroDeclData, TestDeclData, ExternDeclData, ExternKind, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, SpreadExprData, NodeFlag, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, noneType, isUnresolvedType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable } from "./types";
 import { ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
@@ -1966,6 +1966,50 @@ function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentS
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
 		const dt = sgGetSymbolDetail(ctx, fd.fnName);
+function sgExternSymbolKind(ek: ExternKind): SymbolKind {
+	return match (ek) {
+		ExternKind.Class => SymbolKind.Class,
+		ExternKind.Interface => SymbolKind.Interface,
+		ExternKind.Struct => SymbolKind.Struct,
+		ExternKind.Type => SymbolKind.TypeAlias,
+		ExternKind.Enum => SymbolKind.Enum,
+		ExternKind.Macro => SymbolKind.Macro,
+		ExternKind.Const | ExternKind.Var | ExternKind.Let => SymbolKind.Variable,
+		_ => SymbolKind.Function,
+	};
+}
+
+function sgCollectPatternNames(pattern: Node, isMutable: boolean, ctx: CheckerContext, result: SgDocumentSymbol[]): void {
+	if (pattern === null) return;
+	if (pattern.kind === NodeKind.Identifier) {
+		const id = pattern.data as IdentifierData;
+		if (id.name === "_") return;
+		const dt = sgGetSymbolDetail(ctx, id.name);
+		result.push({ name: id.name, kind: SymbolKind.Variable, location: pattern.location, detail: dt, isMutable, children: [] });
+		return;
+	}
+	if (pattern.kind === NodeKind.ArrayPattern) {
+		const ap = pattern.data as ArrayPatternData;
+		for (const el of ap.patternElements) sgCollectPatternNames(el, isMutable, ctx, result);
+		return;
+	}
+	if (pattern.kind === NodeKind.ObjectPattern) {
+		const op = pattern.data as ObjectPatternData;
+		for (const prop of op.patternProps) sgCollectPatternNames(prop, isMutable, ctx, result);
+		return;
+	}
+	if (pattern.kind === NodeKind.ObjectPatternProp) {
+		const pp = pattern.data as ObjectPatternPropData;
+		sgCollectPatternNames(pp.propAlias, isMutable, ctx, result);
+		return;
+	}
+	if (pattern.kind === NodeKind.SpreadExpr) {
+		const sp = pattern.data as SpreadExprData;
+		sgCollectPatternNames(sp.spreadArg, isMutable, ctx, result);
+		return;
+	}
+}
+
 		const item: SgDocumentSymbol = { name: fd.fnName, kind: SymbolKind.Function, location: node.location, detail: dt, isMutable: false, children: [] };
 		result.push(item);
 		return;
@@ -2027,6 +2071,37 @@ export function sgCollectSymbolsInFile(ctx: CheckerContext, program: Node): SgDo
 	const result: SgDocumentSymbol[] = [];
 	if (program === null || program.kind !== NodeKind.Program) return result;
 	const pd = program.data as ProgramData;
+	if (node.kind === NodeKind.DecoratedDecl) {
+		const dcd = node.data as DecoratedDeclData;
+		sgCollectOneSymbol(dcd.decoratedNode, ctx, result);
+		return;
+	}
+	if (node.kind === NodeKind.MacroDecl) {
+		const mcd = node.data as MacroDeclData;
+		const sig = "(" + sgJoinFieldNames(mcd.macroDeclParamTypes) + ")" + (mcd.macroDeclReturnType !== "" ? " => " + mcd.macroDeclReturnType : "");
+		const kw = (node.flags & NodeFlag.Converter) !== 0 ? "converter " : "macro ";
+		const item: SgDocumentSymbol = { name: mcd.macroDeclName, kind: SymbolKind.Macro, location: node.location, detail: kw + sig, isMutable: false, children: [] };
+		result.push(item);
+		return;
+	}
+	if (node.kind === NodeKind.TestDecl) {
+		const tsd = node.data as TestDeclData;
+		const item: SgDocumentSymbol = { name: tsd.testName, kind: SymbolKind.Function, location: node.location, detail: "test", isMutable: false, children: [] };
+		result.push(item);
+		return;
+	}
+	if (node.kind === NodeKind.ExternDecl) {
+		const xtd = node.data as ExternDeclData;
+		const mut = xtd.externKind === ExternKind.Var || xtd.externKind === ExternKind.Let;
+		const item: SgDocumentSymbol = { name: xtd.externName, kind: sgExternSymbolKind(xtd.externKind), location: node.location, detail: xtd.externType, isMutable: mut, children: [] };
+		result.push(item);
+		return;
+	}
+	if (node.kind === NodeKind.DestructuringDecl) {
+		const dsd = node.data as DestructuringDeclData;
+		sgCollectPatternNames(dsd.destrPattern, !dsd.destrIsConst, ctx, result);
+		return;
+	}
 	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
 		sgCollectOneSymbol(pd.programStmts[i], ctx, result);
 	}
