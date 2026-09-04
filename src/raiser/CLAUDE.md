@@ -182,7 +182,8 @@ How a std operation gets executed in Raiser. Four mechanisms answer this
 question; the model below is the source of truth, but enforcing it is still
 manual (see Known gaps). Before 2026-09-04, 21 of the 38 externs declared in
 `.rms` were dead — they resolved to nothing and the identifier arm silently
-emits `LoadConst nil`. The model:
+emitted `LoadConst nil` (that arm is now a hard comptime error with a span,
+bug124). The model:
 
 | Tier | What | Admission test |
 |---|---|---|
@@ -220,11 +221,12 @@ stdlib, because they have nothing to delegate to.
   called by an exported function reads as "Undefined variable" inside macro
   bodies even though the C backend compiles it fine. Export the helper and
   add it to the `index.rms` re-export line (see `asciiLower`).
-- Generic-array methods (`pop`/`at`/`setLength`/`capacity`/`splice`) are blocked
-  twice over: their `from "&msGenericArrayX"` spelling keeps the `&` inside
-  `Symbol.nativeName` (only the C backend strips it), so the CallHost key can
-  never match; and the VM heap exposes only `Len/Get/Set/Push` — no shrink
-  primitive, so they cannot be written in MS either.
+- RESOLVED 2026-09-04: generic-array methods are portable MS in
+  `std/core/array/index.rms` over the ArraySetLen opcode (the heap's shrink
+  primitive) + push/index/length; `setLength` is intercepted by the codegen
+  exactly like `push`, so the `'&'`-prefixed extern names never reach
+  CallHost. `capacity` returns the live length (the heap exposes no
+  allocation size).
 - Nothing checks that `.rms` externs are covered by the registry or the opcode
   intercepts, so a new extern goes dead silently.
 
@@ -280,7 +282,6 @@ src/raiser/
   value.ms           -- RaiserValue (boxed today, target untagged), array/object heaps
   module.ms          -- RaiserFunction, RaiserModule, accessors
   vm.ms              -- if/else dispatch loop, boxed register file (Phase 0)
-  vmDispatch.c      -- computed-goto C dispatch (mirrors vm.ms layout exactly)
   disasm.ms          -- bytecode pretty-printer
   repl.ms            -- REPL skeleton — to be expanded into IDE backend (Phase 2/3)
   spike/
@@ -302,7 +303,7 @@ Codegen lives in `src/codegen/raiser/` (separate dir): `context.ms`, `expression
 
 `RaiserInstruction` is a flat interface today. Phase 1d goal: pack to ≤8 bytes per instruction.
 
-### Opcode table (52 today)
+### Opcode table (53 today)
 
 | Family | Count | Notes |
 |---|---|---|
@@ -313,7 +314,7 @@ Codegen lives in `src/codegen/raiser/` (separate dir): `context.ms`, `expression
 | f64 compare-branch | 6 | symmetric to i64 |
 | Bitwise | 6 | And/Or/Xor/Not/Shl/Shr — int32 internally |
 | Control | 5 | Jump (Ax), Call, Ret, Halt, Print |
-| Array | 5 | NewArray, LoadIndex, StoreIndex, ArrayLen, ArrayPush |
+| Array | 6 | NewArray, LoadIndex, StoreIndex, ArrayLen, ArrayPush, ArraySetLen (truncate or nil-extend — the heap's only shrink primitive) |
 | Object | 3 | NewObject, LoadField (string-keyed today), StoreField |
 | String | 6 | ConcatStr, EqStr, NeStr, StrLen, StrCharAt, StrSlice |
 | Indirect | 1 | CallIndirect (func index from register) |
@@ -339,9 +340,14 @@ while (!vm.halted) {
 }
 ```
 
-### Computed-goto fast path (`vmDispatch.c`)
+### Computed-goto fast path (PLANNED — no C mirror exists today)
 
-`vmDispatch.c` mirrors `vm.ms`/`value.ms`/`module.ms` struct layout exactly (see `_RD_*` typedefs in the file). Any field change in those `.ms` files breaks the C dispatch — keep them in sync. Opcode numeric values are mirrored at the top of the C file.
+Dispatch is the `if/else` chain in vm.ms ONLY. The computed-goto C mirror
+(`vmDispatch.c`) described by older versions of this file never landed in
+this repo — when Phase 4 builds it, it must mirror vm.ms/value.ms/module.ms
+struct layouts exactly and keep opcode numbering in sync at the top of the
+C file. Until then, any field change in those `.ms` files has no C mirror
+to update.
 
 ---
 
