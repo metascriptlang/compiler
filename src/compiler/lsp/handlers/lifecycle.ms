@@ -422,6 +422,16 @@ test "returns symbols for file" {
 	assert r.length > 60;
 }
 
+test "outline carries struct, macro and test blocks" {
+	const src = "struct P { x: int32; }\nmacro twice(a: int32): int32 { return a; }\ntest \"it works\" { assert 1 === 1; }";
+	const db = testDb("file:///outline.ms", src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///outline.ms\"}}";
+	const r = handleDocumentSymbol("23", params, db);
+	assert r.indexOf("\"kind\":23") >= 0;
+	assert r.indexOf("\"name\":\"twice\"") >= 0;
+	assert r.indexOf("\"name\":\"it works\"") >= 0;
+}
+
 test "unknown doc returns empty array" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"}}";
@@ -543,6 +553,29 @@ test "phase 6: src/test/fixtures/lsp/phase6TypePredicate.ms type-checks cleanly"
 	const db = testDb(uri, src);
 	const diags = buildDiagnosticsJson(uri, db, lspUriToPath(uri));
 	assert hasNoErrors(diags);
+}
+
+test "outline: src/test/fixtures/lsp/outlineKinds.ms type-checks cleanly" {
+	const src = loadExample("src/test/fixtures/lsp/outlineKinds.ms");
+	assert src.length > 0;
+	const uri = "file:///ex-outline.ms";
+	const db = testDb(uri, src);
+	const diags = buildDiagnosticsJson(uri, db, lspUriToPath(uri));
+	assert hasNoErrors(diags);
+}
+
+test "outline: src/test/fixtures/lsp/outlineKinds.ms reports every decl kind" {
+	const src = loadExample("src/test/fixtures/lsp/outlineKinds.ms");
+	assert src.length > 0;
+	const uri = "file:///ex-outline2.ms";
+	const db = testDb(uri, src);
+	const params = "{\"textDocument\":{\"uri\":\"" + uri + "\"}}";
+	const r = handleDocumentSymbol("24", params, db);
+	assert r.indexOf("\"name\":\"Vec2\"") >= 0;
+	assert r.indexOf("\"name\":\"puts\"") >= 0;
+	assert r.indexOf("\"name\":\"twice\"") >= 0;
+	assert r.indexOf("\"name\":\"x\"") >= 0;
+	assert r.indexOf("\"name\":\"scale doubles both axes\"") >= 0;
 }
 
 test "phase 5: sig help on src/test/fixtures/lsp/phase5Overloads.ms narrows to Square" {

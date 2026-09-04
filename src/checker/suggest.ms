@@ -3373,6 +3373,61 @@ test "function with params" {
 	const fnType = createFunction(params, names, voidType());
 	const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
 	const sigs = sgFormatSignature(sym);
+test "collects test blocks" {
+	const pr = parseSource("test \"adds two numbers\" { assert 1 === 1; }");
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
+	assert symbols.length === 1;
+	assert symbols[0].name === "adds two numbers";
+	assert symbols[0].kind === SymbolKind.Function;
+}
+
+test "collects extern decl" {
+	const pr = parseSource("extern function puts(s: cstring): int32 from \"puts\";");
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
+	assert symbols.length === 1;
+	assert symbols[0].name === "puts";
+	assert symbols[0].kind === SymbolKind.Function;
+}
+
+test "collects destructuring bindings" {
+	const pr = parseSource("interface P { a: int32; b: int32; }\nconst p: P = { a: 1, b: 2 };\nconst { a, b } = p;");
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
+	assert symbols.length === 4;
+	assert symbols[2].name === "a";
+	assert symbols[2].kind === SymbolKind.Variable;
+	assert symbols[3].name === "b";
+	assert !symbols[3].isMutable;
+}
+
+test "collects macro and converter" {
+	const pr = parseSource("macro twice(a: int32): int32 { return a; }\nconverter toInt(n: Node): int32 { return 0; }");
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
+	assert symbols.length === 2;
+	assert symbols[0].name === "twice";
+	assert symbols[0].kind === SymbolKind.Macro;
+	assert symbols[0].detail.slice(0, 5) === "macro";
+	assert symbols[1].name === "toInt";
+	assert symbols[1].detail.slice(0, 9) === "converter";
+}
+
+test "unwraps decorated decl" {
+	const pr = parseSource("@derive(Eq)\nstruct Point { x: int32; }");
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
+	assert symbols.length === 1;
+	assert symbols[0].name === "Point";
+	assert symbols[0].kind === SymbolKind.Struct;
+}
+
 	assert sigs.length === 1;
 	assert sigs[0].label === "log(line: number, msg: string): void";
 	assert sigs[0].paramLabels.length === 2;
