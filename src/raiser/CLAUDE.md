@@ -56,14 +56,20 @@ ORC is **simpler on Raiser than on C**, because VM objects are *self-describing*
 
 No fundamental blocker found.
 
-### Work outline (planned)
+### Work outline — LANDED (measured 2026-09-04)
 
-1. `rc` + color/flags on `RaiserObjectData` / `RaiserArrayData` (today: none).
-2. Free-list / slot recycle on the heaps (today: append-only `push`).
-3. VM `incref` / `decref(handle)`; on `decref → 0`, generic destroy (walk fields, decref refs, recycle slot).
-4. ARC placement: run the Phase-4 analyzer for the Raiser path (parity) **or** VM-intrinsic RC on ref store / overwrite / scope-pop.
-5. Bacon trial-deletion cycle collector over the VM heap (generic trace).
-6. `gcMode` toggle on `RaiserContext`.
+1. `rc` + color on the heap entries — `value.ms:197-198`.
+2. Free-list / slot recycle — `value.ms:203`, `heapAllocArray` reuses before appending.
+3. VM `incref` / `decref` + generic destroy — `rcIncref`/`rcDecref` in `value.ms`.
+4. ARC placement took the **VM-intrinsic** branch (not the Phase-4 analyzer): `vm.ms:126-158`, on ref store / overwrite, gated on `gcMode`.
+5. Bacon trial-deletion cycle collector — `orc.ms`, driven from `vm.ms:145`.
+6. `gcMode` toggle — `createVM(mod, gcMode = "arena")`, `"arena" | "orc"`.
+
+**Not wired to the CLI.** `createContext()` (`context.ms:42`) hardcodes
+`gcMode: "arena"`, and `cmdRunRaiser` builds its VM through it — so
+`--target=raiser` runs with **no reclamation** regardless of workload. Only
+`createVM(mod, "orc")` reaches the collector today. Long-running roles (2/4)
+and any whole-program run need this threaded through `CliOptions` first.
 
 ---
 
@@ -71,7 +77,18 @@ No fundamental blocker found.
 
 ### Phase 0 — Working baseline (DONE)
 
-52 opcodes; generic boxed `RaiserValue` register file; computed-goto C dispatch via `vmDispatch.c`; 1959 tests across rgen + eval. Sufficient for comptime macro execution and small REPL programs. Rough perf: ~50× of C — dominated by per-op heap allocation and pointer indirection.
+57 opcodes; generic boxed `RaiserValue` register file; computed-goto C dispatch via `vmDispatch.c`; 1959 tests across rgen + eval. Sufficient for comptime macro execution and small REPL programs.
+
+Perf, measured 2026-09-04 (`fib(27)`, MIN of 5 rounds, load ~5.8, VM time isolated by subtracting a `fib(1)` run so parse+check+bytecode drops out):
+
+| | time | vs VM |
+|---|---|---|
+| native `--danger` | 3.1 ms | **79×** |
+| native default (`-O0`) | 4.3 ms | **61×** |
+| Raiser VM portion | 245.7 ms | — |
+| Raiser fixed cost (parse+check+bytecode) | 172.6 ms | — |
+
+The older "~50× of C" estimate was optimistic but the right order of magnitude. Dominated by per-op heap allocation and pointer indirection — the Phase 1 targets.
 
 ### Phase 1 — Untagged typed registers (SPIKED — see `spike/`)
 
@@ -229,6 +246,17 @@ stdlib, because they have nothing to delegate to.
   allocation size).
 - Nothing checks that `.rms` externs are covered by the registry or the opcode
   intercepts, so a new extern goes dead silently.
+- Whole-program `--target=raiser`, measured 2026-09-04. The prelude is
+  target-agnostic — all 16 modules of `globalImports()` (`src/checker/prelude.ms:13`)
+  must type-check, and `std/core/json` pulls `serialize/json/accessors.ms`,
+  whose `seen.join("; ")` had no raiser-tier `join`. One Tier-2 `join` in
+  `index.rms` unblocked the entire target: `console.log`, functions, `for..of`,
+  interfaces, `match`+enum, `Result`+`try`, classes, closure capture and
+  generics all run. Next wall is **`std/fs` — no `.ms` and no `.rms`**, only
+  `index.cms`/`index.jms`, so `Cannot resolve import 'std/fs'` stops every
+  compiler module above the lexer even though all 14 `msFs*` bridges already
+  exist in `hostTable.ms`. `process.exit` is a second hole: it routes to
+  `msExit`, which is not in the host table (`Unknown host function: msExit`).
 
 ## Execution budget — back-edges, not instructions
 
