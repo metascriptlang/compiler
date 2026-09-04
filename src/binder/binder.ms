@@ -629,7 +629,16 @@ function bindDeferStmt(state: BinderState, node: Node): void {
 
 function bindAssertStmt(state: BinderState, node: Node): void {
 	const d = node.data as AssertStmtData;
-	if (d.assertExpr !== null) bindExpression(state, d.assertExpr);
+	if (d.assertExpr !== null) {
+		// `assert e;` aborts on the false side, so flow continues only through
+		// the TrueCondition edge — subsequent statements narrow on e exactly
+		// like an `if (e) { ... }` body. The abort label gets the FalseCondition
+		// edge and is dropped unfinished: nothing flows from it.
+		const thenLabel = createBranchLabel();
+		const abortLabel = createBranchLabel();
+		bindCondition(state, d.assertExpr, thenLabel, abortLabel);
+		state.currentFlow = finishFlowLabel(thenLabel);
+	}
 }
 
 function bindTestDecl(state: BinderState, node: Node): void {
@@ -783,6 +792,25 @@ function bindCallExpr(state: BinderState, node: Node): void {
 	for (const arg of d.arguments) {
 		bindExpression(state, arg);
 	}
+	// `exit(...)` never returns (C: exit/msExit, [[noreturn]]). Flow after the
+	// call is dead, so an `if (!r.ok) { exit(1); } r.value` guard narrows the
+	// fall-through path to the ok variant.
+	if (d.callee !== null && isExitCallee(d.callee)) {
+		state.currentFlow = state.unreachableFlow;
+	}
+}
+
+function isExitCallee(callee: Node): boolean {
+	if (callee.kind === NodeKind.Identifier) {
+		return (callee.data as IdentifierData).name === "exit";
+	}
+	if (callee.kind === NodeKind.MemberExpr) {
+		const md = callee.data as MemberExprData;
+		return md.property === "exit" && md.object !== null
+			&& md.object.kind === NodeKind.Identifier
+			&& (md.object.data as IdentifierData).name === "process";
+	}
+	return false;
 }
 
 function bindNewExpr(state: BinderState, node: Node): void {
