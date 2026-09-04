@@ -1,0 +1,152 @@
+// std/compress/zip — Raiser tier. Same contract as zip.cms: miniz kernels
+// are host bridges (hostTable.ms) over the same runtime/compress/zip.c the
+// C tier links; reader/writer state is int64 handles, all Result/object
+// construction stays in portable MS on this side.
+
+import { CompressError, CompressErrorKind, compressError } from "./errors";
+
+export { CompressFormat, CompressError, CompressErrorKind } from "./errors";
+
+// ===== Extern bindings (host bridges) =====
+
+extern function msZipReaderOpen(data: string): int64 from "msZipReaderOpen";
+extern function msZipReaderCount(handle: int64): int32 from "msZipReaderCount";
+extern function msZipReaderEntryName(handle: int64, index: int32): string from "msZipReaderEntryName";
+extern function msZipReaderEntrySize(handle: int64, index: int32): int64 from "msZipReaderEntrySize";
+extern function msZipReaderEntryIsDir(handle: int64, index: int32): int32 from "msZipReaderEntryIsDir";
+extern function msZipReaderExtract(handle: int64, index: int32): string from "msZipReaderExtract";
+extern function msZipReaderClose(handle: int64): void from "msZipReaderClose";
+
+extern function msZipWriterNew(): int64 from "msZipWriterNew";
+extern function msZipWriterAdd(handle: int64, name: string, data: string, level: int32): int32 from "msZipWriterAdd";
+extern function msZipWriterFinalize(handle: int64): string from "msZipWriterFinalize";
+extern function msZipWriterClose(handle: int64): void from "msZipWriterClose";
+
+// ===== Types =====
+
+export interface ZipEntry {
+	name: string;
+	size: int64;
+	isDir: boolean;
+}
+
+export interface ZipReader {
+	handle: int64;
+}
+
+export interface ZipWriter {
+	handle: int64;
+	finalized: boolean;
+}
+
+// ===== Reader API =====
+
+export function openZip(data: string): Result<ZipReader, CompressError> {
+	const h = msZipReaderOpen(data);
+	if (h === 0) {
+		return Result.err(compressError(CompressErrorKind.ZipError, "failed to open zip archive"));
+	}
+	return Result.ok({ handle: h });
+}
+
+export function zipCount(r: ZipReader): int32 {
+	return msZipReaderCount(r.handle);
+}
+
+export function zipEntries(r: ZipReader): ZipEntry[] {
+	const out: ZipEntry[] = [];
+	const n = msZipReaderCount(r.handle);
+	let i: int32 = 0;
+	while (i < n) {
+		out.push({
+			name: msZipReaderEntryName(r.handle, i),
+			size: msZipReaderEntrySize(r.handle, i),
+			isDir: msZipReaderEntryIsDir(r.handle, i) === 1,
+		});
+		i = i + 1;
+	}
+	return out;
+}
+
+export function zipExtract(r: ZipReader, index: int32): Result<string, CompressError> {
+	const isDir = msZipReaderEntryIsDir(r.handle, index);
+	if (isDir < 0) {
+		return Result.err(compressError(CompressErrorKind.ZipError, "invalid entry index"));
+	}
+	if (isDir === 1) return Result.ok("");
+	const expectedSize = msZipReaderEntrySize(r.handle, index);
+	if (expectedSize === 0) return Result.ok("");
+	const data = msZipReaderExtract(r.handle, index);
+	if (data.length === 0) {
+		return Result.err(compressError(CompressErrorKind.ZipError, "failed to extract zip entry"));
+	}
+	return Result.ok(data);
+}
+
+export function zipFindByName(r: ZipReader, name: string): int32 {
+	const n = msZipReaderCount(r.handle);
+	let i: int32 = 0;
+	while (i < n) {
+		if (msZipReaderEntryName(r.handle, i) === name) return i;
+		i = i + 1;
+	}
+	return -1;
+}
+
+export function zipExtractByName(r: ZipReader, name: string): Result<string, CompressError> {
+	const idx = zipFindByName(r, name);
+	if (idx < 0) {
+		return Result.err(compressError(CompressErrorKind.ZipError, "entry not found: " + name));
+	}
+	return zipExtract(r, idx);
+}
+
+export function closeZip(r: ZipReader): void {
+	if (r.handle !== 0) {
+		msZipReaderClose(r.handle);
+		r.handle = 0;
+	}
+}
+
+// ===== Writer API =====
+
+export function newZipWriter(): Result<ZipWriter, CompressError> {
+	const h = msZipWriterNew();
+	if (h === 0) {
+		return Result.err(compressError(CompressErrorKind.OutOfMemory, "failed to create zip writer"));
+	}
+	return Result.ok({ handle: h, finalized: false });
+}
+
+export function zipAdd(w: ZipWriter, name: string, data: string, level: int32 = 6): Result<boolean, CompressError> {
+	if (w.handle === 0 || w.finalized) {
+		return Result.err(compressError(CompressErrorKind.InvalidInput, "writer already closed or finalized"));
+	}
+	const st = msZipWriterAdd(w.handle, name, data, level);
+	if (st < 0) {
+		return Result.err(compressError(CompressErrorKind.ZipError, "zipAdd failed for " + name));
+	}
+	return Result.ok(true);
+}
+
+export function zipFinalize(w: ZipWriter): Result<string, CompressError> {
+	if (w.handle === 0) {
+		return Result.err(compressError(CompressErrorKind.InvalidInput, "writer already closed"));
+	}
+	if (w.finalized) {
+		return Result.err(compressError(CompressErrorKind.InvalidInput, "writer already finalized"));
+	}
+	const out = msZipWriterFinalize(w.handle);
+	w.finalized = true;
+	if (out.length === 0) {
+		return Result.err(compressError(CompressErrorKind.ZipError, "finalize failed"));
+	}
+	return Result.ok(out);
+}
+
+export function closeZipWriter(w: ZipWriter): void {
+	if (w.handle !== 0) {
+		msZipWriterClose(w.handle);
+		w.handle = 0;
+	}
+}
