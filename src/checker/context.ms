@@ -1010,11 +1010,11 @@ export function hasAttachedOps(ops: AttachedOps): boolean {
 // transam/cancel.ms imports this (transam→checker dependency already established).
 
 export class CancelCtx {
-	version: number;
+	version: int32;
 	cancelled: boolean;
 }
 
-export function isCancelled(cancel: CancelCtx, startVersion: number): boolean {
+export function isCancelled(cancel: CancelCtx, startVersion: int32): boolean {
 	if (cancel === null) return false;
 	return cancel.version !== startVersion || cancel.cancelled;
 }
@@ -1134,7 +1134,7 @@ export class CheckerContext {
 	compileDirectives: string; // accumulated @compile args, newline-separated
 	compilerFlags: string;     // accumulated @passC/-iquote args, space-separated (compile-time)
 	cancelCtx: CancelCtx;       // null in batch mode, set for LSP
-	cancelVersion: number;       // version at check start
+	cancelVersion: int32;        // version at check start
 	modulePath: string;          // Implementation parity: source path for name mangling
 	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (reference suggest parity)
 	matchExprDepth: number;      // >0 when inside match expression block arm (return targets match, not function)

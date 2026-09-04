@@ -2634,7 +2634,7 @@ function checkProgramCore(
 	graph: ModuleGraph | null,
 	mod: Module | null,
 	cancelCtx: CancelCtx | null,
-	cancelVersion: number,
+	cancelVersion: int32,
 ): CheckerContext {
 	// Use shared IdentCache from prelude (one cache per compilation)
 	const sharedCache = preludeCtx.table.identCache;
@@ -2717,7 +2717,7 @@ export function checkProgramWithRegistryCancellable(
 	program: Node, registry: ExportRegistry,
 	graph: ModuleGraph, mod: Module,
 	preludeCtx: CheckerContext,
-	cancelCtx: CancelCtx, cancelVersion: number
+	cancelCtx: CancelCtx, cancelVersion: int32
 ): CheckerContext {
 	return checkProgramCore(program, preludeCtx, registry, graph, mod, cancelCtx, cancelVersion);
 }

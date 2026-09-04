@@ -21,8 +21,8 @@ export interface TaDependencyEntry {
 export class TaCacheEntry {
 	key: TaQueryKey;
 	state: TaQueryState;
-	computedAt: number;       // revision when last computed
-	verifiedAt: number;       // revision when last verified green
+	computedAt: int32;      // revision when last computed
+	verifiedAt: int32;      // revision when last verified green
 	durability: TaDurability;
 	dependencies: TaDependencyEntry[];
 	outputHash: number;       // hash of the output (0 in Phase 1)

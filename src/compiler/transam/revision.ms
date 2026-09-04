@@ -37,7 +37,7 @@ export enum TaDurability {
 // ===== Revision — monotonically increasing counter =====
 
 export class TaRevision {
-	value: number;
+	value: int32;
 }
 
 export function createRevision(): TaRevision {
@@ -52,10 +52,10 @@ export function incrementRevision(rev: TaRevision): void {
 
 export interface TaQueryKey {
 	queryKind: TaQueryKind;
-	fileId: number;        // sequential file ID (not content hash in Phase 1)
+	fileId: int32;         // sequential file ID (not content hash in Phase 1)
 }
 
-export function createQueryKey(kind: TaQueryKind, fileId: number): TaQueryKey {
+export function createQueryKey(kind: TaQueryKind, fileId: int32): TaQueryKey {
 	return { queryKind: kind, fileId };
 }
 

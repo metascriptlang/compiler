@@ -18,12 +18,12 @@ export function createCancelContext(): CancelCtx {
 // ===== Cancellation API =====
 
 // Capture version at query start
-export function getCancelVersion(ctx: CancelCtx): number {
+export function getCancelVersion(ctx: CancelCtx): int32 {
 	return ctx.version;
 }
 
 // Check if query should abort (version changed since start)
-export function checkCancel(ctx: CancelCtx, startingVersion: number): boolean {
+export function checkCancel(ctx: CancelCtx, startingVersion: int32): boolean {
 	return ctx.version !== startingVersion || ctx.cancelled;
 }
 

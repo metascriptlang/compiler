@@ -31,13 +31,13 @@ import { TaModuleDepGraph, createModuleDepGraph, getTransitiveDependents, record
 // ===== Callback Registration for Query Executor =====
 // avoids function-type parameters (closure codegen issues)
 
-let registeredExecutor: number = 0;
+let registeredExecutor: number = 0;  // executor fn slot id (hash-keyed)
 
-type TaExecutorFn = (queryKind: number, fileId: number) => number;
+type TaExecutorFn = (queryKind: int32, fileId: int32) => number;
 
 // Internal module-level variable for executor function
-let _executorKind: number = 0;
-let _executorFileId: number = 0;
+let _executorKind: int32 = 0;
+let _executorFileId: int32 = 0;
 let _executorResult: number = 0;
 let _executorCalled: boolean = false;
 
@@ -51,7 +51,7 @@ export function tryMarkGreen(
 	cache: TaCacheStore,
 	fileInput: TaFileInputStore,
 	key: TaQueryKey,
-	currentRevision: number
+	currentRevision: int32
 ): boolean {
 	const entry = cacheGet(cache, key);
 	if (entry === null) return false;
@@ -136,8 +136,8 @@ export function executeQueryWith(
 	fileInput: TaFileInputStore,
 	depStack: TaDependencyStack,
 	key: TaQueryKey,
-	currentRevision: number,
-	outputHash: number,
+	currentRevision: int32,
+	outputHash: number,  // content hash
 	wasComputed: boolean
 ): void {
 	if (!wasComputed) return;
@@ -167,7 +167,7 @@ export function executeQueryWith(
 export function invalidateFile(
 	cache: TaCacheStore,
 	moduleDeps: TaModuleDepGraph,
-	fileId: number
+	fileId: int32
 ): void {
 	markQueriesRedForFile(cache, fileId);
 
@@ -183,7 +183,7 @@ interface TaTestCounter {
 	value: number;
 }
 
-function makeTestDeps(fileId: number, expectedHash: number): TaDependencyEntry[] {
+function makeTestDeps(fileId: int32, expectedHash: number): TaDependencyEntry[] {
 	const deps: TaDependencyEntry[] = [];
 	const dk = createQueryKey(TaQueryKind.FileText, fileId);
 	const de: TaDependencyEntry = { depKey: dk, expectedHash: expectedHash };

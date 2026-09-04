@@ -8,29 +8,29 @@
 // ===== Interned String Storage =====
 
 export interface TaInternEntry {
-	id: number;
+	id: int32;
 	value: string;
 }
 
 export class TaStringInterner {
 	entries: TaInternEntry[];
-	nextId: number;
-	index: HashMap<string, number>;  // string → id (O(1) dedup lookup)
+	nextId: int32;
+	index: HashMap<string, int32>;  // string → id (O(1) dedup lookup)
 }
 
 export function createStringInterner(): TaStringInterner {
 	return {
 		entries: [],
 		nextId: 0,
-		index: new HashMap<string, number>(),
+		index: new HashMap<string, int32>(),
 	};
 }
 
 // ===== Interner API =====
 
 // Intern a string, returning its unique ID. Deduplicates via Map lookup.
-export function internString(interner: TaStringInterner, s: string): number {
-	if (interner.index.has(s)) return interner.index.get(s) as number;
+export function internString(interner: TaStringInterner, s: string): int32 {
+	if (interner.index.has(s)) return interner.index.get(s) as int32;
 	const id = interner.nextId;
 	interner.nextId = interner.nextId + 1;
 	const entry: TaInternEntry = { id: id, value: s };
@@ -40,13 +40,13 @@ export function internString(interner: TaStringInterner, s: string): number {
 }
 
 // Retrieve interned string by ID. O(1) via direct index (id === array index).
-export function lookupInterned(interner: TaStringInterner, id: number): string {
+export function lookupInterned(interner: TaStringInterner, id: int32): string {
 	if (id >= 0 && id < interner.entries.length) return interner.entries[id].value;
 	return "";
 }
 
 // Number of unique interned strings.
-export function internedCount(interner: TaStringInterner): number {
+export function internedCount(interner: TaStringInterner): int32 {
 	return interner.entries.length;
 }
 

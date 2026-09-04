@@ -125,11 +125,11 @@ export class TransAmDb {
 	stdPath: string;
 	resolverConfig: ResolverConfig;
 	preludeCtx: CheckerContext;
-	preprocessCache: HashMap<number, string>;  // fileId → preprocessed source
+	preprocessCache: HashMap<int32, string>;  // fileId → preprocessed source
 	checkInProgress: HashSet<string>;          // cycle guard for macro-dep pre-checks
 }
 
-export function createTransAmDb(cacheCapacity: number): TransAmDb {
+export function createTransAmDb(cacheCapacity: int32): TransAmDb {
 	return {
 		revision: createRevision(),
 		fileInput: createFileInputStore(),
@@ -142,17 +142,17 @@ export function createTransAmDb(cacheCapacity: number): TransAmDb {
 		stdPath: "",
 		resolverConfig: createDefaultConfig(Backend.C, ""),
 		preludeCtx: null as unknown as CheckerContext,
-		preprocessCache: new HashMap<number, string>(),
+		preprocessCache: new HashMap<int32, string>(),
 		checkInProgress: new HashSet<string>(),
 	};
 }
 
 // Cache key offsets for different query types
-function parseNodeKey(fileId: number): number { return fileId; }
-function checkCtxKey(fileId: number): number { return fileId + 10000; }
-function checkNodeKey(fileId: number): number { return fileId + 15000; }
-function transformNodeKey(fileId: number): number { return fileId + 20000; }
-function analyzeNodeKey(fileId: number): number { return fileId + 30000; }
+function parseNodeKey(fileId: int32): int32 { return fileId; }
+function checkCtxKey(fileId: int32): int32 { return fileId + 10000; }
+function checkNodeKey(fileId: int32): int32 { return fileId + 15000; }
+function transformNodeKey(fileId: int32): int32 { return fileId + 20000; }
+function analyzeNodeKey(fileId: int32): int32 { return fileId + 30000; }
 
 // ===== Public API =====
 
@@ -177,7 +177,7 @@ export function dbSetFileText(db: TransAmDb, filePath: string, rawSource: string
 
 // Remove ExportRegistry entries for a file and its transitive dependents
 // G3: Skip std/ paths — their exports are immutable for the session
-function dbInvalidateExports(db: TransAmDb, fileId: number): void {
+function dbInvalidateExports(db: TransAmDb, fileId: int32): void {
 	const path = getFilePath(db.fileInput, fileId);
 	if (path !== "" && !isStdPathFor(db, path)) removeExportEntry(db.exportRegistry, path);
 	resetRegisteredAt(db.moduleDeps, fileId);
@@ -210,12 +210,12 @@ function removeExportEntry(registry: ExportRegistry, path: string): void {
 }
 
 // Count of all files in the DB
-export function dbGetFileCount(db: TransAmDb): number {
+export function dbGetFileCount(db: TransAmDb): int32 {
 	return getFileCount(db.fileInput);
 }
 
 // Get file path by sequential index (0..count-1)
-export function dbGetFilePathByIndex(db: TransAmDb, index: number): string {
+export function dbGetFilePathByIndex(db: TransAmDb, index: int32): string {
 	return getFilePathByIndex(db.fileInput, index);
 }
 
@@ -235,7 +235,7 @@ export function dbGetFilePathByIndex(db: TransAmDb, index: number): string {
 // Trans-Am-backed SourceProvider. When inlineHeaderImports reads a .h file through this
 // provider, the read records a FileText dependency on the current query frame, so the
 // containing Preprocess query auto-invalidates when the .h file changes.
-function createTaSourceProvider(db: TransAmDb, currentFileId: number): SourceProvider {
+function createTaSourceProvider(db: TransAmDb, currentFileId: int32): SourceProvider {
 	return createTaReadProvider((headerPath: string) => {
 		dbEnsureFileLoaded(db, headerPath);
 		const headerId = getFileId(db.fileInput, headerPath);
@@ -380,7 +380,7 @@ function dbRecordDepImports(db: TransAmDb, depPath: string, depProgram: Node): v
 
 // Lazily ensure all files imported by `filePath` have their exports in the registry.
 // Depth-first: processes transitive deps before current (compileModule pattern).
-function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: HashSet<string>, startVersion: number): void {
+function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: HashSet<string>, startVersion: int32): void {
 	// Cycle protection — O(1) Set lookup
 	if (visited.has(filePath)) return;
 	visited.add(filePath);

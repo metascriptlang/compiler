@@ -14,8 +14,10 @@ import { TaDurability } from "./revision";
 export class TaFileEntry {
 	filePath: string;
 	source: string;
+	// A content hash, not an index: it carries taHashString's full 64-bit range
+	// and must NOT be narrowed with the fileId/index fields around it.
 	sourceHash: number;
-	fileId: number;
+	fileId: int32;
 	durability: TaDurability;
 }
 
@@ -23,26 +25,26 @@ export class TaFileEntry {
 
 export class TaFileInputStore {
 	files: TaFileEntry[];
-	nextFileId: number;
-	pathIndex: HashMap<string, number>;  // filePath → array index (O(1) lookup)
+	nextFileId: int32;
+	pathIndex: HashMap<string, int32>;  // filePath → array index (O(1) lookup)
 }
 
 export function createFileInputStore(): TaFileInputStore {
 	return {
 		files: [],
 		nextFileId: 0,
-		pathIndex: new HashMap<string, number>(),
+		pathIndex: new HashMap<string, int32>(),
 	};
 }
 
 // ===== Lookup =====
 
-function findByPath(store: TaFileInputStore, filePath: string): number {
-	if (store.pathIndex.has(filePath)) return store.pathIndex.get(filePath) as number;
+function findByPath(store: TaFileInputStore, filePath: string): int32 {
+	if (store.pathIndex.has(filePath)) return store.pathIndex.get(filePath) as int32;
 	return -1;
 }
 
-function findByFileId(store: TaFileInputStore, fileId: number): number {
+function findByFileId(store: TaFileInputStore, fileId: int32): int32 {
 	// fileId === array index for sequentially assigned IDs
 	if (fileId >= 0 && fileId < store.files.length && store.files[fileId].fileId === fileId) return fileId;
 	// Fallback linear scan for non-sequential IDs
@@ -79,19 +81,20 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 	return true;
 }
 
-export function getFileText(store: TaFileInputStore, fileId: number): string {
+export function getFileText(store: TaFileInputStore, fileId: int32): string {
 	const idx = findByFileId(store, fileId);
 	if (idx < 0) return "";
 	return store.files[idx].source;
 }
 
-export function getFileHash(store: TaFileInputStore, fileId: number): number {
+// Returns the content hash — see TaFileEntry.sourceHash, deliberately not int32.
+export function getFileHash(store: TaFileInputStore, fileId: int32): number {
 	const idx = findByFileId(store, fileId);
 	if (idx < 0) return 0;
 	return store.files[idx].sourceHash;
 }
 
-export function getFileId(store: TaFileInputStore, filePath: string): number {
+export function getFileId(store: TaFileInputStore, filePath: string): int32 {
 	const idx = findByPath(store, filePath);
 	if (idx < 0) return -1;
 	return store.files[idx].fileId;
@@ -102,32 +105,32 @@ export function hasFile(store: TaFileInputStore, filePath: string): boolean {
 }
 
 // Reverse lookup: fileId → file path. Returns "" if not found.
-export function getFilePath(store: TaFileInputStore, fileId: number): string {
+export function getFilePath(store: TaFileInputStore, fileId: int32): string {
 	const idx = findByFileId(store, fileId);
 	if (idx < 0) return "";
 	return store.files[idx].filePath;
 }
 
 // Count of all known files
-export function getFileCount(store: TaFileInputStore): number {
+export function getFileCount(store: TaFileInputStore): int32 {
 	return store.files.length;
 }
 
 // Get file path by sequential index (0..count-1). Returns "" if out of range.
-export function getFilePathByIndex(store: TaFileInputStore, index: number): string {
+export function getFilePathByIndex(store: TaFileInputStore, index: int32): string {
 	if (index < 0 || index >= store.files.length) return "";
 	return store.files[index].filePath;
 }
 
 // ===== Durability =====
 
-export function getFileDurability(store: TaFileInputStore, fileId: number): TaDurability {
+export function getFileDurability(store: TaFileInputStore, fileId: int32): TaDurability {
 	const idx = findByFileId(store, fileId);
 	if (idx < 0) return TaDurability.Low;
 	return store.files[idx].durability;
 }
 
-export function setFileDurability(store: TaFileInputStore, fileId: number, dur: TaDurability): void {
+export function setFileDurability(store: TaFileInputStore, fileId: int32, dur: TaDurability): void {
 	const idx = findByFileId(store, fileId);
 	if (idx >= 0) store.files[idx].durability = dur;
 }

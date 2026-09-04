@@ -11,16 +11,16 @@
 // ===== Types =====
 
 export interface TaDepEdge {
-	importerFileId: number;
-	importedFileId: number;
+	importerFileId: int32;
+	importedFileId: int32;
 }
 
 // ===== Module Dependency Graph =====
 
 export class TaModuleDepGraph {
 	edges: TaDepEdge[];
-	reverseAdj: number[][];  // importedFileId → [importerFileId, ...] for O(1) reverse lookup
-	registeredAt: number[];  // fileId → revision when exports registered (-1 = never)
+	reverseAdj: int32[][];  // importedFileId → [importerFileId, ...] for O(1) reverse lookup
+	registeredAt: int32[];  // fileId → revision when exports registered (-1 = never)
 }
 
 export function createModuleDepGraph(): TaModuleDepGraph {
@@ -29,23 +29,23 @@ export function createModuleDepGraph(): TaModuleDepGraph {
 
 // ===== Export Registration Revision =====
 
-function ensureRegisteredAtCapacity(deps: TaModuleDepGraph, fileId: number): void {
+function ensureRegisteredAtCapacity(deps: TaModuleDepGraph, fileId: int32): void {
 	while (deps.registeredAt.length <= fileId) {
 		deps.registeredAt.push(-1);
 	}
 }
 
-export function getRegisteredAt(deps: TaModuleDepGraph, fileId: number): number {
+export function getRegisteredAt(deps: TaModuleDepGraph, fileId: int32): int32 {
 	if (fileId < 0 || fileId >= deps.registeredAt.length) return -1;
 	return deps.registeredAt[fileId];
 }
 
-export function setRegisteredAt(deps: TaModuleDepGraph, fileId: number, rev: number): void {
+export function setRegisteredAt(deps: TaModuleDepGraph, fileId: int32, rev: int32): void {
 	ensureRegisteredAtCapacity(deps, fileId);
 	deps.registeredAt[fileId] = rev;
 }
 
-export function resetRegisteredAt(deps: TaModuleDepGraph, fileId: number): void {
+export function resetRegisteredAt(deps: TaModuleDepGraph, fileId: int32): void {
 	if (fileId >= 0 && fileId < deps.registeredAt.length) {
 		deps.registeredAt[fileId] = -1;
 	}
@@ -53,7 +53,7 @@ export function resetRegisteredAt(deps: TaModuleDepGraph, fileId: number): void 
 
 // ===== Edge Operations =====
 
-function edgeExists(deps: TaModuleDepGraph, importer: number, imported: number): boolean {
+function edgeExists(deps: TaModuleDepGraph, importer: int32, imported: int32): boolean {
 	// Use reverse index for O(degree) check instead of O(E) edge scan
 	if (imported >= deps.reverseAdj.length) return false;
 	const rev = deps.reverseAdj[imported];
@@ -63,19 +63,19 @@ function edgeExists(deps: TaModuleDepGraph, importer: number, imported: number):
 	return false;
 }
 
-export function recordModuleImport(deps: TaModuleDepGraph, importerFileId: number, importedFileId: number): void {
+export function recordModuleImport(deps: TaModuleDepGraph, importerFileId: int32, importedFileId: int32): void {
 	if (edgeExists(deps, importerFileId, importedFileId)) return;
 	const edge: TaDepEdge = { importerFileId, importedFileId };
 	deps.edges.push(edge);
 	// Maintain reverse adjacency index
 	while (deps.reverseAdj.length <= importedFileId) {
-		const empty: number[] = [];
+		const empty: int32[] = [];
 		deps.reverseAdj.push(empty);
 	}
 	deps.reverseAdj[importedFileId].push(importerFileId);
 }
 
-export function clearImportsFor(deps: TaModuleDepGraph, fileId: number): void {
+export function clearImportsFor(deps: TaModuleDepGraph, fileId: int32): void {
 	// Remove all edges where fileId is the importer + update reverse index
 	let i = deps.edges.length;
 	while (i > 0) {
@@ -108,10 +108,10 @@ export function clearImportsFor(deps: TaModuleDepGraph, fileId: number): void {
 
 // ===== Queries =====
 
-export function getDirectImporters(deps: TaModuleDepGraph, fileId: number): number[] {
+export function getDirectImporters(deps: TaModuleDepGraph, fileId: int32): int32[] {
 	if (fileId < 0 || fileId >= deps.reverseAdj.length) return [];
 	const rev = deps.reverseAdj[fileId];
-	const result: number[] = [];
+	const result: int32[] = [];
 	for (let i = 0; i < rev.length; i = i + 1) {
 		result.push(rev[i]);
 	}
@@ -119,10 +119,10 @@ export function getDirectImporters(deps: TaModuleDepGraph, fileId: number): numb
 }
 
 // BFS: returns all files that transitively depend on the given file
-export function getTransitiveDependents(deps: TaModuleDepGraph, fileId: number): number[] {
-	const result: number[] = [];
-	const queue: number[] = [];
-	const visited: HashSet<number> = new HashSet<number>();
+export function getTransitiveDependents(deps: TaModuleDepGraph, fileId: int32): int32[] {
+	const result: int32[] = [];
+	const queue: int32[] = [];
+	const visited: HashSet<int32> = new HashSet<int32>();
 	visited.add(fileId);  // don't include seed in results
 	queue.push(fileId);
 
@@ -143,8 +143,8 @@ export function getTransitiveDependents(deps: TaModuleDepGraph, fileId: number):
 // ===== Forward Edge Queries =====
 
 // Get all fileIds that `fileId` imports (forward edges)
-export function getDirectImports(deps: TaModuleDepGraph, fileId: number): number[] {
-	const result: number[] = [];
+export function getDirectImports(deps: TaModuleDepGraph, fileId: int32): int32[] {
+	const result: int32[] = [];
 	for (const edge of deps.edges) {
 		if (edge.importerFileId === fileId) {
 			result.push(edge.importedFileId);
@@ -155,29 +155,29 @@ export function getDirectImports(deps: TaModuleDepGraph, fileId: number): number
 
 // Detect if importing `targetId` from `sourceId` creates a cycle.
 // DFS from targetId following forward edges. Returns cycle path if reaches sourceId, [] otherwise.
-export function detectCycle(deps: TaModuleDepGraph, sourceId: number, targetId: number): number[] {
+export function detectCycle(deps: TaModuleDepGraph, sourceId: int32, targetId: int32): int32[] {
 	if (sourceId === targetId) return [sourceId];
-	const visited: number[] = [];
-	const stack: number[] = [];
-	const parent: number[] = [];
+	const visited: int32[] = [];
+	const stack: int32[] = [];
+	const parent: int32[] = [];
 	stack.push(targetId);
 	parent.push(-1);
 
 	while (stack.length > 0) {
 		const current = stack.pop();
 		const _parent = parent.pop();
-		if (numberListContains(visited, current)) continue;
+		if (int32ListContains(visited, current)) continue;
 		visited.push(current);
 
 		if (current === sourceId) {
 			// Found cycle — reconstruct path
-			const path: number[] = [sourceId, targetId];
+			const path: int32[] = [sourceId, targetId];
 			return path;
 		}
 
 		const imports = getDirectImports(deps, current);
 		for (let i = 0; i < imports.length; i = i + 1) {
-			if (!numberListContains(visited, imports[i])) {
+			if (!int32ListContains(visited, imports[i])) {
 				stack.push(imports[i]);
 				parent.push(current);
 			}
@@ -188,7 +188,7 @@ export function detectCycle(deps: TaModuleDepGraph, sourceId: number, targetId: 
 
 // ===== Helpers =====
 
-function numberListContains(list: number[], val: number): boolean {
+function int32ListContains(list: int32[], val: int32): boolean {
 	for (let i = 0; i < list.length; i = i + 1) {
 		if (list[i] === val) return true;
 	}
@@ -229,8 +229,8 @@ test "transitive: A->B->C" {
 	const result = getTransitiveDependents(deps, 2);
 	assert result.length === 2;
 	// Both 0 and 1 depend on 2
-	assert numberListContains(result, 0);
-	assert numberListContains(result, 1);
+	assert int32ListContains(result, 0);
+	assert int32ListContains(result, 1);
 }
 
 test "diamond: A->B, A->C, B->D, C->D" {
@@ -241,9 +241,9 @@ test "diamond: A->B, A->C, B->D, C->D" {
 	recordModuleImport(deps, 2, 3);  // C imports D
 	const result = getTransitiveDependents(deps, 3);
 	assert result.length === 3;
-	assert numberListContains(result, 0);
-	assert numberListContains(result, 1);
-	assert numberListContains(result, 2);
+	assert int32ListContains(result, 0);
+	assert int32ListContains(result, 1);
+	assert int32ListContains(result, 2);
 }
 
 test "cycle: A->B->A does not infinite loop" {
@@ -252,7 +252,7 @@ test "cycle: A->B->A does not infinite loop" {
 	recordModuleImport(deps, 1, 0);  // B imports A
 	const result = getTransitiveDependents(deps, 0);
 	assert result.length === 1;
-	assert numberListContains(result, 1);
+	assert int32ListContains(result, 1);
 }
 
 test "no dependents" {

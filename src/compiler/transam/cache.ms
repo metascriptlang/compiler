@@ -13,25 +13,25 @@ import { TaCacheEntry, createCacheEntry } from "./query";
 
 export class TaCacheStore {
 	entries: TaCacheEntry[];
-	accessCounters: number[];   // parallel: last-access time per entry
-	accessClock: number;            // monotonic clock, incremented on each access
-	capacity: number;
-	fileIndex: HashMap<number, TaCacheEntry[]>;  // fileId → entries for O(1) invalidation
+	accessCounters: int32[];   // parallel: last-access time per entry
+	accessClock: int32;            // monotonic clock, incremented on each access
+	capacity: int32;
+	fileIndex: HashMap<int32, TaCacheEntry[]>;  // fileId → entries for O(1) invalidation
 }
 
-export function createCacheStore(capacity: number): TaCacheStore {
+export function createCacheStore(capacity: int32): TaCacheStore {
 	return {
 		entries: [],
 		accessCounters: [],
 		accessClock: 0,
 		capacity,
-		fileIndex: new HashMap<number, TaCacheEntry[]>(),
+		fileIndex: new HashMap<int32, TaCacheEntry[]>(),
 	};
 }
 
 // ===== Lookup =====
 
-function findIndex(cache: TaCacheStore, key: TaQueryKey): number {
+function findIndex(cache: TaCacheStore, key: TaQueryKey): int32 {
 	for (let i = 0; i < cache.entries.length; i = i + 1) {
 		if (queryKeysEqual(cache.entries[i].key, key)) return i;
 	}
@@ -52,7 +52,7 @@ export function cacheContains(cache: TaCacheStore, key: TaQueryKey): boolean {
 
 // ===== Insert / Update =====
 
-function findEvictIndex(cache: TaCacheStore): number {
+function findEvictIndex(cache: TaCacheStore): int32 {
 	let minAccess = cache.accessCounters[0];
 	let minIdx = 0;
 	for (let i = 1; i < cache.accessCounters.length; i = i + 1) {
@@ -64,7 +64,7 @@ function findEvictIndex(cache: TaCacheStore): number {
 	return minIdx;
 }
 
-function evictAt(cache: TaCacheStore, idx: number): void {
+function evictAt(cache: TaCacheStore, idx: int32): void {
 	// Remove from file index before evicting
 	const evicted = cache.entries[idx];
 	const fid = evicted.key.fileId;
@@ -150,7 +150,7 @@ export function markAllRed(cache: TaCacheStore): void {
 	}
 }
 
-export function markQueriesRedForFile(cache: TaCacheStore, fileId: number): void {
+export function markQueriesRedForFile(cache: TaCacheStore, fileId: int32): void {
 	const indexed = cache.fileIndex.get(fileId);
 	if (indexed === null) return;
 	for (const entry of indexed) {

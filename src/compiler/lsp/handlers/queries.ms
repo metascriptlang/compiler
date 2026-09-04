@@ -294,7 +294,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	// Search transitive dependents only (files that could import this symbol)
 	const defModule = suggest.modulePath !== null && suggest.modulePath !== "" ? suggest.modulePath : path;
 	const targetFileId = getFileId(db.fileInput, path);
-	let depIds: number[] = [];
+	let depIds: int32[] = [];
 	if (targetFileId >= 0) {
 		depIds = getTransitiveDependents(db.moduleDeps, targetFileId);
 	}
