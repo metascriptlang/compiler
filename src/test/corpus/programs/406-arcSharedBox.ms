@@ -1,8 +1,8 @@
-// @maxrss: 40
-// @stdout: arc-shared-box total=112000
+// @maxrss: 20
+// @stdout: arc-shared-box total=3360000
 // @serial
 // @skip-js: Arc<T> has no js binding (atomic-rc box is C-only, PARALOCK tier 2/3) - the generic-substitution Promise mismatch above it was fixed 2026-09-01
-// note: Arc<T> atomic-refcount shared box — the first per-type atomic-rc path in the compiler. 4000 rounds × 4 spawn tasks each take an OWNING reference to one shared Arc<Payload> (return a → atomic incref) and drop the awaited result (atomic decref): concurrent owning rc traffic that a non-atomic refcount corrupts under contention (the reason Rust needs Arc<Mutex<T>>; MS's plain Ref rc is non-atomic, racing the check-then-decrement TOCTOU). createArc tags a Ref with TypeFlag.IsAtomic; classify.ms emits msAtomicIncref/Decref; new Arc(v) lowers to msBoxArc → msAllocArc cell at rc=MS_RC_INCREMENT (Rust convention — msAtomicDecRefIsLast frees when fetch_sub sees old==INC, so the box must NOT start at the rc=0 sole-owner of the non-atomic path). The cell reuses a weak-linkage Arc TypeInfo (ensureArcCellTypeInfo) whose destroyFn is the pointee's destructor — weak so a lifted-closure module can box without the owning-module gating that left PayloadTypeInfo undefined. Flat RSS proves box+pointee free once; total=112000 (4000×4×7) proves the value round-trips. ASAN-clean drc+orc separately (no UAF/double-free under contention); the atomic primitive proven by an 8-thread pthread+TSAN probe.
+// note: Arc<T> atomic-refcount shared box — the first per-type atomic-rc path in the compiler. 120000 rounds x 4 spawn tasks each take an OWNING reference to one shared Arc<Payload> (return a → atomic incref) and drop the awaited result (atomic decref): concurrent owning rc traffic that a non-atomic refcount corrupts under contention (the reason Rust needs Arc<Mutex<T>>; MS's plain Ref rc is non-atomic, racing the check-then-decrement TOCTOU). createArc tags a Ref with TypeFlag.IsAtomic; classify.ms emits msAtomicIncref/Decref; new Arc(v) lowers to msBoxArc → msAllocArc cell at rc=MS_RC_INCREMENT (Rust convention — msAtomicDecRefIsLast frees when fetch_sub sees old==INC, so the box must NOT start at the rc=0 sole-owner of the non-atomic path). The cell reuses a weak-linkage Arc TypeInfo (ensureArcCellTypeInfo) whose destroyFn is the pointee's destructor — weak so a lifted-closure module can box without the owning-module gating that left PayloadTypeInfo undefined. Flat RSS proves box+pointee free once; total=3360000 (120000x4x7) proves the value round-trips. ASAN-clean drc+orc separately (no UAF/double-free under contention); the atomic primitive proven by an 8-thread pthread+TSAN probe. Bound 40-to-20 + rounds 4000-to-120000 (2026-09-04 RSS audit): measured steady-state ~8.4MB (Linux drc), so 20 keeps 2.3x headroom while a spawn-machinery leak (~64B x 480k spawns ~ 30MB) now trips - the old shape was blind under 9KB/round.
 
 // Arc<T> — atomic-refcounted shared box, the first per-type atomic-rc path.
 //
@@ -25,7 +25,7 @@ function fetchShared(a: Arc<Payload>): Arc<Payload> { return a; }
 function main(): void {
 	const a: Arc<Payload> = new Arc({ buf: "arc-shared-payload", n: 7 });
 	let total = 0;
-	for (let round = 0; round < 4000; round = round + 1) {
+	for (let round = 0; round < 120000; round = round + 1) {
 		const h1 = spawn(() => fetchShared(a));
 		const h2 = spawn(() => fetchShared(a));
 		const h3 = spawn(() => fetchShared(a));

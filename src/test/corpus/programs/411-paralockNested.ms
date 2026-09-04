@@ -1,7 +1,7 @@
-// @maxrss: 80
+// @maxrss: 20
 // @stdout: paralock-nested check=
 // @serial
-// note: PARALOCK guard: spawn + actor + async crossed, 20k-iteration massive interleave on the shared worker pool. Standing answer to 'did my change break PARALOCK seamlessly?'. The final marker only prints if the actor tag round-trips. Higher RSS bound — concurrency runtime has a larger steady-state baseline (pool threads + mailboxes).
+// note: PARALOCK guard: spawn + actor + async crossed, 100k-iteration massive interleave on the shared worker pool. Standing answer to 'did my change break PARALOCK seamlessly?'. The final marker only prints if the actor tag round-trips. Bound 80-to-20 + iters 20000-to-100000 (2026-09-04 RSS audit): the concurrency runtime steady-state is ~8.6MB (Linux drc) - the old 80 bound left 71MB slack, blind under 3.9KB/iter; 20 keeps 2.3x platform headroom while a per-iter leak of the churned population (2 spawn futures + actor reply + async chain ~ 570B/iter ~ 34MB) now trips.
 
 // PARALOCK guard — spawn + actor + async crossed, massive, run NATIVELY.
 //
@@ -42,7 +42,7 @@ function main(): void {
 	acc.setTag("paralock-room");
 	let check = 0;
 
-	for (let iter = 0; iter < 20000; iter = iter + 1) {
+	for (let iter = 0; iter < 100000; iter = iter + 1) {
 		// A spawn thunk borrows the enclosing env, so it may only capture const
 		// bindings — snapshot the loop counter before fanning out.
 		const it = iter;
