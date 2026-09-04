@@ -15,7 +15,7 @@ export function bareAfterDelim(s: string, delim: string): string {
 	return result;
 }
 
-export function findChar(s: string, ch: string): number {
+export function findChar(s: string, ch: string): int32 {
 	let depth = 0;
 	for (let i = 0; i < s.length; i += 1) {
 		const c = s.charAt(i);

@@ -568,7 +568,7 @@ export function collectMacro(ctx: CheckerContext, node: Node): void {
 // origin 0 = local decl, 1 = import, 2 = build.ms globalImports inject.
 // A LOWER origin shadows a higher one; two converters for the same pair at the
 // SAME tier is an error — the compiler never chooses between equals.
-export function registerConverter(ctx: CheckerContext, target: string, name: string, origin: int32, line: number, column: number): void {
+export function registerConverter(ctx: CheckerContext, target: string, name: string, origin: int32, line: int32, column: int32): void {
 	ctx.converterTargetByName.set(name, target);
 	if (!ctx.converterTargets.has(target)) { ctx.converterTargetKeys.push(target); }
 	if (ctx.converterTargets.has(target)) {

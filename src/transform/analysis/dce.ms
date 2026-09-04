@@ -523,7 +523,7 @@ export function lowerDCE(program: Node, ctx: TransformContext): Node {
 
 // ===== Test Helper: DCE with checker context =====
 
-function stmtCountWithChecker(input: string, setup: (cc: CheckerContext) => void): number {
+function stmtCountWithChecker(input: string, setup: (cc: CheckerContext) => void): int32 {
 	const result = parseInput(input);
 	if (!result.ok) return -1;
 	const cc = createContext();

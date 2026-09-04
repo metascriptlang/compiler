@@ -58,7 +58,7 @@ function findTopLevelChar(text: string, ch: string): number {
 }
 
 // Parse function type string to resolved Function type
-function resolveFunctionType(text: string, ctx: CheckerContext, line: number, col: number): Type {
+function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let depth = 0;
 	let closeIdx = -1;
 	for (let i = 0; i < text.length; i += 1) {
@@ -154,7 +154,7 @@ function tryBrandIntersection(operandTypes: Type[]): Type | null {
 // Collision policy: error on duplicate name (Nim-style). Operand label flows
 // into error message so user sees which parent / intersection operand introduced
 // the colliding field.
-function appendStructFields(operandStruct: Type, operandLabel: string, accumNames: string[], accumTypes: Type[], ctx: CheckerContext, line: number, col: number): void {
+function appendStructFields(operandStruct: Type, operandLabel: string, accumNames: string[], accumTypes: Type[], ctx: CheckerContext, line: int32, col: int32): void {
 	if (operandStruct.typeNames === null || operandStruct.typeChildren === null) return;
 	for (let pi = 0; pi < operandStruct.typeNames.length; pi += 1) {
 		const fname = operandStruct.typeNames[pi];
@@ -193,14 +193,14 @@ function collectInferParamNames(t: Type | null, acc: string[]): void {
 // One annotation reaches resolveAnnotation once per checker pass, and the
 // passes report DIFFERENT columns for it (declaration start vs the annotation
 // itself), so the key has to be the line, not the position.
-function warnOncePerLine(ctx: CheckerContext, msg: string, line: number, col: number): void {
+function warnOncePerLine(ctx: CheckerContext, msg: string, line: int32, col: int32): void {
 	for (const e of ctx.errors) {
 		if (e.line === line && e.message === msg) return;
 	}
 	addWarning(ctx, msg, line, col);
 }
 
-export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line: number, col: number): Type {
+export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	const t = resolveAnnotation(text, ctx, line, col);
 	if (t.kind === TypeKind.Span) {
 		const elem = t.typeReturn !== null ? typeDisplayName(t.typeReturn) : "T";
@@ -209,7 +209,7 @@ export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line:
 	return t;
 }
 
-export function resolveAnnotation(text: string, ctx: CheckerContext, line: number, col: number): Type {
+export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let trimmed = text.trim();
 	if (trimmed === "") return inferredType();
 	// Strip outer parens that wrap the entire expression (not function type form `(...) => ...`).
@@ -748,7 +748,7 @@ function isValidTypeIdentifier(name: string): boolean {
 	return true;
 }
 
-function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: number, col: number, mangledName: string): Type {
+function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: int32, col: int32, mangledName: string): Type {
 	if (line > 0 && isValidTypeIdentifier(name)
 			&& name.indexOf("__") < 0 && name.indexOf("typeof ") < 0
 			&& name !== "unknown" && name !== "never") {
@@ -1052,7 +1052,7 @@ export function recordGenericTypeInstantiation(baseName: string, genericParams: 
 // ===== Resolve Helpers =====
 
 // Resolve an array of type annotation strings into Type[], matching names 1:1
-function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerContext, line: number, col: number): Type[] {
+function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerContext, line: int32, col: int32): Type[] {
 	const types: Type[] = [];
 	for (let i = 0; i < count; i += 1) {
 		if (i < typeStrs.length && typeStrs[i] !== "") {
@@ -1338,7 +1338,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 }
 
-function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: string, line: number, col: number): void {
+function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: string, line: int32, col: int32): void {
 	addWarning(ctx, "owning self-referential field '" + fieldName + "' in '" + typeName + "': destroy recurses per node — a long chain overflows the stack; for non-owning links use Cursor<" + typeName + "> with an arena/array owner (docs/NIM-REF.md §5)", line, col);
 }
 

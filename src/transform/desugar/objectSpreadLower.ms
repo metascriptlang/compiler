@@ -93,7 +93,7 @@ function hoistSpreadStmt(stmt: Node, ctx: TransformContext): Node[] {
 
 // ===== Stage 2: expand spread entries into per-field member reads =====
 
-function providedLater(d: ObjectLiteralData, idx: number, name: string): boolean {
+function providedLater(d: ObjectLiteralData, idx: int32, name: string): boolean {
 	let j = idx + 1;
 	while (j < d.keys.length) {
 		if (d.keys[j] === name) return true;

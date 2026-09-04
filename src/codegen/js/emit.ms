@@ -13,7 +13,7 @@ import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, sh
 
 export class JSGenerator {
 	buf: string[];
-	indentLevel: number;
+	indentLevel: int32;
 	jsImports: JsImportEntry[];
 	bundleMode: boolean;
 	bundleIsPrelude: boolean; // true if current module is std/core/* (global scope, skip imports)

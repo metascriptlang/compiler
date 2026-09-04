@@ -27,12 +27,12 @@ export enum ErrorSeverity {
 
 export interface ModuleError {
 	message: string;
-	line: number;       // 1-based, 0 = unknown
-	column: number;     // 0-based, 0 = unknown
+	line: int32;        // 1-based, 0 = unknown
+	column: int32;      // 0-based, 0 = unknown
 	severity: ErrorSeverity;
 }
 
-export function createModuleError(message: string, line: number, column: number, severity: ErrorSeverity): ModuleError {
+export function createModuleError(message: string, line: int32, column: int32, severity: ErrorSeverity): ModuleError {
 	return { message, line, column, severity };
 }
 
@@ -64,7 +64,7 @@ export class CircularDep {
 	fromPath: string;    // module that triggered the circular import
 	toPath: string;      // module being imported (already on import stack)
 	cycle: string[];     // full cycle path (for diagnostics)
-	importLine: number;  // line of the import declaration (1-indexed, 0 if unknown)
+	importLine: int32;  // line of the import declaration (1-indexed, 0 if unknown)
 	importNames: string[]; // names being imported
 }
 
@@ -115,7 +115,7 @@ export function findModule(graph: ModuleGraph, path: string): Module {
 	return null as unknown as Module;
 }
 
-export function findModuleIndex(graph: ModuleGraph, path: string): number {
+export function findModuleIndex(graph: ModuleGraph, path: string): int32 {
 	for (let i = 0; i < graph.modulePaths.length; i += 1) {
 		if (graph.modulePaths[i] === path) return i;
 	}

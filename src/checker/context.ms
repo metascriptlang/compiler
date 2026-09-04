@@ -1077,10 +1077,10 @@ export enum Severity {
 // Structured error — standard reference messages always carry line info
 export interface CheckerError {
 	message: string;
-	line: number;    // 1-based, 0 = unknown
-	column: number;  // 1-based (parser convention), 0 = unknown
-	endLine: number; // 1-based, 0 = same as line (single-line range)
-	endColumn: number; // 1-based, 0 = use column+1 (single char)
+	line: int32;    // 1-based, 0 = unknown
+	column: int32;  // 1-based (parser convention), 0 = unknown
+	endLine: int32; // 1-based, 0 = same as line (single-line range)
+	endColumn: int32; // 1-based, 0 = use column+1 (single char)
 	fatal: boolean;  // true = globalError (abort), false = localError (continue)
 	severity: Severity;
 	tags: number;    // LSP DiagnosticTag bitmask (1 = Unnecessary, 2 = Deprecated)
@@ -1258,49 +1258,49 @@ export function isEngineCheckMode(): boolean {
 	return _engineCheckMode;
 }
 
-export function addError(ctx: CheckerContext, msg: string, line: number, col: number): void {
+export function addError(ctx: CheckerContext, msg: string, line: int32, col: int32): void {
 	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: 0, fatal: false, severity: Severity.Error, tags: 0 });
 }
 
 // error with explicit end column — underlines a range (e.g., full identifier)
-export function addErrorRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number): void {
+export function addErrorRange(ctx: CheckerContext, msg: string, line: int32, col: int32, endCol: int32): void {
 	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: endCol, fatal: false, severity: Severity.Error, tags: 0 });
 }
 
 // error with full range (start line:col → end line:col) — for multi-line highlights
-export function addErrorFullRange(ctx: CheckerContext, msg: string, line: number, col: number, endLine: number, endCol: number): void {
+export function addErrorFullRange(ctx: CheckerContext, msg: string, line: int32, col: int32, endLine: int32, endCol: int32): void {
 	ctx.errors.push({ message: msg, line, column: col, endLine, endColumn: endCol, fatal: false, severity: Severity.Error, tags: 0 });
 }
 
 // warning with full range
-export function addWarningFullRange(ctx: CheckerContext, msg: string, line: number, col: number, endLine: number, endCol: number): void {
+export function addWarningFullRange(ctx: CheckerContext, msg: string, line: int32, col: int32, endLine: int32, endCol: int32): void {
 	ctx.errors.push({ message: msg, line, column: col, endLine, endColumn: endCol, fatal: false, severity: Severity.Warning, tags: 0 });
 }
 
 // warning — non-fatal, compilation continues, shown as warning in LSP
-export function addWarning(ctx: CheckerContext, msg: string, line: number, col: number): void {
+export function addWarning(ctx: CheckerContext, msg: string, line: int32, col: int32): void {
 	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: 0, fatal: false, severity: Severity.Warning, tags: 0 });
 }
 
-export function addWarningRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number, tags: number): void {
+export function addWarningRange(ctx: CheckerContext, msg: string, line: int32, col: int32, endCol: int32, tags: number): void {
 	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: endCol, fatal: false, severity: Severity.Warning, tags });
 }
 
 // globalError — fatal, compilation should abort
-export function addFatalError(ctx: CheckerContext, msg: string, line: number, col: number): void {
+export function addFatalError(ctx: CheckerContext, msg: string, line: int32, col: int32): void {
 	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: 0, fatal: true, severity: Severity.Error, tags: 0 });
 }
 
-export function addFatalErrorRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number): void {
+export function addFatalErrorRange(ctx: CheckerContext, msg: string, line: int32, col: int32, endCol: int32): void {
 	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: endCol, fatal: true, severity: Severity.Error, tags: 0 });
 }
 
 // hint — non-fatal, shown as subtle hint in LSP (curly underline + faded when tag=1)
-export function addHint(ctx: CheckerContext, msg: string, line: number, col: number, tags: number): void {
+export function addHint(ctx: CheckerContext, msg: string, line: int32, col: int32, tags: number): void {
 	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: 0, fatal: false, severity: Severity.Hint, tags });
 }
 
-export function addHintRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number, tags: number): void {
+export function addHintRange(ctx: CheckerContext, msg: string, line: int32, col: int32, endCol: int32, tags: number): void {
 	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: endCol, fatal: false, severity: Severity.Hint, tags });
 }
 

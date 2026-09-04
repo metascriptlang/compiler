@@ -382,7 +382,7 @@ function countLinesBefore(text: string, endPos: int32): int32 {
 
 // Parse "{ A, B as C }" into original names and alias pairs.
 interface SpecItem { origName: string; aliasName: string; }
-function parseSpecItems(stmt: string, braceOpen: number, braceClose: number): SpecItem[] {
+function parseSpecItems(stmt: string, braceOpen: int32, braceClose: int32): SpecItem[] {
 	const items: SpecItem[] = [];
 	if (braceOpen < 0 || braceClose <= braceOpen) return items;
 	const parts = stmt.slice(braceOpen + 1, braceClose).split(",");
@@ -495,7 +495,7 @@ function createAndAddModule(graph: ModuleGraph, path: string): void {
 }
 
 // Load .ms source module — DRC-isolated (mod stays in this scope)
-function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProvider, config: ResolverConfig, useConfig: number): boolean {
+function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProvider, config: ResolverConfig, useConfig: int32): boolean {
 	const mod = createModule(path);
 	mod.state = ModuleState.Loading;
 	addModule(graph, mod);
@@ -603,7 +603,7 @@ function canonicalizeStdModule(path: string, stdPath: string, provider: SourcePr
 }
 
 // useConfig: 0 = bare (skip std, .ms only), 1 = full (use ResolverConfig)
-export function loadModule(graph: ModuleGraph, path: string, provider: SourceProvider, config: ResolverConfig, useConfig: number): Result<boolean, string> {
+export function loadModule(graph: ModuleGraph, path: string, provider: SourceProvider, config: ResolverConfig, useConfig: int32): Result<boolean, string> {
 	path = canonicalModulePath(path);
 	path = canonicalizeStdModule(path, config.stdPath, provider);
 	// Already in graph — check if still loading (circular import)
@@ -643,7 +643,7 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 
 // ===== Import Processing =====
 
-function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider: SourceProvider, config: ResolverConfig, useConfig: number): void {
+function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider: SourceProvider, config: ResolverConfig, useConfig: int32): void {
 	const d = node.data as ImportDeclData;
 	const specifier = d.importSource;
 

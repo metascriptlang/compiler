@@ -3706,7 +3706,7 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 	return returnType;
 }
 
-export function checkEnumExhaustiveness(ctx: CheckerContext, enumType: Type, covered: string[], matchLine: number, matchCol: number, discEndCol: number): void {
+export function checkEnumExhaustiveness(ctx: CheckerContext, enumType: Type, covered: string[], matchLine: int32, matchCol: int32, discEndCol: int32): void {
 	for (const member of enumType.typeNames) {
 		let found = false;
 		for (const c of covered) {
@@ -3720,7 +3720,7 @@ export function checkEnumExhaustiveness(ctx: CheckerContext, enumType: Type, cov
 }
 
 // Estimate end column of an expression node (for diagnostic ranges)
-export function estimateExprEndCol(node: Node): number {
+export function estimateExprEndCol(node: Node): int32 {
 	const col = node.location.column;
 	return match (node.kind) {
 		NodeKind.Identifier => col + (node.data as IdentifierData).name.length,

@@ -83,7 +83,7 @@ export function isArcPointeeSendable(t: Type | null): boolean {
 	return isDeepSendable(t, SendLeaf.String as int32);
 }
 
-export function checkArcPointeeSendable(ctx: CheckerContext, pointee: Type, line: number, column: number): void {
+export function checkArcPointeeSendable(ctx: CheckerContext, pointee: Type, line: int32, column: int32): void {
 	if (isArcPointeeSendable(pointee)) return;
 	addError(ctx, `Arc<T> pointee must be deep-immutable data — '${typeDisplayName(pointee)}' contains a reference or array\nSHARE aliases the pointee across threads; shared mutable state is Locked<T> (PARALOCK Amendment I)`,
 		line, column);
@@ -100,7 +100,7 @@ export function isLockedPayloadSendable(t: Type | null): boolean {
 	return isDeepSendable(t, SendLeaf.GenericParam as int32);
 }
 
-export function checkLockedPayloadSendable(ctx: CheckerContext, payload: Type, line: number, column: number): void {
+export function checkLockedPayloadSendable(ctx: CheckerContext, payload: Type, line: int32, column: int32): void {
 	if (isLockedPayloadSendable(payload)) return;
 	addError(ctx, `Locked<T> payload must be plain data — '${typeDisplayName(payload)}' owns memory (string, array or reference)\nthe cell's payload is stored under the lock by value; an owning payload has no destroy-on-store (PARALOCK I22)`,
 		line, column);

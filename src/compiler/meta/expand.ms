@@ -1764,13 +1764,13 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 			const errCol = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "column");
 			const errEndLine = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "endLine");
 			const errEndCol = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "endColumn");
-			const diagLine = errLine.kind === RaiserValueKind.Int ? errLine.intVal : (errLine.kind === RaiserValueKind.Float ? errLine.floatVal as int32 : node.location.line);
-			const diagCol = errCol.kind === RaiserValueKind.Int ? errCol.intVal : (errCol.kind === RaiserValueKind.Float ? errCol.floatVal as int32 : node.location.column);
+			const diagLine = errLine.kind === RaiserValueKind.Int ? errLine.intVal as int32 : (errLine.kind === RaiserValueKind.Float ? errLine.floatVal as int32 : node.location.line);
+			const diagCol = errCol.kind === RaiserValueKind.Int ? errCol.intVal as int32 : (errCol.kind === RaiserValueKind.Float ? errCol.floatVal as int32 : node.location.column);
 			const hasEndLine = errEndLine.kind === RaiserValueKind.Int || errEndLine.kind === RaiserValueKind.Float;
 			const hasEndCol = errEndCol.kind === RaiserValueKind.Int || errEndCol.kind === RaiserValueKind.Float;
 			if (hasEndLine || hasEndCol) {
-				const diagEndLine = hasEndLine ? (errEndLine.kind === RaiserValueKind.Int ? errEndLine.intVal : errEndLine.floatVal as int32) : diagLine;
-				const diagEndCol = hasEndCol ? (errEndCol.kind === RaiserValueKind.Int ? errEndCol.intVal : errEndCol.floatVal as int32) : diagCol + 1;
+				const diagEndLine = hasEndLine ? (errEndLine.kind === RaiserValueKind.Int ? errEndLine.intVal as int32 : errEndLine.floatVal as int32) : diagLine;
+				const diagEndCol = hasEndCol ? (errEndCol.kind === RaiserValueKind.Int ? errEndCol.intVal as int32 : errEndCol.floatVal as int32) : diagCol + 1;
 				addErrorFullRange(ctx, `Macro '${d.macroName}': ${msg}`, diagLine, diagCol, diagEndLine, diagEndCol);
 			} else {
 				addError(ctx, `Macro '${d.macroName}': ${msg}`, diagLine, diagCol);

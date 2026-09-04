@@ -20,7 +20,7 @@ export function lowerDestructuring(program: Node, ctx: TransformContext): Node {
 // Carried onto the synthetic index access so a later capture (lambda lifting)
 // types the env field concretely; without it a destructured closure element
 // defaults to `double`/void* in the captured env.
-function destrElemType(base: Node, i: number): Type {
+function destrElemType(base: Node, i: int32): Type {
 	const t = destrPositionalElemType(base.nodeType, i as int32);
 	return t !== null ? t : (null as unknown as Type);
 }

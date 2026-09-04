@@ -3,7 +3,7 @@
 
 import { Token } from "../lexer/token";
 
-export function formatError(msg: string, line: number, col: number): string {
+export function formatError(msg: string, line: int32, col: int32): string {
 	return `Error at line ${line}, col ${col}: ${msg}`;
 }
 

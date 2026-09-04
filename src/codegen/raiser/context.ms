@@ -18,7 +18,7 @@ import { CheckerError, Severity } from "../../checker/context";
 
 let _raiserCompileErrors: CheckerError[] = [];
 
-export function queueRaiserCompileError(message: string, line: number, column: number): void {
+export function queueRaiserCompileError(message: string, line: int32, column: int32): void {
 	_raiserCompileErrors.push({
 		message: message,
 		line: line,
