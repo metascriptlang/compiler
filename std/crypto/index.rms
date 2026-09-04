@@ -1,0 +1,34 @@
+// std/crypto — Raiser tier. Hash family only (the surface the compiler
+// itself reaches): kernels are host bridges over the same runtime/crypto/
+// hash.c + mbedtls TUs index.cms @compiles into this binary. HMAC, key
+// derivation and the cipher/AEAD submodules are NOT carried on this tier
+// yet — nothing in the compiler imports them.
+
+import { CryptoError, CryptoErrorKind, hashFailed } from "./errors";
+export { CryptoError, CryptoErrorKind, cryptoError } from "./errors";
+
+extern function msCryptoInit(): boolean from "msCryptoInit";
+extern function msCryptoCleanup(): void from "msCryptoCleanup";
+extern function msCryptoHashString(algorithm: string, data: string, encoding: string): string from "msCryptoHashString";
+
+export function init(): boolean {
+	return msCryptoInit();
+}
+
+export function cleanup(): void {
+	msCryptoCleanup();
+}
+
+export function hash(algorithm: string, data: string, encoding: string = "hex"): Result<string, CryptoError> {
+	const result = msCryptoHashString(algorithm, data, encoding);
+	if (result === "") {
+		return Result.err(hashFailed(algorithm, "Hash computation failed"));
+	}
+	return Result.ok(result);
+}
+
+export function sha256(data: string, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha256", data, encoding); }
+export function sha512(data: string, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha512", data, encoding); }
+export function sha384(data: string, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha384", data, encoding); }
+export function sha1(data: string, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha1", data, encoding); }
+export function md5(data: string, encoding: string = "hex"): Result<string, CryptoError> { return hash("md5", data, encoding); }
