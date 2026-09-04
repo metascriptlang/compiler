@@ -65,11 +65,11 @@ No fundamental blocker found.
 5. Bacon trial-deletion cycle collector — `orc.ms`, driven from `vm.ms:145`.
 6. `gcMode` toggle — `createVM(mod, gcMode = "arena")`, `"arena" | "orc"`.
 
-**Not wired to the CLI.** `createContext()` (`context.ms:42`) hardcodes
-`gcMode: "arena"`, and `cmdRunRaiser` builds its VM through it — so
-`--target=raiser` runs with **no reclamation** regardless of workload. Only
-`createVM(mod, "orc")` reaches the collector today. Long-running roles (2/4)
-and any whole-program run need this threaded through `CliOptions` first.
+**CLI reaches it.** `createContext()` (`context.ms:42`) defaults to
+`gcMode: "arena"`, but `cmdRunRaiser` overrides to `"orc"` right after
+(`compile.ms:2317`) — so `--target=raiser` runs refcounted with the cycle
+collector. Anything embedding the VM directly and skipping that override
+(eval helper paths) still gets arena.
 
 ---
 
