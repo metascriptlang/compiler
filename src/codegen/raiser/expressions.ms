@@ -632,6 +632,12 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 		return compileToStringCall(s, node);
 	}
 
+	// exit(code) / process.exit(code) — Nim's VM has no quit op at comptime;
+	// on the run path exit is a Tier-0 concern: halt the VM with the code.
+	if (isExitCall(d.callee) && d.arguments.length === 1) {
+		return compileExitCall(s, node);
+	}
+
 	// str.charAt(i)
 	if (isStringMethod(s, d.callee, "charAt") && d.arguments.length === 1) {
 		return compileStrCharAt(s, node);
@@ -981,6 +987,28 @@ function compileArraySetLenCall(s: RaiserCompState, node: Node): number {
 	const lenReg = compileExpr(s, d.arguments[0]);
 	emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, arrReg, lenReg, 0));
 	return arrReg;
+}
+
+// exit(code) / process.exit(code) — name-based like setLength: the import
+// graph proves the callee, the codegen intercept wins every call site.
+function isExitCall(callee: Node): boolean {
+	if (callee.kind === NodeKind.Identifier) {
+		return (callee.data as IdentifierData).name === "exit";
+	}
+	if (callee.kind === NodeKind.MemberExpr) {
+		const md = callee.data as MemberExprData;
+		if (md.property !== "exit") return false;
+		if (md.object.kind !== NodeKind.Identifier) return false;
+		return (md.object.data as IdentifierData).name === "process";
+	}
+	return false;
+}
+
+function compileExitCall(s: RaiserCompState, node: Node): number {
+	const d = node.data as CallExprData;
+	const codeReg = compileExpr(s, d.arguments[0]);
+	emitInst(s, raiserABC(RaiserOpcode.Halt, codeReg, 0, 0));
+	return codeReg;
 }
 
 // --- String method detection + compilation ---
