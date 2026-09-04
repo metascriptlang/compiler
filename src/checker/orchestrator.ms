@@ -196,6 +196,10 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		const parseState = createState(lr.value);
 		const pr = callStateProgramParser(parseState);
 		tP2Parse = tP2Parse + (performance.now() - _t2p0);
+		if (!pr.ok) {
+			mod.errors.push(createModuleError("Parse: " + pr.error, 0, 0, ErrorSeverity.Error));
+			continue;
+		}
 
 		for (const parseErr of parseState.errors) {
 			mod.errors.push(createModuleError("Parse: " + parseErr, 0, 0, ErrorSeverity.Error));

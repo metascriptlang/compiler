@@ -2203,7 +2203,7 @@ function liftWithChecker(input: string): Node {
 	_globalHookOwners = createNameSet();
 	_globalTypeInfoOwners = createNameSet();
 	const pr = parseInput(input);
-	if (!pr.ok) return pr.value;
+	if (!pr.ok) return null as unknown as Node;
 	const checkerCtx = checkProgram(pr.value);
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	return liftDestructors(pr.value, ctx);
@@ -2236,7 +2236,7 @@ function liftWithCompare(input: string): Node {
 	_globalHookOwners = createNameSet();
 	_globalTypeInfoOwners = createNameSet();
 	const pr = parseInput(input);
-	if (!pr.ok) return pr.value;
+	if (!pr.ok) return null as unknown as Node;
 	const checkerCtx = checkProgram(pr.value);
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const lowered = lowerOperators(pr.value, ctx);

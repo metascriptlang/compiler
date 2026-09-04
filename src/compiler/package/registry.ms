@@ -74,8 +74,13 @@ function parseDeps(depsObj: JsonValue): { keys: string[], values: string[] } {
 	let i = 0;
 	while (i < depsObj.keys.length) {
 		keys.push(depsObj.keys[i]);
-		if (i < depsObj.values.length && depsObj.values[i] !== null && depsObj.values[i].kind === JsonKind.String) {
-			values.push(depsObj.values[i].strVal);
+		if (i < depsObj.values.length) {
+			const el = depsObj.values[i];
+			if (el !== null && el.kind === JsonKind.String) {
+				values.push(el.strVal);
+			} else {
+				values.push("");
+			}
 		} else {
 			values.push("");
 		}
