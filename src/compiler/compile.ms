@@ -47,6 +47,7 @@ import { drainPendingInstances } from "../checker/instantiate";
 import { ResolveSection, DepsSection, defaultResolveSection, loadBuildConfig } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
+import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target } from "./options";
 import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
@@ -2315,6 +2316,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 
 	const ctx = createRaiserContext();
 	ctx.gcMode = "orc";
+	ensureHostTableLoaded();
 	raiserLoad(ctx, raiserMod);
 	const ranOk = raiserExecute(ctx);
 
