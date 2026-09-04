@@ -2,7 +2,7 @@
 
 import { bold, cyan, yellow, dim, green } from "../utils/color";
 
-export const VERSION = "0.2.53";
+export const VERSION = "0.2.54";
 
 export function printUsage(): void {
 	console.log("");
