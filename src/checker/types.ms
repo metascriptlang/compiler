@@ -1598,6 +1598,34 @@ export function destrRestElemType(srcType: Type | null): Type | null {
 	return null;
 }
 
+export function destrObjectRestNames(srcType: Type | null, taken: string[]): string[] {
+	const names: string[] = [];
+	let bt = srcType;
+	if (bt === null) return names;
+	if ((bt.kind === TypeKind.Ref || bt.kind === TypeKind.Var) && bt.typeReturn !== null) bt = bt.typeReturn;
+	if (bt.kind !== TypeKind.Struct) return names;
+	for (const fieldName of bt.typeNames) {
+		let isTaken = false;
+		for (const takenName of taken) {
+			if (takenName === fieldName) isTaken = true;
+		}
+		if (!isTaken) names.push(fieldName);
+	}
+	return names;
+}
+
+export function destrObjectRestType(srcType: Type | null, taken: string[]): Type | null {
+	const names = destrObjectRestNames(srcType, taken);
+	if (names.length === 0) return null;
+	const types: Type[] = [];
+	for (const fieldName of names) {
+		const ft = destrNamedFieldType(srcType, fieldName);
+		if (ft === null) return null;
+		types.push(ft);
+	}
+	return createStruct(anonStructName(names, types), names, types, false);
+}
+
 // StringLiteral: a specific string value as a type (TypeScript parity).
 // Not a singleton — each unique value creates a new instance.
 export function createStringLiteral(value: string): Type {
