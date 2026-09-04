@@ -280,8 +280,15 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			// Nothing the bytecode compiler can execute bound this name (module-
 			// level vars and other non-routine symbols land here). Report it
 			// instead of silently splicing nil into the macro's output.
+			let why = "no local, function, enum constant, or builtin binding reached the bytecode compiler";
+			if (node.resolvedSym === null) why = "symbol did not resolve";
+			else if (node.resolvedSym.symbolKind !== SymbolKind.Variable) why = `symbol kind is ${node.resolvedSym.symbolKind}`;
+			else if (node.resolvedSym.declNode === null) why = "symbol has no declaration node";
+			else if (node.resolvedSym.declNode.kind !== NodeKind.VariableDecl) why = `declaration node is ${node.resolvedSym.declNode.kind}`;
+			else if ((node.resolvedSym.symFlags & SymbolFlag.Mutable) !== 0) why = "symbol is mutable";
+			else if ((node.resolvedSym.declNode.data as VariableDeclData).initializer === null) why = "declaration has no initializer";
 			queueRaiserCompileError(
-				`cannot evaluate '${d.name}' at comptime: no local, function, enum constant, or builtin binding reached the bytecode compiler`,
+				`cannot evaluate '${d.name}' at comptime: ${why}`,
 				node.location.line, node.location.column);
 			const fallback = allocReg(s);
 			emitLoadConst(s, fallback, raiserNil());
