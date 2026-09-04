@@ -80,5 +80,14 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 	}
 }
 
+export function join(this arr: string[], sep: string): string {
+	let out = "";
+	for (let i = 0; i < arr.length; i = i + 1) {
+		if (i > 0) out = out + sep;
+		out = out + arr[i];
+	}
+	return out;
+}
+
 // string ← uint8[] kernel (host bridge; mirrors array/index.cms asString)
 export extern function asString(this arr: uint8[]): string from "msAsString";
