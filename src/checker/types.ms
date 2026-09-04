@@ -964,6 +964,43 @@ export function duSharedFieldOffsetDiffers(unionType: Type | null, fieldName: st
 	return false;
 }
 
+// A field read off a union without narrowing is sound only when EVERY variant
+// declares it with an identical layout prefix. `duSharedFieldOffsetDiffers`
+// never fires for a field that a strict SUBSET of variants declares (a
+// single-variant field meets no conflicting signature), yet reading such a
+// field routes the access to a slot of the declaring variant while another
+// variant may be active — reinterpreted bytes, no runtime check. Maybe unions
+// (payload | null) are exempt: the null side carries no fields and payload
+// reads are governed by the null-check narrowing paths instead.
+export function duFieldRequiresNarrowing(unionType: Type | null, fieldName: string): boolean {
+	if (unionType === null || unionType.typeChildren === null) return false;
+	if (unwrapRefNullUnion(unionType) !== null) return false;
+	let firstSig = "";
+	let found = 0;
+	let variants = 0;
+	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
+		const variant = peelToStruct(unionType.typeChildren[i]);
+		if (variant === null || variant.typeNames === null) return true;
+		variants += 1;
+		let sig = "";
+		let hasField = false;
+		for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
+			const ft = fi < variant.typeChildren.length ? variant.typeChildren[fi] : null;
+			sig = sig + "|" + duLayoutName(ft);
+			if (variant.typeNames[fi] === fieldName) { hasField = true; break; }
+		}
+		if (!hasField) continue;
+		if (found === 0) {
+			firstSig = sig;
+		} else if (sig !== firstSig) {
+			return true;
+		}
+		found += 1;
+	}
+	if (found === 0) return false;
+	return found < variants;
+}
+
 // Find variant index by discriminant enum value name (e.g. "NumLit" or "NodeKind.NumLit").
 // typeNames layout: [discFieldName, key0, key1, ...] — keys start at index 1.
 // Matches both qualified ("Kind.A") and unqualified ("A") against stored keys.
