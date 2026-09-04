@@ -140,3 +140,4 @@ import "./bug123ArrowExprReturnCheck";
 import "./bug123RmsSharedStringTier";
 import "./bug124RaiserSilentNil";
 import "./bug125RaiserMissingBridgeSpan";
+import "./bug126RaiserConstInline";

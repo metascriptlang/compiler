@@ -8,12 +8,13 @@ import {
 	CallExprData, IdentifierData, MemberExprData,
 	ConditionalExprData, TypeAssertionData, UpdateExprData,
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
-	MoveExprData,
+	MoveExprData, VariableDeclData,
 	HiddenDerefData, HiddenStdConvData
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC } from "../../raiser/bytecode";
 import { raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
+import { SymbolFlag } from "../../checker/symbol";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
 	resolveFunc, isLocalString, isEnumName, findEnumConstant,
@@ -262,8 +263,22 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 				emitLoadConst(s, r, raiserInt(funcIdx));
 				return r;
 			}
+			// Module-level const — the reference inlines skConst through the
+			// symbol's defining AST: compile the initializer at the use site.
+			// Consts are immutable by construction, so the value at the
+			// declaration is the value at every use; mutable module vars
+			// keep falling through to the error below.
+			if (node.resolvedSym !== null && node.resolvedSym.symbolKind === SymbolKind.Variable
+				&& node.resolvedSym.declNode !== null
+				&& node.resolvedSym.declNode.kind === NodeKind.VariableDecl
+				&& (node.resolvedSym.symFlags & SymbolFlag.Mutable) === 0) {
+				const vd = node.resolvedSym.declNode.data as VariableDeclData;
+				if (vd.initializer !== null) {
+					return compileExpr(s, vd.initializer);
+				}
+			}
 			// Nothing the bytecode compiler can execute bound this name (module-
-			// level consts and other non-routine symbols land here). Report it
+			// level vars and other non-routine symbols land here). Report it
 			// instead of silently splicing nil into the macro's output.
 			queueRaiserCompileError(
 				`cannot evaluate '${d.name}' at comptime: no local, function, enum constant, or builtin binding reached the bytecode compiler`,
