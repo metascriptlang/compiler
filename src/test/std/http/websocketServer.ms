@@ -152,7 +152,7 @@ function wsUpgradeHandler(req: HttpRequest, res: ServerResponse): void {
 
 test "E2E C: server-side frame recv loop compiles" {
 	const src = `
-function recvLoop(fs: FragState, buf: number[]): int32 {
+function recvLoop(fs: FragState, buf: uint8[]): int32 {
 	// Caller would: recv bytes from fd → parseFrame → processFrame(fs, frame, true).
 	// We exercise the pure compile path here; the I/O wiring is in Photon's
 	// vendor layer.

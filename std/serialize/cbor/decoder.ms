@@ -1,8 +1,8 @@
 // MetaScript CBOR — Decoder (RFC 8949 §3, §5)
 //
 // Reads a byte stream and produces a CborValue tree. Mirrors encoder's design:
-// internal reader uses `number[]`. Public API at index.ms accepts a Buffer
-// and converts to number[] for the reader (one-time linear copy, V1 simple).
+// internal reader uses `uint8[]`. Public API at index.ms accepts a Buffer
+// and converts to uint8[] for the reader (one-time linear copy, V1 simple).
 //
 // V1 scope mirrors encoder:
 //   - Major 0..6 fully supported
@@ -30,7 +30,7 @@ const MAX_DEPTH: number = 1000;
 // Sanity cap on collection lengths declared in the wire. RFC 8949 allows
 // arrays/maps up to 2^64-1 items, but a malicious decoder seeing a
 // declared length of 2^31 with only a few bytes of payload would attempt
-// to push 2 billion items into a number[] and OOM the host. Cap at 100M;
+// to push 2 billion items into a uint8[] and OOM the host. Cap at 100M;
 // any plausible CBOR document fits well below this. Decoder also cross-
 // checks `length <= remaining(r)` (each item is ≥1 byte) to reject
 // length-prefix-without-payload attacks.
@@ -39,7 +39,7 @@ const MAX_COLLECTION_SIZE: number = 100000000;
 // Copy `length` bytes from r.buf[start..start+length] into a freshly-
 // allocated Buffer. Used by both Bytes decoding and the double-precision
 // float decode path; previously inlined in 3 places.
-function bytesToBuffer(src: number[], start: number, length: number): Buffer {
+function bytesToBuffer(src: uint8[], start: number, length: number): Buffer {
 	const buf = Buffer.alloc(length);
 	let i = 0;
 	while (i < length) {
@@ -52,13 +52,13 @@ function bytesToBuffer(src: number[], start: number, length: number): Buffer {
 // --- Reader state ---
 
 export interface CborReader {
-	buf: number[];
+	buf: uint8[];
 	pos: number;
 	error: string;  // empty when no error
 	depth: number;  // recursion depth tracker
 }
 
-export function newCborReader(bytes: number[]): CborReader {
+export function newCborReader(bytes: uint8[]): CborReader {
 	return { buf: bytes, pos: 0, error: "", depth: 0 };
 }
 
@@ -207,7 +207,7 @@ function decodeBytes(r: CborReader, length: number): CborValue {
 // truncated multi-byte sequences (V1: silently drops the trailing partial
 // run; spec strict mode would error). Caller passes the byte source array
 // and the byte range to decode.
-function utf8FromBytes(bytes: number[], start: number, length: number): string {
+function utf8FromBytes(bytes: uint8[], start: number, length: number): string {
 	// All masks/constants declared as int32 so the bitwise ops stay int-typed
 	// throughout. MS's `&` requires integer operands; mixing int32 with a
 	// `number` literal (which defaults to float64) errors at type-check.
@@ -355,8 +355,8 @@ function decodeMapLen(r: CborReader, pairCount: number): CborValue {
 // Append finite-length chunks of major-type `expectedMajor` until break.
 // Chunks must NOT themselves be indefinite (RFC §3.2.3 prohibits nesting).
 // Returns the concatenated byte buffer.
-function readIndefiniteByteChunks(r: CborReader, expectedMajor: number, label: string): number[] {
-	const out: number[] = [];
+function readIndefiniteByteChunks(r: CborReader, expectedMajor: number, label: string): uint8[] {
+	const out: uint8[] = [];
 	while (true) {
 		if (r.error !== "") return out;
 		if (tryConsumeBreak(r)) return out;
@@ -383,7 +383,7 @@ function readIndefiniteByteChunks(r: CborReader, expectedMajor: number, label: s
 			return out;
 		}
 		for (let i = 0; i < length; i = i + 1) {
-			out.push(r.buf[r.pos + i] & 0xff);
+			out.push((r.buf[r.pos + i] & 0xff) as uint8);
 		}
 		r.pos = r.pos + length;
 	}
@@ -612,7 +612,7 @@ function decodeTag(r: CborReader, tagNum: int64): CborValue {
 
 // --- Top-level decode entry ---
 
-export function decodeAll(bytes: number[]): Result<CborValue, string> {
+export function decodeAll(bytes: uint8[]): Result<CborValue, string> {
 	const r = newCborReader(bytes);
 	const v = decodeValue(r);
 	if (r.error !== "") return Result.err(r.error);
@@ -629,7 +629,7 @@ export function decodeAll(bytes: number[]): Result<CborValue, string> {
 // can't live inside a regular function body. Caller asserts both
 // `r.value.kind` and other fields, which doubles as success-check (an
 // errored decode returns cborNull whose kind is CborKind.Null).
-function decOk(bytes: number[]): CborValue {
+function decOk(bytes: uint8[]): CborValue {
 	const r = decodeAll(bytes);
 	if (!r.ok) return cborNull();
 	return r.value;
@@ -830,7 +830,7 @@ test "decode 0xd8 0x20 + text → tag(32, \"http://...\") (URI)" {
 	// 0x20 = 32 (URI tag)
 	// 0x76 = text length 22
 	// then 22 ASCII bytes for "http://www.example.com"
-	const bytes: number[] = [0xd8, 0x20, 0x76,
+	const bytes: uint8[] = [0xd8, 0x20, 0x76,
 		0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, 0x77, 0x77, 0x77, 0x2e,
 		0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d];
 	const v = decOk(bytes);
@@ -848,7 +848,7 @@ test "decode 0x98 0x19 + 25 items → array of 25" {
 	// then 25 single-byte ints (1..25 all fit inline since < 24, except 24, 25 themselves)
 	// Items 1..23 fit inline as 0x01..0x17
 	// Items 24..25 need 2 bytes each: 0x18 0x18, 0x18 0x19
-	const bytes: number[] = [0x98, 0x19,
+	const bytes: uint8[] = [0x98, 0x19,
 		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
 		0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
 		0x15, 0x16, 0x17,                          // 1..23 inline
@@ -1078,7 +1078,7 @@ test "decode oversized map pair count → error" {
 test "decode deep tag chain → error after MAX_DEPTH" {
 	// Build 1001 nested tag-0 wrappers (one over MAX_DEPTH=1000), each tag
 	// taking 1 head byte. Followed by a single int 0 as the deepest payload.
-	const bytes: number[] = [];
+	const bytes: uint8[] = [];
 	let i: number = 0;
 	while (i < 1001) {
 		bytes.push(0xc0);  // tag 0, info 0 inline
@@ -1091,7 +1091,7 @@ test "decode deep tag chain → error after MAX_DEPTH" {
 
 test "decode tag chain just under depth limit succeeds" {
 	// 999 nested tags + int 0 — within MAX_DEPTH.
-	const bytes: number[] = [];
+	const bytes: uint8[] = [];
 	let i: number = 0;
 	while (i < 999) {
 		bytes.push(0xc0);

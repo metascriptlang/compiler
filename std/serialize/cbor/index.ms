@@ -2,8 +2,8 @@
 //
 // Re-exports the public surface from internal modules and provides Buffer-
 // based entry points for end users. Internal encoder/decoder operate on
-// `number[]` for test-harness compatibility; this layer routes Buffer
-// payloads through that internal representation.
+// `uint8[]`; this layer routes Buffer payloads through that internal
+// representation.
 
 import { Buffer } from "std/core/buffer";
 
@@ -108,10 +108,10 @@ export function _cborToStructArray<T>(cv: CborValue, witness: T | null): T[] {
 
 export function decode(buf: Buffer): Result<CborValue, string> {
 	const len = buf.byteLength;
-	const bytes: number[] = [];
+	const bytes: uint8[] = [];
 	let i = 0;
 	while (i < len) {
-		bytes.push(buf.byteAt(i) & 0xff);
+		bytes.push((buf.byteAt(i) & 0xff) as uint8);
 		i = i + 1;
 	}
 	return decodeAll(bytes);

@@ -52,7 +52,7 @@ export enum WsCloseCode {
 
 export interface WsMessage {
 	kind: WsMessageKind;
-	data: number[];          // raw bytes — text frames are also bytes; caller decodes UTF-8 if needed
+	data: uint8[];          // raw bytes — text frames are also bytes; caller decodes UTF-8 if needed
 	closeCode: int32;        // populated only when kind === Close (default 1000 if no code)
 }
 
@@ -64,12 +64,12 @@ export interface WsMessage {
 // fragmentation is in flight.
 
 export interface FragState {
-	fragments: number[];
+	fragments: uint8[];
 	fragOpcode: int32;
 }
 
 export function newFragState(): FragState {
-	const empty: number[] = [];
+	const empty: uint8[] = [];
 	return { fragments: empty, fragOpcode: 0 };
 }
 
@@ -88,17 +88,17 @@ export interface FrameDecision {
 	action: string;
 	message: WsMessage;
 	autoReplyOpcode: int32;     // OPCODE_PONG or OPCODE_CLOSE — caller sends it; 0 = none
-	autoReplyPayload: number[]; // payload for the auto-reply
+	autoReplyPayload: uint8[]; // payload for the auto-reply
 	closeCode: int32;           // for "error" — the close code to send (1002 / 1009 etc.)
 	errorMsg: string;           // for "error" — the error message
 }
 
 function emptyMessage(): WsMessage {
-	const empty: number[] = [];
+	const empty: uint8[] = [];
 	return { kind: WsMessageKind.Text, data: empty, closeCode: 0 };
 }
 
-export function decisionContinue(reply: int32, payload: number[]): FrameDecision {
+export function decisionContinue(reply: int32, payload: uint8[]): FrameDecision {
 	return {
 		action: "continue",
 		message: emptyMessage(),
@@ -110,7 +110,7 @@ export function decisionContinue(reply: int32, payload: number[]): FrameDecision
 }
 
 export function decisionDeliver(msg: WsMessage): FrameDecision {
-	const empty: number[] = [];
+	const empty: uint8[] = [];
 	return {
 		action: "deliver",
 		message: msg,
@@ -121,7 +121,7 @@ export function decisionDeliver(msg: WsMessage): FrameDecision {
 	};
 }
 
-export function decisionDeliveredClose(msg: WsMessage, replyPayload: number[]): FrameDecision {
+export function decisionDeliveredClose(msg: WsMessage, replyPayload: uint8[]): FrameDecision {
 	return {
 		action: "delivered_close",
 		message: msg,
@@ -133,7 +133,7 @@ export function decisionDeliveredClose(msg: WsMessage, replyPayload: number[]): 
 }
 
 export function decisionError(code: int32, msg: string): FrameDecision {
-	const empty: number[] = [];
+	const empty: uint8[] = [];
 	return {
 		action: "error",
 		message: emptyMessage(),
@@ -149,22 +149,22 @@ export function decisionError(code: int32, msg: string): FrameDecision {
 // Shared by the state machine and the handshake recv loop. Exposed so the
 // I/O wrapper can splice frame chunks together without re-implementing them.
 
-export function appendBytes(dst: number[], src: number[]): void {
+export function appendBytes(dst: uint8[], src: uint8[]): void {
 	for (let i: int32 = 0; i < src.length; i = i + 1) {
 		dst.push(src[i]);
 	}
 }
 
-export function dropPrefix(arr: number[], prefixLen: int32): number[] {
-	let out: number[] = [];
+export function dropPrefix(arr: uint8[], prefixLen: int32): uint8[] {
+	let out: uint8[] = [];
 	for (let i: int32 = prefixLen; i < arr.length; i = i + 1) {
 		out.push(arr[i]);
 	}
 	return out;
 }
 
-export function sliceBytes(src: number[], start: int32, end: int32): number[] {
-	let out: number[] = [];
+export function sliceBytes(src: uint8[], start: int32, end: int32): uint8[] {
+	let out: uint8[] = [];
 	for (let i: int32 = start; i < end; i = i + 1) {
 		out.push(src[i]);
 	}
@@ -172,7 +172,7 @@ export function sliceBytes(src: number[], start: int32, end: int32): number[] {
 }
 
 // Find \r\n\r\n in a byte buffer. Returns -1 if not present.
-export function findCRLFCRLF(bytes: number[]): int32 {
+export function findCRLFCRLF(bytes: uint8[]): int32 {
 	const cr: int32 = 0x0D;
 	const lf: int32 = 0x0A;
 	const limit = bytes.length - 3;
@@ -217,7 +217,7 @@ export function processFrame(fs: FragState, f: ParsedFrame, isServerSide: boolea
 		return decisionContinue(OPCODE_PONG, f.payload);
 	}
 	if (f.opcode === OPCODE_PONG) {
-		const empty: number[] = [];
+		const empty: uint8[] = [];
 		return decisionContinue(0, empty);
 	}
 	if (f.opcode === OPCODE_CLOSE) {
@@ -248,13 +248,13 @@ export function processFrame(fs: FragState, f: ParsedFrame, isServerSide: boolea
 		if (f.fin) {
 			const op = fs.fragOpcode;
 			const data = fs.fragments;
-			const empty: number[] = [];
+			const empty: uint8[] = [];
 			fs.fragments = empty;
 			fs.fragOpcode = 0;
 			const kind = op === OPCODE_TEXT ? WsMessageKind.Text : WsMessageKind.Binary;
 			return decisionDeliver({ kind: kind, data: data, closeCode: 0 });
 		}
-		const empty: number[] = [];
+		const empty: uint8[] = [];
 		return decisionContinue(0, empty);
 	}
 
@@ -272,7 +272,7 @@ export function processFrame(fs: FragState, f: ParsedFrame, isServerSide: boolea
 		}
 		fs.fragOpcode = f.opcode;
 		appendBytes(fs.fragments, f.payload);
-		const empty: number[] = [];
+		const empty: uint8[] = [];
 		return decisionContinue(0, empty);
 	}
 
@@ -283,7 +283,7 @@ export function processFrame(fs: FragState, f: ParsedFrame, isServerSide: boolea
 
 // ===== Tests =====
 
-function makeFrame(opcode: int32, fin: boolean, masked: boolean, payload: number[]): ParsedFrame {
+function makeFrame(opcode: int32, fin: boolean, masked: boolean, payload: uint8[]): ParsedFrame {
 	return {
 		fin: fin,
 		opcode: opcode,
@@ -294,7 +294,7 @@ function makeFrame(opcode: int32, fin: boolean, masked: boolean, payload: number
 	};
 }
 
-function bytesEqual(a: number[], b: number[]): boolean {
+function bytesEqual(a: uint8[], b: uint8[]): boolean {
 	if (a.length !== b.length) return false;
 	for (let i: int32 = 0; i < a.length; i = i + 1) {
 		if (a[i] !== b[i]) return false;
@@ -306,7 +306,7 @@ function bytesEqual(a: number[], b: number[]): boolean {
 
 test "processFrame: single Text frame FIN=1 → deliver" {
 	const fs = newFragState();
-	const payload: number[] = [0x68, 0x65, 0x6C, 0x6C, 0x6F];  // "hello"
+	const payload: uint8[] = [0x68, 0x65, 0x6C, 0x6C, 0x6F];  // "hello"
 	const d = processFrame(fs, makeFrame(OPCODE_TEXT, true, false, payload));
 	assert d.action === "deliver";
 	assert d.message.kind === WsMessageKind.Text;
@@ -317,7 +317,7 @@ test "processFrame: single Text frame FIN=1 → deliver" {
 
 test "processFrame: single Binary frame FIN=1 → deliver" {
 	const fs = newFragState();
-	const payload: number[] = [0x01, 0x02, 0x03];
+	const payload: uint8[] = [0x01, 0x02, 0x03];
 	const d = processFrame(fs, makeFrame(OPCODE_BINARY, true, false, payload));
 	assert d.action === "deliver";
 	assert d.message.kind === WsMessageKind.Binary;
@@ -328,7 +328,7 @@ test "processFrame: single Binary frame FIN=1 → deliver" {
 
 test "processFrame: Ping → continue + auto-reply Pong with same payload" {
 	const fs = newFragState();
-	const pingPayload: number[] = [0x01, 0x02, 0x03];
+	const pingPayload: uint8[] = [0x01, 0x02, 0x03];
 	const d = processFrame(fs, makeFrame(OPCODE_PING, true, false, pingPayload));
 	assert d.action === "continue";
 	assert d.autoReplyOpcode === OPCODE_PONG;
@@ -337,7 +337,7 @@ test "processFrame: Ping → continue + auto-reply Pong with same payload" {
 
 test "processFrame: Pong → continue silently (no auto-reply)" {
 	const fs = newFragState();
-	const pongPayload: number[] = [0x42];
+	const pongPayload: uint8[] = [0x42];
 	const d = processFrame(fs, makeFrame(OPCODE_PONG, true, false, pongPayload));
 	assert d.action === "continue";
 	assert d.autoReplyOpcode === 0;
@@ -345,7 +345,7 @@ test "processFrame: Pong → continue silently (no auto-reply)" {
 
 test "processFrame: Close (no payload) → delivered_close, code defaults to 1000" {
 	const fs = newFragState();
-	const empty: number[] = [];
+	const empty: uint8[] = [];
 	const d = processFrame(fs, makeFrame(OPCODE_CLOSE, true, false, empty));
 	assert d.action === "delivered_close";
 	assert d.message.kind === WsMessageKind.Close;
@@ -355,7 +355,7 @@ test "processFrame: Close (no payload) → delivered_close, code defaults to 100
 
 test "processFrame: Close (code 1001 only) → delivered_close, code=1001" {
 	const fs = newFragState();
-	const payload: number[] = [0x03, 0xE9];  // 1001
+	const payload: uint8[] = [0x03, 0xE9];  // 1001
 	const d = processFrame(fs, makeFrame(OPCODE_CLOSE, true, false, payload));
 	assert d.action === "delivered_close";
 	assert d.message.closeCode === 1001;
@@ -363,7 +363,7 @@ test "processFrame: Close (code 1001 only) → delivered_close, code=1001" {
 
 test "processFrame: Close (code + reason) → delivered_close echoes payload" {
 	const fs = newFragState();
-	const payload: number[] = [0x03, 0xE8, 0x62, 0x79, 0x65];  // 1000 + "bye"
+	const payload: uint8[] = [0x03, 0xE8, 0x62, 0x79, 0x65];  // 1000 + "bye"
 	const d = processFrame(fs, makeFrame(OPCODE_CLOSE, true, false, payload));
 	assert d.action === "delivered_close";
 	assert d.message.closeCode === 1000;
@@ -372,7 +372,7 @@ test "processFrame: Close (code + reason) → delivered_close echoes payload" {
 
 test "processFrame: Close with illegal code 1006 → protocol error 1002" {
 	const fs = newFragState();
-	const payload: number[] = [0x03, 0xEE];  // 1006 (Abnormal Closure — wire-illegal)
+	const payload: uint8[] = [0x03, 0xEE];  // 1006 (Abnormal Closure — wire-illegal)
 	const d = processFrame(fs, makeFrame(OPCODE_CLOSE, true, false, payload));
 	assert d.action === "error";
 	assert d.closeCode === (WsCloseCode.ProtocolError as int32);
@@ -380,7 +380,7 @@ test "processFrame: Close with illegal code 1006 → protocol error 1002" {
 
 test "processFrame: Close with illegal code 1015 → protocol error" {
 	const fs = newFragState();
-	const payload: number[] = [0x03, 0xF7];  // 1015 (TLS — wire-illegal)
+	const payload: uint8[] = [0x03, 0xF7];  // 1015 (TLS — wire-illegal)
 	const d = processFrame(fs, makeFrame(OPCODE_CLOSE, true, false, payload));
 	assert d.action === "error";
 }
@@ -389,7 +389,7 @@ test "processFrame: Close with illegal code 1015 → protocol error" {
 
 test "processFrame: server-masked frame → protocol error" {
 	const fs = newFragState();
-	const payload: number[] = [0x68, 0x69];
+	const payload: uint8[] = [0x68, 0x69];
 	const d = processFrame(fs, makeFrame(OPCODE_TEXT, true, true, payload));  // masked=true
 	assert d.action === "error";
 	assert d.closeCode === (WsCloseCode.ProtocolError as int32);
@@ -399,7 +399,7 @@ test "processFrame: server-masked frame → protocol error" {
 
 test "processFrame server-side: masked client frame → deliver" {
 	const fs = newFragState();
-	const payload: number[] = [0x68, 0x65, 0x6C, 0x6C, 0x6F];
+	const payload: uint8[] = [0x68, 0x65, 0x6C, 0x6C, 0x6F];
 	const d = processFrame(fs, makeFrame(OPCODE_TEXT, true, true, payload), true);  // isServerSide=true, masked=true
 	assert d.action === "deliver";
 	assert d.message.kind === WsMessageKind.Text;
@@ -408,7 +408,7 @@ test "processFrame server-side: masked client frame → deliver" {
 
 test "processFrame server-side: unmasked client frame → protocol error" {
 	const fs = newFragState();
-	const payload: number[] = [0x68, 0x69];
+	const payload: uint8[] = [0x68, 0x69];
 	const d = processFrame(fs, makeFrame(OPCODE_TEXT, true, false, payload), true);  // isServerSide=true, masked=false
 	assert d.action === "error";
 	assert d.closeCode === (WsCloseCode.ProtocolError as int32);
@@ -417,7 +417,7 @@ test "processFrame server-side: unmasked client frame → protocol error" {
 
 test "processFrame server-side: ping with masked payload → auto-pong" {
 	const fs = newFragState();
-	const payload: number[] = [0x01, 0x02];
+	const payload: uint8[] = [0x01, 0x02];
 	const d = processFrame(fs, makeFrame(OPCODE_PING, true, true, payload), true);
 	assert d.action === "continue";
 	assert d.autoReplyOpcode === OPCODE_PONG;
@@ -436,7 +436,7 @@ test "processFrame server-side: fragmentation still works with masked frames" {
 
 test "processFrame: fragmented Text — start FIN=0 sets state, no deliver" {
 	const fs = newFragState();
-	const part1: number[] = [0x48, 0x65, 0x6C];  // "Hel"
+	const part1: uint8[] = [0x48, 0x65, 0x6C];  // "Hel"
 	const d = processFrame(fs, makeFrame(OPCODE_TEXT, false, false, part1));
 	assert d.action === "continue";
 	assert fs.fragOpcode === OPCODE_TEXT;
@@ -446,7 +446,7 @@ test "processFrame: fragmented Text — start FIN=0 sets state, no deliver" {
 test "processFrame: fragmented Text — middle Continuation FIN=0 appends, no deliver" {
 	const fs = newFragState();
 	processFrame(fs, makeFrame(OPCODE_TEXT, false, false, [0x48, 0x65, 0x6C]));
-	const part2: number[] = [0x6C, 0x6F];
+	const part2: uint8[] = [0x6C, 0x6F];
 	const d = processFrame(fs, makeFrame(OPCODE_CONTINUATION, false, false, part2));
 	assert d.action === "continue";
 	assert fs.fragOpcode === OPCODE_TEXT;
@@ -456,7 +456,7 @@ test "processFrame: fragmented Text — middle Continuation FIN=0 appends, no de
 test "processFrame: fragmented Text — end Continuation FIN=1 delivers reassembled" {
 	const fs = newFragState();
 	processFrame(fs, makeFrame(OPCODE_TEXT, false, false, [0x48, 0x65, 0x6C]));
-	const part2: number[] = [0x6C, 0x6F];
+	const part2: uint8[] = [0x6C, 0x6F];
 	const d = processFrame(fs, makeFrame(OPCODE_CONTINUATION, true, false, part2));
 	assert d.action === "deliver";
 	assert d.message.kind === WsMessageKind.Text;
@@ -468,9 +468,9 @@ test "processFrame: fragmented Text — end Continuation FIN=1 delivers reassemb
 
 test "processFrame: fragmented Binary multi-part (3 frames) reassembles in order" {
 	const fs = newFragState();
-	const a: number[] = [0x01, 0x02];
-	const b: number[] = [0x03, 0x04];
-	const c: number[] = [0x05, 0x06];
+	const a: uint8[] = [0x01, 0x02];
+	const b: uint8[] = [0x03, 0x04];
+	const c: uint8[] = [0x05, 0x06];
 	processFrame(fs, makeFrame(OPCODE_BINARY, false, false, a));
 	processFrame(fs, makeFrame(OPCODE_CONTINUATION, false, false, b));
 	const d = processFrame(fs, makeFrame(OPCODE_CONTINUATION, true, false, c));
@@ -481,7 +481,7 @@ test "processFrame: fragmented Binary multi-part (3 frames) reassembles in order
 
 test "processFrame: orphan Continuation (no prior data start) → protocol error" {
 	const fs = newFragState();
-	const payload: number[] = [0x01];
+	const payload: uint8[] = [0x01];
 	const d = processFrame(fs, makeFrame(OPCODE_CONTINUATION, true, false, payload));
 	assert d.action === "error";
 	assert d.closeCode === (WsCloseCode.ProtocolError as int32);
@@ -498,7 +498,7 @@ test "processFrame: interleaved data frame during fragmentation → protocol err
 test "processFrame: Ping during fragmentation does NOT clear fragment state" {
 	const fs = newFragState();
 	processFrame(fs, makeFrame(OPCODE_TEXT, false, false, [0x48, 0x65, 0x6C]));
-	const pingPayload: number[] = [0x9A];
+	const pingPayload: uint8[] = [0x9A];
 	const dPing = processFrame(fs, makeFrame(OPCODE_PING, true, false, pingPayload));
 	assert dPing.action === "continue";
 	assert dPing.autoReplyOpcode === OPCODE_PONG;
@@ -521,7 +521,7 @@ test "processFrame: Ping during fragmentation does NOT clear fragment state" {
 
 test "processFrame: fragment START below cap → accepted" {
 	const fs = newFragState();
-	let payload: number[] = [];
+	let payload: uint8[] = [];
 	for (let i: int32 = 0; i < 4; i = i + 1) {
 		payload.push(0);
 	}
@@ -533,56 +533,56 @@ test "processFrame: fragment START below cap → accepted" {
 // ----- Bytes helpers -----
 
 test "appendBytes appends in order" {
-	let dst: number[] = [1, 2];
-	const src: number[] = [3, 4, 5];
+	let dst: uint8[] = [1, 2];
+	const src: uint8[] = [3, 4, 5];
 	appendBytes(dst, src);
 	assert bytesEqual(dst, [1, 2, 3, 4, 5]);
 }
 
 test "appendBytes empty src is no-op" {
-	let dst: number[] = [1, 2, 3];
-	const src: number[] = [];
+	let dst: uint8[] = [1, 2, 3];
+	const src: uint8[] = [];
 	appendBytes(dst, src);
 	assert bytesEqual(dst, [1, 2, 3]);
 }
 
 test "dropPrefix removes leading bytes" {
-	const arr: number[] = [10, 20, 30, 40];
+	const arr: uint8[] = [10, 20, 30, 40];
 	const out = dropPrefix(arr, 2);
 	assert bytesEqual(out, [30, 40]);
 }
 
 test "dropPrefix prefixLen == length yields empty" {
-	const arr: number[] = [1, 2, 3];
+	const arr: uint8[] = [1, 2, 3];
 	const out = dropPrefix(arr, 3);
 	assert out.length === 0;
 }
 
 test "sliceBytes slices half-open range" {
-	const arr: number[] = [10, 20, 30, 40, 50];
+	const arr: uint8[] = [10, 20, 30, 40, 50];
 	const out = sliceBytes(arr, 1, 4);
 	assert bytesEqual(out, [20, 30, 40]);
 }
 
 test "findCRLFCRLF locates separator" {
-	const arr: number[] = [0x41, 0x42, 0x0D, 0x0A, 0x0D, 0x0A, 0x43];
+	const arr: uint8[] = [0x41, 0x42, 0x0D, 0x0A, 0x0D, 0x0A, 0x43];
 	assert findCRLFCRLF(arr) === 2;
 }
 
 test "findCRLFCRLF returns -1 when absent" {
-	const arr: number[] = [0x41, 0x42, 0x43];
+	const arr: uint8[] = [0x41, 0x42, 0x43];
 	assert findCRLFCRLF(arr) === -1;
 }
 
 test "findCRLFCRLF skips a single CRLF" {
-	const arr: number[] = [0x0D, 0x0A, 0x41, 0x0D, 0x0A, 0x42];
+	const arr: uint8[] = [0x0D, 0x0A, 0x41, 0x0D, 0x0A, 0x42];
 	assert findCRLFCRLF(arr) === -1;
 }
 
 // ----- Decision constructor sanity -----
 
 test "decisionContinue carries reply opcode + payload" {
-	const payload: number[] = [0x01];
+	const payload: uint8[] = [0x01];
 	const d = decisionContinue(OPCODE_PONG, payload);
 	assert d.action === "continue";
 	assert d.autoReplyOpcode === OPCODE_PONG;

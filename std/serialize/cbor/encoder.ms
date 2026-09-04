@@ -1,7 +1,7 @@
 // MetaScript CBOR — Encoder (RFC 8949 §3, §4)
 //
 // Walks a CborValue tree and produces the canonical wire byte sequence.
-// Internal builder uses `number[]` (each element 0..255). Public API at
+// Internal builder uses `uint8[]` (1 byte per element). Public API at
 // index.ms wraps this builder and converts the byte array to a Buffer for
 // the user.
 //
@@ -26,7 +26,7 @@ import { Buffer } from "std/core/buffer";
 export function encode(v: CborValue): Buffer {
 	const w = newCborWriter();
 	encodeValue(w, v);
-	return Buffer.fromArray(w.bytes);
+	return w.bytes.asString();
 }
 
 // --- Internal byte builder ---
@@ -36,18 +36,18 @@ export function encode(v: CborValue): Buffer {
 // caller (index.ms) converts the array to a Buffer in one shot.
 
 export interface CborWriter {
-	bytes: number[];
+	bytes: uint8[];
 }
 
 export function newCborWriter(): CborWriter {
-	const bytes: number[] = [];
+	const bytes: uint8[] = [];
 	return { bytes };
 }
 
 // --- Low-level byte primitives ---
 
 function writeByte(w: CborWriter, b: number): void {
-	w.bytes.push(b & 0xff);
+	w.bytes.push((b & 0xff) as uint8);
 }
 
 // Write `byteCount` bytes of `value` in big-endian order. `value` must be a
@@ -61,7 +61,7 @@ function writeBE(w: CborWriter, value: number, byteCount: number): void {
 		let k = 0;
 		while (k < pos) { div = div * 256; k = k + 1; }
 		const byte = ((value / div) | 0) % 256;
-		w.bytes.push(byte);
+		w.bytes.push(byte as uint8);
 		pos = pos - 1;
 	}
 }
@@ -133,7 +133,7 @@ function pushStringBytes(w: CborWriter, s: string): void {
 	const n = s.byteLength;
 	let i = 0;
 	while (i < n) {
-		w.bytes.push(s.byteAt(i) & 0xff);
+		w.bytes.push((s.byteAt(i) & 0xff) as uint8);
 		i = i + 1;
 	}
 }
@@ -142,7 +142,7 @@ function pushBufferBytes(w: CborWriter, b: Buffer): void {
 	const n = b.byteLength;
 	let i = 0;
 	while (i < n) {
-		w.bytes.push(b.byteAt(i) & 0xff);
+		w.bytes.push((b.byteAt(i) & 0xff) as uint8);
 		i = i + 1;
 	}
 }
@@ -192,7 +192,7 @@ const SIMPLE_UNDEFINED: number = 23;
 // Push a single major-7 byte with `info` packed into the additional-info bits.
 // Used for inline simple values (info < 24) including bool/null/undefined.
 function pushMajor7Inline(w: CborWriter, info: number): void {
-	w.bytes.push(MAJOR7_HEAD | (info & 0x1f));
+	w.bytes.push((MAJOR7_HEAD | (info & 0x1f)) as uint8);
 }
 
 export function encodeBool(w: CborWriter, b: boolean): void {
@@ -215,8 +215,8 @@ export function encodeSimple(w: CborWriter, n: number): void {
 		pushMajor7Inline(w, n);
 		return;
 	}
-	w.bytes.push(MAJOR7_HEAD | 24);
-	w.bytes.push(n & 0xff);
+	w.bytes.push((MAJOR7_HEAD | 24) as uint8);
+	w.bytes.push((n & 0xff) as uint8);
 }
 
 // Major 7, additional info 27 — IEEE 754 double-precision float.
@@ -226,12 +226,12 @@ export function encodeSimple(w: CborWriter, n: number): void {
 // writeDoubleBE helper to produce the 8 BE bytes; float encoding has no
 // inline tests — coverage lives in native probes.
 export function encodeFloat(w: CborWriter, f: float64): void {
-	w.bytes.push(MAJOR7_HEAD | 27);
+	w.bytes.push((MAJOR7_HEAD | 27) as uint8);
 	const buf = Buffer.allocUnsafe(8);
 	buf.writeDoubleBE(f, 0);
 	let i: number = 0;
 	while (i < 8) {
-		w.bytes.push(buf.readUInt8(i));
+		w.bytes.push(buf.readUInt8(i) as uint8);
 		i = i + 1;
 	}
 }
@@ -263,19 +263,19 @@ export function encodeValue(w: CborWriter, v: CborValue): void {
 // We encode each, capture the byte sequence, and assert against the spec.
 
 // Helper: build writer, encode, return bytes.
-function encInt(value: int64): number[] {
+function encInt(value: int64): uint8[] {
 	const w = newCborWriter();
 	encodeInt(w, value);
 	return w.bytes;
 }
 
-function encText(s: string): number[] {
+function encText(s: string): uint8[] {
 	const w = newCborWriter();
 	encodeText(w, s);
 	return w.bytes;
 }
 
-function encArray(items: CborValue[]): number[] {
+function encArray(items: CborValue[]): uint8[] {
 	const w = newCborWriter();
 	encodeArray(w, items);
 	return w.bytes;
