@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod } from "./context";
+import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -426,6 +426,9 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 			for (const d of md.methodDefaults) { newDefaults.push(d); }
 			md.methodDefaults = newDefaults;
 		}
+	}
+	if (md.methodIsStatic && classGenerics !== "" && !isGenericFn(md.methodFlags)) {
+		md.methodFlags = md.methodFlags === "" ? `gen:${classGenerics}` : `${md.methodFlags}|gen:${classGenerics}`;
 	}
 	const fnType = createFunction([], [], inferredType());
 	if (md.nativeName !== null && md.nativeName !== "") {
