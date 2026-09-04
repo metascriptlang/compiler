@@ -252,23 +252,29 @@ stdlib, because they have nothing to delegate to.
   whose `seen.join("; ")` had no raiser-tier `join`. One Tier-2 `join` in
   `index.rms` unblocked the entire target: `console.log`, functions, `for..of`,
   interfaces, `match`+enum, `Result`+`try`, classes, closure capture and
-  generics all run. `std/fs` and `std/process` now carry full raiser tiers
-  over their host bridges; `exit` is intercepted at the call site into a
+  generics all run. `std/fs`, `std/process`, `std/io`, `std/compress/zip`
+  and the crypto hash family now carry raiser tiers over host bridges
+  (round-trip probes: zip write→read→extract through int64 handle bridges,
+  sha256("abc") exact); `exit` is intercepted at the call site into a
   `Halt` (Nim's VM has no quit op) and `cmdRunRaiser` propagates the VM exit
   value as msc's exit code. `cmdRunRaiser` also loads the host table BEFORE
   `generateRaiserProject` (the bridge-coverage check resolves at the call
   site) and prints queued bytecode-compile errors as warnings — comptime
   parity: std bodies the program never calls can contain unbridgeable
   externs, so they are reported, not fatal. `src/checker/checkPass.ms`
-  compiles and runs clean this way. Next wall for the whole compiler:
-  **`std/io` (no bridge at all), `std/compress/zip`, `std/crypto`** —
-  "Cannot resolve import".
-- **Cross-module const inlining drops bridge calls** (measured 2026-09-04):
-  `export const platform = msProcessPlatform()` inlines to nil at a
-  cross-module use site (warning: "cannot evaluate 'platform'"), while the
-  same const works same-module and a wrapper function works cross-module.
-  `argv` (array const) survives; the string const does not. Unfixed — every
-  raiser-tier const initialized from an extern is affected.
+  compiles and runs clean this way. The import wall for the whole compiler
+  is down (`src/index.ms` no longer reports "Cannot resolve import"); the
+  remaining 20 errors are `Undefined variable 'fetch'/'spawn'/'waitFor'/
+  'Buffer'` — **`std/core/promise` and `std/core/fetch` are .cms-only**, so
+  their prelude globals never enter the raiser graph. That is the next wall,
+  not a codegen bug.
+- **Exported consts keep their AST across modules** (fixed 2026-09-04): the
+  export-info builder only carried `declNode` for Function/Method/Enum, so an
+  imported const's symbol pointed at the ImportDecl and the Raiser const
+  inlining arm compiled it to nil ("cannot evaluate 'platform'"). The fix is
+  at the export side (`src/checker/context.ms`) — `importSymFromRegistry`
+  already had the restore hook. Bytecode warnings now name the exact reason
+  an identifier failed to bind (symbol kind, decl kind, no initializer…).
 
 ## Execution budget — back-edges, not instructions
 
