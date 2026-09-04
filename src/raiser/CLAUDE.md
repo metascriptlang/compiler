@@ -275,6 +275,21 @@ stdlib, because they have nothing to delegate to.
   at the export side (`src/checker/context.ms`) — `importSymFromRegistry`
   already had the restore hook. Bytecode warnings now name the exact reason
   an identifier failed to bind (symbol kind, decl kind, no initializer…).
+- **Two fail-loud holes, measured 2026-09-04 — both report success.**
+  (a) `async`/`await` compiles to a **no-op program**: on
+  `async function work(): Promise<int32> { return 7; }` + `await go()`, C and
+  JS both print `7`, Raiser produces **0 bytes and exits 0**.
+  `transformForRaiser` runs none of `lowerAsync`/`lowerAwait`/`lowerAsyncBridge`,
+  so the nodes reach the bytecode compiler and evaporate. Async is a deliberate
+  non-goal, but a non-goal owes a hard error with a span — the rule bug124
+  applied to the identifier arm. `function*`/`Generator` and `spawn` DO fail
+  loud, so async is the one silent case.
+  (b) **A VM runtime error still exits 0.** `cmdRunRaiser` prints
+  `raiser runtime error: …` under `if (!ranOk …)` but only assigns an exit
+  code under `if (ranOk …)`, so the failure path falls through to 0. Probe:
+  `const a: int32[] = [1,2,3]; console.log(a[99]);` prints
+  `array index out of bounds: 99 (length 3)` and returns **rc=0** — any script
+  or CI lane reading the exit status sees a pass.
 
 ## Execution budget — back-edges, not instructions
 
