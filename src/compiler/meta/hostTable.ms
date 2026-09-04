@@ -57,6 +57,8 @@ import {
 	mkdir, rmdir, remove, rename, readDir,
 } from "std/fs";
 import { cwd, platform, env, exec } from "std/process";
+import { resolveRuntimeDir } from "../../utils/path";
+import { join } from "std/fs/path";
 import { IoErrorKind } from "std/io/errors";
 import { ProcessErrorKind } from "std/process/errors";
 
@@ -723,4 +725,76 @@ test "spawn state preserved across getter calls" {
 	assert okFn([]).intVal === 0;
 	assert exitFn([]).intVal === 0;
 	assert stderrFn([]).strVal === "";
+}
+
+// --- .rms closure guard ---
+// Every extern declared in a std .rms prelude must be executable when a
+// macro calls it: a host bridge in this table, an opcode-intercepted name
+// that never reaches CallHost, or on the deliberate dead list below (with
+// its blocker). Keeps a new extern from going dead silently.
+
+function scanRmsExternNames(src: string): string[] {
+	const names: string[] = [];
+	const needle = `from "`;
+	let i = 0;
+	while (i < src.length) {
+		const at = src.indexOf(needle, i);
+		if (at < 0) break;
+		const start = at + needle.length;
+		const endQuote = src.indexOf(`"`, start);
+		if (endQuote < 0) break;
+		const name = src.slice(start, endQuote);
+		i = endQuote + 1;
+		if (name.indexOf("/") >= 0) continue;  // module specifier (re-export), not an extern
+		names.push(name);
+	}
+	return names;
+}
+
+function nameListed(list: string[], name: string): boolean {
+	for (const x of list) {
+		if (x === name) return true;
+	}
+	return false;
+}
+
+test "rms extern closure: declared externs are bridged, intercepted, or listed dead" {
+	const root = resolveRuntimeDir();
+	const stdPath = root !== "" ? join(root, "std") : "std";
+	const rmsFiles = [
+		join(stdPath, "core/string/index.rms"),
+		join(stdPath, "core/array/index.rms"),
+	];
+	// Names the Raiser codegen intercepts to opcodes before CallHost.
+	const intercepted: string[] = [
+		"msStringEquals", "msStringCompareLt",            // string == / <
+		"msStringCharAt", "msStringSlice",                // StrCharAt / StrSlice
+		"&msGenericArrayPush",                            // ArrayPush
+	];
+	// Deliberately dead — each needs work before it can come off this list.
+	const knownDead: string[] = [
+		"msStringSubstring",                              // clamp semantics differ from byteSlice
+		"msStringPadStart", "msStringPadEnd",             // MS-able, unwritten
+		"msStringParseFloat", "msStringParseInt",         // parsing not in the shared tier
+		"msStringFromCodePoint",                          // needs a codepoint-to-UTF8 encoder
+		"&msGenericArrayPop", "&msGenericArrayAt",        // '&' stays in nativeName: the
+		"&msGenericArraySetLen", "&msGenericArrayCapacity", // registry key can never match;
+		"&msRefArraySplice", "&msRefArraySplice3",        // the heap also lacks a shrink op
+	];
+	_resetHostRegistryForTests();
+	ensureHostTableLoaded();
+	let checked = 0;
+	for (const f of rmsFiles) {
+		const r = readFile(f);
+		assert r.ok;
+		if (!r.ok) continue;
+		for (const name of scanRmsExternNames(r.value)) {
+			checked = checked + 1;
+			const covered = lookupHostFn(name) !== null
+				|| nameListed(intercepted, name)
+				|| nameListed(knownDead, name);
+			assert covered, `${f}: ${name}`;
+		}
+	}
+	assert checked >= 18;
 }
