@@ -1,153 +1,171 @@
-# MetaScript Compiler
+# MetaScript
 
-This repository contains the **public, self-hosted implementation** of the MetaScript compiler. MetaScript is a modern, TypeScript-inspired language that compiles to native code via C, designed for high-performance game development and systems programming.
+**TypeScript-shaped syntax. Native performance. Deterministic memory.**
 
-### Why This Repository?
+MetaScript is a statically typed programming language that compiles to C (and to JavaScript), built for systems work — servers, game logic, tooling, wasm. No garbage collector pauses, no runtime lurking under your types: memory is managed by deterministic reference counting (DRC) with a cycle collector (ORC), verified at compile time by lifecycle analysis.
 
-This is a **clean rewrite** of the internal compiler used at [Metacraft Studio](https://metacraft.studio). While internal compiler has served well in ad-hoc production, it accumulated manual hacks and technical debt over rapid iteration cycles. This public repository represents:
+The entire compiler is written in MetaScript — **880 source files, ~175K lines** — and every generation of it is built by the previous one. The language carries its own weight.
 
-- ✨ **Clean Architecture** - Proper separation of concerns, well-documented code
-- 🎯 **Self-Hosted** - The compiler is written in MetaScript, demonstrating the language's capabilities
-- 🌍 **Open Source** - Community-driven development with transparent design decisions
-- 📈 **Future-Proof** - This will gradually become the canonical source-of-truth for MetaScript
+```ms
+function hexDigit(ch: string): int32 {
+    const c = ch.charCodeAt(0);
+    return match (ch) {
+        "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => c - "0".code,
+        "a" | "b" | "c" | "d" | "e" | "f" => c - "a".code + 10,
+        _ => -1,
+    };
+}
 
-## Features
+function parseHex(raw: string): Result<int32, string> {
+    let value: int32 = 0;
+    for (let i = 0; i < raw.length; i += 1) {
+        const d = hexDigit(raw.charAt(i));
+        if (d < 0) return Result.err("bad hex char");
+        value = value * 16 + d;
+    }
+    return Result.ok(value);
+}
 
-- **Self-Hosting**: The compiler compiles itself, proving MetaScript's maturity
-- **Modular Design**: Clean separation between lexer, parser, type checker, and code generator
-- **TypeScript-Inspired**: Familiar syntax for TypeScript/JavaScript developers
-- **Native Performance**: Compiles to C for maximum performance
-- **Modern Type System**: Interfaces, generics, type inference, and more
+actor Accumulator {
+    total: int32 = 0;
+    add(n: int32): int32 {
+        this.total = this.total + n;
+        return this.total;
+    }
+}
+
+function main(): void {
+    defer console.log("done.");
+    const parsed = try parseHex("cafe");        // Result + try: unwrap or early-return
+    console.log("cafe = " + parsed.toString());
+    const acc = new Accumulator();
+    acc.add(20);                                 // SEND — fire-and-forget
+    const total = await acc.add(22);             // CALL — reply via Promise<int32>
+    console.log("actor total = " + total.toString());
+    const h = spawn(() => parsed * 2);           // structured parallel task
+    console.log("spawn 2x = " + (await h).toString());
+}
+main();
+```
+
+The program above is real: it builds and runs natively via `msc run`, printing `cafe = 51966`, `actor total = 42`, `spawn 2x = 103932`.
+
+## Why MetaScript
+
+- **Familiar surface, systems substrate.** If you know TypeScript, you can read MetaScript. But under it: sized integers (`int32`, `uint64`, `float64`), value `struct`s vs reference `interface`s, `move` ownership transfer, `defer` scope-exit cleanup, and `distinct` nominal types.
+- **Deterministic memory — no GC pauses.** DRC reference counting with compiler-synthesized `=destroy` / `=sink` / `=wasMoved` hooks per type, plus an ORC cycle collector. Need more control? `--gc=manual` (arena/pool allocators) and `--os=bare` (freestanding, no libc) are both shipped.
+- **Match expressions as the dispatch backbone.** Patterns, or-patterns, `when` guards, destructuring — as expressions, lowered to C `switch` where the discriminant allows it.
+- **Errors as values.** `Result<T, E>` + the `try` operator (Rust-style), including compiler-checked `Promise<Result<T, E>>` typing for async failures.
+- **A locked-in concurrency model.** One `await` keyword. `spawn` for structured parallelism with affine, scope-checked handles. Actors with BEAM-style pids (generation-checked 53-bit handles, hazard-pointer reclamation), suspension without thread blocking, supervision, and explicit shared state via `Arc<T>` / `Locked<T>`. The full design is locked in
+`docs/PARALOCK.md` (kept in sync outside git — see the repo's docs directory).
+- **Real metaprogramming.** User `macro`s (AST → AST), `quote`, `@comptime` blocks executed on Raiser — an embedded register-based bytecode VM — and JSX parsed into compile-time AST for macros to consume.
+- **One source, many targets.** Native C via clang or `zig cc` (macOS, Linux, Windows, Android — cross-compiling from any host), wasm32-WASI and Emscripten for the web, static/shared library output (`--app=lib|staticlib`) for embedding. A JavaScript backend with source maps for the rest.
+- **A toolchain, not just a compiler.** `msc` ships build/run/test/check/fmt/init/lsp commands, a content-addressed build cache, phase timers, a package manager with a registry and lockfiles, and LSP support with an incremental red/green re-check engine.
 
 ## Quick Start
 
-### Prerequisites
-
-- [MetaScript compiler](https://metascriptlang.org/installation)
-- C compiler (GCC or Clang)
-
-### Running the Compiler
+Install a release binary (see the [installation guide](https://metascriptlang.org/installation)) — the compiler bootstraps itself from the previous release, so no other toolchain is needed beyond a C compiler (`zig` or `clang` recommended).
 
 ```bash
-# Run the self-hosted compiler
-msc run src/index.ms
+# Run a program natively
+msc run hello.ms
 
-# Run tests
+# Optimized native build
+msc build hello.ms --release --output=hello
+
+# Cross-compile: same command from any host
+msc build hello.ms --os=windows --release
+msc build hello.ms --os=linux  --release
+msc build hello.ms --os=emcc            # browser wasm
+
+# Run the test suite of a project
 msc test src/index.ms
 
-# Compile an example
-msc run examples/testBasics.ms
+# Editor support: VS Code, Neovim, Zed, JetBrains (tools/editor-plugin/)
 ```
 
-### Project Structure
+## The Language in One Minute
 
+```ms
+// Sized integers; bare literals infer int32
+const id: int32 = 42;
+const ratio: float64 = 0.75;
+
+// struct = value type (stack, copied) — interface = reference (RC'd)
+struct Vec2 { x: float64; y: float64; }
+
+// Errors as values
+const cfg = try readConfig("app.json") catch defaultConfig;
+
+// Ownership and cleanup
+function process(): string {
+    defer releaseLock();
+    let buf = readFile("input.bin");
+    consume(move buf);            // ownership handed off — use-after-move is an error
+    return "done";
+}
+
+// Conditional compilation, checked before type checking
+when (os == "windows") {
+    extern function WaitForSingleObject(h: Ptr<void>): uint32 from "WaitForSingleObject";
+}
+
+// Generics with constraints and const parameters
+function identity<T>(v: T): T { return v; }
 ```
-src/
-├── index.ms           # Main entry point
-├── lexer/
-│   ├── lexer.ms      # Tokenization
-│   └── token.ms      # Token types and formatting
-└── ast/
-    └── node.ms       # AST node definitions
-```
 
-## Current Status
+Deeper reference: [docs/LANG.md](docs/LANG.md). Concurrency model: `docs/PARALOCK.md`. Memory model internals: [docs/ORC.md](docs/ORC.md).
 
-**Self-Hosted** — All 5 phases are complete and `msc` compiles, tests, and runs itself natively (C runtime and all). The build, test, and release paths are pure MetaScript: each generation of the compiler is built by the previous one, seeded from a released binary on a clean machine.
+## Standard Library
 
-- Phase 1 (Parse + Module): Complete — 37 NodeKind, 80+ TokenKind, recursive descent + Pratt
-- Phase 2 (TypeCheck): Complete — 3-pass (collect, resolve, check), cross-module propagation
-- Phase 3 (Transform): Complete — 27 general + 4 C-backend transforms
-- Phase 4 (Analyzer/DRC): Complete — deterministic reference counting injection
-- Phase 5 (Codegen): Complete — C, JavaScript, and Raiser bytecode backends
+Twenty modules, pre-compiled into the build: `core` (19 submodules — string, array, math, bigint, json, fetch with TLS, promise, actor, buffer, date, websocket...), `crypto` (AES, ChaCha20, Ed25519, X25519, Argon2, RSA, TLS — mbedTLS-backed), `http`/`net`/`io` (select / epoll / kqueue / IOCP / io_uring engines), `serialize` (JSON + CBOR), `compress` (deflate/zip), `hash`, `archive`, `fs`, `os`, `process`, and more.
 
-## Architecture
+## Project Status
 
-The compiler follows a multi-pass architecture aligned with modern compiler design:
+**v0.2.53 — fully self-hosted.** The compiler, its test runner, its LSP, its formatter, and its package manager are all written in MetaScript. A fresh machine bootstraps from a released binary and rebuilds everything from source.
 
-1. **Lexical Analysis** - Tokenize source code
-2. **Parsing** - Build Abstract Syntax Tree (AST)
-3. **Type Checking** - Multi-pass type inference and validation
-4. **Code Generation** - Emit C code for native compilation
+Measured, not claimed (Apple Silicon, 8-core):
 
-### Type System Design
+| Metric | Value |
+|---|---|
+| Self-compile, cold | ~53 s (of which ~35 s is the C toolchain) |
+| Self-compile, warm cache | ~32 s |
+| Test suite execution | 4,794 inline test blocks |
+| Regression suite | 128 append-only `bugNNN` programs |
+| Parity corpus | 168 programs, C vs JS byte-compared (no golden files) |
+| Lifecycle guards | 89 probes run under a DRC ledger that aborts on double-finalize |
+| Self-hosted `msc` binary | ~10.3 MB (thin-LTO) |
 
-The type system is inspired by TypeScript but optimized for systems programming:
+Every guard probe is proven red before it is trusted; the corpus runs parity, RSS (under both `--gc=drc` and `--gc=orc`), and ASan lanes. [docs/BUILD-PERF.md](docs/BUILD-PERF.md) has the measurement methodology.
 
-- **Structural Typing** - Interfaces define contracts, not implementations
-- **Type Inference** - Minimize annotations while maintaining safety
-- **Generic Instantiation** - Zero-cost abstractions via monomorphization
-- **Lifetime Analysis** - Automatic memory management through ownership tracking
+**Honest gaps** (documented, not hidden): actor spawn-capture static rules S1/S3 are designed but not yet enforced; `@derive` and `@inline` are documented as reference-only/planned; the Erlang backend is postponed. Details live in the docs linked above.
 
 ## Development
 
-### Building from Source
-
 ```bash
-# Build the self-hosted compiler, generate ./out/release/index
-msc build --gc=drc --release src/index.ms
+# Build the self-hosted compiler binary (fastest the toolchain can link)
+msc build src/index.ms --gc=drc --danger --output=msc
+
+# Full compiler test suite
+msc test src/index.ms
+
+# Corpus: parity + RSS lanes; SAN lane adds ASan + DRC ledger
+msc run src/test/corpus/run.ms
+MSCORPUS_SAN=1 msc run src/test/corpus/run.ms
+
+# Lifecycle guards (proven-red discipline)
+src/test/guard/run.sh
 ```
 
-## Roadmap
+Full workflow (syncing `~/.metascript/`, release process): `docs/DEVELOPMENT.md` in this tree.
 
-### Phase 1: Foundation
-- [x] ~~Project structure~~
-- [x] ~~Lexer implementation~~
-- [x] ~~Cross-module imports~~
-- [x] ~~Parser implementation~~
-- [x] ~~Basic type checker~~
+## Why This Repository?
 
-### Phase 2: Self-Hosting (Current)
-- [x] ~~Compile the compiler with itself~~
-- [x] ~~Bootstrap process documentation~~
-- [ ] Performance benchmarking
-
-### Phase 3: Production Ready
-- [x] ~~Full type system implementation~~
-- [x] ~~Optimization passes (27 general + 4 C-backend transforms)~~
-- [x] ~~Error recovery and diagnostics~~
-- [ ] Standard library integration
-
-### Phase 4: Community
-- [ ] Plugin system
-- [x] ~~Language server protocol (LSP)~~
-- [ ] Package manager integration
-- [ ] Comprehensive documentation
-
-## Contributing
-
-We welcome contributions! This is the future of MetaScript, and we're building it together.
-
-### How to Contribute
-
-1. **Report Issues** - Found a bug? Open an issue with a minimal reproduction
-2. **Propose Features** - Have an idea? Start a discussion in Issues
-3. **Submit PRs** - Fix bugs, add features, improve documentation
-
-### Contribution Guidelines
-
-- Follow the existing code style (tabs for indentation)
-- Add tests for new features
-- Update documentation as needed
-- Keep commits focused and well-described
-
-## Why MetaScript?
-
-**For TypeScript Developers**: Familiar syntax, but compiles to native code for 10-100x performance improvements.
-
-**For Systems Programmers**: Modern language features (type inference, interfaces, generics) without sacrificing control or performance.
-
-**For Game Developers**: Fast iteration with scripting-like ergonomics, production performance with native compilation.
-
-## Links
-
-- **Discord Community**: [Join us on Discord](https://discord.com/invite/gCwkmqS3xB)
+This is the public, self-hosted implementation of MetaScript — a clean rewrite of the internal compiler that has been running in production at [Metacraft Studio](https://metacraft.studio), powering gameplay logic, network code, asset pipelines, and build tooling across shipped games. The internal version served well but accumulated hacks through rapid iteration; this repository is the canonical going-forward implementation, built in the open with transparent design decisions.
 
 ## Acknowledgments
 
-MetaScript is used internally at Metacraft Studio — powering gameplay logic, network code, asset pipelines, and build tooling across shipped games. This public compiler reflects lessons from that production usage.
-
-Its design draws on ideas from several languages:
+MetaScript is a new language with its own tradeoffs, not a clone — but it would not exist in its current shape without the work these communities did first:
 
 - **TypeScript** — surface syntax, structural typing, and developer ergonomics familiar to JavaScript developers
 - **Nim** — transformation pipeline design, phase ordering, IR-based lowering, and the **ORC** reference counting model that directly inspired our deterministic memory management
@@ -159,8 +177,12 @@ Its design draws on ideas from several languages:
 - **Haxe** — multi-target compilation philosophy: one source, many native outputs
 - **Salsa** — query-based incremental computation, directly inspired **Trans-Am**, our incremental build and caching engine
 
-MetaScript is a new language with its own tradeoffs, not a clone of any of these — but it would not exist in its current shape without the work these communities did first.
+## Community
+
+- **Discord**: [Join us](https://discord.com/invite/gCwkmqS3xB)
+- **Website**: [metascriptlang.org](https://metascriptlang.org)
+- **Issues**: bug reports with minimal reproductions are gold — the `src/test/fixedbugs/` suite grows one file per fixed bug
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
