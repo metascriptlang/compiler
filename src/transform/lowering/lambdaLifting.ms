@@ -574,7 +574,10 @@ function rewriteNode(
 		return node;
 	}
 	if (isFuncBoundary(node)) return node;
-	mapChildren(node, (child: Node): Node => rewriteNode(child, captures, envTypeName, envStructType, chainNames, chainTypes));
+	mapChildren(node, (child: Node): Node => {
+		const rewritten = rewriteNode(child, captures, envTypeName, envStructType, chainNames, chainTypes);
+		return rewritten === null ? child : rewritten;
+	});
 	return node;
 }
 
@@ -621,7 +624,10 @@ function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 	// Don't enter nested function bodies or already-lifted closure pairs
 	if (isFuncBoundary(node)) return node;
 	if ((node.flags & NodeFlag.Closure) !== 0) return node;
-	mapChildren(node, (child: Node): Node => rewriteOuterRef(child, rewrite));
+	mapChildren(node, (child: Node): Node => {
+		const rewritten = rewriteOuterRef(child, rewrite);
+		return rewritten === null ? child : rewritten;
+	});
 	return node;
 }
 
