@@ -1,0 +1,154 @@
+// std/fs — Raiser tier. Same contract as index.cms: kernels are host
+// bridges (hostTable.ms), everything else is portable MS. Return values
+// follow the C contract — 1/0 ints for predicates and mutations, errno
+// polled via msFsLastErrno, readFile returns "" on failure.
+
+import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
+
+export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";
+
+extern function msFsReadFile(path: string): string from "msFsReadFile";
+extern function msFsLastErrno(): number from "msFsLastErrno";
+extern function msFsWriteFileMode(path: string, content: string, mode: string): number from "msFsWriteFileMode";
+extern function msFsExists(path: string): number from "msFsExists";
+extern function msFsIsFile(path: string): number from "msFsIsFile";
+extern function msFsIsDir(path: string): number from "msFsIsDir";
+extern function msFsIsExecutable(path: string): number from "msFsIsExecutable";
+extern function msFsFileSize(path: string): number from "msFsFileSize";
+extern function msFsChmod(path: string, mode: int32): number from "msFsChmod";
+extern function msFsMkdir(path: string): number from "msFsMkdir";
+extern function msFsRmdir(path: string): number from "msFsRmdir";
+extern function msFsRemove(path: string): number from "msFsRemove";
+extern function msFsRename(oldPath: string, newPath: string): number from "msFsRename";
+extern function msFsReadDirEntries(path: string): string from "msFsReadDirEntries";
+
+export function readFile(path: string): Result<string, IoError> {
+	const raw = msFsReadFile(path);
+	const err = msFsLastErrno();
+	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.ok(raw);
+}
+
+export function writeFile(path: string, content: string): Result<void, IoError> {
+	const ok = msFsWriteFileMode(path, content, "wb");
+	if (ok !== 1) {
+		const err = msFsLastErrno();
+		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "write failed"));
+	}
+	return Result.ok(null);
+}
+
+export function appendFile(path: string, content: string): Result<void, IoError> {
+	const ok = msFsWriteFileMode(path, content, "ab");
+	if (ok !== 1) {
+		const err = msFsLastErrno();
+		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "append failed"));
+	}
+	return Result.ok(null);
+}
+
+export function chmod(path: string, mode: int32): Result<void, IoError> {
+	if (msFsChmod(path, mode) === 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "chmod failed"));
+}
+
+export function mkdir(path: string): Result<void, IoError> {
+	if (msFsMkdir(path) === 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "mkdir failed"));
+}
+
+export function rmdir(path: string): Result<void, IoError> {
+	if (msFsRmdir(path) === 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "rmdir failed"));
+}
+
+export function remove(path: string): Result<void, IoError> {
+	if (msFsRemove(path) === 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "remove failed"));
+}
+
+export function removeAll(path: string): Result<void, IoError> {
+	if (!exists(path)) return Result.ok(null);
+	if (isDir(path)) {
+		for (const entry of readDir(path)) {
+			const name = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
+			const r = removeAll(path + "/" + name);
+			if (!r.ok) return r;
+		}
+		return rmdir(path);
+	}
+	return remove(path);
+}
+
+export function rename(oldPath: string, newPath: string): Result<void, IoError> {
+	if (msFsRename(oldPath, newPath) === 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err !== 0) return Result.err(ioErrorFromErrno(err, oldPath));
+	return Result.err(writeFailed(oldPath, "rename failed"));
+}
+
+export function exists(path: string): boolean { return msFsExists(path) === 1; }
+export function isFile(path: string): boolean { return msFsIsFile(path) === 1; }
+export function isDir(path: string): boolean { return msFsIsDir(path) === 1; }
+export function isExecutable(path: string): boolean { return msFsIsExecutable(path) === 1; }
+export extern function fileSize(path: string): number from "msFsFileSize";
+
+// readDir: entries are newline-joined by the bridge; directories carry a
+// trailing "/" marker, "." and ".." are excluded. Empty list on error or
+// empty dir — distinguish with exists(path) && isDir(path) first.
+export function readDir(path: string): string[] {
+	const joined = msFsReadDirEntries(path);
+	const result: string[] = [];
+	if (joined === "") return result;
+	const lines = joined.split("\n");
+	for (const line of lines) {
+		if (line !== "") result.push(line);
+	}
+	return result;
+}
+
+export function readLines(path: string): Result<string[], IoError> {
+	const content = try readFile(path);
+	if (content.length === 0) return Result.ok([]);
+	return Result.ok(content.split("\n"));
+}
+
+export function writeLines(path: string, lines: string[]): Result<void, IoError> {
+	return writeFile(path, lines.join("\n"));
+}
+
+export function copyFile(src: string, dst: string): Result<void, IoError> {
+	const content = try readFile(src);
+	return writeFile(dst, content);
+}
+
+export function ensureDir(path: string): Result<void, IoError> {
+	if (msFsExists(path) === 1) return Result.ok(null);
+	let i = 0;
+	while (i < path.length) {
+		if (path.charCodeAt(i) === "/".code) {
+			if (i > 0) {
+				const prefix = path.slice(0, i);
+				if (msFsExists(prefix) !== 1) {
+					const mkResult = mkdir(prefix);
+					if (!mkResult.ok) return mkResult;
+				}
+			}
+		}
+		i = i + 1;
+	}
+	if (msFsExists(path) !== 1) {
+		return mkdir(path);
+	}
+	return Result.ok(null);
+}
