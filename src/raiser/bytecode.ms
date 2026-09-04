@@ -41,6 +41,7 @@ export enum RaiserOpcode {
 	StoreIndex,       // ABC: R[A][R[B]] = R[C]
 	ArrayLen,         // ABC: R[A] = len(R[B])
 	ArrayPush,        // ABC: R[A].push(R[B])
+	ArraySetLen,      // ABC: R[A].setLength(R[B]) — truncate or nil-extend
 
 	// Object operations (3)
 	NewObject,        // ABC: R[A] = new empty object

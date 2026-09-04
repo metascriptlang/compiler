@@ -37,6 +37,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.StoreIndex => "StoreIndex",
 		RaiserOpcode.ArrayLen => "ArrayLen",
 		RaiserOpcode.ArrayPush => "ArrayPush",
+		RaiserOpcode.ArraySetLen => "ArraySetLen",
 		RaiserOpcode.NewObject => "NewObject",
 		RaiserOpcode.LoadField => "LoadField",
 		RaiserOpcode.StoreField => "StoreField",

@@ -9,7 +9,7 @@ import {
 import {
 	RaiserValue, RaiserValueKind,
 	raiserNil, raiserInt, raiserBool, raiserString, raiserArray, raiserToString, copyValueInto,
-	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArrayLen,
+	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject,
 	rcIncref, rcDecref
 } from "./value";
@@ -362,6 +362,8 @@ export function execLoop(vm: RaiserVM): void {
 			vmHandleArrayLen(vm, inst);
 		} else if (op === RaiserOpcode.ArrayPush) {
 			vmHandleArrayPush(vm, inst);
+		} else if (op === RaiserOpcode.ArraySetLen) {
+			vmHandleArraySetLen(vm, inst);
 		} else if (op === RaiserOpcode.NewObject) {
 			vmHandleNewObject(vm, inst);
 		} else if (op === RaiserOpcode.LoadField) {
@@ -597,6 +599,19 @@ function vmHandleArrayPush(vm: RaiserVM, inst: RaiserInstruction): void {
 	}
 	heapArrayPush(vm.arrayHeap, handle, val);
 	vmIncref(vm, val);
+}
+
+function vmHandleArraySetLen(vm: RaiserVM, inst: RaiserInstruction): void {
+	const arrVal = getReg(vm, vm.baseReg + inst.a);
+	const lenVal = getReg(vm, vm.baseReg + inst.b);
+	const handle = arrVal.intVal;
+	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
+		vmError(vm, `array handle out of bounds: ${handle}`); return;
+	}
+	if (lenVal.kind !== RaiserValueKind.Int) {
+		vmError(vm, `ArraySetLen expected an integer length, got kind ${lenVal.kind}`); return;
+	}
+	heapArraySetLen(vm.arrayHeap, handle, lenVal.intVal);
 }
 
 // --- Object opcode handlers ---
@@ -1155,6 +1170,51 @@ test "ArrayPush + ArrayLen" {
 		[raiserInt(42)]
 	));
 	assert vm.exitValue.intVal === 1;
+}
+
+test "ArraySetLen truncates" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),   // R0 = []
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 7
+			raiserABC(RaiserOpcode.ArrayPush, 0, 1, 0),  // R0.push(7)
+			raiserABC(RaiserOpcode.ArrayPush, 0, 1, 0),  // R0.push(7)
+			raiserABC(RaiserOpcode.ArrayPush, 0, 1, 0),  // R0.push(7)
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = 1
+			raiserABC(RaiserOpcode.ArraySetLen, 0, 2, 0), // R0.setLength(1)
+			raiserABC(RaiserOpcode.ArrayLen, 3, 0, 0),   // R3 = 1
+			raiserABC(RaiserOpcode.Halt, 3, 0, 0),
+		],
+		[raiserInt(7), raiserInt(1)]
+	));
+	assert vm.exitValue.intVal === 1;
+}
+
+test "ArraySetLen nil-extends" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),   // R0 = []
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 3
+			raiserABC(RaiserOpcode.ArraySetLen, 0, 1, 0), // R0.setLength(3)
+			raiserABC(RaiserOpcode.ArrayLen, 2, 0, 0),   // R2 = 3
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(3)]
+	));
+	assert vm.exitValue.intVal === 3;
+	// the extended slot reads as nil
+	const vm2 = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.ArraySetLen, 0, 1, 0),
+			raiserABx(RaiserOpcode.LoadConst, 3, 1),
+			raiserABC(RaiserOpcode.LoadIndex, 4, 0, 3),
+			raiserABC(RaiserOpcode.Halt, 4, 0, 0),
+		],
+		[raiserInt(3), raiserInt(2)]
+	));
+	assert vm2.exitValue.kind === RaiserValueKind.Nil;
 }
 
 test "StoreIndex" {

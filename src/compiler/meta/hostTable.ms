@@ -770,6 +770,7 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 		"msStringEquals", "msStringCompareLt",            // string == / <
 		"msStringCharAt", "msStringSlice",                // StrCharAt / StrSlice
 		"&msGenericArrayPush",                            // ArrayPush
+		"&msGenericArraySetLen",                          // ArraySetLen
 	];
 	// Deliberately dead — each needs work before it can come off this list.
 	const knownDead: string[] = [
@@ -777,9 +778,6 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 		"msStringPadStart", "msStringPadEnd",             // MS-able, unwritten
 		"msStringParseFloat", "msStringParseInt",         // parsing not in the shared tier
 		"msStringFromCodePoint",                          // needs a codepoint-to-UTF8 encoder
-		"&msGenericArrayPop", "&msGenericArrayAt",        // '&' stays in nativeName: the
-		"&msGenericArraySetLen", "&msGenericArrayCapacity", // registry key can never match;
-		"&msRefArraySplice", "&msRefArraySplice3",        // the heap also lacks a shrink op
 	];
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
@@ -796,5 +794,5 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 			assert covered, `${f}: ${name}`;
 		}
 	}
-	assert checked >= 18;
+	assert checked >= 14;
 }

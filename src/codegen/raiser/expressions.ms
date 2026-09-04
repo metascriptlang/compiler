@@ -621,6 +621,12 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 		return compileArrayPushCall(s, node);
 	}
 
+	// arr.setLength(n) — arrays only; strings fall through (their setLength
+	// is a C-backend in-place mutation with no comptime meaning).
+	if (isArraySetLengthCall(s, d.callee) && d.arguments.length === 1) {
+		return compileArraySetLenCall(s, node);
+	}
+
 	// x.toString()
 	if (isToStringCall(d.callee) && d.arguments.length === 0) {
 		return compileToStringCall(s, node);
@@ -933,6 +939,13 @@ function isArrayPush(node: Node): boolean {
 	return d.property === "push";
 }
 
+function isArraySetLengthCall(s: RaiserCompState, node: Node): boolean {
+	if (node.kind !== NodeKind.MemberExpr) return false;
+	const d = node.data as MemberExprData;
+	if (d.property !== "setLength") return false;
+	return !exprIsString(s, d.object);
+}
+
 function isToStringCall(node: Node): boolean {
 	if (node.kind !== NodeKind.MemberExpr) return false;
 	const d = node.data as MemberExprData;
@@ -958,6 +971,15 @@ function compileArrayPushCall(s: RaiserCompState, node: Node): number {
 		const valReg = compileExpr(s, d.arguments[i]);
 		emitInst(s, raiserABC(RaiserOpcode.ArrayPush, arrReg, valReg, 0));
 	}
+	return arrReg;
+}
+
+function compileArraySetLenCall(s: RaiserCompState, node: Node): number {
+	const d = node.data as CallExprData;
+	const md = d.callee.data as MemberExprData;
+	const arrReg = compileExpr(s, md.object);
+	const lenReg = compileExpr(s, d.arguments[0]);
+	emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, arrReg, lenReg, 0));
 	return arrReg;
 }
 

@@ -141,3 +141,4 @@ import "./bug123RmsSharedStringTier";
 import "./bug124RaiserSilentNil";
 import "./bug125RaiserMissingBridgeSpan";
 import "./bug126RaiserConstInline";
+import "./bug127RaiserArrayTier";

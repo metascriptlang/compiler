@@ -245,6 +245,20 @@ export function heapArrayPush(heap: RaiserArrayHeap, handle: number, val: Raiser
 	heap.arrays[handle].items.push(copy);
 }
 
+// The only shrink primitive on the heap: truncate drops references (arena
+// regime — no per-value RC), extend pads with nil copies.
+export function heapArraySetLen(heap: RaiserArrayHeap, handle: number, newLen: number): void {
+	const items = heap.arrays[handle].items;
+	if (newLen < items.length) {
+		items.setLength(newLen);
+	} else {
+		while (items.length < newLen) {
+			const nilCopy: RaiserValue = { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0, strVal: "" };
+			items.push(nilCopy);
+		}
+	}
+}
+
 // --- Array Heap Tests ---
 test "alloc empty array" {
 	const heap = createArrayHeap();

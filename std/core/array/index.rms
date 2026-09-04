@@ -1,25 +1,69 @@
 // MetaScript Array Prelude — Raiser Backend
 // Generic T[] methods only: Raiser values are dynamic, so one generic form
 // covers every element type (the C backend monomorphizes per element type
-// for native arrays; the VM does not need that). `push` is intercepted by
-// the Raiser codegen to the ArrayPush opcode; the rest resolve to CallHost.
-// Mirrors std/core/array/index.cms minus C-only @include/@compile + the
-// number[]/string[] specializations.
+// for native arrays; the VM does not need that). `push` and `setLength` are
+// intercepted by the Raiser codegen to the ArrayPush/ArraySetLen opcodes —
+// the extern declarations below exist for the checker only, mirroring the
+// push pattern. The remaining methods are portable MS over those two ops,
+// matching the C kernels' semantics (std/core/array/index.cms).
 
 export class Array<T> {
 	length: number;
 }
 
 export extern function push<T>(this arr: T[], value: T): void from "&msGenericArrayPush";
-export extern function pop<T>(this arr: T[]): T from "&msGenericArrayPop";
-export extern function at<T>(this arr: T[], idx: number): T from "&msGenericArrayAt";
 export extern function setLength<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
-export extern function capacity<T>(this arr: T[]): number from "&msGenericArrayCapacity";
-export extern function splice<T>(this arr: T[], start: number, deleteCount: number): void from "&msRefArraySplice";
-export extern function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void from "&msRefArraySplice3";
 
-// string ← uint8[] kernel (host bridge; mirrors array/index.cms asString)
-export extern function asString(this arr: uint8[]): string from "msAsString";
+// Negative index support (C kernel contract): -1 reads the last element.
+export function at<T>(this arr: T[], idx: number): T {
+	let i = idx;
+	if (i < 0) i = i + arr.length;
+	return arr[i];
+}
+
+export function pop<T>(this arr: T[]): T {
+	const n = arr.length;
+	const v = arr[n - 1];
+	arr.setLength(n - 1);
+	return v;
+}
+
+// The VM heap exposes no allocation size; the live length is the only
+// meaningful capacity at comptime.
+export function capacity<T>(this arr: T[]): number {
+	return arr.length;
+}
+
+// Removes deleteCount elements starting at start (clamped).
+export function splice<T>(this arr: T[], start: number, deleteCount: number): void {
+	const n = arr.length;
+	let s = start;
+	if (s < 0) s = 0;
+	if (s > n) s = n;
+	let end = s + deleteCount;
+	if (end > n) end = n;
+	let dst = s;
+	let src = end;
+	while (src < n) {
+		arr[dst] = arr[src];
+		dst = dst + 1;
+		src = src + 1;
+	}
+	arr.setLength(n - (end - s));
+}
+
+// Removes deleteCount elements at start, then inserts item at start.
+export function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void {
+	splice(arr, start, deleteCount);
+	const n = arr.length;
+	arr.setLength(n + 1);
+	let i = n;
+	while (i > start) {
+		arr[i] = arr[i - 1];
+		i = i - 1;
+	}
+	arr[start] = item;
+}
 
 export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 	const n = arr.length;
@@ -35,3 +79,6 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 		i = i + 1;
 	}
 }
+
+// string ← uint8[] kernel (host bridge; mirrors array/index.cms asString)
+export extern function asString(this arr: uint8[]): string from "msAsString";
