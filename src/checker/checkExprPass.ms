@@ -2112,6 +2112,15 @@ function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (unwrapped !== null) returnExpected = unwrapped;
 		}
 		d.arrowBody = fitNode(ctx, d.arrowBody, returnExpected, d.arrowBody.nodeType);
+		const finalRetType = d.arrowBody.nodeType;
+		if (finalRetType !== null
+			&& !isUnresolvedType(finalRetType)
+			&& finalRetType.kind !== TypeKind.Error
+			&& returnExpected.kind !== TypeKind.Void
+			&& !hasGenericParams(returnExpected)
+			&& !isAssignable(finalRetType, returnExpected)) {
+			addError(ctx, "Return type mismatch in '<arrow>': expected " + typeDisplayName(returnExpected) + ", got " + typeDisplayName(finalRetType) + explainStructuralPrefix(finalRetType, returnExpected), d.arrowBody.location.line, d.arrowBody.location.column);
+		}
 	}
 	return fnType;
 }
