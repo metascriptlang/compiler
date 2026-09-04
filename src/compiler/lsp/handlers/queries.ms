@@ -116,6 +116,8 @@ function lspDocumentSymbolKind(kind: SymbolKind, isMutable: boolean): number {
 		SymbolKind.TypeAlias => 26,  // TypeParameter (was 25=Operator, wrong)
 		SymbolKind.Method => 6,
 		SymbolKind.Property => 7,
+		SymbolKind.Struct => 23,
+		SymbolKind.Macro => 12,
 		_ => 13,
 	};
 }
