@@ -623,6 +623,43 @@ Traps, all paid for on 2026-09-05:
 - SAN on hosts without libasan (scoop MinGW: `cannot find -lasan`) is
   environment-blocked — record it, don't chase phantom code bugs.
 
+More traps, measured 2026-09-06 on the pattern-default AST-slot change
+(186 programs, 245 emitted C files per pass):
+
+- **The emitted C embeds the tree's absolute path** — in the C filename, in
+  module-qualified type names (`Box__ZprivateZtmpZga95w4m8ZgOms`), and in every
+  `#line`. Two trees at different paths therefore hash-differ on every
+  tree-local module even when nothing changed. A/A check (one binary, identical
+  source at two paths): entry module 5532 bytes on both sides, raw md5 differs,
+  **byte-identical after normalizing the path token + the `#line` paths**;
+  instantiated generics (`Box__int32`) carry no path, so nothing semantic
+  drifts. So step 1 above works, but either run both passes from ONE path
+  (swapping the binary between them) or normalize before hashing — a raw hash
+  compare across two trees is 100% false positives.
+- **std does not move with the tree**: it resolves next to the BINARY
+  (`resolveRuntimeDir` walks up from argv0), so std modules emit identical C in
+  both passes (8 of 9 here) and the whole signal is the entry module plus
+  `_dispatch.c`, which names it. Corollary: to build a tree with a given
+  compiler, copy that binary INTO the tree — and on macOS `cp` over a mapped
+  inode yields SIGKILL, so `rm` + `cp` + `codesign -s -`.
+- **Both binaries must be at the same optimisation level.** A -O0 control
+  (113 MB) costs 10-25 s per program against ~1 s for a release candidate
+  (11 MB) — rebuild the control with the same builder and flags, or the sweep
+  runs for hours and compares two different things.
+- **Keep the emitted-C cache warm.** Clearing `out/debug/*.c` between programs
+  costs ~25 s per program instead of ~1.1 s: 186 programs is 80 min vs 3 min.
+- **The prelude pack is a GLOBAL cache** (`$HOME/.metascript/cache/prelude`),
+  shared by every tree on the machine. Change a `NodeData` shape and it serves
+  stale entries — clang then reports mangling errors that read exactly like a
+  compiler bug (16 of them). It self-heals once the pack key rotates; rule it
+  out with `MSC_NO_PRELUDE_PACK=1` (plus `MSC_NO_GLOBAL_CACHE=1`).
+- **Path mangling escapes uppercase as decimal ASCII** (`/Users` → `Z85sers`,
+  `_` → `95`, `.` → `O`); type names do NOT go through it. A hand-rolled
+  mangler that maps C files back to sources and misses this reports every
+  program as missing (179 false ENTRY_MISSING).
+- Two `msc test` runs in the SAME tree race on `out/debug/.cache` — serialise
+  them, or the second run's results are contaminated.
+
 ---
 
 ## 6. When You Fix a Bug — Mandatory Checklist
