@@ -101,6 +101,12 @@ export interface RaiserFutures {
 	items: RaiserFuture[];
 }
 
+export interface RaiserSched {
+	strands: RaiserStrands;
+	futures: RaiserFutures;
+	nextStrandId: number;
+}
+
 export interface RaiserVM {
 	mod: RaiserModule;
 	regs: RaiserRegFile;
@@ -118,11 +124,9 @@ export interface RaiserVM {
 	error: string;    // Non-empty when VM stopped due to error
 	gcMode: string;   // "arena" (default, no RC) | "orc" (refcount + cycle collector)
 	gcThreshold: number;  // live-object count that triggers a cycle collection (orc)
-	strands: RaiserStrands;
-	current: number;      // index into strands.items of the running strand
-	nextStrandId: number;
+	sched: RaiserSched;
+	current: number;      // index into sched.strands.items of the running strand
 	yielded: boolean;     // set by Yield / strand completion, consumed by the scheduler
-	futures: RaiserFutures;
 	// Exception state of the running strand. safePoints holds the pending try
 	// handlers of the CURRENT function only — a call stashes them on the frame.
 	// savedIp is the instruction a `finally` must return to when it ends: the
@@ -185,8 +189,9 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const strands: RaiserStrands = { items: strandItems };
 	const futureItems: RaiserFuture[] = [];
 	const futures: RaiserFutures = { items: futureItems };
+	const sched: RaiserSched = { strands, futures, nextStrandId: 1 };
 	const safePoints: number[] = [];
-	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, strands, current: 0, nextStrandId: 1, yielded: false, futures, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -289,7 +294,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 // --- Strand scheduling ---
 
 function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
-	vm.strands.items.length = 0;
+	vm.sched.strands.items.length = 0;
 	const result = raiserNil();
 	vm.safePoints.length = 0;
 	vm.unwinding = false;
@@ -297,11 +302,11 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	// The main strand keeps the VM's existing heap objects: the host holds that
 	// identity across runs (context.ms captures it, expand.ms clears it).
 	const mainStrand: RaiserStrand = { id: 0, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException, unwinding: false, savedIp: -1 };
-	vm.strands.items.push(mainStrand);
+	vm.sched.strands.items.push(mainStrand);
 	vm.current = 0;
-	vm.nextStrandId = 1;
+	vm.sched.nextStrandId = 1;
 	vm.yielded = false;
-	vm.futures.items.length = 0;
+	vm.sched.futures.items.length = 0;
 }
 
 // --- Futures ---
@@ -311,16 +316,16 @@ function newFuture(vm: RaiserVM): number {
 	const valueArrayHeap = createArrayHeap();
 	const valueObjectHeap = createStructHeap();
 	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), valueArrayHeap, valueObjectHeap, waiters };
-	vm.futures.items.push(f);
-	return vm.futures.items.length - 1;
+	vm.sched.futures.items.push(f);
+	return vm.sched.futures.items.length - 1;
 }
 
 function futureComplete(vm: RaiserVM, handle: number, value: RaiserValue): void {
-	if (handle < 0 || handle >= vm.futures.items.length) {
+	if (handle < 0 || handle >= vm.sched.futures.items.length) {
 		vmError(vm, `future handle out of bounds: ${handle}`);
 		return;
 	}
-	const f = vm.futures.items[handle];
+	const f = vm.sched.futures.items[handle];
 	if (f.finished) return;
 	f.finished = true;
 	// Completion runs on the producing strand, whose heap dies with it — the
@@ -329,24 +334,24 @@ function futureComplete(vm: RaiserVM, handle: number, value: RaiserValue): void 
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 	copyValueInto(f.value, owned);
 	for (const w of f.waiters) {
-		const s = vm.strands.items[w];
+		const s = vm.sched.strands.items[w];
 		if (s.status === RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
 	}
 	f.waiters.length = 0;
 }
 
 function futureFail(vm: RaiserVM, handle: number, message: string): void {
-	if (handle < 0 || handle >= vm.futures.items.length) {
+	if (handle < 0 || handle >= vm.sched.futures.items.length) {
 		vmError(vm, `future handle out of bounds: ${handle}`);
 		return;
 	}
-	const f = vm.futures.items[handle];
+	const f = vm.sched.futures.items[handle];
 	if (f.finished) return;
 	f.finished = true;
 	f.failed = true;
 	f.errorMsg = message;
 	for (const w of f.waiters) {
-		const s = vm.strands.items[w];
+		const s = vm.sched.strands.items[w];
 		if (s.status === RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
 	}
 	f.waiters.length = 0;
@@ -356,7 +361,7 @@ function futureFail(vm: RaiserVM, handle: number, message: string): void {
 // contract msReportOrphanFailures enforces at exit on C.
 export function vmOrphanFailures(vm: RaiserVM): string[] {
 	const out: string[] = [];
-	for (const f of vm.futures.items) {
+	for (const f of vm.sched.futures.items) {
 		if (f.failed && !f.errorObserved) out.push(f.errorMsg);
 	}
 	return out;
@@ -393,7 +398,7 @@ function unhandledException(vm: RaiserVM): void {
 	vm.unwinding = false;
 	vm.savedIp = -1;
 	const msg = raiserToString(vm.currentException);
-	const s = vm.strands.items[vm.current];
+	const s = vm.sched.strands.items[vm.current];
 	if (s.resultFuture >= 0) {
 		// A spawned strand dies into its future: a reader re-raises it, and a
 		// failure nobody reads is reported as an orphan at exit.
@@ -480,7 +485,7 @@ function raiseFromFuture(vm: RaiserVM, f: RaiserFuture): void {
 }
 
 function strandSave(vm: RaiserVM): void {
-	const s = vm.strands.items[vm.current];
+	const s = vm.sched.strands.items[vm.current];
 	s.regs = vm.regs;
 	s.callStack = vm.callStack;
 	s.arrayHeap = vm.arrayHeap;
@@ -496,7 +501,7 @@ function strandSave(vm: RaiserVM): void {
 }
 
 function strandResume(vm: RaiserVM, idx: number): void {
-	const s = vm.strands.items[idx];
+	const s = vm.sched.strands.items[idx];
 	vm.current = idx;
 	vm.regs = s.regs;
 	vm.callStack = s.callStack;
@@ -516,11 +521,11 @@ function strandResume(vm: RaiserVM, idx: number): void {
 // Round-robin from the strand after the current one, so a yielding strand
 // hands the turn on rather than immediately reclaiming it.
 function schedulePick(vm: RaiserVM): number {
-	const n = vm.strands.items.length;
+	const n = vm.sched.strands.items.length;
 	let k = 1;
 	while (k <= n) {
 		const idx = (vm.current + k) % n;
-		if (vm.strands.items[idx].status === RaiserStrandStatus.Ready) return idx;
+		if (vm.sched.strands.items[idx].status === RaiserStrandStatus.Ready) return idx;
 		k = k + 1;
 	}
 	return -1;
@@ -530,7 +535,7 @@ function schedulePick(vm: RaiserVM): number {
 // should pick another; false when the main strand finished, which ends the
 // program with its value.
 function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
-	const s = vm.strands.items[vm.current];
+	const s = vm.sched.strands.items[vm.current];
 	copyValueInto(s.result, value);
 	s.status = RaiserStrandStatus.Done;
 	if (s.resultFuture >= 0) futureComplete(vm, s.resultFuture, value);
@@ -538,14 +543,14 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 }
 
 function vmHasRunnable(vm: RaiserVM): boolean {
-	for (const s of vm.strands.items) {
+	for (const s of vm.sched.strands.items) {
 		if (s.status === RaiserStrandStatus.Ready) return true;
 	}
 	return false;
 }
 
 function vmHasBlocked(vm: RaiserVM): boolean {
-	for (const s of vm.strands.items) {
+	for (const s of vm.sched.strands.items) {
 		if (s.status === RaiserStrandStatus.Blocked) return true;
 	}
 	return false;
@@ -575,14 +580,14 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	ensureSlots(regs, callee.maxRegs);
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames };
-	const id = vm.nextStrandId;
-	vm.nextStrandId = id + 1;
+	const id = vm.sched.nextStrandId;
+	vm.sched.nextStrandId = id + 1;
 	const result = raiserNil();
 	const sp: number[] = [];
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const s: RaiserStrand = { id, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
-	vm.strands.items.push(s);
+	vm.sched.strands.items.push(s);
 	return id;
 }
 
@@ -618,13 +623,13 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
 	}
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames };
-	const id = vm.nextStrandId;
-	vm.nextStrandId = id + 1;
+	const id = vm.sched.nextStrandId;
+	vm.sched.nextStrandId = id + 1;
 	const fut = newFuture(vm);
 	const result = raiserNil();
 	const sp: number[] = [];
 	const s: RaiserStrand = { id, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
-	vm.strands.items.push(s);
+	vm.sched.strands.items.push(s);
 	return fut;
 }
 
@@ -652,11 +657,11 @@ function vmHandleAwait(vm: RaiserVM, inst: RaiserInstruction): void {
 		setReg(vm, base + inst.a, copy);
 		return;
 	}
-	if (v.intVal < 0 || v.intVal >= vm.futures.items.length) {
+	if (v.intVal < 0 || v.intVal >= vm.sched.futures.items.length) {
 		vmError(vm, `future handle out of bounds: ${v.intVal}`);
 		return;
 	}
-	const f = vm.futures.items[v.intVal];
+	const f = vm.sched.futures.items[v.intVal];
 	if (f.finished) {
 		if (f.failed) {
 			raiseFromFuture(vm, f);
@@ -670,7 +675,7 @@ function vmHandleAwait(vm: RaiserVM, inst: RaiserInstruction): void {
 		return;
 	}
 	vm.ip = vm.ip - 1;
-	const cur = vm.strands.items[vm.current];
+	const cur = vm.sched.strands.items[vm.current];
 	cur.status = RaiserStrandStatus.Blocked;
 	f.waiters.push(vm.current);
 	vm.yielded = true;
@@ -683,8 +688,8 @@ export function execLoop(vm: RaiserVM): void {
 	// leaves pointing at the main strand's heap. exitValue needs no copy: both
 	// finishProgram call sites are guarded by strandFinish returning false,
 	// which is exactly the main strand.
-	if (vm.strands.items.length > 0) {
-		const main = vm.strands.items[0];
+	if (vm.sched.strands.items.length > 0) {
+		const main = vm.sched.strands.items[0];
 		vm.arrayHeap = main.arrayHeap;
 		vm.objectHeap = main.objectHeap;
 	}
@@ -696,7 +701,7 @@ function execStrandLoop(vm: RaiserVM): void {
 		if (vm.halted) return;
 		if (!vm.yielded) return;
 		vm.yielded = false;
-		const cur = vm.strands.items[vm.current];
+		const cur = vm.sched.strands.items[vm.current];
 		if (cur.status === RaiserStrandStatus.Running) cur.status = RaiserStrandStatus.Ready;
 		strandSave(vm);
 		const next = schedulePick(vm);
@@ -2400,8 +2405,8 @@ test "single strand: no scheduler involvement" {
 		[raiserInt(42)]
 	));
 	assert vm.exitValue.intVal === 42;
-	assert vm.strands.items.length === 1;
-	assert vm.strands.items[0].status === RaiserStrandStatus.Done;
+	assert vm.sched.strands.items.length === 1;
+	assert vm.sched.strands.items[0].status === RaiserStrandStatus.Done;
 }
 
 test "two strands interleave at Yield" {
@@ -2464,8 +2469,8 @@ test "spawned strand finishes and hands the turn back" {
 	vmSpawnStrand(vm, 1);
 	execLoop(vm);
 	assert vm.output === "7\n9\n";
-	assert vm.strands.items[1].status === RaiserStrandStatus.Done;
-	assert vm.strands.items[1].result.intVal === 7;
+	assert vm.sched.strands.items[1].status === RaiserStrandStatus.Done;
+	assert vm.sched.strands.items[1].result.intVal === 7;
 }
 
 test "each strand keeps its own registers" {
@@ -2490,7 +2495,7 @@ test "each strand keeps its own registers" {
 	vmSpawnStrand(vm, 1);
 	execLoop(vm);
 	assert vm.exitValue.intVal === 11;
-	assert vm.strands.items[1].result.intVal === 22;
+	assert vm.sched.strands.items[1].result.intVal === 22;
 }
 
 // --- Futures: spawn / await ---
@@ -2530,8 +2535,8 @@ test "spawn returns a future the strand completes, await reads it" {
 	assert vm.error === "";
 	assert vm.output === "7\n";
 	assert vm.exitValue.intVal === 7;
-	assert vm.futures.items.length === 1;
-	assert vm.futures.items[0].finished;
+	assert vm.sched.futures.items.length === 1;
+	assert vm.sched.futures.items[0].finished;
 }
 
 test "a ref result crosses three heaps: producer, future, reader" {
@@ -2561,8 +2566,8 @@ test "a ref result crosses three heaps: producer, future, reader" {
 	assert vm.output === "42\n";
 	// One object per stage: the worker built it, the future owns a copy, and
 	// main holds the closure it spawned plus the copy it read back.
-	assert vm.strands.items[1].objectHeap.objects.length === 1;
-	assert vm.futures.items[0].valueObjectHeap.objects.length === 1;
+	assert vm.sched.strands.items[1].objectHeap.objects.length === 1;
+	assert vm.sched.futures.items[0].valueObjectHeap.objects.length === 1;
 	assert vm.objectHeap.objects.length === 2;
 }
 
@@ -2598,7 +2603,7 @@ test "a spawned strand writes to its own copy of the captured env" {
 	// C would let the child write straight through the borrow; here the child
 	// owns a copy, so the parent still reads what it stored (Amendment J).
 	assert vm.output === "7\n";
-	const childEnv = heapObjectGetField(vm.strands.items[1].objectHeap, 0, "n");
+	const childEnv = heapObjectGetField(vm.sched.strands.items[1].objectHeap, 0, "n");
 	assert childEnv.intVal === 99;
 }
 
@@ -2704,7 +2709,7 @@ test "process.exit skips the drain" {
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
 	assert vm.output === "1\n";
-	assert vm.strands.items[1].status === RaiserStrandStatus.Ready;
+	assert vm.sched.strands.items[1].status === RaiserStrandStatus.Ready;
 }
 
 // --- Exceptions ---
@@ -2863,8 +2868,8 @@ test "a throw in a spawned strand fails its future and re-raises in the reader" 
 	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
 	assert vm.error === "";
 	assert vm.output === "boom\n";
-	assert vm.futures.items[0].failed;
-	assert vm.futures.items[0].errorObserved;
+	assert vm.sched.futures.items[0].failed;
+	assert vm.sched.futures.items[0].errorObserved;
 	assert vmOrphanFailures(vm).length === 0;
 }
 
