@@ -44,7 +44,7 @@ nim-cache/
 # a mis-expanded ~ once created a nested copy of the repo here
 /Users/
 
-# syncthing folder markers, never in git
+# docs/ is a Syncthing folder root (NIM-REF.md shared with the Windows box)
 docs/.stfolder/
 docs/.stignore
 docs/.stversions/
