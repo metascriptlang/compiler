@@ -18,9 +18,20 @@ import { CheckerError, Severity } from "../../checker/context";
 
 let _raiserCompileErrors: CheckerError[] = [];
 
+let _raiserModulePath: string = "";
+
+export function setRaiserModulePath(path: string): void {
+	_raiserModulePath = path;
+}
+
+export function getRaiserModulePath(): string {
+	return _raiserModulePath;
+}
+
 export function queueRaiserCompileError(message: string, line: int32, column: int32): void {
+	const tagged = _raiserModulePath == "" ? message : `[${_raiserModulePath}] ${message}`;
 	_raiserCompileErrors.push({
-		message: message,
+		message: tagged,
 		line: line,
 		column: column,
 		endLine: 0,
@@ -296,6 +307,18 @@ export function hasLoop(s: RaiserCompState): boolean {
 
 // --- Function map helpers ---
 
+type RaiserFuncDemandFn = (idx: int32) => void;
+
+let _raiserFuncDemandFn: RaiserFuncDemandFn = (_idx: int32): void => {};
+
+export function registerRaiserFuncDemand(fn: RaiserFuncDemandFn): void {
+	_raiserFuncDemandFn = fn;
+}
+
+export function clearRaiserFuncDemand(): void {
+	_raiserFuncDemandFn = (_idx: int32): void => {};
+}
+
 export function registerFunc(s: RaiserCompState, name: string, index: int32): void {
 	const entry: RaiserFuncEntry = { name, index };
 	s.funcMap.items.push(entry);
@@ -303,7 +326,8 @@ export function registerFunc(s: RaiserCompState, name: string, index: int32): vo
 
 export function resolveFunc(s: RaiserCompState, name: string): int32 {
 	for (let i = s.funcMap.items.length - 1; i >= 0; i = i - 1) {
-		if (s.funcMap.items[i].name === name) {
+		if (s.funcMap.items[i].name == name) {
+			_raiserFuncDemandFn(s.funcMap.items[i].index);
 			return s.funcMap.items[i].index;
 		}
 	}

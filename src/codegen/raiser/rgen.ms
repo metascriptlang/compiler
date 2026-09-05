@@ -23,6 +23,8 @@ import {
 	RaiserFuncMap, RaiserFuncEntry, RaiserBuiltinMap, RaiserBuiltinEntry,
 	createCompState, emitInst, emitLoadConst, emitRet, allocReg,
 	addConst, declareLocal, resetTemps, resolveFunc, emitClosurePair,
+	registerRaiserFuncDemand, clearRaiserFuncDemand,
+	setRaiserModulePath, getRaiserModulePath,
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr } from "./expressions";
@@ -86,7 +88,7 @@ function isExpressionBody(node: Node): boolean {
 
 // --- Compile a function body ---
 
-export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, fnName: string, params: string[], body: Node, arity: number): RaiserFunction {
+export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, fnName: string, params: string[], body: Node, arity: number, isMethod: boolean = false): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
 	s.enumMap = enumMap;
@@ -242,6 +244,19 @@ export interface RaiserModuleInput {
 	program: Node;
 }
 
+interface RaiserProjectDecl {
+	modulePath: string;
+	isCtor: boolean;
+	isMethod: boolean;
+	fnName: string;
+	params: string[];
+	body: Node;
+	className: string;
+	classBody: Node[];
+	ctorParams: string[];
+	ctorBody: Node;
+}
+
 export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModule {
 	const functions: RaiserFunction[] = [];
 
@@ -251,6 +266,10 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 	const globalEnumMapItems: RaiserFuncEntry[] = [];
 	const globalEnumMap: RaiserFuncMap = { items: globalEnumMapItems };
 	let funcIdx = 0;
+	const projectDecls: RaiserProjectDecl[] = [];
+	const noNodes: Node[] = [];
+	const noStrs: string[] = [];
+	const nullNode = null as unknown as Node;
 
 	// Pass 1a: Collect functions + enums (must match Phase 2 compilation order)
 	for (let mi = 0; mi < modules.length; mi += 1) {
@@ -261,6 +280,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 				const fd = fnNode.data as FunctionDeclData;
 				const entry: RaiserFuncEntry = { name: fd.fnName, index: funcIdx };
 				globalFuncMap.items.push(entry);
+				projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: false, isMethod: false, fnName: fd.fnName, params: fd.params, body: fd.fnBody, className: "", classBody: noNodes, ctorParams: noStrs, ctorBody: nullNode });
 				funcIdx += 1;
 			}
 			const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
@@ -290,6 +310,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 						const methodKey = `${cd.className}_${md.methodName}`;
 						const mEntry: RaiserFuncEntry = { name: methodKey, index: funcIdx };
 						globalFuncMap.items.push(mEntry);
+						projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: false, isMethod: true, fnName: methodKey, params: md.methodParams, body: md.methodBody, className: "", classBody: noNodes, ctorParams: noStrs, ctorBody: nullNode });
 						funcIdx += 1;
 					}
 				}
@@ -300,6 +321,8 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 						const ctorKey = cd.className + "_new";
 						const cEntry: RaiserFuncEntry = { name: ctorKey, index: funcIdx };
 						globalFuncMap.items.push(cEntry);
+						const ctd = cd.classBody[ci].data as ConstructorDeclData;
+						projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: true, isMethod: false, fnName: ctorKey, params: noStrs, body: nullNode, className: cd.className, classBody: cd.classBody, ctorParams: ctd.ctorParams, ctorBody: ctd.ctorBody });
 						funcIdx += 1;
 					}
 				}
@@ -307,6 +330,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 					const ctorKey = cd.className + "_new";
 					const cEntry: RaiserFuncEntry = { name: ctorKey, index: funcIdx };
 					globalFuncMap.items.push(cEntry);
+					projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: true, isMethod: false, fnName: ctorKey, params: noStrs, body: nullNode, className: cd.className, classBody: cd.classBody, ctorParams: noStrs, ctorBody: nullNode });
 					funcIdx += 1;
 				}
 			}
@@ -327,54 +351,31 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 		funcIdx += 1;
 	}
 
-	// --- Pass 2: Compile function bodies ---
-	for (let mi = 0; mi < modules.length; mi += 1) {
-		const pd = modules[mi].program.data as ProgramData;
-		for (let i = 0; i < pd.programStmts.length; i += 1) {
-			const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
-			if (fnNode !== null) {
-				const fd = fnNode.data as FunctionDeclData;
-				const func = compileFuncBody(globalFuncMap, globalEnumMap, fd.fnName, fd.params, fd.fnBody, fd.params.length);
-				functions.push(func);
-			}
-		}
+	// --- Pass 2: Reserve slots; bodies compile on demand (roots = init functions) ---
+	for (const _dcl of projectDecls) {
+		functions.push(raiserPlaceholderFunc());
 	}
-
-	// --- Pass 2b: Compile class methods and constructors ---
-	for (let mi = 0; mi < modules.length; mi += 1) {
-		const pd = modules[mi].program.data as ProgramData;
-		for (let i = 0; i < pd.programStmts.length; i += 1) {
-			const classNode = unwrapToClassDecl(pd.programStmts[i]);
-			if (classNode !== null) {
-				const cd = classNode.data as ClassDeclData;
-				let hasCtor = false;
-				// Methods first (same order as Phase 1 collection)
-				for (let ci = 0; ci < cd.classBody.length; ci += 1) {
-					if (cd.classBody[ci].kind === NodeKind.MethodDecl) {
-						const md = cd.classBody[ci].data as MethodDeclData;
-						const methodName = `${cd.className}_${md.methodName}`;
-						// md.methodParams already has "this" at index 0 (injected by collectPass)
-						const func = compileFuncBody(globalFuncMap, globalEnumMap, methodName, md.methodParams, md.methodBody, md.methodParams.length);
-						functions.push(func);
-					}
-				}
-				// Constructor
-				for (let ci = 0; ci < cd.classBody.length; ci += 1) {
-					if (cd.classBody[ci].kind === NodeKind.ConstructorDecl) {
-						hasCtor = true;
-						const ctd = cd.classBody[ci].data as ConstructorDeclData;
-						const func = compileClassConstructor(globalFuncMap, globalEnumMap, cd.className, cd.classBody, ctd.ctorParams, ctd.ctorBody);
-						functions.push(func);
-					}
-				}
-				if (!hasCtor) {
-					const noParams: string[] = [];
-					const func = compileClassConstructor(globalFuncMap, globalEnumMap, cd.className, cd.classBody, noParams, null);
-					functions.push(func);
-				}
-			}
-		}
+	const compiledFlags: boolean[] = [];
+	for (const _dcl of projectDecls) {
+		compiledFlags.push(false);
 	}
+	const demandBody = (idx: int32): void => {
+		if (idx < 0 || idx >= projectDecls.length) return;
+		if (compiledFlags[idx]) return;
+		compiledFlags[idx] = true;
+		const dcl = projectDecls[idx];
+		const prevModule = getRaiserModulePath();
+		setRaiserModulePath(dcl.modulePath);
+		if (dcl.isCtor) {
+			functions[idx] = compileClassConstructor(globalFuncMap, globalEnumMap, dcl.className, dcl.classBody, dcl.ctorParams, dcl.ctorBody);
+		} else {
+			functions[idx] = compileFuncBody(globalFuncMap, globalEnumMap, dcl.fnName, dcl.params, dcl.body, dcl.params.length, dcl.isMethod);
+		}
+		setRaiserModulePath(prevModule);
+	};
+	registerRaiserFuncDemand(demandBody);
+	defer clearRaiserFuncDemand();
+	defer setRaiserModulePath("");
 
 	// --- Emit builtin stubs ---
 	for (let bi = 0; bi < builtinNames.length; bi += 1) {
@@ -392,6 +393,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 	const initIndices: number[] = [];
 	for (let mi = 0; mi < modules.length; mi += 1) {
 		const pd = modules[mi].program.data as ProgramData;
+		setRaiserModulePath(modules[mi].modulePath);
 		const s = createCompState();
 		s.funcMap = globalFuncMap;
 		s.enumMap = globalEnumMap;
