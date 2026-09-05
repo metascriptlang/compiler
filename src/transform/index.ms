@@ -134,6 +134,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerGenerator(result, ctx); }
 	if (!jsBackend) { result = lowerSpawn(result, ctx); }
 	if (!jsBackend) { result = lowerAwait(result, ctx); }
+	if (!jsBackend) { result = lowerCtorInit(result, ctx); }
 	if (!jsBackend) { result = lowerActor(result, ctx); }
 	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
 	if (!jsBackend) { result = lowerRvalueBridge(result, ctx); }
