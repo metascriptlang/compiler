@@ -51,6 +51,21 @@ typedef struct {
 typedef void (*msCallSoonFn)(msClosure cb);
 extern MS_THREAD_LOCAL msCallSoonFn msCallSoonProc; /* set by dispatcher init */
 
+/* Callback-list spinlock — the ONE cross-thread spot in the future machinery.
+ * The reference event loop is single-threaded (add and fire on one thread, no
+ * lock needed); our actor runtime dispatches async methods on stolen pool
+ * workers while the dispatcher thread fires completions, so list mutations
+ * must be ordered. Tiny critical sections: pointer swaps only, callbacks
+ * always run outside the lock. */
+extern _Atomic(int) gMsFutCbLock; /* defined in core/system.c */
+static inline void msFutCbLock(void) {
+	while (atomic_exchange_explicit(&gMsFutCbLock, 1, memory_order_acquire))
+		while (atomic_load_explicit(&gMsFutCbLock, memory_order_relaxed)) {}
+}
+static inline void msFutCbUnlock(void) {
+	atomic_store_explicit(&gMsFutCbLock, 0, memory_order_release);
+}
+
 static inline void msCallSoon(msClosure cb) {
 	if (msCallSoonProc == NULL) {
 		/* No dispatcher — call immediately (Standard reference fallback) */
@@ -231,9 +246,11 @@ extern void msNotifyFutureComplete(void);
 /* Fire all registered callbacks via callSoon (reference parity).
  * Deferred execution prevents reentrancy during msProcessTimers/msFutureComplete. */
 static inline void msFutureFireCallbacks(msFutureBase* f) {
+	msFutCbLock();
 	msFutureCb* cb = f->callbacks;
 	f->callbacks = NULL;
 	f->cbTail = NULL;
+	msFutCbUnlock();
 	if (f->failed && cb == NULL && !atomic_load_explicit(&f->errorObserved, memory_order_relaxed)) {
 		msNoteOrphanFailure(f);
 	}
@@ -261,9 +278,11 @@ static inline void msFutureFail(void* fp, void* err) {
 static inline void msFutureCancel(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	if (atomic_load_explicit(&f->finished, memory_order_acquire)) return;
+	msFutCbLock();
 	msFutureCb* cb = f->callbacks;
 	f->callbacks = NULL;
 	f->cbTail = NULL;
+	msFutCbUnlock();
 	while (cb) {
 		msFutureCb* next = cb->next;
 		free(cb);
@@ -280,10 +299,25 @@ static inline bool msFutureFailed(void* fp) { return ((msFutureBase*)fp)->failed
 /* Check if future was cancelled */
 static inline bool msFutureCancelled(void* fp) { return ((msFutureBase*)fp)->cancelled; }
 
-/* Add callback — if already finished, defer via callSoon; else append to list. */
+/* Add callback — if already finished, defer via callSoon; else append to list.
+ * The finished re-check under the list lock closes the add-vs-fire race: either
+ * the append lands before a concurrent fire's grab (node is taken by that fire)
+ * or after it (we see finished and take the callSoon path). Without it, a node
+ * appended between the fire's grab and its NULL-store is stranded forever on
+ * the finished future — the lost wakeup behind the spawn-inside-actor hang. */
 static inline void msFutureAddCallback(void* fp, msClosure cb) {
 	msFutureBase* f = (msFutureBase*)fp;
 	if (atomic_load_explicit(&f->finished, memory_order_acquire)) {
+		if (f->failed) {
+			atomic_store_explicit(&f->errorObserved, true, memory_order_relaxed);
+			msClearOrphanFailure(f);
+		}
+		msCallSoon(cb);
+		return;
+	}
+	msFutCbLock();
+	if (atomic_load_explicit(&f->finished, memory_order_acquire)) {
+		msFutCbUnlock();
 		if (f->failed) {
 			atomic_store_explicit(&f->errorObserved, true, memory_order_relaxed);
 			msClearOrphanFailure(f);
@@ -302,6 +336,7 @@ static inline void msFutureAddCallback(void* fp, msClosure cb) {
 		f->cbTail->next = node;
 		f->cbTail = node;
 	}
+	msFutCbUnlock();
 }
 
 /* ===== Typed Complete / Read (monomorphic — no boxing) ===== */

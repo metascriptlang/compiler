@@ -1612,13 +1612,20 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 						const mapped = lookupLocalName(p, safe);
 						cName = mapped !== "" ? mapped : safe;
 					}
-					// If the symbol is passed by pointer in C, use `->`; otherwise
-					// direct dot access. Three paths produce a pointer:
-					//   1. Reference type (Ref/Ptr/Borrow): isPointerType is true
-					//   2. Large value-type param: tracked via `isIndirectParam`
-					//   3. Local hoisted via `&temp` for borrow: tracked via
-					//      `isIndirectLocal`
-					const ptrType = isPointerType(walkObj.nodeType !== null ? walkObj.nodeType : (idSym !== null ? idSym.symbolType : null));
+				// If the symbol is passed by pointer in C, use `->`; otherwise
+				// direct dot access. Three paths produce a pointer:
+				//   1. Reference type (Ref/Ptr/Borrow): isPointerType is true
+				//   2. Large value-type param: tracked via `isIndirectParam`
+				//   3. Local hoisted via `&temp` for borrow: tracked via
+				//      `isIndirectLocal`
+				// Pointer-ness is asked of the DECLARED type (symbolType), never
+				// the flow-narrowed nodeType: narrowing selects which variant slot
+				// is read, it does not move the base into pointer storage — but a
+				// narrowed variant IS Ref-repr, so asking nodeType made value-storage
+				// locals emit `->` on a union struct ("member reference type ... is
+				// not a pointer"). Field resolution uses the narrowed type above;
+				// access syntax uses where the value lives.
+				const ptrType = isPointerType(idSym !== null ? idSym.symbolType : null);
 					const indirect = isIndirectParam(p, rawName) || isIndirectLocal(p, rawName);
 					const acc2 = (ptrType || indirect) ? "->" : ".";
 					const identTail = discSuffix !== "" ? discSuffix : `v${declVarIdx}.${field}`;

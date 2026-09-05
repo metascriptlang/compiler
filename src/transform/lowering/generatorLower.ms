@@ -39,7 +39,7 @@ import {
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
 	collectDeclNames, makeTryCatch, makeMoveExpr,
 } from "../util";
-import { numberType, noneType } from "../../checker/types";
+import { numberType, createPtr, createPrimitive } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Data Structures =====
@@ -62,10 +62,21 @@ export interface LoopFrame {
 	continueState: number;
 }
 
+// Active finally scope (finallyPath port, reference closureiters): a
+// yield-containing try with a yield-free finally inlines its finally body at
+// every exit of the try. loopDepth = loopStack length when the try began; a
+// break/continue only crosses the try — and so only runs the finally — when
+// its target loop sits outside the try (frame.loopDepth > target loop index).
+export interface FinallyFrame {
+	stmts: Node[];
+	loopDepth: number;
+}
+
 export interface StateCollector {
 	items: GenState[];
 	loopStack: LoopFrame[];
 	excType: Type | null;   // exception type carried by $curExc (from a catch's nodeType)
+	finallyStack: FinallyFrame[];
 }
 
 
@@ -254,6 +265,30 @@ function emitYield(sc: StateCollector, currentState: number, nextSt: number, yie
 // ===== State Splitting =====
 // Split a linear sequence of statements at yield points.
 
+// Inline the finally bodies of every frame a break/continue crosses
+// (innermost first). targetLoopIdx = loopStack index of the loop being exited;
+// frames entered deeper than the target (loopDepth > targetLoopIdx) are tries
+// the exit leaves, so their finally must run before the state transition.
+function pushCrossedFinallies(sc: StateCollector, targetLoopIdx: number, out: Node[]): void {
+	let f = sc.finallyStack.length - 1;
+	while (f >= 0) {
+		if (sc.finallyStack[f].loopDepth > targetLoopIdx) {
+			for (const s of sc.finallyStack[f].stmts) out.push(s);
+		}
+		f = f - 1;
+	}
+}
+
+// Inline ALL enclosing finally bodies (innermost first) — a return leaves
+// every try, not just the innermost loop-crossing subset.
+function pushAllFinallies(sc: StateCollector, out: Node[]): void {
+	let f = sc.finallyStack.length - 1;
+	while (f >= 0) {
+		for (const s of sc.finallyStack[f].stmts) out.push(s);
+		f = f - 1;
+	}
+}
+
 export function splitStmts(stmts: Node[], sc: StateCollector, startState: number, exitState: number, loc: SourceLocation, resultType: Type | null): void {
 	let currentState = startState;
 	let i = 0;
@@ -265,12 +300,23 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 		if (stmt.kind === NodeKind.BreakStmt && sc.loopStack.length > 0) {
 			// Direct break: post-break stmts are dead, no need for trailing continue.
 			const top = sc.loopStack[sc.loopStack.length - 1];
+			pushCrossedFinallies(sc, sc.loopStack.length - 1, sc.items[currentState].stmts);
 			sc.items[currentState].stmts.push(makeStateAssign(top.breakState, loc));
 			return;
 		} else if (stmt.kind === NodeKind.ContinueStmt && sc.loopStack.length > 0) {
 			const top = sc.loopStack[sc.loopStack.length - 1];
+			pushCrossedFinallies(sc, sc.loopStack.length - 1, sc.items[currentState].stmts);
 			sc.items[currentState].stmts.push(makeStateAssign(top.continueState, loc));
 			return;
+		} else if (stmt.kind === NodeKind.ReturnStmt && sc.finallyStack.length > 0) {
+			// finallyPath port: a bare return inside a SPLIT try runs every
+			// enclosing finally before leaving. The return itself is left in
+			// its incoming shape (async consumers pre-rewrite returns into
+			// completion blocks that never reach this arm; generator returns
+			// keep their V1 shape).
+			pushAllFinallies(sc, sc.items[currentState].stmts);
+			sc.items[currentState].stmts.push(stmt);
+			i += 1;
 		} else if (!containsYield(stmt)) {
 			// Nested break/continue inside pushed-as-is stmt (e.g. `if (x) break;`
 			// where the if has no yield) needs the trailing-continue form.
@@ -348,9 +394,21 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 		} else if (stmt.kind === NodeKind.TryCatchStmt) {
 			const td = stmt.data as TryCatchStmtData;
 			const hasFinally = td.finallyBody !== null && !isEmptyBlock(td.finallyBody);
-			// Covered: try/catch without finally (single or nested). Other shapes
-			// (finally, catch-less) stay V1-skip until the finallyPath port.
-			if (hasFinally || td.catchBody === null) {
+			// finallyPath port: try-with-finally containing a yield splits with
+			// the finally inlined at each exit (splitTryFinally). A yield inside
+			// the finally body itself stays a loud V1 gap (it would need its own
+			// resumable states) — pushed as-is, codegen's unsupported-expression
+			// comment fails the build, unchanged behaviour. Catch-less and
+			// finally-less tries have nothing to split on.
+			if (hasFinally && containsYield(td.finallyBody)) {
+				sc.items[currentState].stmts.push(stmt);
+				i += 1;
+			} else if (hasFinally) {
+				const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
+				splitTryFinally(stmt, sc, currentState, afterSt, loc, resultType);
+				currentState = afterSt;
+				i += 1;
+			} else if (td.catchBody === null) {
 				sc.items[currentState].stmts.push(stmt);
 				i += 1;
 			} else {
@@ -438,6 +496,88 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 	splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, afterSt, loc, resultType);
 }
 
+// finallyPath helpers: the normal exit routes through a dedicated landing-free
+// finally state (an exception raised BY the finally body propagates directly
+// instead of re-entering a landing that would run the finally a second time);
+// the exception path runs the finally then re-raises $curExc out of the
+// machine (reference closureiters end-finally raise branch). Returns the
+// finally state index so later excLanding mark-loops can skip it.
+function appendNormalFinally(sc: StateCollector, exitStateIdx: number, finStmts: Node[], afterSt: number, loc: SourceLocation): number {
+	const finNormal = allocState(sc);
+	sc.items[exitStateIdx].stmts.push(makeStateAssign(finNormal, loc));
+	for (const s of finStmts) sc.items[finNormal].stmts.push(s);
+	sc.items[finNormal].stmts.push(makeStateAssign(afterSt, loc));
+	return finNormal;
+}
+
+function appendReraiseFinally(sc: StateCollector, finReraiseIdx: number, finStmts: Node[], loc: SourceLocation): void {
+	for (const s of finStmts) sc.items[finReraiseIdx].stmts.push(s);
+	sc.items[finReraiseIdx].stmts.push(makeStateAssign(-1, loc));
+	const curExcRef = makeIdent("$curExc", loc);
+	if (sc.excType !== null) curExcRef.nodeType = sc.excType;
+	sc.items[finReraiseIdx].stmts.push(createNode(NodeKind.ThrowStmt, { throwArg: curExcRef }, syntheticToken(loc)));
+}
+
+// Split a try containing BOTH a yield and a finally (yield-free finally),
+// with or without a catch. finallyPath port (reference closureiters): the
+// reference routes finally exits through a runtime :finallyPath env array;
+// with a yield-free finally body the finally state is single-shot straight
+// line code, so inlining it at each exit is equivalent (the reference itself
+// inlines single-entry states). Exits covered:
+//   normal try completion   → finNormal  [fin..., goto afterSt]
+//   normal catch completion → finNormal2 [fin..., goto afterSt]  (catch case)
+//   raise in try body       → catchSt (catch case) / finReraise
+//   raise in catch body     → finReraise [fin..., $state=-1, rethrow $curExc]
+//   break/continue/return crossing the try → splitStmts via sc.finallyStack
+// Exit paths are mutually exclusive, so the shared stmt nodes execute exactly
+// once per execution. tryExit/catchExit keep an excLanding on purpose: a
+// trailing await's resume read (the re-raising read) executes at their entry.
+// Known divergence from the reference's runtime routing: a finally body that
+// itself raises can run twice on the resume-read boundary path (the reference
+// runs it once) — a corner documented at corpus 420.
+function splitTryFinally(node: Node, sc: StateCollector, currentState: number, afterSt: number, loc: SourceLocation, resultType: Type | null): void {
+	const td = node.data as TryCatchStmtData;
+	const finStmts = extractBodyStmts(td.finallyBody);
+	if (node.nodeType !== null) sc.excType = node.nodeType;
+	const tryStart = allocState(sc);
+	const tryExit = allocState(sc);
+	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc));
+	sc.finallyStack.push({ stmts: finStmts, loopDepth: sc.loopStack.length });
+
+	if (td.catchBody === null) {
+		const finReraise = allocState(sc);
+		splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
+		for (let s = tryStart; s < sc.items.length; s += 1) {
+			if (s !== finReraise && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
+		}
+		appendReraiseFinally(sc, finReraise, finStmts, loc);
+		appendNormalFinally(sc, tryExit, finStmts, afterSt, loc);
+	} else {
+		// tryStart/tryExit are pre-allocated above, so catchSt's index sits
+		// INSIDE the try-body mark range — the `s !== catchSt` guard keeps the
+		// catch from landing on itself (splitTryCatch avoids this by allocating
+		// catchSt first; here the two mark loops below cover both orders).
+		const catchSt = allocState(sc);
+		splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
+		for (let s = tryStart; s < sc.items.length; s += 1) {
+			if (s !== catchSt && sc.items[s].excLanding < 0) sc.items[s].excLanding = catchSt;
+		}
+		const finNormal = appendNormalFinally(sc, tryExit, finStmts, afterSt, loc);
+		const catchExit = allocState(sc);
+		const finReraise = allocState(sc);
+		splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, catchExit, loc, resultType);
+		// finNormal must stay landing-free (single finally run); everything else
+		// in the catch range — catchSt itself, catchExit's entry read included —
+		// runs the finally then re-raises.
+		for (let s = catchSt; s < sc.items.length; s += 1) {
+			if (s !== finReraise && s !== finNormal && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
+		}
+		appendReraiseFinally(sc, finReraise, finStmts, loc);
+		appendNormalFinally(sc, catchExit, finStmts, afterSt, loc);
+	}
+	sc.finallyStack.pop();
+}
+
 // Rewrite every Identifier named `oldName` in `node`'s subtree to `newName`,
 // stamping `typ` so member access (e.g. `$curExc.message`) resolves post-check.
 function renameIdentInSubtree(node: Node, oldName: string, newName: string, typ: Type | null): void {
@@ -495,7 +635,12 @@ export function wrapExcRouting(dispatch: Node, sc: StateCollector, loc: SourceLo
 
 export function makeCurExcDecl(sc: StateCollector, loc: SourceLocation): Node {
 	const curExcDecl = makeVarDecl("$curExc", makeNull(loc), DeclKind.Let, loc);
-	curExcDecl.nodeType = sc.excType !== null ? sc.excType : noneType();
+	// No known exception type (catch-less try/finally): a raw Ptr<void> holder.
+	// Never noneType() — TypeKind.None is a sentinel that trips the codegen
+	// unresolved-type gate. DRC corner (documented, same as an untyped env
+	// field): a ref exception rethrown through a catch-less finally has no
+	// destructor hook on this holder and leaks on the error path.
+	curExcDecl.nodeType = sc.excType !== null ? sc.excType : createPtr(createPrimitive(TypeKind.Void));
 	return curExcDecl;
 }
 
@@ -631,7 +776,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	rewriteReturns(bodyStmts, loc, iterResultType);
 
 	// 4. Split at yield points
-	const sc: StateCollector = { items: [], loopStack: [], excType: null };
+	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [] };
 	const initState = allocState(sc);
 	const doneState = -1;  // terminal
 
@@ -784,6 +929,12 @@ test "generator still one stmt" {
 }
 
 test "generator flag removed" { assert firstStmtKindAfter("function* gen() { yield 1; }", lowerGenerator) === NodeKind.FunctionDecl; }
+
+test "try finally with yield splits" { assert stmtCountAfter("function* gen() { try { yield 1; } finally { x = 2; } }", lowerGenerator) === 1; }
+
+test "try catch finally with yield splits" { assert stmtCountAfter("function* gen() { try { yield 1; } catch (e) { y = 3; } finally { x = 2; } }", lowerGenerator) === 1; }
+
+test "yield in finally stays passthrough" { assert stmtCountAfter("function* gen() { try { x = 1; } finally { yield 2; } }", lowerGenerator) === 1; }
 
 test "two yields" { assert stmtCountAfter("function* gen() { yield 1; yield 2; }", lowerGenerator) === 1; }
 

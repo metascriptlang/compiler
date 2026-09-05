@@ -1213,12 +1213,28 @@ function genUnionType(g: CGen, t: Type): string {
 
 		// Cache variant Object type so getTypeDesc returns the variant struct name.
 		// First variant with a given structural key wins — duplicates reuse it.
+		// A variant DECLARED in this module (cname: registered by the pass-1
+		// decl-name walk) resolves through its own declared typedef instead:
+		// caching the slot name under the struct's typeKey ("object:<id>") made
+		// genInterfaceDecl's idempotency gate think the body was already
+		// emitted, silently dropping it — and DRC hook definitions then took
+		// their parameter from that hijacked slot name while the hook
+		// prototypes derive from the hook NAME (clang: conflicting types).
+		// That happened whenever a function forced the union BEFORE the
+		// interface decl was processed — exactly what lambda lifting's
+		// prepend of lifted functions produces. Resolving the declared name
+		// here emits the body and keeps hooks, prototypes and the later
+		// InterfaceDecl in agreement regardless of statement order; anonymous
+		// variants keep the structural sharing this cache was designed for.
 		let canonical = varName;
 		if (variant !== null && variant.kind === TypeKind.Struct) {
 			const varKey = typeKey(variant);
 			const existing = typeCacheGet(g.typeCache, varKey);
 			if (existing !== "") {
 				canonical = existing;
+			} else if (variant.typeName !== "" && !isAnonTypeName(variant.typeName)
+					&& typeCacheGet(g.typeCache, "cname:" + variant.typeName) !== "") {
+				canonical = getTypeDesc(g, variant);
 			} else {
 				typeCacheSet(g.typeCache, varKey, varName);
 			}

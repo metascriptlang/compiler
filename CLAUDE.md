@@ -54,6 +54,14 @@ MSCORPUS_SAN=1 msc run src/test/corpus/run.ms  # ASan + DRC ledger, ~10 min
 MSCORPUS_FILTER=leak msc run src/test/corpus/run.ms   # substring subset
 src/test/guard/run.sh                          # lifecycle guards (proven-red)
 
+# Narrow checker/codegen fix and want corpus confidence without the ~19-min
+# run (cold anyway — the toolchain stamp hashes the binary itself)? Emit-diff
+# selector: `--emit=c` every corpus program with the HEAD binary and the
+# candidate, hash-diff the emitted C. Identical C ⇒ no lane outcome can
+# change. PROVE selector sensitivity on a known-affected PLAIN program first
+# (test-block repros diff 0 — `build` never emits test bodies).
+# Recipe + traps: src/test/CLAUDE.md §5.3.
+
 # Run without tests (build + run natively)
 msc run src/index.ms
 
@@ -81,6 +89,29 @@ bash tools/editor-plugin/build.sh --install
 ```
 
 **See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)** for the full build → test → sync → verify workflow and how `~/.metascript/` is kept in sync with the local source tree (the public `install.sh` only fetches GitHub releases; dev workflow needs the script above).
+
+## Windows Host Traps (this box, paid for 2026-09-05)
+
+- **Corpus `MSC=` must name a `.exe`.** The runner spawns the subject through
+  `cmd.exe`, which refuses extension-less binaries — an extension-less MSC
+  once produced an 863-fail corpus run where every cell said "build failed"
+  for a reason that had nothing to do with the compiler.
+- **msc spawns clang with the target's directory as cwd.** A stale
+  `runtime/` / `std/` / `vendor/` tree parked next to your targets (a
+  temp-dir graveyard from an older session did exactly this: an old
+  `dispatch.h` without `cancelled`, while the repo's copy was current) wins
+  the quoted-include search and produces header errors that "can't be true".
+  Delete stale support trees near targets FIRST; never start by reading
+  compiler source.
+- **pwsh `git show X | Set-Content` corrupts non-ASCII source** (one mangled
+  char broke a `fit.ms` export list). In a throwaway worktree use
+  `git checkout -- <file>` instead; in the main tree see Git Rules.
+- **`Start-Process` ExitCode is sometimes empty even after `-Wait`** — judge
+  runs by artifacts (test totals in the log, built binaries), not
+  `$p.ExitCode`.
+- Strip ANSI before grepping logs: `-replace "`e\[[0-9;]*m",""`.
+- The SAN lane needs libasan; scoop MinGW has none (`cannot find -lasan`), so
+  `MSCORPUS_SAN=1` is host-blocked until a toolchain with ASan arrives.
 
 ## Build Optimization — default `build` is UNOPTIMIZED (`-O0`)
 

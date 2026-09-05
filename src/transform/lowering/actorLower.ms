@@ -1284,18 +1284,18 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 
 			// Extract as top-level FunctionDecl with fnFlags: "async"
 			const implNativeName = name + "_" + md.methodName + "_impl";
-			// Plain-ref MOVE release is SYNC-ONLY: every method extracted here
-			// contains await, and putting the release in a try/finally around an
-			// await body trips a PRE-EXISTING async-lowering gap (a YieldExpr
-			// inside a try body survives to codegen — `async function f() { try
-			// { const n = await w; } finally {} }` fails identically without any
-			// actor involved). Async SEND leaks remain open, pinned by program
-			// 419; pass isVoid here once try×await lowering lands.
+			// Plain-ref MOVE release now covers ASYNC void methods too: the
+			// release wrapper puts the body in try/finally, and try×await
+			// splits since the finallyPath port (corpus 420) — the finally
+			// rides the async body's completion states. Non-void methods keep
+			// BORROW (Amendment I: an awaited CALL holds the borrow on the
+			// sender's frame), so they still pass isVoid=false.
+			const implVoid = md.methodReturnType === "" || md.methodReturnType === "void";
 			const implNode = createNode(NodeKind.FunctionDecl, {
 				fnName: implNativeName,
 				params: md.methodParams,
 				fnParamTypes: md.methodParamTypes,
-				fnBody: wrapImplBodyWithShareRelease(md.methodBody, md.methodParams, m.nodeType !== null ? m.nodeType.typeChildren : null, false, ctx, actorNode.location),
+				fnBody: wrapImplBodyWithShareRelease(md.methodBody, md.methodParams, m.nodeType !== null ? m.nodeType.typeChildren : null, implVoid, ctx, actorNode.location),
 				fnFlags: "async",
 				fnReturnType: md.methodReturnType,
 				fnDefaults: [],

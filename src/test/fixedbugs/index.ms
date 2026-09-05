@@ -144,3 +144,7 @@ import "./bug126RaiserConstInline";
 import "./bug127RaiserArrayTier";
 import "./bug128_staticGenericClassMake";
 import "./bug129_classMethodOverload";
+import "./bug129_tryAwaitFinallySplit";
+import "./bug130NarrowedUnionArg";
+import "./bug131NarrowedUnionMemberRead";
+import "./bug132LiftedFnUnionVariantHooks";

@@ -19,7 +19,7 @@
 //
 // Both cases clear fnFlags so generatorLower skips these functions.
 
-import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, ExprStmtData, IfStmtData, WhileStmtData, TryCatchStmtData, CallExprData, BinaryExprData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, ExprStmtData, IfStmtData, WhileStmtData, TryCatchStmtData, CallExprData, BinaryExprData, Type, TypeKind, isEmptyBlock } from "../../ast/node";
 import { mapChildren } from "../walker";
 import { TransformContext } from "../context";
 import {
@@ -29,7 +29,7 @@ import {
 } from "../util";
 import { NameSet, createNameSet, nameSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
-import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl } from "./generatorLower";
+import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
 import { stmtCountAfter } from "../testUtil";
 
 // ===== Variable Type Collection =====
@@ -188,7 +188,23 @@ function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promis
 	), loc)];
 }
 
-function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutName: string): void {
+// pendingFinallies: outer→inner finally bodies of every SPLIT try the return
+// sits inside (finallyPath port — see splitTryFinally in generatorLower). The
+// try's C-level finally disappears when it is split into states, so the return
+// block must run them itself, innermost-first, BEFORE the completion. A
+// yield-free try keeps its C-level finally (it is never split) and contributes
+// nothing here. Returns an empty list when no split try encloses the return.
+function finalliesBeforeReturn(pending: Node[][]): Node[] {
+	const out: Node[] = [];
+	let i = pending.length - 1;
+	while (i >= 0) {
+		for (const s of pending[i]) out.push(s);
+		i = i - 1;
+	}
+	return out;
+}
+
+function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutName: string, pendingFinallies: Node[][]): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt === null) continue;
@@ -198,7 +214,11 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 				const isVoidReturn = fnReturnInner === null || fnReturnInner.kind === TypeKind.Void;
 
 				const completeStmts = makeFutureCompleteStmts(rd.argument, isVoidReturn, promiseType, fnReturnInner, loc, retFutName);
-				const blockStmts: Node[] = [makeStateAssign(-1, loc)];
+				const blockStmts: Node[] = [];
+				// finallyPath: enclosing split-try finallies run before the
+				// function exits (before $state=-1 and the completion).
+				for (const fs of finalliesBeforeReturn(pendingFinallies)) blockStmts.push(fs);
+				blockStmts.push(makeStateAssign(-1, loc));
 				for (const cs of completeStmts) blockStmts.push(cs);
 				blockStmts.push(makeReturn(makeNull(loc), loc));
 				const block = makeBlock(blockStmts, loc);
@@ -206,30 +226,40 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 			},
 			NodeKind.BlockStmt => {
 				const bd = stmt.data as BlockStmtData;
-				rewriteAsyncReturns(bd.statements, promiseType, fnReturnInner, loc, retFutName);
+				rewriteAsyncReturns(bd.statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies);
 			},
 			NodeKind.IfStmt => {
 				const id = stmt.data as IfStmtData;
 				if (id.consequent !== null && id.consequent.kind === NodeKind.BlockStmt) {
-					rewriteAsyncReturns((id.consequent.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName);
+					rewriteAsyncReturns((id.consequent.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies);
 				}
 				if (id.alternate !== null && id.alternate.kind === NodeKind.BlockStmt) {
-					rewriteAsyncReturns((id.alternate.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName);
+					rewriteAsyncReturns((id.alternate.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies);
 				}
 			},
 			NodeKind.WhileStmt => {
 				const wd = stmt.data as WhileStmtData;
 				if (wd.whileBody !== null && wd.whileBody.kind === NodeKind.BlockStmt) {
-					rewriteAsyncReturns((wd.whileBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName);
+					rewriteAsyncReturns((wd.whileBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies);
 				}
 			},
 			NodeKind.TryCatchStmt => {
 				const td = stmt.data as TryCatchStmtData;
+				// Only a try that WILL split (yield in try or catch body — the
+				// finally body itself must stay yield-free) loses its C-level
+				// finally; those and only those contribute to the pending list.
+				let childPending: Node[][] = pendingFinallies;
+				const hasFin = td.finallyBody !== null && !isEmptyBlock(td.finallyBody);
+				if (hasFin && (containsYield(td.tryBody) || containsYield(td.catchBody))) {
+					childPending = [];
+					for (const p of pendingFinallies) childPending.push(p);
+					childPending.push(extractBodyStmts(td.finallyBody));
+				}
 				if (td.tryBody !== null && td.tryBody.kind === NodeKind.BlockStmt) {
-					rewriteAsyncReturns((td.tryBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName);
+					rewriteAsyncReturns((td.tryBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, childPending);
 				}
 				if (td.catchBody !== null && td.catchBody.kind === NodeKind.BlockStmt) {
-					rewriteAsyncReturns((td.catchBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName);
+					rewriteAsyncReturns((td.catchBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, childPending);
 				}
 			},
 			_ => {},
@@ -471,7 +501,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	collectDeclNames(body, nc, false);
 
 	// 3. Rewrite returns: return val → msFutureComplete($retFut, val); return null;
-	rewriteAsyncReturns(bodyStmts, retFutType, fnReturnInner, loc, retFutName);
+	rewriteAsyncReturns(bodyStmts, retFutType, fnReturnInner, loc, retFutName, []);
 
 	// 3b. Implicit void completion at body end
 	bodyStmts.push(makeExprStmt(makeCall(
@@ -482,7 +512,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	bodyStmts.push(makeReturn(makeNull(loc), loc));
 
 	// 4. Split at yield points (reuse generatorLower's algorithm)
-	const sc: StateCollector = { items: [], loopStack: [], excType: null };
+	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [] };
 	const initState = allocState(sc);
 	const doneState = -1;
 	splitStmts(bodyStmts, sc, initState, doneState, loc, null as unknown as Type);

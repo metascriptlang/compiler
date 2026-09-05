@@ -31,6 +31,16 @@ MS_THREAD_LOCAL msException* msCurrException = NULL;
 MS_THREAD_LOCAL msCallSoonFn msCallSoonProc = NULL;
 MS_THREAD_LOCAL void* msErrPayload = NULL;
 
+/* Future callback-list spinlock (declared extern in future.h). Guards the
+ * check-then-append of msFutureAddCallback against the grab-and-NULL of
+ * msFutureFireCallbacks/msFutureCancel on a different thread: actor async
+ * methods are dispatched on stolen pool-worker visits, so a callback can be
+ * appended to a future at the exact moment another thread completes and
+ * fires it — the appended node would be stranded on the finished future and
+ * never run (lost wakeup; proven by the spawn-inside-actor hang, 2026-09-05).
+ * Held only for list-pointer swaps, never while callbacks execute. */
+_Atomic(int) gMsFutCbLock = 0;
+
 void msPrintln(msString s) {
 	if (s.p != NULL && s.len > 0) {
 		fwrite(s.p->data, 1, s.len, stdout);
