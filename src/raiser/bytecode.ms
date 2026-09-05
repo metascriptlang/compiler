@@ -107,6 +107,11 @@ export enum RaiserOpcode {
 	// opcode NUMBERS, so inserting mid-enum would silently desync it.
 	LtStr,            // ABC: if R[A].strVal < R[B].strVal skip C
 	LeStr,            // ABC: if R[A].strVal <= R[B].strVal skip C
+
+	// Strand suspension (1)
+	// Hands the turn to the scheduler; the strand resumes at the next
+	// instruction. Same append-at-the-END rule as LtStr/LeStr above.
+	Yield,            // ABC: suspend the current strand, stay Ready
 }
 
 // --- Instruction ---
