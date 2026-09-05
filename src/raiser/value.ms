@@ -11,6 +11,7 @@ export enum RaiserValueKind {
 	String,     // string value
 	Array,      // handle into RaiserArrayHeap
 	Object,     // handle into RaiserObjectHeap
+	Future,     // handle into RaiserFutures — the VM's msFuture
 }
 
 // Flat interface — all fields always present, unused ones zeroed.
@@ -52,6 +53,10 @@ export function raiserArray(handle: number): RaiserValue {
 
 export function raiserObject(handle: number): RaiserValue {
 	return { kind: RaiserValueKind.Object, intVal: handle, floatVal: 0.0, strVal: "" };
+}
+
+export function raiserFuture(handle: number): RaiserValue {
+	return { kind: RaiserValueKind.Future, intVal: handle, floatVal: 0.0, strVal: "" };
 }
 
 // --- Deep copy (avoids pointer aliasing) ---
