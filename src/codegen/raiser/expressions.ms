@@ -8,7 +8,7 @@ import {
 	CallExprData, IdentifierData, MemberExprData,
 	ConditionalExprData, TypeAssertionData, UpdateExprData,
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
-	MoveExprData, VariableDeclData, AwaitExprData,
+	MoveExprData, VariableDeclData, AwaitExprData, NewExprData,
 	HiddenDerefData, HiddenStdConvData
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC } from "../../raiser/bytecode";
@@ -307,6 +307,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		NodeKind.ArrayAccess => { return compileArrayAccess(s, node); },
 		NodeKind.MemberExpr => { return compileMemberExpr(s, node); },
 		NodeKind.ObjectLiteral => { return compileObjectLiteral(s, node); },
+		NodeKind.NewExpr => { return compileNewExpr(s, node); },
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
 			return compileExpr(s, d.moveArg);
@@ -904,6 +905,39 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): number {
 	}
 
 	return dest;
+}
+
+// --- New ---
+
+function compileNewExpr(s: RaiserCompState, node: Node): number {
+	const d = node.data as NewExprData;
+
+	if (d.newCallee.kind === NodeKind.Identifier) {
+		const classId = d.newCallee.data as IdentifierData;
+		const funcIdx = resolveFunc(s, classId.name + "_new");
+		if (funcIdx >= 0) {
+			const sym = d.newCallee.resolvedSym;
+			const knownCtorless = sym !== null && (sym.symFlags & SymbolFlag.HasConstructor) === 0;
+			let callArgs: Node[] = d.newArguments;
+			if (knownCtorless && d.newArguments.length > 0) {
+				queueRaiserCompileError(
+					`new ${classId.name}: positional arguments on a class without a constructor reached codegen unlowered — they would be dropped`,
+					node.location.line, node.location.column);
+				callArgs = [];
+			}
+			const dest = allocReg(s);
+			emitCallArgs(s, dest, callArgs);
+			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, callArgs.length));
+			return dest;
+		}
+	}
+
+	queueRaiserCompileError(
+		"cannot compile 'new' here: no matching constructor in the Raiser function table",
+		node.location.line, node.location.column);
+	const reg = allocReg(s);
+	emitLoadConst(s, reg, raiserNil());
+	return reg;
 }
 
 // --- Array ---
