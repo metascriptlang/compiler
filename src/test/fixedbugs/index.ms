@@ -143,3 +143,5 @@ import "./bug125RaiserMissingBridgeSpan";
 import "./bug126RaiserConstInline";
 import "./bug127RaiserArrayTier";
 import "./bug128_staticGenericClassMake";
+import "./bug129_tryAwaitFinallySplit";
+import "./bug130NarrowedUnionArg";
