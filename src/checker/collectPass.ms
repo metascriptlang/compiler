@@ -404,7 +404,7 @@ export function collectClass(ctx: CheckerContext, node: Node): void {
 		const classGenerics = getGenericDecl(d.className);
 		const isExternClass = (node.flags & NodeFlag.ExternC) !== 0;
 		for (let si = 0; si < d.classBody.length; si += 1) {
-			collectClassMethod(ctx, d.className, classGenerics, d.classBody[si], isExternClass);
+			collectClassMethod(ctx, d.className, classGenerics, d.classBody, si, isExternClass);
 		}
 	}
 }
@@ -441,13 +441,43 @@ export function collectActor(ctx: CheckerContext, node: Node): void {
 	// Register methods as extensions (reuse collectClassMethod)
 	if (ctx.extensionRegistry !== null) {
 		const actorGenerics = getGenericDecl(d.actorName);
-		for (const member of d.actorBody) {
-			collectClassMethod(ctx, d.actorName, actorGenerics, member, false);
+		for (let mi = 0; mi < d.actorBody.length; mi += 1) {
+			collectClassMethod(ctx, d.actorName, actorGenerics, d.actorBody, mi, false);
 		}
 	}
 }
 
-function collectClassMethod(ctx: CheckerContext, className: string, classGenerics: string, member: Node, isExternClass: boolean): void {
+function methodDeclOfMember(member: Node): Node | null {
+	if (member.kind === NodeKind.MethodDecl) return member;
+	if (member.kind === NodeKind.DecoratedDecl) {
+		const dd = member.data as DecoratedDeclData;
+		if (dd.decoratedNode !== null && dd.decoratedNode.kind === NodeKind.MethodDecl) return dd.decoratedNode;
+	}
+	return null;
+}
+
+function methodDefinesRoutine(md: MethodDeclData): boolean {
+	if (md.methodBody === null) return false;
+	if (md.methodFlags.indexOf("overload", 0) >= 0) return false;
+	if (md.nativeName !== null && md.nativeName !== "") return false;
+	if (md.methodBody.kind !== NodeKind.BlockStmt) return true;
+	return (md.methodBody.data as BlockStmtData).statements.length > 0;
+}
+
+function methodOverloadPrimary(body: Node[], upTo: int32, methodName: string): Symbol | null {
+	for (let i = 0; i < upTo; i += 1) {
+		const priorNode = methodDeclOfMember(body[i]);
+		if (priorNode === null) continue;
+		const pd = priorNode.data as MethodDeclData;
+		if (pd.methodName !== methodName) continue;
+		if (!methodDefinesRoutine(pd)) continue;
+		if (priorNode.resolvedSym !== null) return priorNode.resolvedSym;
+	}
+	return null;
+}
+
+function collectClassMethod(ctx: CheckerContext, className: string, classGenerics: string, body: Node[], memberIdx: int32, isExternClass: boolean): void {
+	const member = body[memberIdx];
 	let builtinKind = "";
 	let methodNode: Node | null = null;
 	if (member.kind === NodeKind.MethodDecl) {
@@ -523,6 +553,14 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	methodSym.modulePath = ctx.modulePath;
 	methodSym.declNode = member;
 	member.resolvedSym = methodSym;
+	methodNode.resolvedSym = methodSym;
+	if (methodDefinesRoutine(md)) {
+		const primarySym = methodOverloadPrimary(body, memberIdx, md.methodName);
+		if (primarySym !== null) {
+			primarySym.overloads.push(methodSym);
+			methodSym.overloadIdx = primarySym.overloads.length;
+		}
+	}
 	// Copy method defaults onto the symbol so call-site default-fill can find them.
 	// resolvePass populates this for FunctionDecl via d.fnDefaults, but never visits
 	// the MethodDecl branch, so the method symbol's defaultParams stays empty unless
