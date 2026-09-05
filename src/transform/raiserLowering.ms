@@ -21,6 +21,8 @@ import { lowerResultFieldCheck } from "./desugar/resultFieldCheck";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
 import { lowerLambda } from "./lowering/lambdaLifting";
+import { lowerCtorInit } from "./lowering/ctorLower";
+import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
@@ -43,6 +45,8 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerResultFieldCheck(result, ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
+	result = lowerCtorInit(result, ctx);
+	result = lowerNewExpr(result, ctx);
 	result = lowerLambda(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
 	return result;
