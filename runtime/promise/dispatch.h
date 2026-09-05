@@ -60,7 +60,16 @@ typedef struct {
 /* ===== Dispatcher ===== */
 
 typedef struct msDispatcher {
+#if defined(MSOS_EMCC) || defined(MSOS_WASM) || defined(MSOS_BARE)
+	/* Single-threaded targets own their timers per dispatcher — there is one
+	 * dispatcher and one thread, so "who services this heap" cannot be asked.
+	 * The threaded dispatcher (dispatchFull.c) keeps timers on ONE process-
+	 * global heap instead, because the thread that ARMS a timer (a pool worker
+	 * running a spawn task) is not the thread that can service it. Exact
+	 * complement of the gate below: a target has either this field or a
+	 * completion port, never both. */
 	msTimerHeap timers;
+#endif
 	msCallbackDeque callbacks;
 #if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
   #ifdef _WIN32
