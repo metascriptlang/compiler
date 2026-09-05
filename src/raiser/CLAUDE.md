@@ -275,21 +275,32 @@ stdlib, because they have nothing to delegate to.
   at the export side (`src/checker/context.ms`) — `importSymFromRegistry`
   already had the restore hook. Bytecode warnings now name the exact reason
   an identifier failed to bind (symbol kind, decl kind, no initializer…).
-- **Two fail-loud holes, measured 2026-09-04 — both report success.**
-  (a) `async`/`await` compiles to a **no-op program**: on
-  `async function work(): Promise<int32> { return 7; }` + `await go()`, C and
-  JS both print `7`, Raiser produces **0 bytes and exits 0**.
-  `transformForRaiser` runs none of `lowerAsync`/`lowerAwait`/`lowerAsyncBridge`,
-  so the nodes reach the bytecode compiler and evaporate. Async is a deliberate
-  non-goal, but a non-goal owes a hard error with a span — the rule bug124
-  applied to the identifier arm. `function*`/`Generator` and `spawn` DO fail
-  loud, so async is the one silent case.
-  (b) **A VM runtime error still exits 0.** `cmdRunRaiser` prints
-  `raiser runtime error: …` under `if (!ranOk …)` but only assigns an exit
-  code under `if (ranOk …)`, so the failure path falls through to 0. Probe:
-  `const a: int32[] = [1,2,3]; console.log(a[99]);` prints
-  `array index out of bounds: 99 (length 3)` and returns **rc=0** — any script
-  or CI lane reading the exit status sees a pass.
+- **Async runs eager-sync (fixed 2026-09-05).** The single-threaded VM has no
+  event loop, so `lowerRaiserAsyncSync` (`src/transform/lowering/raiserAsyncSync.ms`,
+  wired into `transformForRaiser` right before `lowerLambda`) collapses the
+  async surface to its synchronous equivalent BEFORE codegen: `await X → X`,
+  `spawn(fn) → fn()`, `waitFor(h) → h`, `Promise.resolve(v) → v`. Detection
+  keys off `resolvedSym.builtinKind` (`PromiseSpawn`/`WaitFor`/`PromiseResolve`),
+  set by the checker; the bottom-up walk folds `await spawn(fn)` to `fn()` in
+  one pass. For deterministic code the result is identical to C/JS — only
+  concurrency is lost, which is correct for sequential suite/corpus runs.
+  Previously async was a **silent no-op** (0 bytes, rc=0). `spawn`/`waitFor`
+  also needed `std/core/promise/index.rms` to type-check (the module was
+  `.cms`-only); the `.rms` only carries the surface — the `ms*` externs are
+  never reached because the lowering deletes every live call site. This dropped
+  `src/index.ms` from 20 unresolved names to 15 (only `fetch`×14 + `Buffer`
+  remain, both network/CLI-shell). A real async construct with no eager-sync
+  form (generator, unbridged combinator) still hits the `_ =>` warning arm in a
+  dead std body — kept a warning, not fatal, because node-kind is not a
+  reachability signal (marking it fatal aborts every whole-program run on
+  `NewExpr`/`MacroInvocation` in uncalled prelude bodies — measured).
+- **A VM runtime error now exits non-zero (fixed 2026-09-05).** `cmdRunRaiser`
+  printed `raiser runtime error: …` under `if (!ranOk)` but only assigned an
+  exit code under `if (ranOk)`, so the failure path fell through to 0. Now the
+  `!ranOk` branch calls `exit(1)`. Probe: `const a: int32[] = [1,2,3];
+  console.log(a[99]);` prints `array index out of bounds` and returns rc=1.
+  This also unmasked a pre-existing raiser runtime crash in `checkPass.ms`
+  (`initSysTypes` array OOB) that the exit-0 hole had been hiding.
 
 ## Execution budget — back-edges, not instructions
 
