@@ -354,8 +354,14 @@ function _bridgeMsStdinDisableBuffering(args: RaiserValue[]): RaiserValue {
 // Raw miniz kernels from runtime/compress/zip.c — the same TU set zip.cms
 // @compiles into this binary via the package-manager import chain. Handles
 // are int64 tokens; all Result/object construction lives in the .rms tier.
+// The externs bind TUs that only the package-manager chain @compiles in —
+// a test build whose closure lacks that chain (fixedbugs via test/helpers)
+// would fail to link them, so the whole bridge tier is compiled out of
+// test binaries (same pattern as the CLI entry's `when (!testBuild)`).
 
 @include("runtime/compress/zip.h");
+
+when (!testBuild) {
 
 extern function msZipReaderOpen(data: string): int64;
 extern function msZipReaderCount(handle: int64): int32;
@@ -415,11 +421,16 @@ function _bridgeMsZipWriterClose(args: RaiserValue[]): RaiserValue {
 	return raiserNil();
 }
 
+}
+
 // --- std/crypto bridges (hash family) ---
 // runtime/crypto/hash.c + the mbedtls hash TUs are already compiled into
 // this binary through the package-manager import chain (download.ms).
+// Same test-build compile-out as the zip bridges above.
 
 @include("runtime/crypto/hash.h");
+
+when (!testBuild) {
 
 extern function msCryptoInit(): boolean;
 extern function msCryptoCleanup(): void;
@@ -436,6 +447,8 @@ function _bridgeMsCryptoCleanup(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsCryptoHashString(args: RaiserValue[]): RaiserValue {
 	return boxString(msCryptoHashString(unboxString(args[0]), unboxString(args[1]), unboxString(args[2])));
+}
+
 }
 
 // --- Macro Node child accessors ---
@@ -738,22 +751,24 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msReadLine",            _bridgeMsReadLine);
 	registerHostFn("msReadBytes",           _bridgeMsReadBytes);
 	registerHostFn("msStdinHasData",        _bridgeMsStdinHasData);
-	registerHostFn("msWriteStdout",         _bridgeMsWriteStdout);
-	registerHostFn("msWriteStderr",         _bridgeMsWriteStderr);
-	registerHostFn("msZipReaderOpen",       _bridgeMsZipReaderOpen);
-	registerHostFn("msZipReaderCount",      _bridgeMsZipReaderCount);
-	registerHostFn("msZipReaderEntryName",  _bridgeMsZipReaderEntryName);
-	registerHostFn("msZipReaderEntrySize",  _bridgeMsZipReaderEntrySize);
-	registerHostFn("msZipReaderEntryIsDir", _bridgeMsZipReaderEntryIsDir);
-	registerHostFn("msZipReaderExtract",    _bridgeMsZipReaderExtract);
-	registerHostFn("msZipReaderClose",      _bridgeMsZipReaderClose);
-	registerHostFn("msZipWriterNew",        _bridgeMsZipWriterNew);
-	registerHostFn("msZipWriterAdd",        _bridgeMsZipWriterAdd);
-	registerHostFn("msZipWriterFinalize",   _bridgeMsZipWriterFinalize);
-	registerHostFn("msZipWriterClose",      _bridgeMsZipWriterClose);
-	registerHostFn("msCryptoInit",          _bridgeMsCryptoInit);
-	registerHostFn("msCryptoCleanup",       _bridgeMsCryptoCleanup);
-	registerHostFn("msCryptoHashString",    _bridgeMsCryptoHashString);
+	registerHostFn("msWriteStdout",        _bridgeMsWriteStdout);
+	registerHostFn("msWriteStderr",        _bridgeMsWriteStderr);
+	when (!testBuild) {
+		registerHostFn("msZipReaderOpen",       _bridgeMsZipReaderOpen);
+		registerHostFn("msZipReaderCount",      _bridgeMsZipReaderCount);
+		registerHostFn("msZipReaderEntryName",  _bridgeMsZipReaderEntryName);
+		registerHostFn("msZipReaderEntrySize",  _bridgeMsZipReaderEntrySize);
+		registerHostFn("msZipReaderEntryIsDir", _bridgeMsZipReaderEntryIsDir);
+		registerHostFn("msZipReaderExtract",    _bridgeMsZipReaderExtract);
+		registerHostFn("msZipReaderClose",      _bridgeMsZipReaderClose);
+		registerHostFn("msZipWriterNew",        _bridgeMsZipWriterNew);
+		registerHostFn("msZipWriterAdd",        _bridgeMsZipWriterAdd);
+		registerHostFn("msZipWriterFinalize",   _bridgeMsZipWriterFinalize);
+		registerHostFn("msZipWriterClose",      _bridgeMsZipWriterClose);
+		registerHostFn("msCryptoInit",          _bridgeMsCryptoInit);
+		registerHostFn("msCryptoCleanup",       _bridgeMsCryptoCleanup);
+		registerHostFn("msCryptoHashString",    _bridgeMsCryptoHashString);
+	}
 	registerHostFn("msStringSplit",         _bridgeMsStringSplit);
 	registerHostFn("msNodeIsFloatLiteral", _bridgeMsNodeIsFloatLiteral);
 	registerHostFn("msNodeIntValue",        _bridgeMsNodeIntValue);
