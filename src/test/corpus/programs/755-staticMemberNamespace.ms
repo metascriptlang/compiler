@@ -6,8 +6,16 @@
 // name without colliding. Both backends must agree on every line.
 
 class Unit {}
+class Ax {}
+class Bx {}
 
 function scale(this typeof Unit, v: float64): float64 { return v * 2.0; }
+
+function scale(v: float64): float64 { return v * 3.0; }
+
+function f(this typeof Ax, x: int32): int32 { return x + 1; }
+
+function f(this typeof Bx, x: int32): int32 { return x + 2; }
 
 function widen(this s: string): int32 { return s.length; }
 
@@ -28,6 +36,11 @@ function main(): int32 {
 
 	// A user namespace behaves the same way.
 	pass = check("userStatic", Unit.scale(2.5) === 5.0) && pass;
+
+	// Same-named routines of one module coexist: the static keys on its
+	// receiver, the free function on the value, each with its own emitted name.
+	pass = check("sameNameStaticVsFree", Unit.scale(2.0) === 4.0 && scale(2.0) === 6.0) && pass;
+	pass = check("twoStaticsDistinct", Ax.f(10) === 11 && Bx.f(10) === 12) && pass;
 
 	// An instance extension keeps both call forms.
 	pass = check("instanceReceiver", "abcd".widen() === 4) && pass;
