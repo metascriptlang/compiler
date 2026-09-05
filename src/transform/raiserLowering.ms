@@ -4,7 +4,6 @@
 //
 // Ordering matches the proven transformProgram pipeline (1000+ tests):
 //   lowerConstFold before lowerMatch (patterns resolved)
-//   lowerTryExpr before lowerResultFieldCheck (desugar first, then validate)
 
 import { Node } from "../ast/node";
 import { CheckerContext } from "../checker/context";
@@ -17,7 +16,6 @@ import { lowerTypeCoercion } from "./coercion/typeCoercion";
 import { lowerDestructuring } from "./desugar/destructuringLower";
 import { lowerSpread } from "./desugar/spreadExpand";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
-import { lowerResultFieldCheck } from "./desugar/resultFieldCheck";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
 import { lowerLambda } from "./lowering/lambdaLifting";
@@ -42,7 +40,6 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	// this, calls to Result.ok/err fall through to compileClosureCall →
 	// LoadField on Nil → "object handle out of bounds: 0".
 	result = lowerResultConstructors(result);
-	result = lowerResultFieldCheck(result, ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = lowerCtorInit(result, ctx);

@@ -13,7 +13,6 @@
 // 11. forLoopLower          — normalize for→while before forOf
 // 12. forOfLower            — desugars for-of to while
 // 13. resultDesugar         — 1:N expansion of try expressions
-// 14. resultFieldCheck      — safety checks on $result_N.value/.error access
 // 15. switchLower           — user switch → the match engine (ordinal discs pass through)
 //     matchLower            — sees simplest AST
 // 16. tailCallLower         — tail recursion → while + loop-carried shadow locals (both targets)
