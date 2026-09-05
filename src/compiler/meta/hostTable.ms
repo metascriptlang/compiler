@@ -59,6 +59,7 @@ import {
 import { cwd, platform, env, exec, argv, execFile, execFileCapture } from "std/process";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { performance } from "std/core/performance";
+import { fromCodePoint } from "std/core/string";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
 import { IoErrorKind } from "std/io/errors";
@@ -543,6 +544,18 @@ function _bridgeMsStringCharCodeAt(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).charCodeAt(unboxInt(args[1])));
 }
 
+function _bridgeMsStringParseInt(args: RaiserValue[]): RaiserValue {
+	return boxInt(unboxString(args[0]).parseInt() as number);
+}
+
+function _bridgeMsStringParseFloat(args: RaiserValue[]): RaiserValue {
+	return boxFloat(unboxString(args[0]).parseFloat());
+}
+
+function _bridgeMsStringFromCodePoint(args: RaiserValue[]): RaiserValue {
+	return boxString(fromCodePoint(unboxInt(args[0])));
+}
+
 // Tier 1 — string ↔ VM-heap byte-array kernels. These cross the VM-heap
 // boundary (host zero-copy view vs VM heap array), which MS cannot express
 // from either side; every derived string algorithm is Tier 2
@@ -740,6 +753,9 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringTrimEnd",       _bridgeMsStringTrimEnd);
 	registerHostFn("msStringIndexOf",       _bridgeMsStringIndexOf);
 	registerHostFn("msStringCharCodeAt",    _bridgeMsStringCharCodeAt);
+	registerHostFn("msStringParseInt",      _bridgeMsStringParseInt);
+	registerHostFn("msStringParseFloat",    _bridgeMsStringParseFloat);
+	registerHostFn("msStringFromCodePoint", _bridgeMsStringFromCodePoint);
 	registerHostFn("msStringFromValue",     _bridgeMsStringFromValue);
 	registerHostFn("msPerformanceNow",      _bridgeMsPerformanceNow);
 	registerHostFn("msProcessArgv",         _bridgeMsProcessArgv);
