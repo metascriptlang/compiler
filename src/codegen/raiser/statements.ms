@@ -18,7 +18,8 @@ import {
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, currentLoop, hasLoop, patchLoopBreaks, patchLoopContinues,
-	resolveBuiltin, registerFunc, resolveFunc, emitClosurePair
+	resolveBuiltin, registerFunc, resolveFunc, emitClosurePair,
+	registerRaiserStmtCompiler
 } from "./context";
 import { compileExpr, exprIsString } from "./expressions";
 
@@ -95,6 +96,8 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 		_ => {},
 	};
 }
+
+registerRaiserStmtCompiler(compileStmt);
 
 // --- Block ---
 

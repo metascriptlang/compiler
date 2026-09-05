@@ -5,8 +5,8 @@ import {
 	RaiserOpcode, RaiserInstruction,
 	raiserABC, raiserABx, raiserAx
 } from "../../raiser/bytecode";
-import { RaiserValue, raiserInt, raiserString } from "../../raiser/value";
-import { Symbol, SymbolKind } from "../../ast/node";
+import { RaiserValue, raiserInt, raiserString, raiserNil } from "../../raiser/value";
+import { Node, Symbol, SymbolKind } from "../../ast/node";
 import { CheckerError, Severity } from "../../checker/context";
 
 // --- Bytecode-compiler error queue ---
@@ -464,4 +464,27 @@ export function isRoutineSym(sym: Symbol): boolean {
 export function callRaiserOnDemand(sym: Symbol): int32 {
 	if (!isRoutineSym(sym)) return -1;
 	return _raiserOnDemandFn(sym);
+}
+
+type RaiserStmtCompilerFn = (s: RaiserCompState, stmt: Node) => void;
+
+let _raiserStmtCompiler: RaiserStmtCompilerFn = (_s: RaiserCompState, stmt: Node): void => {
+	queueRaiserCompileError("raiser statement compiler not registered",
+		stmt.location.line, stmt.location.column);
+};
+
+export function registerRaiserStmtCompiler(fn: RaiserStmtCompilerFn): void {
+	_raiserStmtCompiler = fn;
+}
+
+export function callRaiserStmtCompiler(s: RaiserCompState, stmt: Node): void {
+	_raiserStmtCompiler(s, stmt);
+}
+
+export function emitTrapNil(s: RaiserCompState, message: string): number {
+	const cIdx = addConst(s, raiserString(message));
+	emitInst(s, raiserABx(RaiserOpcode.Trap, 0, cIdx));
+	const reg = allocReg(s);
+	emitLoadConst(s, reg, raiserNil());
+	return reg;
 }

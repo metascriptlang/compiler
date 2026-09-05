@@ -9,7 +9,7 @@ import {
 	ConditionalExprData, TypeAssertionData, UpdateExprData,
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
 	MoveExprData, VariableDeclData, AwaitExprData, NewExprData,
-	HiddenDerefData, HiddenStdConvData
+	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC } from "../../raiser/bytecode";
 import { raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
@@ -19,7 +19,8 @@ import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
 	resolveFunc, isLocalString, isEnumName, findEnumConstant,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
-	markRegFloat, isRegFloat, callRaiserOnDemand, queueRaiserCompileError
+	markRegFloat, isRegFloat, callRaiserOnDemand, queueRaiserCompileError,
+	callRaiserStmtCompiler, emitTrapNil
 } from "./context";
 
 // --- Float detection ---
@@ -281,18 +282,15 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			// level vars and other non-routine symbols land here). Report it
 			// instead of silently splicing nil into the macro's output.
 			let why = "no local, function, enum constant, or builtin binding reached the bytecode compiler";
-			if (node.resolvedSym === null) why = "symbol did not resolve";
-			else if (node.resolvedSym.symbolKind !== SymbolKind.Variable) why = `symbol kind is ${node.resolvedSym.symbolKind}`;
-			else if (node.resolvedSym.declNode === null) why = "symbol has no declaration node";
-			else if (node.resolvedSym.declNode.kind !== NodeKind.VariableDecl) why = `declaration node is ${node.resolvedSym.declNode.kind}`;
-			else if ((node.resolvedSym.symFlags & SymbolFlag.Mutable) !== 0) why = "symbol is mutable";
-			else if ((node.resolvedSym.declNode.data as VariableDeclData).initializer === null) why = "declaration has no initializer";
-			queueRaiserCompileError(
-				`cannot evaluate '${d.name}' at comptime: ${why}`,
-				node.location.line, node.location.column);
-			const fallback = allocReg(s);
-			emitLoadConst(s, fallback, raiserNil());
-			return fallback;
+			if (node.resolvedSym == null) why = "symbol did not resolve";
+			else if (node.resolvedSym.symbolKind != SymbolKind.Variable) why = `symbol kind is ${node.resolvedSym.symbolKind}`;
+			else if (node.resolvedSym.declNode == null) why = "symbol has no declaration node";
+			else if (node.resolvedSym.declNode.kind != NodeKind.VariableDecl) why = `declaration node is ${node.resolvedSym.declNode.kind}`;
+			else if ((node.resolvedSym.symFlags & SymbolFlag.Mutable) != 0) why = "symbol is mutable";
+			else if ((node.resolvedSym.declNode.data as VariableDeclData).initializer == null) why = "declaration has no initializer";
+			const msg = `cannot evaluate '${d.name}' at comptime: ${why}`;
+			queueRaiserCompileError(msg, node.location.line, node.location.column);
+			return emitTrapNil(s, msg);
 		},
 		NodeKind.BinaryExpr => { return compileBinaryExpr(s, node); },
 		NodeKind.UnaryExpr => { return compileUnaryExpr(s, node); },
@@ -334,14 +332,36 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			const hd = node.data as HiddenStdConvData;
 			return compileExpr(s, hd.convExpr);
 		},
-		_ => {
-			// Unsupported node kind: report instead of silently splicing nil.
-			queueRaiserCompileError(
-				`cannot compile node kind ${node.kind} at comptime: unsupported by the Raiser bytecode compiler`,
-				node.location.line, node.location.column);
+		// Statement-list-in-expression position: run n-1 statements, the last
+		// ExprStmt is the value — the reference VM's stmt-list-expr shape.
+		NodeKind.BlockStmt => {
+			const d = node.data as BlockStmtData;
+			const n = d.statements.length;
+			if (n == 0) {
+				const reg = allocReg(s);
+				emitLoadConst(s, reg, raiserNil());
+				return reg;
+			}
+			let i = 0;
+			while (i < n - 1) {
+				callRaiserStmtCompiler(s, d.statements[i]);
+				i = i + 1;
+			}
+			const last = d.statements[n - 1];
+			if (last.kind == NodeKind.ExprStmt) {
+				const ld = last.data as ExprStmtData;
+				return compileExpr(s, ld.expr);
+			}
+			callRaiserStmtCompiler(s, last);
 			const reg = allocReg(s);
 			emitLoadConst(s, reg, raiserNil());
 			return reg;
+		},
+		_ => {
+			// Unsupported node kind: report instead of silently splicing nil.
+			const msg = `cannot compile node kind ${node.kind} at comptime: unsupported by the Raiser bytecode compiler`;
+			queueRaiserCompileError(msg, node.location.line, node.location.column);
+			return emitTrapNil(s, msg);
 		},
 	};
 }
@@ -605,9 +625,9 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): number {
 	}
 
 	// Fallback: unsupported compound assign target
-	const reg = allocReg(s);
-	emitLoadConst(s, reg, raiserNil());
-	return reg;
+	const caMsg = "cannot compile compound assignment target: unsupported by the Raiser bytecode compiler";
+	queueRaiserCompileError(caMsg, node.location.line, node.location.column);
+	return emitTrapNil(s, caMsg);
 }
 
 // --- Call ---
@@ -883,9 +903,9 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): number {
 	}
 
 	// Fallback: unsupported update target
-	const reg = allocReg(s);
-	emitLoadConst(s, reg, raiserNil());
-	return reg;
+	const upMsg = "cannot compile update target: unsupported by the Raiser bytecode compiler";
+	queueRaiserCompileError(upMsg, node.location.line, node.location.column);
+	return emitTrapNil(s, upMsg);
 }
 
 // --- Object ---
@@ -932,12 +952,9 @@ function compileNewExpr(s: RaiserCompState, node: Node): number {
 		}
 	}
 
-	queueRaiserCompileError(
-		"cannot compile 'new' here: no matching constructor in the Raiser function table",
-		node.location.line, node.location.column);
-	const reg = allocReg(s);
-	emitLoadConst(s, reg, raiserNil());
-	return reg;
+	const newMsg = "cannot compile 'new' here: no matching constructor in the Raiser function table";
+	queueRaiserCompileError(newMsg, node.location.line, node.location.column);
+	return emitTrapNil(s, newMsg);
 }
 
 // --- Array ---
