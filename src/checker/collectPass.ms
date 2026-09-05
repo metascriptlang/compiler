@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod } from "./context";
+import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, ExtensionMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -16,6 +16,48 @@ export function collectTopLevel(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
 	for (const stmt of stmts.programStmts) {
 		collectDecl(ctx, stmt);
+	}
+	auditStaticMemberNames(ctx);
+}
+
+// A static member never enters the module scope, so scope-merge overload
+// numbering cannot disambiguate it from a same-named routine in the same
+// module — both would emit one C name (clang: "incompatible type" at a
+// call site, or a silently skipped definition). Reject at collect until
+// emitted names key on symbol identity rather than scope position.
+function auditStaticMemberNames(ctx: CheckerContext): void {
+	if (ctx.extensionRegistry === null) return;
+	const locals: ExtensionMethod[] = [];
+	for (const ext of ctx.extensionRegistry.methods) {
+		const s = ext.sym;
+		if (!ext.isStatic || s === null) continue;
+		if (s.modulePath !== ctx.modulePath) continue;
+		if (hasFlag(s, SymbolFlag.ImportC) || hasFlag(s, SymbolFlag.OverloadSig)) continue;
+		// Class static methods also register here, but their C name carries
+		// the class prefix — only `this typeof` extension statics share the
+		// bare-name mangle space with scope functions.
+		const dn = s.declNode;
+		if (dn === null || dn.kind !== NodeKind.FunctionDecl) continue;
+		if (!isStaticExtensionFlag((dn.data as FunctionDeclData).fnFlags)) continue;
+		locals.push(ext);
+	}
+	for (let i = 0; i < locals.length; i += 1) {
+		const ext = locals[i];
+		const extSym = ext.sym;
+		if (extSym === null) continue;
+		const scopeSym = lookupSymbol(ctx.table, ext.methodName);
+		if (scopeSym !== null && scopeSym.symbolKind === SymbolKind.Function
+			&& scopeSym.modulePath === ctx.modulePath && !hasFlag(scopeSym, SymbolFlag.ImportC)) {
+			addError(ctx, `Static member '${ext.receiverTypeName}.${ext.methodName}' collides with function '${ext.methodName}' in the same module`,
+				extSym.location.line, extSym.location.column);
+		}
+		for (let j = i + 1; j < locals.length; j += 1) {
+			const other = locals[j];
+			const otherSym = other.sym;
+			if (otherSym === null || other.methodName !== ext.methodName) continue;
+			addError(ctx, `Static member '${other.receiverTypeName}.${other.methodName}' collides with static member '${ext.receiverTypeName}.${ext.methodName}' in the same module`,
+				otherSym.location.line, otherSym.location.column);
+		}
 	}
 }
 
@@ -102,12 +144,26 @@ function markClassMethodsExported(ctx: CheckerContext, classNode: Node): void {
 	}
 }
 
+function staticExtSymOf(decl: Node): Symbol | null {
+	if (decl.kind !== NodeKind.FunctionDecl) return null;
+	const fd = decl.data as FunctionDeclData;
+	if (!isStaticExtensionFlag(fd.fnFlags)) return null;
+	return decl.resolvedSym;
+}
+
 function collectExportLocal(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ExportDeclData;
 	// Re-export from import: skip in Phase 1 (registry not ready for cross-module)
 	if (d.exportedDecl.kind === NodeKind.ImportDecl) return;
 	// Regular export: collect the inner declaration and mark exported
 	collectDeclLocal(ctx, d.exportedDecl);
+	// A static member is not in scope, so the name lookup below would either miss
+	// it or mark an unrelated same-named free function.
+	const staticMemberSym = staticExtSymOf(d.exportedDecl);
+	if (staticMemberSym !== null) {
+		setFlag(staticMemberSym, SymbolFlag.Exported);
+		return;
+	}
 	const name = getDeclName(d.exportedDecl);
 	if (name !== "") {
 		const sym = lookupSymbol(ctx.table, name);
@@ -187,12 +243,16 @@ export function collectDecorated(ctx: CheckerContext, node: Node): void {
 
 // ===== Define + Error Helper =====
 
-export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): void {
+export function stampDecl(ctx: CheckerContext, sym: Symbol, node: Node): void {
 	// Only set location if not already preserved from defining module (import parity)
 	if (sym.location === null || sym.location.line === 0) sym.location = node.location;
 	sym.declNode = node; // Discovery Commitment: link symbol to its declaration node
 	// Implementation parity: stamp module ownership — set once at creation
 	if (sym.modulePath === "") sym.modulePath = ctx.modulePath;
+}
+
+export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): void {
+	stampDecl(ctx, sym, node);
 	match (node.kind) {
 		NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ClassDecl
 		| NodeKind.EnumDecl | NodeKind.TypeAliasDecl | NodeKind.ActorDecl =>
@@ -218,8 +278,10 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 	// Matches Pass 2 `ensureShaped` state guard + Pass 3 `resolvedSym !== null`
 	// preservation. Modeled on the "transform exactly once" cache check at
 	// transf.nim:1307 in the reference compiler.
+	const extTypeName = getExtTypeName(d.fnFlags);
+	const isStaticMember = extTypeName !== "" && isStaticExtensionFlag(d.fnFlags);
 	if (node.resolvedSym !== null && node.resolvedSym.modulePath !== "") {
-		defineSymbol(ctx.table, node.resolvedSym);
+		if (!isStaticMember) defineSymbol(ctx.table, node.resolvedSym);
 		return;
 	}
 	// Define symbol first — needed so extension can link to it
@@ -240,12 +302,18 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 			sym.nativeName = d.fnName;
 		}
 	}
-	defineOrError(ctx, sym, node);
+	// A static member's name belongs to its receiver type, not to the module
+	// scope — otherwise `Number.parseFloat` and `parseFloat(this s: string)`
+	// become indistinguishable free functions (the receiver is not a parameter).
+	if (isStaticMember) {
+		stampDecl(ctx, sym, node);
+	} else {
+		defineOrError(ctx, sym, node);
+	}
 	// Reference parity: attach symbol to declaration node.
 	// DRC uses this to get param types and check sfGeneratedOp without lookupSymbol.
 	node.resolvedSym = sym;
 	// Register extension (instance or static) with direct sym link
-	const extTypeName = getExtTypeName(d.fnFlags);
 	if (extTypeName !== "" && ctx.extensionRegistry !== null) {
 		registerExtension(ctx.extensionRegistry, createExtMethod(d.fnName, extTypeName, "", noneType(), isStaticExtensionFlag(d.fnFlags), sym, 1));
 	}
@@ -1135,6 +1203,13 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 
 	// Regular export: single declaration
 	collectDecl(ctx, d.exportedDecl);
+	// A static member is not in scope, so the name lookup below would either miss
+	// it or mark an unrelated same-named free function.
+	const staticMemberSym = staticExtSymOf(d.exportedDecl);
+	if (staticMemberSym !== null) {
+		setFlag(staticMemberSym, SymbolFlag.Exported);
+		return;
+	}
 	const name = getDeclName(d.exportedDecl);
 	if (name !== "") {
 		const sym = lookupSymbol(ctx.table, name);
