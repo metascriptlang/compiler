@@ -1332,6 +1332,53 @@ test "collect function" {
 	assert symbolKindOf("function foo() { return 1; }", "foo") === SymbolKind.Function;
 }
 
+test "static member is reachable through its receiver, not as a free name" {
+	const src = "class K {} function m(this typeof K, x: int32): int32 { return x; }";
+	const ctx = collectFromSource(src);
+	assert lookupSymbol(ctx.table, "m") === null;
+	assert findExtension(ctx.extensionRegistry, "K", "m") !== null;
+}
+
+test "instance extension stays a free name" {
+	const src = "function m(this s: string): int32 { return 1; }";
+	const ctx = collectFromSource(src);
+	assert lookupSymbol(ctx.table, "m") !== null;
+	assert findExtension(ctx.extensionRegistry, "string", "m") !== null;
+}
+
+test "a static and an instance extension sharing a name in one module are rejected" {
+	const src = "class K {} function p(this typeof K, s: string): int32 { return 1; }"
+		+ " function p(this s: string): int32 { return 2; }";
+	const ctx = collectFromSource(src);
+	const free = lookupSymbol(ctx.table, "p");
+	assert free !== null;
+	assert free.overloads.length === 0;
+	assert findExtension(ctx.extensionRegistry, "K", "p") !== null;
+	assert findExtension(ctx.extensionRegistry, "string", "p") !== null;
+	assert ctx.errors.length === 1;
+}
+
+test "a static member colliding with a same-module free function is rejected" {
+	const src = "class K {} function m(this typeof K, x: int32): int32 { return x; }"
+		+ " function m(s: string): string { return s; }";
+	const ctx = collectFromSource(src);
+	assert ctx.errors.length === 1;
+}
+
+test "two same-named static members in one module are rejected" {
+	const src = "class A {} class B {} function f(this typeof A, x: int32): int32 { return x; }"
+		+ " function f(this typeof B, x: int32): int32 { return x; }";
+	const ctx = collectFromSource(src);
+	assert ctx.errors.length === 1;
+}
+
+test "a class static method does not collide with a same-named function" {
+	const src = "class H { static create(): int32 { return 1; } }"
+		+ " function create(s: string): string { return s; }";
+	const ctx = collectFromSource(src);
+	assert ctx.errors.length === 0;
+}
+
 test "collect class" {
 	assert hasSymbol("class Foo {}", "Foo");
 	assert symbolKindOf("class Foo {}", "Foo") === SymbolKind.Class;
