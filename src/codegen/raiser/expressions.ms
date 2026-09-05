@@ -8,7 +8,7 @@ import {
 	CallExprData, IdentifierData, MemberExprData,
 	ConditionalExprData, TypeAssertionData, UpdateExprData,
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
-	MoveExprData, VariableDeclData,
+	MoveExprData, VariableDeclData, AwaitExprData,
 	HiddenDerefData, HiddenStdConvData
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC } from "../../raiser/bytecode";
@@ -310,6 +310,13 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
 			return compileExpr(s, d.moveArg);
+		},
+		NodeKind.AwaitExpr => {
+			const d = node.data as AwaitExprData;
+			const futReg = compileExpr(s, d.awaitArg);
+			const dest = allocReg(s);
+			emitInst(s, raiserABC(RaiserOpcode.Await, dest, futReg, 0));
+			return dest;
 		},
 		// Hidden* nodes are checker-inserted markers (deref point for Ref<Struct>,
 		// implicit type conversion). Raiser VM is dynamically typed and has no
@@ -643,6 +650,28 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 	// on the run path exit is a Tier-0 concern: halt the VM with the code.
 	if (isExitCall(d.callee) && d.arguments.length === 1) {
 		return compileExitCall(s, node);
+	}
+
+	// spawn(fn) / waitFor(h) / Promise.resolve(v) — the async surface the VM
+	// owns as opcodes. Keyed on builtinKind (set from the @builtin decorator
+	// in std/core/promise), never on the name.
+	const asyncKind = asyncBuiltinKind(node);
+	if (asyncKind === "PromiseSpawn" && d.arguments.length === 1) {
+		const closureReg = compileExpr(s, d.arguments[0]);
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.Spawn, dest, closureReg, 0));
+		return dest;
+	}
+	if (asyncKind === "WaitFor" && d.arguments.length === 1) {
+		const futReg = compileExpr(s, d.arguments[0]);
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.Await, dest, futReg, 0));
+		return dest;
+	}
+	if (asyncKind === "PromiseResolve" && d.arguments.length === 1) {
+		// Await reads a finished future as its value, so a future that starts
+		// finished is indistinguishable from the value itself.
+		return compileExpr(s, d.arguments[0]);
 	}
 
 	// str.charAt(i)
@@ -1014,8 +1043,19 @@ function isExitCall(callee: Node): boolean {
 function compileExitCall(s: RaiserCompState, node: Node): number {
 	const d = node.data as CallExprData;
 	const codeReg = compileExpr(s, d.arguments[0]);
-	emitInst(s, raiserABC(RaiserOpcode.Halt, codeReg, 0, 0));
+	// b=1 marks the halt abrupt: it skips the strand drain, the way
+	// process.exit bypasses msDrainUntilIdle on C.
+	emitInst(s, raiserABC(RaiserOpcode.Halt, codeReg, 1, 0));
 	return codeReg;
+}
+
+// spawn/waitFor/Promise.resolve carry @builtin on the extern; the kind lands
+// on the CallExpr for free functions and on the callee for the static method.
+function asyncBuiltinKind(node: Node): string {
+	if (node.resolvedSym !== null && node.resolvedSym.builtinKind !== "") return node.resolvedSym.builtinKind;
+	const d = node.data as CallExprData;
+	if (d.callee.resolvedSym !== null) return d.callee.resolvedSym.builtinKind;
+	return "";
 }
 
 // --- String method detection + compilation ---
