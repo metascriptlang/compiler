@@ -71,13 +71,18 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.Yield => "Yield",
 		RaiserOpcode.Spawn => "Spawn",
 		RaiserOpcode.Await => "Await",
+		RaiserOpcode.Try => "Try",
+		RaiserOpcode.Catch => "Catch",
+		RaiserOpcode.Finally => "Finally",
+		RaiserOpcode.FinallyEnd => "FinallyEnd",
+		RaiserOpcode.Throw => "Throw",
 	};
 }
 
 // --- Format helpers ---
 
 function isABxOp(op: RaiserOpcode): boolean {
-	return op === RaiserOpcode.LoadConst;
+	return op === RaiserOpcode.LoadConst || op === RaiserOpcode.Try || op === RaiserOpcode.Catch;
 }
 
 function isAxOp(op: RaiserOpcode): boolean {

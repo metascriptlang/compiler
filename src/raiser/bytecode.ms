@@ -121,6 +121,18 @@ export enum RaiserOpcode {
 	// exists. Same append-at-the-END rule as Yield above.
 	Spawn,            // ABC: R[A] = spawn closure R[B]  → future handle
 	Await,            // ABC: R[A] = await R[B]          → park until finished
+
+	// Exceptions (5)
+	// `Try` pushes a safepoint pointing at the handler metadata; `Catch` is
+	// never executed — it only tells the unwinder where the handler body
+	// starts and where the guarded block ends. A single untyped catch clause
+	// is all the surface has, so there is no chain of typed patterns to walk.
+	// Same append-at-the-END rule as the opcodes above.
+	Try,              // ABx: push a safepoint at ip + Bx (a Catch or a Finally)
+	Catch,            // ABx: metadata — handler body follows, Bx = offset past the block
+	Finally,          // ABC: pop the safepoint — reached only when nothing was raised
+	FinallyEnd,       // ABC: resume the pending unwind, if there is one
+	Throw,            // ABC: raise R[A]
 }
 
 // --- Instruction ---
