@@ -440,6 +440,10 @@ export function printArrayPattern(node: Node, options: FormatOptions): Doc {
 		const isRest = d.hasRestElement && i === d.patternElements.length - 1;
 		if (isRest) elements.push(docText("..."));
 		elements.push(callPrintNode(d.patternElements[i], options));
+		if (i < d.patternDefaults.length && d.patternDefaults[i] !== null) {
+			elements.push(docText(" = "));
+			elements.push(callPrintNode(d.patternDefaults[i], options));
+		}
 	}
 	return docGroup([docText("["), docGroup(elements), docText("]")]);
 }
@@ -462,8 +466,12 @@ export function printObjectPatternProp(node: Node, options: FormatOptions): Doc 
 	// Shorthand `{ x }` when alias is an identifier with the same name.
 	if (d.propAlias !== null && d.propAlias.kind === NodeKind.Identifier) {
 		const aliasName = (d.propAlias.data as IdentifierData).name;
-		if (aliasName === d.propKey) return docText(d.propKey);
+		if (aliasName === d.propKey) {
+			if (d.propDefault !== null) return docGroup([docText(d.propKey + " = "), callPrintNode(d.propDefault, options)]);
+			return docText(d.propKey);
+		}
 	}
+	if (d.propDefault !== null) return docGroup([docText(d.propKey + ": "), callPrintNode(d.propAlias, options), docText(" = "), callPrintNode(d.propDefault, options)]);
 	return docGroup([docText(d.propKey + ": "), callPrintNode(d.propAlias, options)]);
 }
 
