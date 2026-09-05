@@ -112,6 +112,15 @@ export enum RaiserOpcode {
 	// Hands the turn to the scheduler; the strand resumes at the next
 	// instruction. Same append-at-the-END rule as LtStr/LeStr above.
 	Yield,            // ABC: suspend the current strand, stay Ready
+
+	// Async surface (2)
+	// The runtime pair behind `spawn` / `await`: Spawn starts a strand for a
+	// closure pair and hands back the future it will complete; Await reads a
+	// future, parking the strand until it is finished. A parked strand
+	// re-executes its Await on resume, so no partial-instruction state
+	// exists. Same append-at-the-END rule as Yield above.
+	Spawn,            // ABC: R[A] = spawn closure R[B]  → future handle
+	Await,            // ABC: R[A] = await R[B]          → park until finished
 }
 
 // --- Instruction ---
