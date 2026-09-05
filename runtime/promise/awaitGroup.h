@@ -297,7 +297,7 @@ static inline bool msSpawnCheckCancel(msAwaitGroup* g) {
  * Replaces heap-allocated msAwaitGroup for the common `await spawn(fn)` pattern. */
 
 extern bool msPoolHelpOne(void);  /* pool.h — avoid circular include */
-extern void msPoolBusyDec(void);
+extern bool msPoolBusyDec(void);  /* true only when it actually decremented */
 extern void msPoolBusyInc(void);
 
 typedef struct msAwaitSlot {
@@ -332,13 +332,15 @@ extern _Thread_local bool msIsPoolWorker;
 
 static inline void msAwaitSlotWait(void* sp) {
     msAwaitSlot* s = (msAwaitSlot*)sp;
-    bool isWorker = msIsPoolWorker;
-    if (isWorker) msPoolBusyDec();  /* signal: I'm available to help while waiting */
+    /* Re-increment ONLY if the decrement took: the count saturates at 0 and a
+     * nested help-first chain reaches it routinely, so an unconditional Inc
+     * adds a count nobody removed and strands the exit drain. */
+    bool dec = msIsPoolWorker && msPoolBusyDec();  /* available to help while waiting */
     while (atomic_load_explicit(&s->pending, memory_order_acquire) > 0) {
         if (msPoolHelpOne()) continue;
         msYield();
     }
-    if (isWorker) msPoolBusyInc();  /* back to own work */
+    if (dec) msPoolBusyInc();  /* back to own work */
 }
 
 static inline void* msAwaitSlotResult(void* sp) {

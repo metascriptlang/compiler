@@ -801,7 +801,8 @@ void* msWaitFor(void* fp) {
 	msFutureBase* fut = (msFutureBase*)fp;
 	bool worker = msIsWorkerWait();
 	if (!worker) msGetDispatcher(); /* ensure event loop exists on main thread */
-	if (worker) msPoolBusyDec();  /* signal availability while waiting */
+	/* Re-increment ONLY if the decrement took — see msPoolBusyDec (pool.c). */
+	bool dec = worker && msPoolBusyDec();
 	while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
 		if (msPoolHelpOne()) continue;
 		if (!worker) {
@@ -810,7 +811,7 @@ void* msWaitFor(void* fp) {
 			msWorkerWaitOnFuture(fp);
 		}
 	}
-	if (worker) msPoolBusyInc();  /* back to own work */
+	if (dec) msPoolBusyInc();  /* back to own work */
 	return msFutureRead(fp);
 }
 
@@ -818,7 +819,7 @@ void msWaitForReady(void* fp) {
 	msFutureBase* fut = (msFutureBase*)fp;
 	bool worker = msIsWorkerWait();
 	if (!worker) msGetDispatcher(); /* ensure event loop exists on main thread */
-	if (worker) msPoolBusyDec();  /* signal availability while waiting */
+	bool dec = worker && msPoolBusyDec();  /* see msWaitFor */
 	int spins = 0;
 	bool helped = false;
 	while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
@@ -834,7 +835,7 @@ void msWaitForReady(void* fp) {
 			helped = false;
 		}
 	}
-	if (worker) msPoolBusyInc();  /* back to own work */
+	if (dec) msPoolBusyInc();  /* back to own work */
 }
 
 /* Standard reference runForever pattern */

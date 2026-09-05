@@ -377,15 +377,24 @@ bool msPoolHelpOne(void) {
 
 /* Called when a worker enters a wait loop (msAwaitSlotWait, msWaitForReady).
  * Decrements the atomic busyCount so shouldSend sees available capacity,
- * allowing new spawns to be queued instead of inlined. Re-increment on exit. */
-void msPoolBusyDec(void) {
-	/* Saturating decrement — prevent underflow from nested help-first wait chains.
-	 * CAS loop: only decrement if current value > 0. */
+ * allowing new spawns to be queued instead of inlined.
+ *
+ * Returns whether it actually decremented. The decrement SATURATES at 0 —
+ * nested help-first wait chains reach it routinely (a waiter helps, the helped
+ * task waits, that waiter helps again …) — so a caller that unconditionally
+ * re-increments on exit adds a count it never removed, and the counter drifts
+ * upward for good. That strands msDrainUntilIdle, whose exit condition is
+ * msPoolBusyPeek() == 0: the program finishes all its work, prints everything,
+ * and then never exits (proven 2026-09-05 by corpus 421, which read a steady
+ * busy=1..2 with the pool completely idle). Pair every Dec with an Inc ONLY
+ * when this returned true. */
+bool msPoolBusyDec(void) {
 	int32_t prev = atomic_load_explicit(&msPoolBusyCount, memory_order_relaxed);
 	while (prev > 0) {
 		if (atomic_compare_exchange_weak_explicit(&msPoolBusyCount, &prev, prev - 1,
-				memory_order_relaxed, memory_order_relaxed)) break;
+				memory_order_relaxed, memory_order_relaxed)) return true;
 	}
+	return false;
 }
 
 void msPoolBusyInc(void) {
