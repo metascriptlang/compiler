@@ -1347,24 +1347,28 @@ function hoistScopeVars(stmts: Node[], scope: DrcScope, hoisted: Node[], tryBody
 	}
 }
 
-function wrapWithTryFinally(bodyStmts: Node[], cleanupStmts: Node[], scope: DrcScope, loc: SourceLocation): Node {
-	// Hoist RC variable declarations before try (null init for setjmp safety)
-	// Standard scope processing emits all tracked variables before try body. We do the same by
-	// scanning bodyStmts (and one level into sub-blocks) for registered RC vars.
+// Reference: processScope (injectdestructors.nim:587) — the scope's variable
+// declarations are emitted unconditionally; needsTry only picks where cleanup goes.
+function assembleScope(bodyStmts: Node[], cleanupStmts: Node[], scope: DrcScope, loc: SourceLocation): Node[] {
 	const hoisted: Node[] = [];
-	const tryBody: Node[] = [];
-	hoistScopeVars(bodyStmts, scope, hoisted, tryBody, loc);
-
-	const tryBlock = makeBlock(tryBody, loc);
-	const finallyBlock = makeBlock(cleanupStmts, loc);
-	const tryFinally = makeTryFinally(tryBlock, finallyBlock, loc);
+	const body: Node[] = [];
+	hoistScopeVars(bodyStmts, scope, hoisted, body, loc);
 
 	const result: Node[] = [];
 	for (const h of hoisted) {
 		result.push(h);
 	}
-	result.push(tryFinally);
-	return makeBlock(result, loc);
+	if (cleanupStmts.length > 0 && scope.needsTry) {
+		result.push(makeTryFinally(makeBlock(body, loc), makeBlock(cleanupStmts, loc), loc));
+		return result;
+	}
+	for (const s of body) {
+		result.push(s);
+	}
+	for (const cs of cleanupStmts) {
+		result.push(cs);
+	}
+	return result;
 }
 
 // ===== Statement List Processing =====
@@ -1433,13 +1437,7 @@ function processBlockBody(body: Node, dctx: DrcContext, isLoop: boolean, isFunct
 	const scope = popScope(dctx);
 	const cleanup = generateCleanup(scope, emptyNameSet(), loc);
 
-	if (scope.needsTry && cleanup.length > 0) {
-		return wrapWithTryFinally(processed, cleanup, scope, loc);
-	}
-	for (const cs of cleanup) {
-		processed.push(cs);
-	}
-	return makeBlock(processed, loc);
+	return makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
 }
 
 // ===== Per-Statement Dispatch =====
@@ -1702,13 +1700,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	popOuterStmts(dctx);  // pop function boundary sentinel
 	dctx.cursors = createCursorSet();  // Phase B: clear cursors after function
 
-	if (scope.needsTry && cleanup.length > 0) {
-		return wrapWithTryFinally(processed, cleanup, scope, loc);
-	}
-	for (const cs of cleanup) {
-		processed.push(cs);
-	}
-	return makeBlock(processed, loc);
+	return makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
 }
 
 
@@ -2332,12 +2324,7 @@ function processSwitchCase(caseNode: Node, dctx: DrcContext, loc: SourceLocation
 	const processed = processStmtList(cd.caseStmts, dctx, loc);
 	const scope = popScope(dctx);
 	const cleanup = generateCleanup(scope, emptyNameSet(), loc);
-	if (scope.needsTry && cleanup.length > 0) {
-		cd.caseStmts = [wrapWithTryFinally(processed, cleanup, scope, loc)];
-		return;
-	}
-	for (const cs of cleanup) { processed.push(cs); }
-	cd.caseStmts = processed;
+	cd.caseStmts = assembleScope(processed, cleanup, scope, loc);
 }
 
 function processSwitch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
