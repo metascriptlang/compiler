@@ -308,7 +308,6 @@ int32_t msGetWakePipeFd(void) { return -1; }
  * completions route to registry entry 0 via msPostCompletion's fallback,
  * exactly like POSIX's global queue. */
 void msEnsureLoopChannel(void) {
-	extern _Thread_local bool msIsPoolWorker;  /* pool.c */
 	if (!msIsPoolWorker) (void)msGetDispatcher();
 }
 
@@ -833,7 +832,6 @@ void msPoll(int timeoutMs) {
 /* Dual-path wait: main thread runs event loop (msRunOnce), workers use condvar.
  * Uses the pool's TLS worker flag — set in msPoolWorkerLoop at thread entry. */
 static inline bool msIsWorkerWait(void) {
-	extern _Thread_local bool msIsPoolWorker;
 	return msIsPoolWorker;
 }
 
@@ -1139,9 +1137,7 @@ void msAsyncStart(void* retFut, msClosure stepper) {
 	 * workers steal actor visits and dispatch async methods, minting dead ports).
 	 * Workers rely on inline callback execution (msCallSoonProc == NULL → msCallSoon
 	 * fires immediately) and msFirstLoopIocp() for completion routing, like POSIX. */
-	bool isWorker = false;
-	{ extern _Thread_local bool msIsPoolWorker; isWorker = msIsPoolWorker; }
-	if (!isWorker) {
+	if (!msIsPoolWorker) {
 		msGetDispatcher();
 	}
 	msAsyncCbEnv* env = (msAsyncCbEnv*)malloc(sizeof(msAsyncCbEnv));
