@@ -49,6 +49,7 @@ src/codegen/raiser/
 | ArrayAccess | LoadIndex / StoreIndex |
 | MemberExpr | LoadField / StoreField |
 | ObjectLiteral | NewObject + StoreField per property |
+| NewExpr | Call to `<Class>_new` — the constructor rgen already compiles (Pass 2b) |
 | TypeAssertion (as) | (compiles inner expression, no-op cast) |
 | MoveExpr | (compiles inner expression) |
 | ParenExpr | (compiles inner expression) |
@@ -87,7 +88,7 @@ src/codegen/raiser/
 
 | NodeKind | Notes |
 |----------|-------|
-| NewExpr (whole-program run path) | **Evaluates to nil, silently.** `const o = new MyErr("x"); o.message` prints `nil` under `msc run --target=raiser`, with no diagnostic at the offending line — for a plain user class, no try/catch involved (measured 2026-09-05). The 31 ClassDecl tests here pass because they exercise the codegen unit path, not the project-wide run path; the two disagree. Makes `throw new Error(msg)` lose its payload — see the exception row below |
+| `new Array<T>(n)` | Evaluates to an **empty** array — the length argument is dropped, so the first index raises `array index out of bounds: 0 (length 0)`. Loud, not silent. Measured 2026-09-05 identical on the pre-fix and post-fix compiler, in both the bare and the `const a: number[] = …` shape, so it is untouched by the class-`new` wiring. A `NewExpr` handler keyed on `node.nodeType.kind === TypeKind.Array` was written and **removed**: it never fired in any probed shape |
 | ClassDecl (extends) | Inheritance deferred |
 | ClassDecl (static) | Static methods/properties deferred |
 | ClassDecl (get/set) | Getter/setter deferred |

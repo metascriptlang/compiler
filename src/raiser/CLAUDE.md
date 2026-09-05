@@ -347,11 +347,12 @@ stdlib, because they have nothing to delegate to.
     finally and still returns 7, rethrow across frames, nested try where the
     catch itself throws, and a throw inside `spawn` caught by the awaiting
     reader.
-  - **Payload gap, pre-existing and not exception-specific:** `new` evaluates
-    to nil on the whole-program run path (see `src/codegen/raiser/CLAUDE.md`),
-    so `throw new Error(msg)` throws nil and `e.message` reads `nil`. Throwing
-    a string carries its value correctly. Fixing that is a NewExpr ticket, not
-    an exception one.
+  - **Payload gap CLOSED 2026-09-05.** `new` used to evaluate to nil on the
+    whole-program run path, so `throw new Error(msg)` threw nil. `NewExpr` now
+    calls the `<Class>_new` rgen already compiled, and `transformForRaiser`
+    runs the two shared lowerings the run path was missing (`lowerCtorInit`,
+    `lowerNewExpr`). Measured against the pre-fix compiler in a rig:
+    `throw new AppErr("kaboom")` caught → `kaboom` (was `nil`).
   - Orphan reporting, like the strand drain, is **not reachable from valid
     source yet**: the affine rule (PARALOCK R1/E1) rejects a discarded
     `spawn`, so every failing future has a reader. The VM-level tests cover
