@@ -2525,6 +2525,7 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 	const sym = makeSymbolState(expInfo.name, expInfo.kind, expInfo.symType, false, SymbolState.Shaped);
 	setFlag(sym, SymbolFlag.Imported);
 	sym.modulePath = expInfo.definingModule !== "" ? expInfo.definingModule : sourcePath;
+	sym.disamb = expInfo.disamb;
 	if (expInfo.originalName !== "") sym.originalName = expInfo.originalName;
 	if (expInfo.nativeName !== "") sym.nativeName = expInfo.nativeName;
 	if (expInfo.builtinKind !== "") sym.builtinKind = expInfo.builtinKind;
@@ -2546,6 +2547,7 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 		while (oi < expInfo.overloadTypes.length) {
 			const overSym = makeSymbolState(expInfo.name, expInfo.kind, expInfo.overloadTypes[oi], false, SymbolState.Shaped);
 			overSym.overloadIdx = oi + 1;
+			if (oi < expInfo.overloadDisambs.length) overSym.disamb = expInfo.overloadDisambs[oi];
 			overSym.modulePath = sym.modulePath;
 			if (oi < expInfo.overloadNativeNames.length && expInfo.overloadNativeNames[oi] !== "") {
 				overSym.nativeName = expInfo.overloadNativeNames[oi];

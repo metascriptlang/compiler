@@ -284,6 +284,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 	sym.headerPath = "";
 	sym.jsModulePath = "";
 	sym.overloadIdx = 0;
+	sym.disamb = 0;
 	sym.staticFields = [];
 	sym.duVariantSlot = 0;
 	return sym;

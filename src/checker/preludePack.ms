@@ -535,7 +535,7 @@ function writePreludeDeps(root: string, key: string): void {
 //   S idx kind state flags overloadIdx mutatedParams duVariantSlot
 //     locLine locCol locEndLine locEndCol inScope
 //     name modulePath nativeName builtinKind originalName headerPath jsModulePath
-//     typeIdx overloadsCsv staticCsv declIdx dpCsv
+//     typeIdx overloadsCsv staticCsv declIdx dpCsv disamb
 //   E methodName receiverTypeName sourcePath isStatic scopeDepth symIdx fnTypeIdx
 //   M macroName declModule bodyIdx paramsCsv paramTypesCsv
 //   C converterName targetTypeName typeIdx
@@ -737,7 +737,7 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 			for (const sf of s.staticFields) stf.push(idxSym(sf));
 		}
 		const dp = s.defaultParams !== null ? idxs(s.defaultParams) : "-";
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.originalName)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}`);
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.originalName)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}`);
 	}
 
 	if (ctx.extensionRegistry !== null) {
@@ -1194,6 +1194,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			symStaticIdx.push(parseIntsCsv(f[22]));
 			symDeclIdx.push(f[23].parseInt() as int32);
 			symDpRaw.push(f[24]);
+			if (f.length > 25) s.disamb = f[25].parseInt() as int32;
 			syms.push(s);
 		} else if (f[0] === "E") {
 			extRows.push(f);

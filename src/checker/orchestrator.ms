@@ -160,7 +160,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 				location: sym.location !== null ? sym.location : makeLoc(0, 0),
 				memberLocations: memberLocs,
 				primaryFlags: sym.symFlags,
-				overloadFlags: [],
+				overloadFlags: [], disamb: 0, overloadDisambs: [],
 				macroBody: null as unknown as Node,
 				macroParams: [],
 				macroParamTypes: [],

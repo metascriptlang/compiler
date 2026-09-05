@@ -254,7 +254,12 @@ export function mangledFunctionName(sym: Symbol | null, name: string, overloadId
 	// Use original declared name for mangling, not import alias
 	const baseName = (sym !== null && sym.originalName !== "") ? sym.originalName : name;
 	if (sym !== null && sym.modulePath !== "") {
-		return mangleProcName(baseName, mangleModuleName(sym.modulePath), overloadIdx);
+		// The _u suffix is the symbol's per-(module, name) ordinal minted at
+		// declaration — NOT the overload-set slot. A routine that never joins
+		// an overload set (static member, routine nested in a body) still
+		// needs one, and an importer must emit the defining module's number,
+		// which only a carried field (not a recomputed position) gives.
+		return mangleProcName(baseName, mangleModuleName(sym.modulePath), sym.disamb);
 	}
 	if (overloadIdx > 0) return `${safeName(baseName)}__${overloadIdx}`;
 	return safeName(baseName);
@@ -481,10 +486,11 @@ test "mangledFunctionName ImportC bypass" {
 	assert mangledFunctionName(sym, "malloc", 0) === "malloc_";
 }
 
-test "mangledFunctionName overloadIdx disambiguates" {
+test "mangledFunctionName disamb disambiguates" {
 	const sym = makeSymbol("foo", SymbolKind.Function, noneType(), false);
 	sym.modulePath = "src/bar.ms";
-	assert mangledFunctionName(sym, "foo", 2) === "foo__srcZbarOms_u2";
+	sym.disamb = 2;
+	assert mangledFunctionName(sym, "foo", 0) === "foo__srcZbarOms_u2";
 }
 
 test "mangledFunctionName prefers originalName over import alias" {

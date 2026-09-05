@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, ExtensionMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod } from "./context";
+import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -16,48 +16,6 @@ export function collectTopLevel(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
 	for (const stmt of stmts.programStmts) {
 		collectDecl(ctx, stmt);
-	}
-	auditStaticMemberNames(ctx);
-}
-
-// A static member never enters the module scope, so scope-merge overload
-// numbering cannot disambiguate it from a same-named routine in the same
-// module — both would emit one C name (clang: "incompatible type" at a
-// call site, or a silently skipped definition). Reject at collect until
-// emitted names key on symbol identity rather than scope position.
-function auditStaticMemberNames(ctx: CheckerContext): void {
-	if (ctx.extensionRegistry === null) return;
-	const locals: ExtensionMethod[] = [];
-	for (const ext of ctx.extensionRegistry.methods) {
-		const s = ext.sym;
-		if (!ext.isStatic || s === null) continue;
-		if (s.modulePath !== ctx.modulePath) continue;
-		if (hasFlag(s, SymbolFlag.ImportC) || hasFlag(s, SymbolFlag.OverloadSig)) continue;
-		// Class static methods also register here, but their C name carries
-		// the class prefix — only `this typeof` extension statics share the
-		// bare-name mangle space with scope functions.
-		const dn = s.declNode;
-		if (dn === null || dn.kind !== NodeKind.FunctionDecl) continue;
-		if (!isStaticExtensionFlag((dn.data as FunctionDeclData).fnFlags)) continue;
-		locals.push(ext);
-	}
-	for (let i = 0; i < locals.length; i += 1) {
-		const ext = locals[i];
-		const extSym = ext.sym;
-		if (extSym === null) continue;
-		const scopeSym = lookupSymbol(ctx.table, ext.methodName);
-		if (scopeSym !== null && scopeSym.symbolKind === SymbolKind.Function
-			&& scopeSym.modulePath === ctx.modulePath && !hasFlag(scopeSym, SymbolFlag.ImportC)) {
-			addError(ctx, `Static member '${ext.receiverTypeName}.${ext.methodName}' collides with function '${ext.methodName}' in the same module`,
-				extSym.location.line, extSym.location.column);
-		}
-		for (let j = i + 1; j < locals.length; j += 1) {
-			const other = locals[j];
-			const otherSym = other.sym;
-			if (otherSym === null || other.methodName !== ext.methodName) continue;
-			addError(ctx, `Static member '${other.receiverTypeName}.${other.methodName}' collides with static member '${ext.receiverTypeName}.${ext.methodName}' in the same module`,
-				otherSym.location.line, otherSym.location.column);
-		}
 	}
 }
 
@@ -248,7 +206,10 @@ export function stampDecl(ctx: CheckerContext, sym: Symbol, node: Node): void {
 	if (sym.location === null || sym.location.line === 0) sym.location = node.location;
 	sym.declNode = node; // Discovery Commitment: link symbol to its declaration node
 	// Implementation parity: stamp module ownership — set once at creation
-	if (sym.modulePath === "") sym.modulePath = ctx.modulePath;
+	if (sym.modulePath === "") {
+		sym.modulePath = ctx.modulePath;
+		if (sym.symbolKind === SymbolKind.Function) sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+	}
 }
 
 export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): void {
@@ -551,6 +512,7 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	// Link node → symbol for resolvePass + LSP go-to-definition
 	methodSym.location = member.location;
 	methodSym.modulePath = ctx.modulePath;
+	methodSym.disamb = nextDisamb(ctx, ctx.modulePath, md.methodName);
 	methodSym.declNode = member;
 	member.resolvedSym = methodSym;
 	methodNode.resolvedSym = methodSym;
@@ -793,6 +755,7 @@ export function importSymFromRegistry(
 	// and emits spurious "Unresolved type" warnings.
 	sym.state = SymbolState.Shaped;
 	sym.modulePath = resolveDefiningModule(exportInfo, sourcePath);
+	sym.disamb = exportInfo.disamb;
 	const origName = resolveOriginalName(exportInfo, importName);
 	if (origName !== alias) sym.originalName = origName;
 	if (exportInfo.nativeName !== "") sym.nativeName = exportInfo.nativeName;
@@ -842,6 +805,7 @@ function propagateImportedOverloads(
 		// Preserve source-module overload slot so Identifier-as-value references
 		// mangle to the correct `_u${N}` name (primary=0, overloads[k]=k+1).
 		ovSym.overloadIdx = ovIdx + 1;
+		if (ovIdx < exportInfo.overloadDisambs.length) ovSym.disamb = exportInfo.overloadDisambs[ovIdx];
 		ovSym.modulePath = resolveDefiningModule(exportInfo, sourcePath);
 		const ovOrigName = resolveOriginalName(exportInfo, importName);
 		if (ovOrigName !== localAlias) ovSym.originalName = ovOrigName;
@@ -1081,6 +1045,7 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 		if (findExtension(ctx.extensionRegistry, expInfo.extReceiverType, methName) !== null) continue;
 		const methSym = makeSymbol(expInfo.name, SymbolKind.Function, expInfo.symType, false);
 		methSym.modulePath = expInfo.definingModule !== "" ? expInfo.definingModule : sourcePath;
+		methSym.disamb = expInfo.disamb;
 		if (expInfo.nativeName !== "") methSym.nativeName = expInfo.nativeName;
 		if (expInfo.location !== null) methSym.location = expInfo.location;
 		// Carry default-param info — without this, member-call dispatch resolves
@@ -1106,6 +1071,7 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 					const ovSym = makeSymbol(expInfo.name, SymbolKind.Function, expInfo.overloadTypes[ovi], false);
 					ovSym.modulePath = expInfo.definingModule !== "" ? expInfo.definingModule : sourcePath;
 					ovSym.overloadIdx = ovi + 1;
+					if (ovi < expInfo.overloadDisambs.length) ovSym.disamb = expInfo.overloadDisambs[ovi];
 					if (expInfo.overloadNativeNames !== null && ovi < expInfo.overloadNativeNames.length && expInfo.overloadNativeNames[ovi] !== "") ovSym.nativeName = expInfo.overloadNativeNames[ovi];
 					ovSym.state = SymbolState.Shaped;
 					if (markExported) setFlag(ovSym, SymbolFlag.Exported);
@@ -1384,7 +1350,7 @@ test "instance extension stays a free name" {
 	assert findExtension(ctx.extensionRegistry, "string", "m") !== null;
 }
 
-test "a static and an instance extension sharing a name in one module are rejected" {
+test "a static and an instance extension sharing a name in one module coexist" {
 	const src = "class K {} function p(this typeof K, s: string): int32 { return 1; }"
 		+ " function p(this s: string): int32 { return 2; }";
 	const ctx = collectFromSource(src);
@@ -1393,21 +1359,29 @@ test "a static and an instance extension sharing a name in one module are reject
 	assert free.overloads.length === 0;
 	assert findExtension(ctx.extensionRegistry, "K", "p") !== null;
 	assert findExtension(ctx.extensionRegistry, "string", "p") !== null;
-	assert ctx.errors.length === 1;
+	assert ctx.errors.length === 0;
 }
 
-test "a static member colliding with a same-module free function is rejected" {
+test "a static member and a same-module free function get distinct emitted names" {
 	const src = "class K {} function m(this typeof K, x: int32): int32 { return x; }"
 		+ " function m(s: string): string { return s; }";
 	const ctx = collectFromSource(src);
-	assert ctx.errors.length === 1;
+	assert ctx.errors.length === 0;
+	const free = lookupSymbol(ctx.table, "m");
+	const ext = findExtension(ctx.extensionRegistry, "K", "m");
+	assert free !== null && ext !== null && ext.sym !== null;
+	assert free.disamb !== ext.sym.disamb;
 }
 
-test "two same-named static members in one module are rejected" {
+test "two same-named static members in one module get distinct emitted names" {
 	const src = "class A {} class B {} function f(this typeof A, x: int32): int32 { return x; }"
 		+ " function f(this typeof B, x: int32): int32 { return x; }";
 	const ctx = collectFromSource(src);
-	assert ctx.errors.length === 1;
+	assert ctx.errors.length === 0;
+	const fa = findExtension(ctx.extensionRegistry, "A", "f");
+	const fb = findExtension(ctx.extensionRegistry, "B", "f");
+	assert fa !== null && fb !== null && fa.sym !== null && fb.sym !== null;
+	assert fa.sym.disamb !== fb.sym.disamb;
 }
 
 test "a class static method does not collide with a same-named function" {
@@ -1661,7 +1635,7 @@ test "re-export preserves original location and records sgSymRecord" {
 		defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
 		definingModule: "/test/hub/accessors", originalName: "", headerPath: "",
 		location: origLoc, memberLocations: [],
-		primaryFlags: 0, overloadFlags: [],
+		primaryFlags: 0, overloadFlags: [], disamb: 0, overloadDisambs: [],
 		macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [],
 	};
 	registerModuleExports(ctx.exportRegistry, "/test/hub/accessors", [fakeExport]);

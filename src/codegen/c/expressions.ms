@@ -2484,7 +2484,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 			return;
 		}
 		const ovIdx = emitIdx >= 0 ? emitIdx : 0;
-		const ovCalleeName = mangledFunctionName(sym, sym.name, ovIdx);
+		const ovCalleeName = mangledFunctionName(emitSym, emitSym.name, ovIdx);
 		// On-demand cross-module prototype (reference parity: genProcPrototype)
 		ensureCrossModuleProto(g, ovCalleeName, ovType, sym);
 		const ovRet = (ovType !== null && ovType.kind === TypeKind.Function) ? ovType.typeReturn : null;
