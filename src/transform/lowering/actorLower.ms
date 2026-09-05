@@ -13,11 +13,12 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	IdentifierData, VariableDeclData, FunctionDeclData, IfStmtData,
 	WhileStmtData, ForOfStmtData, ForStmtData, BlockStmtData,
 	DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData,
-	ExprStmtData, ReturnStmtData, TestDeclData,
+	ExprStmtData, ReturnStmtData, TestDeclData, ArrowFunctionData, FunctionExprData,
 	Symbol, SymbolKind, SymbolState, createNode } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { canFormAcycle } from "../cycles";
-import { containsExprKind, replaceInExpr } from "../walker";
+import { containsExprKind, mapExprChildren, replaceInExpr } from "../walker";
+import { forEachChild } from "../../ast/visitor";
 import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
@@ -1075,6 +1076,25 @@ function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[]
 
 // ===== Recursively walk into nodes that contain statement lists =====
 
+function exprHasActorNew(expr: Node, names: string[]): boolean {
+	if (expr === null) return false;
+	if (expr.kind === NodeKind.NewExpr) {
+		const ne = expr.data as NewExprData;
+		if (ne.newCallee.kind === NodeKind.Identifier) {
+			const id = ne.newCallee.data as IdentifierData;
+			for (const n of names) {
+				if (n === id.name) return true;
+			}
+		}
+	}
+	const hits: Node[] = [];
+	mapExprChildren(expr, (child: Node): Node => {
+		if (exprHasActorNew(child, names)) hits.push(child);
+		return child;
+	});
+	return hits.length > 0;
+}
+
 function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], ctx: TransformContext): void {
 	match (node.kind) {
 		NodeKind.FunctionDecl => {
@@ -1134,7 +1154,29 @@ function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], di
 			const td = node.data as TestDeclData;
 			wireActorInNode(td.testBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 		},
-		_ => {},
+		NodeKind.ArrowFunction => {
+			const ad = node.data as ArrowFunctionData;
+			if (ad.arrowBody !== null) {
+				if (ad.arrowBody.kind !== NodeKind.BlockStmt && exprHasActorNew(ad.arrowBody, names)) {
+					ad.arrowBody = makeBlock([makeReturn(ad.arrowBody, node.location)], node.location);
+				}
+				wireActorInNode(ad.arrowBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			}
+		},
+		NodeKind.FunctionExpr => {
+			const fe = node.data as FunctionExprData;
+			if (fe.funcExprBody !== null) {
+				if (fe.funcExprBody.kind !== NodeKind.BlockStmt && exprHasActorNew(fe.funcExprBody, names)) {
+					fe.funcExprBody = makeBlock([makeReturn(fe.funcExprBody, node.location)], node.location);
+				}
+				wireActorInNode(fe.funcExprBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			}
+		},
+		_ => {
+			forEachChild(node, (child: Node): void => {
+				wireActorInNode(child, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			});
+		},
 	};
 }
 
