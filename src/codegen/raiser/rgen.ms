@@ -1530,5 +1530,28 @@ test "method calling another method" {
 
 test "class instance as value" {
 	const ctx = evalRaiser("class Pair { constructor(a, b) { this.a = a; this.b = b; } sum() { return this.a + this.b; } } const p = Pair_new(3, 7); const result = p.sum(); return result;");
-	assert ctx.lastResult.intVal === 10;
+	assert ctx.lastResult.intVal == 10;
+}
+
+// --- Trap: compile-time-known-bad sites fail loud when executed ---
+
+test "method reads its own instance, not heap object 0" {
+	const ctx = evalRaiser("class Box { constructor(v) { this.v = v; } get() { return this.v; } } const a = Box_new(1); const b = Box_new(2); return b.get();");
+	assert ctx.lastError == "";
+	assert ctx.lastResult.intVal == 2;
+}
+
+test "trap: unresolved identifier errors at runtime" {
+	const ctx = evalRaiser("return mysteryVar;");
+	assert ctx.lastError.indexOf("cannot evaluate 'mysteryVar'") >= 0;
+}
+
+test "trap: unsupported node kind errors at runtime" {
+	const ctx = evalRaiser("return match (1) { _ => 2 };");
+	assert ctx.lastError.indexOf("cannot compile node kind") >= 0;
+}
+
+test "trap: new without constructor errors at runtime" {
+	const ctx = evalRaiser("return new Mystery(1);");
+	assert ctx.lastError.indexOf("no matching constructor") >= 0;
 }
