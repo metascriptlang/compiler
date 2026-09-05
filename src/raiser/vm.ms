@@ -12,7 +12,7 @@ import {
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField,
 	raiserFuture,
-	rcIncref, rcDecref
+	rcIncref, rcDecref, copyGraph
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -41,11 +41,13 @@ export interface RaiserCallFrames {
 	items: RaiserCallFrame[];
 }
 
-// A strand is one independent line of execution: its own register file and
-// its own frame stack. The whole of it is reified data — MS-level calls never
-// use the host stack (vmHandleCall pushes a frame and re-points funcIdx/ip/
-// baseReg) — so a strand suspends by copying six fields out of the VM and
-// resumes by copying them back. No CPS transform, no per-opcode changes.
+// A strand is one independent line of execution: its own register file, its
+// own frame stack and its own heap. The whole of it is reified data — MS-level
+// calls never use the host stack (vmHandleCall pushes a frame and re-points
+// funcIdx/ip/baseReg) — so a strand suspends by copying those fields out of
+// the VM and resumes by copying them back. No CPS transform, no per-opcode
+// changes: vm.arrayHeap / vm.objectHeap are the running strand's heap, so
+// every allocating opcode stays exactly as it was.
 export enum RaiserStrandStatus {
 	Ready,
 	Running,
@@ -57,6 +59,8 @@ export interface RaiserStrand {
 	id: number;
 	regs: RaiserRegFile;
 	callStack: RaiserCallFrames;
+	arrayHeap: RaiserArrayHeap;
+	objectHeap: RaiserObjectHeap;
 	ip: number;
 	funcIdx: number;
 	baseReg: number;
@@ -84,6 +88,12 @@ export interface RaiserFuture {
 	errorMsg: string;
 	errorObserved: boolean;
 	value: RaiserValue;
+	// The future owns the storage its value lives in, the way MS_FUTURE_STRUCT
+	// makes `value` a field of the future itself (runtime/promise/future.h) —
+	// the producing strand's heap dies with it, so the value is copied in on
+	// completion and copied out into each reader's heap on await.
+	valueArrayHeap: RaiserArrayHeap;
+	valueObjectHeap: RaiserObjectHeap;
 	waiters: number[];   // strand indices blocked on this future
 }
 
@@ -170,7 +180,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const objectHeap = createStructHeap();
 	const mainResult = raiserNil();
 	const mainSafePoints: number[] = [];
-	const mainStrand: RaiserStrand = { id: 0, regs, callStack, ip: 0, funcIdx: mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const mainStrand: RaiserStrand = { id: 0, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	const strandItems: RaiserStrand[] = [mainStrand];
 	const strands: RaiserStrands = { items: strandItems };
 	const futureItems: RaiserFuture[] = [];
@@ -284,7 +294,9 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.safePoints.length = 0;
 	vm.unwinding = false;
 	vm.savedIp = -1;
-	const mainStrand: RaiserStrand = { id: 0, regs: vm.regs, callStack: vm.callStack, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException, unwinding: false, savedIp: -1 };
+	// The main strand keeps the VM's existing heap objects: the host holds that
+	// identity across runs (context.ms captures it, expand.ms clears it).
+	const mainStrand: RaiserStrand = { id: 0, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException, unwinding: false, savedIp: -1 };
 	vm.strands.items.push(mainStrand);
 	vm.current = 0;
 	vm.nextStrandId = 1;
@@ -296,7 +308,9 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 
 function newFuture(vm: RaiserVM): number {
 	const waiters: number[] = [];
-	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), waiters };
+	const valueArrayHeap = createArrayHeap();
+	const valueObjectHeap = createStructHeap();
+	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), valueArrayHeap, valueObjectHeap, waiters };
 	vm.futures.items.push(f);
 	return vm.futures.items.length - 1;
 }
@@ -309,7 +323,11 @@ function futureComplete(vm: RaiserVM, handle: number, value: RaiserValue): void 
 	const f = vm.futures.items[handle];
 	if (f.finished) return;
 	f.finished = true;
-	copyValueInto(f.value, value);
+	// Completion runs on the producing strand, whose heap dies with it — the
+	// value graph moves into storage the future owns.
+	const owned = copyGraph(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, value);
+	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
+	copyValueInto(f.value, owned);
 	for (const w of f.waiters) {
 		const s = vm.strands.items[w];
 		if (s.status === RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
@@ -465,6 +483,8 @@ function strandSave(vm: RaiserVM): void {
 	const s = vm.strands.items[vm.current];
 	s.regs = vm.regs;
 	s.callStack = vm.callStack;
+	s.arrayHeap = vm.arrayHeap;
+	s.objectHeap = vm.objectHeap;
 	s.ip = vm.ip;
 	s.funcIdx = vm.funcIdx;
 	s.baseReg = vm.baseReg;
@@ -480,6 +500,8 @@ function strandResume(vm: RaiserVM, idx: number): void {
 	vm.current = idx;
 	vm.regs = s.regs;
 	vm.callStack = s.callStack;
+	vm.arrayHeap = s.arrayHeap;
+	vm.objectHeap = s.objectHeap;
 	vm.ip = s.ip;
 	vm.funcIdx = s.funcIdx;
 	vm.baseReg = s.baseReg;
@@ -557,7 +579,9 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	vm.nextStrandId = id + 1;
 	const result = raiserNil();
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, regs, callStack, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const arrayHeap = createArrayHeap();
+	const objectHeap = createStructHeap();
+	const s: RaiserStrand = { id, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.strands.items.push(s);
 	return id;
 }
@@ -581,10 +605,15 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
 	const slots: RaiserValue[] = [];
 	const regs: RaiserRegFile = { slots };
 	ensureSlots(regs, callee.maxRegs);
+	const arrayHeap = createArrayHeap();
+	const objectHeap = createStructHeap();
 	const envField = heapObjectGetField(vm.objectHeap, closure.intVal, "env");
 	if (envField.kind === RaiserValueKind.Object) {
-		const envSlot = raiserNil();
-		copyValueInto(envSlot, envField);
+		// C hands the thunk a borrow of the parent's captures and the analyzer
+		// proves the parent outlives them; a handle means nothing in another
+		// heap, so the capture graph crosses as a copy the child owns.
+		const envSlot = copyGraph(vm.arrayHeap, vm.objectHeap, arrayHeap, objectHeap, envField);
+		rcIncref(arrayHeap, objectHeap, envSlot);
 		regs.slots[0] = envSlot;
 	}
 	const frames: RaiserCallFrame[] = [];
@@ -594,7 +623,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
 	const fut = newFuture(vm);
 	const result = raiserNil();
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, regs, callStack, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const s: RaiserStrand = { id, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.strands.items.push(s);
 	return fut;
 }
@@ -633,8 +662,10 @@ function vmHandleAwait(vm: RaiserVM, inst: RaiserInstruction): void {
 			raiseFromFuture(vm, f);
 			return;
 		}
-		const copy = raiserNil();
-		copyValueInto(copy, f.value);
+		// Read out of the future's own storage and into the reader's heap.
+		// Non-destructive: the affine rules (R1/R2) make a second await a
+		// compile error, so there is no read-once slot to clear here.
+		const copy = copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.value);
 		setReg(vm, base + inst.a, copy);
 		return;
 	}
@@ -646,6 +677,20 @@ function vmHandleAwait(vm: RaiserVM, inst: RaiserInstruction): void {
 }
 
 export function execLoop(vm: RaiserVM): void {
+	execStrandLoop(vm);
+	// The host reads its result off the mirror once this returns (context.ms,
+	// expand.ms, the rgen tests), so whichever strand ran last, the mirror
+	// leaves pointing at the main strand's heap. exitValue needs no copy: both
+	// finishProgram call sites are guarded by strandFinish returning false,
+	// which is exactly the main strand.
+	if (vm.strands.items.length > 0) {
+		const main = vm.strands.items[0];
+		vm.arrayHeap = main.arrayHeap;
+		vm.objectHeap = main.objectHeap;
+	}
+}
+
+function execStrandLoop(vm: RaiserVM): void {
 	while (true) {
 		runStrandSlice(vm);
 		if (vm.halted) return;
@@ -2487,6 +2532,74 @@ test "spawn returns a future the strand completes, await reads it" {
 	assert vm.exitValue.intVal === 7;
 	assert vm.futures.items.length === 1;
 	assert vm.futures.items[0].finished;
+}
+
+test "a ref result crosses three heaps: producer, future, reader" {
+	const mainCode = closurePairCode();
+	mainCode.push(raiserABC(RaiserOpcode.Spawn, 3, 1, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Await, 4, 3, 0));
+	mainCode.push(raiserABC(RaiserOpcode.LoadField, 5, 4, 4));
+	mainCode.push(raiserABC(RaiserOpcode.Print, 5, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Halt, 5, 0, 0));
+	const mainConsts = closurePairConsts(1);
+	mainConsts.push(raiserString("v"));
+	const workerCode: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.NewObject, 0, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 1, 1),
+		raiserABC(RaiserOpcode.StoreField, 0, 0, 1),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const workerConsts: RaiserValue[] = [raiserString("v"), raiserInt(42)];
+	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 8);
+	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fWorker];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = execModule(mod, "arena");
+	assert vm.error === "";
+	// The value survives being materialized twice — out of the strand that
+	// built it, then out of the future's own storage into the reader.
+	assert vm.output === "42\n";
+	// One object per stage: the worker built it, the future owns a copy, and
+	// main holds the closure it spawned plus the copy it read back.
+	assert vm.strands.items[1].objectHeap.objects.length === 1;
+	assert vm.futures.items[0].valueObjectHeap.objects.length === 1;
+	assert vm.objectHeap.objects.length === 2;
+}
+
+test "a spawned strand writes to its own copy of the captured env" {
+	const mainConsts: RaiserValue[] = [raiserInt(1), raiserString("fn"), raiserString("env"), raiserString("n"), raiserInt(7)];
+	const mainCode: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.NewObject, 6, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 7, 4),
+		raiserABC(RaiserOpcode.StoreField, 6, 3, 7),
+		raiserABC(RaiserOpcode.NewObject, 1, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 2, 0),
+		raiserABC(RaiserOpcode.StoreField, 1, 1, 2),
+		raiserABC(RaiserOpcode.StoreField, 1, 2, 6),
+		raiserABC(RaiserOpcode.Spawn, 3, 1, 0),
+		raiserABC(RaiserOpcode.Await, 4, 3, 0),
+		raiserABC(RaiserOpcode.LoadField, 5, 6, 3),
+		raiserABC(RaiserOpcode.Print, 5, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 5, 0, 0),
+	];
+	const workerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 1, 1),
+		raiserABC(RaiserOpcode.StoreField, 0, 0, 1),
+		raiserABx(RaiserOpcode.LoadConst, 2, 2),
+		raiserABC(RaiserOpcode.Ret, 2, 0, 0),
+	];
+	const workerConsts: RaiserValue[] = [raiserString("n"), raiserInt(99), raiserInt(0)];
+	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 8);
+	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fWorker];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = execModule(mod, "arena");
+	assert vm.error === "";
+	// C would let the child write straight through the borrow; here the child
+	// owns a copy, so the parent still reads what it stored (Amendment J).
+	assert vm.output === "7\n";
+	const childEnv = heapObjectGetField(vm.strands.items[1].objectHeap, 0, "n");
+	assert childEnv.intVal === 99;
 }
 
 test "await parks the reader until the future completes" {
