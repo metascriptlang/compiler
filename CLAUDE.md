@@ -42,6 +42,14 @@ MSCORPUS_SAN=1 msc run src/test/corpus/run.ms  # ASan + DRC ledger, ~10 min
 MSCORPUS_FILTER=leak msc run src/test/corpus/run.ms   # substring subset
 src/test/guard/run.sh                          # lifecycle guards (proven-red)
 
+# Narrow checker/codegen fix and want corpus confidence without the ~19-min
+# run (cold anyway — the toolchain stamp hashes the binary itself)? Emit-diff
+# selector: `--emit=c` every corpus program with the HEAD binary and the
+# candidate, hash-diff the emitted C. Identical C ⇒ no lane outcome can
+# change. PROVE selector sensitivity on a known-affected PLAIN program first
+# (test-block repros diff 0 — `build` never emits test bodies).
+# Recipe + traps: src/test/CLAUDE.md §5.3.
+
 # Run without tests (build + run natively)
 msc run src/index.ms
 

@@ -381,6 +381,7 @@ done
 | **Inner loop** — any compiler edit | `msc test src/index.ms` | ~40s |
 | Same, under the cycle collector | `msc test src/index.ms --gc=orc` | ~40s |
 | Touched **codegen / DRC / runtime / transform** | + `msc run src/test/corpus/run.ms` | ~19 min |
+| Narrow checker/codegen rule fix, corpus confidence cheaply | emit-diff selector (§5.3), lanes only on the differing set | ~6 min |
 | Touched **DRC hooks, lifetimes, ownership** | + `MSCORPUS_SAN=1 msc run src/test/corpus/run.ms` | ~10 min |
 | Same, targeted lifecycle invariants | + `src/test/guard/run.sh` | ~2 min |
 | Touched **std/** or anything users compile against | rebuild + `tools/sync-local-binary.sh` first, then re-run the above | — |
@@ -569,6 +570,58 @@ Where the remaining time actually goes, if you want to attack it:
    `TransAmDb` does for the LSP). Real project, not a tweak.
 3. **`msc test <file> --filter=<pattern>`** — still worth having for focused
    failure lists, but no longer a performance lever.
+
+### 5.3 Emit-diff selector — corpus confidence for narrow fixes (~6 min)
+
+Measured 2026-09-05 on the bug130 fix (checker identity-fit for narrowed
+union refs): 180 programs × 2 binaries = **334 s**, 2309 emitted C files
+hash-compared, **0 diffs** — with the selector's sensitivity PROVEN on the
+bug shape first (20-line C diff on the minimal repro). Full corpus skipped
+with evidence, not silently: every lane compiles the same emitted C, so
+byte-identical C means no lane outcome can change (same precedent as the
+2026-08-15 SAN skip, §7). The C argument covers the JS lanes too: identical
+C ⇒ the changed checker branch never fired for that program ⇒ the JS emitter
+saw the same checker output as before.
+
+Why not just run the corpus: the toolchain stamp content-hashes the msc
+binary + `runtime/` + `vendor/` (`src/compiler/cache.ms`), so EVERY new
+candidate binary starts cold — the 19 minutes never get cheaper while
+iterating.
+
+Recipe:
+
+1. Two binaries, one tree state: control = HEAD (throwaway `git worktree`,
+   built with the last good binary), candidate = HEAD+fix. Run each from its
+   OWN cwd — `--emit=c` writes `out/debug/<mangled>.c` relative to cwd and
+   the flat mangled names collide across programs.
+2. For every `programs/NNN-*` entry: `msc build <entry> --emit=c --gc=drc`,
+   then sweep `out/debug/*.c` aside into a per-program dir. Shared std
+   modules are identical anyway; the entry module is what carries the diff.
+3. Hash-compare both sides per program. Identical ⇒ provably unaffected.
+   Differing set A ⇒ run `MSCORPUS_FILTER=<exact-name>` (plain + SAN) on
+   exactly those programs.
+4. "A empty AND corpus green" on a brand-new bug shape means the corpus had
+   NO coverage of it — the fix's repro belongs in `corpus/programs/` anyway
+   (§6 step 5), and that new program is the one thing to run through all
+   lanes.
+
+Traps, all paid for on 2026-09-05:
+
+- **Prove sensitivity FIRST.** Emit the minimal repro (as a PLAIN program —
+  `build` never emits `test {}` bodies, a test-block repro diffs 0 and proves
+  nothing) with both binaries and confirm the C actually differs / the
+  control actually fails. `assert` is test-block-only; plain repros narrow
+  with `if (x.kind === ...)`.
+- **Const-foldable repros lie**: one literal-based repro folded to a
+  composite temp on the control binary and compiled fine there. Build values
+  through a function call so the argument is a real local.
+- `MSCORPUS_FILTER` is substring (`name.contains`), not prefix — "2" matches
+  012/102/202/…. Use exact program names.
+- The selector degenerates for broad changes (codegen/runtime/analyzer work
+  that rewrites most programs' C): |A| large ⇒ the full run is the honest
+  option. |A| is self-calibrating, no guessing up front.
+- SAN on hosts without libasan (scoop MinGW: `cannot find -lasan`) is
+  environment-blocked — record it, don't chase phantom code bugs.
 
 ---
 
