@@ -1,0 +1,61 @@
+// std/core/promise — Raiser tier. The Raiser VM is single-threaded, so the
+// async surface runs eager-sync: `await X → X`, `spawn(fn) → fn()`,
+// `waitFor(h) → h`, `Promise.resolve(v) → v` are removed before codegen by
+// lowerRaiserAsyncSync (src/transform/lowering/raiserAsyncSync.ms). This tier
+// only has to make the surface TYPE-CHECK — the `ms*` externs below are never
+// reached by the VM (the lowering deletes every call site in live code; any
+// left in an uncalled std body is a harmless queued warning).
+
+export class Promise<T> {
+	finished: boolean;
+	failed: boolean;
+
+	@builtin("PromiseThen")
+	extern then(callback: (value: T) => void): Promise<void> from "msFutureThen";
+	@builtin("PromiseCatch")
+	extern catch(callback: (error: string) => void): Promise<void> from "msFutureCatch";
+	@builtin("PromiseFinally")
+	extern finally(callback: () => void): Promise<void> from "msFutureFinally";
+
+	@builtin("PromiseAll")
+	static extern all<T>(promises: Promise<T>[]): Promise<T[]> from "msPromiseAll";
+	@builtin("PromiseRace")
+	static extern race<T>(promises: Promise<T>[]): Promise<T> from "msPromiseRace";
+	@builtin("PromiseAllSettled")
+	static extern allSettled<T>(promises: Promise<T>[]): Promise<T[]> from "msPromiseAllSettled";
+	@builtin("PromiseAny")
+	static extern any<T>(promises: Promise<T>[]): Promise<T> from "msPromiseAny";
+
+	@builtin("PromiseResolve")
+	static extern resolve(value: T): Promise<T> from "msPromiseResolve";
+	@builtin("PromiseReject")
+	static extern reject(error: string): Promise<void> from "msPromiseReject";
+}
+
+@builtin("PromiseSpawn")
+export extern function spawn<T>(fn: () => T): Promise<T> from "msSpawn";
+
+@builtin("WaitFor")
+export extern function waitFor<T>(fut: Promise<T>): T from "msWaitFor";
+
+export extern function sleepAsync(ms: number): Promise<void> from "msSleepAsync";
+
+export function asyncCheck(fut: Promise<void>): void {
+}
+
+extern function msLockedAcquire<T>(cell: Locked<T>): void from "msLockedAcquire";
+extern function msLockedRelease<T>(cell: Locked<T>): void from "msLockedRelease";
+extern function msLockedLoad<T>(cell: Locked<T>): T;
+extern function msLockedStore<T>(cell: Locked<T>, value: T): void;
+
+export function lockedUpdate<T>(cell: Locked<T>, fn: (value: T) => T): void {
+	msLockedAcquire(cell);
+	defer msLockedRelease(cell);
+	msLockedStore(cell, fn(msLockedLoad(cell)));
+}
+
+export function lockedRead<T, R>(cell: Locked<T>, fn: (value: T) => R): R {
+	msLockedAcquire(cell);
+	defer msLockedRelease(cell);
+	return fn(msLockedLoad(cell));
+}
