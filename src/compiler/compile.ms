@@ -2349,6 +2349,15 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		exit(1);
 	}
 
+	// A spawned strand that threw with nobody awaiting it is an unhandled
+	// rejection — same contract and exit code as msReportOrphanFailures on C.
+	if (ctx.orphanFailures.length > 0) {
+		for (const msg of ctx.orphanFailures) {
+			console.log(`${error("Error")}: unhandled rejection: ${msg}`);
+		}
+		exit(1);
+	}
+
 	// C-target parity: the program's exit code becomes msc's own.
 	if (ctx.lastResult.kind === RaiserValueKind.Int) {
 		exit(ctx.lastResult.intVal);

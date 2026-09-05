@@ -17,7 +17,7 @@ import {
 } from "./value";
 import { RaiserModule, makeTestModule } from "./module";
 import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx } from "./bytecode";
-import { execModule, vmDumpStack } from "./vm";
+import { execModule, vmDumpStack, vmOrphanFailures } from "./vm";
 
 // --- Context ---
 
@@ -30,6 +30,7 @@ export interface RaiserContext {
 	objectHeap: RaiserObjectHeap;
 	lastError: string;
 	gcMode: string;
+	orphanFailures: string[];   // futures that failed with nobody reading them
 }
 
 export function createContext(): RaiserContext {
@@ -39,7 +40,8 @@ export function createContext(): RaiserContext {
 	const nilResult = raiserNil();
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
-	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap, lastError: "", gcMode: "arena" };
+	const orphanFailures: string[] = [];
+	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap, lastError: "", gcMode: "arena", orphanFailures };
 }
 
 export function load(ctx: RaiserContext, mod: RaiserModule): void {
@@ -54,6 +56,7 @@ export function execute(ctx: RaiserContext): boolean {
 	ctx.lastOutput = vm.output;
 	ctx.arrayHeap = vm.arrayHeap;
 	ctx.objectHeap = vm.objectHeap;
+	ctx.orphanFailures = vmOrphanFailures(vm);
 	if (vm.error !== "") {
 		ctx.lastError = `${vm.error}\n${vmDumpStack(vm)}`;
 		return false;
