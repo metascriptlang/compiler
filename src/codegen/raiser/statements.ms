@@ -3,7 +3,7 @@
 
 import {
 	Node, NodeKind,
-	ReturnStmtData, BlockStmtData, ExprStmtData,
+	ReturnStmtData, BlockStmtData, ExprStmtData, MacroInvocationData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	ForStmtData, ForOfStmtData,
 	ExportDeclData, DecoratedDeclData, ImportDeclData,
@@ -39,6 +39,10 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 		},
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
+			if (d.expr.kind == NodeKind.MacroInvocation) {
+				const mi = d.expr.data as MacroInvocationData;
+				if (mi.macroName != "emit") { return; }
+			}
 			compileExpr(s, d.expr);
 		},
 		NodeKind.BlockStmt => { compileBlock(s, node); },
