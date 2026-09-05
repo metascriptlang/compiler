@@ -454,6 +454,168 @@ function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, ha
 	objHeap.freeList.push(handle);
 }
 
+// --- Cross-heap graph copy ---
+// A handle indexes the heap that allocated it, so a value crossing into
+// another heap must be materialized there. The src->dst handle map preserves
+// sharing and terminates on cycles: a graph the collector exists to reclaim
+// would otherwise recurse forever. Scalars carry their payload inline and
+// Future handles index the VM-wide future table, so both cross unchanged.
+
+export interface RaiserCopyMap {
+	arrSrc: number[];
+	arrDst: number[];
+	objSrc: number[];
+	objDst: number[];
+}
+
+export function createCopyMap(): RaiserCopyMap {
+	const arrSrc: number[] = [];
+	const arrDst: number[] = [];
+	const objSrc: number[] = [];
+	const objDst: number[] = [];
+	return { arrSrc, arrDst, objSrc, objDst };
+}
+
+export function copyGraph(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue): RaiserValue {
+	const map = createCopyMap();
+	return copyGraphWith(srcArr, srcObj, dstArr, dstObj, val, map);
+}
+
+export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
+	if (val.kind === RaiserValueKind.Array) {
+		for (let i = 0; i < map.arrSrc.length; i = i + 1) {
+			if (map.arrSrc[i] === val.intVal) return raiserArray(map.arrDst[i]);
+		}
+		if (val.intVal < 0 || val.intVal >= srcArr.arrays.length) return raiserNil();
+		const dstHandle = heapAllocArray(dstArr);
+		map.arrSrc.push(val.intVal);
+		map.arrDst.push(dstHandle);
+		const items = srcArr.arrays[val.intVal].items;
+		for (let i = 0; i < items.length; i = i + 1) {
+			const copied = copyGraphWith(srcArr, srcObj, dstArr, dstObj, items[i], map);
+			heapArrayPush(dstArr, dstHandle, copied);
+			rcIncref(dstArr, dstObj, copied);
+		}
+		return raiserArray(dstHandle);
+	}
+	if (val.kind === RaiserValueKind.Object) {
+		for (let i = 0; i < map.objSrc.length; i = i + 1) {
+			if (map.objSrc[i] === val.intVal) return raiserObject(map.objDst[i]);
+		}
+		if (val.intVal < 0 || val.intVal >= srcObj.objects.length) return raiserNil();
+		const dstHandle = heapAllocObject(dstObj);
+		map.objSrc.push(val.intVal);
+		map.objDst.push(dstHandle);
+		const fields = srcObj.objects[val.intVal].fields;
+		for (let i = 0; i < fields.length; i = i + 1) {
+			const copied = copyGraphWith(srcArr, srcObj, dstArr, dstObj, fields[i].value, map);
+			heapObjectSetField(dstObj, dstHandle, fields[i].name, copied);
+			rcIncref(dstArr, dstObj, copied);
+		}
+		return raiserObject(dstHandle);
+	}
+	const out = raiserNil();
+	copyValueInto(out, val);
+	return out;
+}
+
+// --- Cross-heap copy tests ---
+test "copyGraph materializes a nested graph in the destination heap" {
+	const sArr = createArrayHeap();
+	const sObj = createStructHeap();
+	const dArr = createArrayHeap();
+	const dObj = createStructHeap();
+	const inner = heapAllocArray(sArr);
+	heapArrayPush(sArr, inner, raiserInt(7));
+	const outer = heapAllocObject(sObj);
+	heapObjectSetField(sObj, outer, "kids", raiserArray(inner));
+	heapObjectSetField(sObj, outer, "tag", raiserString("t"));
+
+	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(outer));
+	assert copied.kind === RaiserValueKind.Object;
+	assert heapObjectGetString(dObj, copied.intVal, "tag") === "t";
+	const kids = heapObjectGetField(dObj, copied.intVal, "kids");
+	assert kids.kind === RaiserValueKind.Array;
+	assert heapArrayLen(dArr, kids.intVal) === 1;
+	assert heapArrayGet(dArr, kids.intVal, 0).intVal === 7;
+}
+
+test "copyGraph leaves the source heap untouched by destination writes" {
+	const sArr = createArrayHeap();
+	const sObj = createStructHeap();
+	const dArr = createArrayHeap();
+	const dObj = createStructHeap();
+	const src = heapAllocObject(sObj);
+	heapObjectSetField(sObj, src, "n", raiserInt(1));
+	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(src));
+	heapObjectSetField(dObj, copied.intVal, "n", raiserInt(99));
+	assert heapObjectGetInt(sObj, src, "n") === 1;
+	assert heapObjectGetInt(dObj, copied.intVal, "n") === 99;
+}
+
+test "copyGraph preserves sharing instead of duplicating" {
+	const sArr = createArrayHeap();
+	const sObj = createStructHeap();
+	const dArr = createArrayHeap();
+	const dObj = createStructHeap();
+	const shared = heapAllocObject(sObj);
+	heapObjectSetField(sObj, shared, "v", raiserInt(5));
+	const holder = heapAllocArray(sArr);
+	heapArrayPush(sArr, holder, raiserObject(shared));
+	heapArrayPush(sArr, holder, raiserObject(shared));
+
+	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserArray(holder));
+	const a = heapArrayGet(dArr, copied.intVal, 0);
+	const b = heapArrayGet(dArr, copied.intVal, 1);
+	assert a.intVal === b.intVal;
+	assert dObj.objects.length === 1;
+}
+
+test "copyGraph terminates on a cycle" {
+	const sArr = createArrayHeap();
+	const sObj = createStructHeap();
+	const dArr = createArrayHeap();
+	const dObj = createStructHeap();
+	const a = heapAllocObject(sObj);
+	const b = heapAllocObject(sObj);
+	heapObjectSetField(sObj, a, "next", raiserObject(b));
+	heapObjectSetField(sObj, b, "back", raiserObject(a));
+
+	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(a));
+	assert dObj.objects.length === 2;
+	const next = heapObjectGetField(dObj, copied.intVal, "next");
+	const back = heapObjectGetField(dObj, next.intVal, "back");
+	assert back.intVal === copied.intVal;
+}
+
+test "copyGraph passes scalars and future handles through" {
+	const sArr = createArrayHeap();
+	const sObj = createStructHeap();
+	const dArr = createArrayHeap();
+	const dObj = createStructHeap();
+	assert copyGraph(sArr, sObj, dArr, dObj, raiserInt(3)).intVal === 3;
+	assert copyGraph(sArr, sObj, dArr, dObj, raiserString("s")).strVal === "s";
+	const fut = copyGraph(sArr, sObj, dArr, dObj, raiserFuture(4));
+	assert fut.kind === RaiserValueKind.Future;
+	assert fut.intVal === 4;
+	assert dArr.arrays.length === 0;
+	assert dObj.objects.length === 0;
+}
+
+test "copyGraph refcounts the destination edges" {
+	const sArr = createArrayHeap();
+	const sObj = createStructHeap();
+	const dArr = createArrayHeap();
+	const dObj = createStructHeap();
+	const child = heapAllocArray(sArr);
+	const parent = heapAllocArray(sArr);
+	heapArrayPush(sArr, parent, raiserArray(child));
+	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserArray(parent));
+	const kid = heapArrayGet(dArr, copied.intVal, 0);
+	assert dArr.arrays[kid.intVal].rc === 1;
+	assert dArr.arrays[copied.intVal].rc === 0;
+}
+
 // --- ORC refcount tests ---
 test "rc incref/decref frees at zero" {
 	const arr = createArrayHeap();
