@@ -10,7 +10,8 @@ import {
 	RaiserValue, RaiserValueKind,
 	raiserNil, raiserInt, raiserBool, raiserString, raiserArray, raiserToString, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
-	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject,
+	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField,
+	raiserFuture,
 	rcIncref, rcDecref
 } from "./value";
 import {
@@ -61,10 +62,28 @@ export interface RaiserStrand {
 	loopCount: number;
 	status: RaiserStrandStatus;
 	result: RaiserValue;
+	resultFuture: number;   // future this strand completes when it finishes; -1 for main
 }
 
 export interface RaiserStrands {
 	items: RaiserStrand[];
+}
+
+// The VM's msFuture (runtime/promise/future.h): a completion cell plus the
+// readers parked on it. One OS thread means none of the cross-thread fields
+// (atomics, crossThreadPublished, deferred release) have a counterpart here;
+// `waiters` is what msFutureCb is for on C — the list woken on completion.
+export interface RaiserFuture {
+	finished: boolean;
+	failed: boolean;
+	errorMsg: string;
+	errorObserved: boolean;
+	value: RaiserValue;
+	waiters: number[];   // strand indices blocked on this future
+}
+
+export interface RaiserFutures {
+	items: RaiserFuture[];
 }
 
 export interface RaiserVM {
@@ -88,6 +107,7 @@ export interface RaiserVM {
 	current: number;      // index into strands.items of the running strand
 	nextStrandId: number;
 	yielded: boolean;     // set by Yield / strand completion, consumed by the scheduler
+	futures: RaiserFutures;
 }
 
 // Initial register file size. The slots array grows on demand via
@@ -136,10 +156,12 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const mainResult = raiserNil();
-	const mainStrand: RaiserStrand = { id: 0, regs, callStack, ip: 0, funcIdx: mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult };
+	const mainStrand: RaiserStrand = { id: 0, regs, callStack, ip: 0, funcIdx: mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1 };
 	const strandItems: RaiserStrand[] = [mainStrand];
 	const strands: RaiserStrands = { items: strandItems };
-	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, strands, current: 0, nextStrandId: 1, yielded: false };
+	const futureItems: RaiserFuture[] = [];
+	const futures: RaiserFutures = { items: futureItems };
+	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, strands, current: 0, nextStrandId: 1, yielded: false, futures };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -244,11 +266,37 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.strands.items.length = 0;
 	const result = raiserNil();
-	const mainStrand: RaiserStrand = { id: 0, regs: vm.regs, callStack: vm.callStack, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result };
+	const mainStrand: RaiserStrand = { id: 0, regs: vm.regs, callStack: vm.callStack, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1 };
 	vm.strands.items.push(mainStrand);
 	vm.current = 0;
 	vm.nextStrandId = 1;
 	vm.yielded = false;
+	vm.futures.items.length = 0;
+}
+
+// --- Futures ---
+
+function newFuture(vm: RaiserVM): number {
+	const waiters: number[] = [];
+	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), waiters };
+	vm.futures.items.push(f);
+	return vm.futures.items.length - 1;
+}
+
+function futureComplete(vm: RaiserVM, handle: number, value: RaiserValue): void {
+	if (handle < 0 || handle >= vm.futures.items.length) {
+		vmError(vm, `future handle out of bounds: ${handle}`);
+		return;
+	}
+	const f = vm.futures.items[handle];
+	if (f.finished) return;
+	f.finished = true;
+	copyValueInto(f.value, value);
+	for (const w of f.waiters) {
+		const s = vm.strands.items[w];
+		if (s.status === RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
+	}
+	f.waiters.length = 0;
 }
 
 function strandSave(vm: RaiserVM): void {
@@ -293,7 +341,35 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	const s = vm.strands.items[vm.current];
 	copyValueInto(s.result, value);
 	s.status = RaiserStrandStatus.Done;
+	if (s.resultFuture >= 0) futureComplete(vm, s.resultFuture, value);
 	return vm.current !== 0;
+}
+
+function vmHasRunnable(vm: RaiserVM): boolean {
+	for (const s of vm.strands.items) {
+		if (s.status === RaiserStrandStatus.Ready) return true;
+	}
+	return false;
+}
+
+function vmHasBlocked(vm: RaiserVM): boolean {
+	for (const s of vm.strands.items) {
+		if (s.status === RaiserStrandStatus.Blocked) return true;
+	}
+	return false;
+}
+
+// The main strand finishing does not stop the program: pending strands run to
+// completion first, the way msDrainUntilIdle (runtime/promise/drain.c) pumps
+// the loop after the entry module returns. `abrupt` is process.exit — it
+// skips the drain, Node parity.
+function finishProgram(vm: RaiserVM, value: RaiserValue, abrupt: boolean): void {
+	copyValueInto(vm.exitValue, value);
+	if (!abrupt && vmHasRunnable(vm)) {
+		vm.yielded = true;
+		return;
+	}
+	vm.halted = true;
 }
 
 export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
@@ -310,9 +386,80 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const id = vm.nextStrandId;
 	vm.nextStrandId = id + 1;
 	const result = raiserNil();
-	const s: RaiserStrand = { id, regs, callStack, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result };
+	const s: RaiserStrand = { id, regs, callStack, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1 };
 	vm.strands.items.push(s);
 	return id;
+}
+
+// Start a strand for a closure pair { fn, env } and hand back the future it
+// completes — the VM's msSpawn. env carries the -1 sentinel when the closure
+// captures nothing; otherwise it is the callee's last argument, and `spawn`
+// takes a zero-arg closure, so env is its only one.
+function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
+	if (closure.kind !== RaiserValueKind.Object) {
+		vmError(vm, "spawn expects a closure");
+		return -1;
+	}
+	const fnField = heapObjectGetField(vm.objectHeap, closure.intVal, "fn");
+	const funcIdx = fnField.intVal;
+	if (fnField.kind !== RaiserValueKind.Int || funcIdx < 0 || funcIdx >= vm.mod.functions.length) {
+		vmError(vm, `spawn: function index out of bounds: ${funcIdx}`);
+		return -1;
+	}
+	const callee = getModuleFunc(vm.mod, funcIdx);
+	const slots: RaiserValue[] = [];
+	const regs: RaiserRegFile = { slots };
+	ensureSlots(regs, callee.maxRegs);
+	const envField = heapObjectGetField(vm.objectHeap, closure.intVal, "env");
+	if (envField.kind === RaiserValueKind.Object) {
+		const envSlot = raiserNil();
+		copyValueInto(envSlot, envField);
+		regs.slots[0] = envSlot;
+	}
+	const frames: RaiserCallFrame[] = [];
+	const callStack: RaiserCallFrames = { items: frames };
+	const id = vm.nextStrandId;
+	vm.nextStrandId = id + 1;
+	const fut = newFuture(vm);
+	const result = raiserNil();
+	const s: RaiserStrand = { id, regs, callStack, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut };
+	vm.strands.items.push(s);
+	return fut;
+}
+
+// Reading a future: finished → its value, pending → park the strand on it.
+// Parking rewinds to this instruction, so the resumed strand re-reads the now
+// finished future and no partial-instruction state has to be saved. PARALOCK
+// §6.2 needs three await lowerings on C because its async frames are
+// stackless; a strand carries its whole frame stack, so one mechanism covers
+// all three — and `await` works at any call depth here.
+function vmHandleAwait(vm: RaiserVM, inst: RaiserInstruction): void {
+	const base = vm.baseReg;
+	const v = getReg(vm, base + inst.b);
+	if (v.kind !== RaiserValueKind.Future) {
+		// Awaiting a plain value is the identity — Promise.resolve semantics.
+		const copy = raiserNil();
+		copyValueInto(copy, v);
+		setReg(vm, base + inst.a, copy);
+		return;
+	}
+	if (v.intVal < 0 || v.intVal >= vm.futures.items.length) {
+		vmError(vm, `future handle out of bounds: ${v.intVal}`);
+		return;
+	}
+	const f = vm.futures.items[v.intVal];
+	if (f.finished) {
+		if (f.failed) f.errorObserved = true;
+		const copy = raiserNil();
+		copyValueInto(copy, f.value);
+		setReg(vm, base + inst.a, copy);
+		return;
+	}
+	vm.ip = vm.ip - 1;
+	const cur = vm.strands.items[vm.current];
+	cur.status = RaiserStrandStatus.Blocked;
+	f.waiters.push(vm.current);
+	vm.yielded = true;
 }
 
 export function execLoop(vm: RaiserVM): void {
@@ -326,7 +473,14 @@ export function execLoop(vm: RaiserVM): void {
 		strandSave(vm);
 		const next = schedulePick(vm);
 		if (next < 0) {
-			vmError(vm, "deadlock: no runnable strand");
+			// Nothing runnable — the event loop is empty and the program is
+			// over. A strand still parked on a future nobody can complete is
+			// a real deadlock, not an idle loop.
+			if (vmHasBlocked(vm)) {
+				vmError(vm, "deadlock: no runnable strand");
+				return;
+			}
+			vm.halted = true;
 			return;
 		}
 		strandResume(vm, next);
@@ -367,8 +521,7 @@ function runStrandSlice(vm: RaiserVM): void {
 			if (strandFinish(vm, haltVal)) {
 				vm.yielded = true;
 			} else {
-				vm.halted = true;
-				vm.exitValue = haltVal;
+				finishProgram(vm, haltVal, inst.b === 1);
 			}
 		} else if (op === RaiserOpcode.Jump) {
 			const offset = getSignedAx(inst);
@@ -550,6 +703,11 @@ function runStrandSlice(vm: RaiserVM): void {
 			setReg(vm, base + inst.a, raiserBool(v.kind === RaiserValueKind.Nil));
 		} else if (op === RaiserOpcode.Yield) {
 			vm.yielded = true;
+		} else if (op === RaiserOpcode.Spawn) {
+			const fut = vmSpawnClosure(vm, getReg(vm, base + inst.b));
+			if (fut >= 0) setReg(vm, base + inst.a, raiserFuture(fut));
+		} else if (op === RaiserOpcode.Await) {
+			vmHandleAwait(vm, inst);
 		} else {
 			vmError(vm, `Unknown opcode: ${op}`);
 		}
@@ -599,14 +757,14 @@ function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
 
 function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	if (vm.callStack.items.length === 0) {
-		// Top-level return — the strand is finished; only the main one halts the VM.
+		// Top-level return — the strand is finished; the main one ends the
+		// program, but only once the remaining strands have drained.
 		const retVal = getReg(vm, vm.baseReg + inst.a);
 		if (strandFinish(vm, retVal)) {
 			vm.yielded = true;
 			return;
 		}
-		copyValueInto(vm.exitValue, retVal);
-		vm.halted = true;
+		finishProgram(vm, retVal, false);
 		return;
 	}
 
@@ -2077,4 +2235,163 @@ test "each strand keeps its own registers" {
 	execLoop(vm);
 	assert vm.exitValue.intVal === 11;
 	assert vm.strands.items[1].result.intVal === 22;
+}
+
+// --- Futures: spawn / await ---
+
+// Builds the closure pair codegen emits for a non-capturing closure:
+// { fn: funcIdx, env: -1 } in R1, using K0=funcIdx, K1="fn", K2=-1, K3="env".
+function closurePairConsts(funcIdx: number): RaiserValue[] {
+	return [raiserInt(funcIdx), raiserString("fn"), raiserInt(-1), raiserString("env")];
+}
+
+function closurePairCode(): RaiserInstruction[] {
+	return [
+		raiserABC(RaiserOpcode.NewObject, 1, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 2, 0),
+		raiserABC(RaiserOpcode.StoreField, 1, 1, 2),
+		raiserABx(RaiserOpcode.LoadConst, 2, 2),
+		raiserABC(RaiserOpcode.StoreField, 1, 3, 2),
+	];
+}
+
+test "spawn returns a future the strand completes, await reads it" {
+	const mainCode = closurePairCode();
+	mainCode.push(raiserABC(RaiserOpcode.Spawn, 3, 1, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Await, 4, 3, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Print, 4, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Halt, 4, 0, 0));
+	const workerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const workerConsts: RaiserValue[] = [raiserInt(7)];
+	const fMain = createRaiserFunction("main", mainCode, closurePairConsts(1), 0, 0, 8);
+	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fWorker];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = execModule(mod, "arena");
+	assert vm.error === "";
+	assert vm.output === "7\n";
+	assert vm.exitValue.intVal === 7;
+	assert vm.futures.items.length === 1;
+	assert vm.futures.items[0].finished;
+}
+
+test "await parks the reader until the future completes" {
+	// main prints 1 before the await and 3 after; the worker prints 2. The
+	// await is reached while the worker is still Ready, so 3 can only follow
+	// 2 if the reader actually parked and resumed.
+	const mainCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 5, 4),
+		raiserABC(RaiserOpcode.Print, 5, 0, 0),
+	];
+	for (const inst of closurePairCode()) { mainCode.push(inst); }
+	mainCode.push(raiserABC(RaiserOpcode.Spawn, 3, 1, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Await, 4, 3, 0));
+	mainCode.push(raiserABx(RaiserOpcode.LoadConst, 5, 5));
+	mainCode.push(raiserABC(RaiserOpcode.Print, 5, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Halt, 4, 0, 0));
+	const mainConsts = closurePairConsts(1);
+	mainConsts.push(raiserInt(1));
+	mainConsts.push(raiserInt(3));
+	const workerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Print, 0, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const workerConsts: RaiserValue[] = [raiserInt(2)];
+	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 8);
+	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fWorker];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = execModule(mod, "arena");
+	assert vm.error === "";
+	assert vm.output === "1\n2\n3\n";
+}
+
+test "a finished future can be read again" {
+	const mainCode = closurePairCode();
+	mainCode.push(raiserABC(RaiserOpcode.Spawn, 3, 1, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Await, 4, 3, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Print, 4, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Await, 5, 3, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Print, 5, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Halt, 5, 0, 0));
+	const workerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const workerConsts: RaiserValue[] = [raiserInt(7)];
+	const fMain = createRaiserFunction("main", mainCode, closurePairConsts(1), 0, 0, 8);
+	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fWorker];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = execModule(mod, "arena");
+	assert vm.error === "";
+	assert vm.output === "7\n7\n";
+}
+
+test "main ending drains the strands it left running" {
+	// No await: main spawns, prints, ends. The worker still runs to
+	// completion first — msDrainUntilIdle parity.
+	const mainCode = closurePairCode();
+	mainCode.push(raiserABC(RaiserOpcode.Spawn, 3, 1, 0));
+	mainCode.push(raiserABx(RaiserOpcode.LoadConst, 4, 4));
+	mainCode.push(raiserABC(RaiserOpcode.Print, 4, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Halt, 4, 0, 0));
+	const mainConsts = closurePairConsts(1);
+	mainConsts.push(raiserInt(1));
+	const workerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Print, 0, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const workerConsts: RaiserValue[] = [raiserInt(2)];
+	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 8);
+	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fWorker];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = execModule(mod, "arena");
+	assert vm.error === "";
+	assert vm.output === "1\n2\n";
+	assert vm.exitValue.intVal === 1;
+}
+
+test "process.exit skips the drain" {
+	// Same program, Halt marked abrupt (inst.b = 1) as compileExitCall emits
+	// it: the worker never runs. Node parity — process.exit is abrupt.
+	const mainCode = closurePairCode();
+	mainCode.push(raiserABC(RaiserOpcode.Spawn, 3, 1, 0));
+	mainCode.push(raiserABx(RaiserOpcode.LoadConst, 4, 4));
+	mainCode.push(raiserABC(RaiserOpcode.Print, 4, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Halt, 4, 1, 0));
+	const mainConsts = closurePairConsts(1);
+	mainConsts.push(raiserInt(1));
+	const workerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Print, 0, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const workerConsts: RaiserValue[] = [raiserInt(2)];
+	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 8);
+	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fWorker];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = execModule(mod, "arena");
+	assert vm.output === "1\n";
+	assert vm.strands.items[1].status === RaiserStrandStatus.Ready;
+}
+
+test "awaiting a plain value is the identity" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.Await, 1, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserInt(5)]
+	));
+	assert vm.error === "";
+	assert vm.exitValue.intVal === 5;
 }
