@@ -2342,12 +2342,15 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		}
 	}
 
-	if (!ranOk && ctx.lastError !== "") {
-		console.log(`${error("raiser runtime error")}: ${ctx.lastError}`);
+	if (!ranOk) {
+		if (ctx.lastError !== "") {
+			console.log(`${error("raiser runtime error")}: ${ctx.lastError}`);
+		}
+		exit(1);
 	}
 
 	// C-target parity: the program's exit code becomes msc's own.
-	if (ranOk && ctx.lastResult.kind === RaiserValueKind.Int) {
+	if (ctx.lastResult.kind === RaiserValueKind.Int) {
 		exit(ctx.lastResult.intVal);
 	}
 }
