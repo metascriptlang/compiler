@@ -6,6 +6,18 @@ Self-hosted compiler for the MetaScript language, written in MetaScript (.ms fil
 
 **NEVER** use `git stash`, `git reset`, `git checkout .`, `git restore`, or any command that discards, overrides, or resets the current working tree state. The working tree contains in-progress work that must not be lost.
 
+## Docs Rule — never edit `docs/*.md` from reading alone
+
+**Before changing any status claim in `docs/`, run it and measure it.** Reading the checker, grepping for a handler, or finding the code path is NOT verification — it tells you code exists, not that it works or what it costs. Write the smallest `.ms` that exercises the claim, `msc run` / `msc build` it, and quote the real output in the edit.
+
+Three rules that follow:
+
+1. **A doc's `TODO` / `PAUSED` / `NOT YET` is a hypothesis, not a fact.** These get written the moment someone gets blocked and are never revisited. On 2026-08-10 every such claim probed — `@emit` expansion, DU serialize, `Result<T,E>` "macro BLIND", `extern function` "PARTIAL", `@passC` "NOT YET" — was already false, some by 3 months. `docs/SERIALIZE.md` in particular predates PROTOCOLS V2 (2026-07-09), `getTypeImpl`/`getTypeArg` (2026-07-27) and `bindSym` (2026-07-28), all of which it depends on.
+2. **Never generalize from one probe variant.** Vary the axis you are making a claim about, and put the matrix in the doc. Same session, same file, three contradictory size claims went in before the numbers were actually measured across variants: "11 KB, DCE fine" (probe that never rooted the runtime) → "555 KB, DCE absent" (probe that blamed the wrong cause) → the real answer, which is that rooting `MsMain()` costs 538 KB of prelude init and targeted `__Init000()` does not. One probe per claim is how you write a confident wrong number.
+3. **Say what you did NOT verify.** Mark the untested rows explicitly rather than silently rewriting the section — a corrected table with unverified neighbours is more dangerous than an obviously stale one, because it looks freshly audited.
+
+Cost of doing this right is under a minute per claim. Cost of skipping it is an architecture decision built on a dead blocker.
+
 ## Shared Worktree
 
 A long-lived git worktree is kept at `/tmp/verify-parent` for HEAD-clean verification (binary search a regression, build at a specific commit without touching the main tree, etc.). **Do NOT remove it.** Reuse across sessions.
@@ -185,6 +197,16 @@ merely mentioning the name anywhere (`const g = main;`) silently disabled the pr
 point. The skeleton `main → MsMain → MsPreMainInner/MsMainInner → msProgramResult` is a
 name-for-name port of the standard reference and stays; the auto-call was our own addition,
 present in neither the reference nor TS. See `docs/NIM-REF.md` §1.
+
+**`MsMain()` is program-wide init, not per-module init.** When a host owns the entry point
+(`--app=lib` → `noMain`, e.g. wasm modules for a custom host), it is tempting to export a
+shim that calls `MsMain()`. Don't: `MsMain` runs `__DatInit000()` + `__Init000()` for *every*
+alive module, and the alive set for a do-nothing entry is still the whole 32-module prelude.
+Measured 2026-08-10 on `--os=emcc`: rooting `MsMain()` = 550 KB, calling only the entry
+module's own two init functions = 11.9 KB. Both init functions are non-`static` and forward-
+declared in the generated `_dispatch.c`, so they can be called directly — at the cost of
+having to add an init call per prelude module whose globals you actually touch. Details and
+the full measurement matrix: `docs/BARE.md` § "Standalone / custom-host wasm on the emcc path".
 
 ## CRITICAL: Codegen Must Be Thin/Dumb
 
