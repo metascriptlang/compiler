@@ -52,6 +52,7 @@ docs/.stversions/
 # local compiler build candidates + their debug PDBs (root only)
 /msc.exe
 /msc.pdb
+/mscB*
 /mscN*
 /mscW*
 /mscL*
