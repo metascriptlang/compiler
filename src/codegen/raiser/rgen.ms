@@ -100,6 +100,13 @@ export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, 
 		declareLocal(s, paramName, reg);
 	}
 
+	// Methods receive `this` as the closure env, which compileClosureCall
+	// passes LAST → R[arity], after the declared params.
+	if (isMethod) {
+		const thisReg = allocReg(s);
+		declareLocal(s, "this", thisReg);
+	}
+
 	// Expression-body functions (e.g., arrow `(x) => x * 2` lifted to FunctionDecl):
 	// body is a bare expression, not a statement — compile as return <expr>.
 	if (isExpressionBody(body)) {
