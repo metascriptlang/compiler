@@ -1060,22 +1060,18 @@ void msAsyncCb(void* raw) {
 void msAsyncStart(void* retFut, msClosure stepper) {
 	(void)retFut;
 	/* Main thread: ensure dispatcher exists (needs IOCP/pipe for cross-thread completion).
-	 * Worker threads: skip dispatcher creation. Workers have no event loop — they rely on
-	 * inline callback execution (msCallSoonProc == NULL → msCallSoon fires immediately)
-	 * and the global completion condvar for blocking waits.
-	 *
-	 * Detection: if msCallSoonProc is set, dispatcher already exists (main thread re-entry).
-	 * If not set but completion pipe isn't initialized yet, this is the first call on the
-	 * main thread — must create. If pipe IS initialized but this thread has no dispatcher,
-	 * we're a worker — skip. */
+	 * Worker threads: skip dispatcher creation — on Windows too. A worker-local
+	 * dispatcher is NOT acceptable: it registers the worker's own IOCP in the wake
+	 * registry, and msPostCompletionCore then routes that worker's completions to
+	 * the worker's port — which no thread ever drains (workers never run msRunOnce).
+	 * The steppers riding those completions never fire, and a spawn-inside-actor
+	 * program hangs with its actor suspended forever (proven 2026-09-05: the
+	 * probabilistic spawn-inside-actor hang, Windows-only, was exactly this —
+	 * workers steal actor visits and dispatch async methods, minting dead ports).
+	 * Workers rely on inline callback execution (msCallSoonProc == NULL → msCallSoon
+	 * fires immediately) and msFirstLoopIocp() for completion routing, like POSIX. */
 	bool isWorker = false;
-#ifdef _WIN32
-	/* Windows: no simple global check. Always create on first call per thread.
-	 * Worker threads that call msAsyncStart get a local dispatcher — acceptable
-	 * because msWorkerWaitOnFuture handles the wait correctly regardless. */
-#else
 	{ extern _Thread_local bool msIsPoolWorker; isWorker = msIsPoolWorker; }
-#endif
 	if (!isWorker) {
 		msGetDispatcher();
 	}
