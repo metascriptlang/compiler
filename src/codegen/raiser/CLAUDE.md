@@ -49,17 +49,20 @@ src/codegen/raiser/
 | ArrayAccess | LoadIndex / StoreIndex |
 | MemberExpr | LoadField / StoreField |
 | ObjectLiteral | NewObject + StoreField per property |
+| BlockStmt | statement-list expression: n−1 statements via the statement compiler, last ExprStmt is the value |
 | NewExpr | Call to `<Class>_new` — the constructor rgen already compiles (Pass 2b) |
 | TypeAssertion (as) | (compiles inner expression, no-op cast) |
 | MoveExpr | (compiles inner expression) |
 | ParenExpr | (compiles inner expression) |
+
+Compile-time-known-bad sites (unresolvable identifier, unsupported node kind, `new` without a constructor, unsupported compound-assign/update targets) queue a compile warning AND emit `Trap` — reaching one at runtime is a fatal vmError, not a catchable raise.
 
 ### Statements (statements.ms)
 
 | NodeKind | Opcodes Emitted |
 |----------|----------------|
 | ReturnStmt | Ret |
-| ExprStmt | (delegates to compileExpr) |
+| ExprStmt | (delegates to compileExpr; non-emit macro directives — @include/@compile — are skipped) |
 | BlockStmt | (iterates children, scoped locals) |
 | VariableDecl | LoadConst/compileExpr + declareLocal |
 | IfStmt | BranchIfFalsy + Jump (with else patching) |
@@ -81,7 +84,7 @@ src/codegen/raiser/
 | NodeKind | Compilation |
 |----------|-------------|
 | FunctionDecl | Phase 1: collect name→funcIdx. Phase 2: compileFuncBody → RaiserFunction |
-| ClassDecl | Phase 1b: collect methods + ctor→funcIdx. Phase 2b: methods via compileFuncBody (this as R0), ctor via compileClassConstructor (NewObject + StoreField props/methods + body + Ret this) |
+| ClassDecl | Phase 1b: collect methods + ctor→funcIdx. Phase 2b: methods via compileFuncBody with isMethod (`this` bound at R[arity] from the closure env), ctor via compileClassConstructor (NewObject + StoreField props/methods + body + Ret this) |
 | EnumDecl | Phase 1: collect member names→values in globalEnumMap |
 
 ### Remaining TODO
@@ -104,25 +107,26 @@ generateRaiserProject(modules: RaiserModuleInput[]) → RaiserModule
   ├── Pass 1b: Collect classes (all modules)
   │     methods first, then constructor per class
   ├── Register builtins (defineConfig, etc.)
-  ├── Pass 2: Compile function bodies → functions[]
-  ├── Pass 2b: Compile class methods + constructors → functions[]
+  ├── Pass 2: Reserve placeholder slots — bodies compile ON DEMAND:
+  │     resolveFunc → demandBody(funcIdx); an un-demanded body is never
+  │     compiled (and its compile warnings never fire)
   ├── Emit builtin stubs → functions[]
   ├── Pass 3: Compile init functions (top-level code per module)
   │     Dependencies init first, entry module last
   └── Assemble RaiserModule(functions, initIndices, ...)
 ```
 
-**Critical invariant**: Pass 1a/1b collection order MUST match Pass 2/2b compilation order. Functions are collected/compiled first (across all modules), then classes. Interleaving would cause funcIdx mismatch.
+**Critical invariant**: collection order (Pass 1a/1b) defines funcIdx, and projectDecls[funcIdx] must describe that same declaration — demandBody(funcIdx) fills functions[funcIdx] in place.
 
 ### Function Value Calling Convention
 
-Function references stored in variables are wrapped as closure pairs `{ fn: funcIdx, env: -1 }` (sentinel -1 = no env). This enables uniform calling: `compileClosureCall` extracts `fn`/`env`, then runtime-branches on `env == -1` to either pass env as first arg (capturing closure) or skip it (non-capturing). Expression-level function identifiers (e.g., inside `{ fn: myFunc, env: ... }`) remain raw integers.
+Function references stored in variables are wrapped as closure pairs `{ fn: funcIdx, env: -1 }` (sentinel -1 = no env). This enables uniform calling: `compileClosureCall` extracts `fn`/`env`, then runtime-branches on `env == -1` to either append env as the LAST arg — it lands at R[arity], after the declared params — or skip it (non-capturing). Expression-level function identifiers (e.g., inside `{ fn: myFunc, env: ... }`) remain raw integers.
 
 Expression-body functions (e.g., lifted arrows `(x) => x * 2`): detected in `compileFuncBody` — if body is not a statement kind, compiled as `compileExpr + emitRet`.
 
 ### Class Compilation — Methods as Closures
 
-Methods compile as top-level functions with `this` as first parameter. Constructor creates object, sets default properties, stores method closures `{ fn: funcIdx, env: this }`, runs ctor body, returns `this`. Method calls flow through existing `CallIndirect` path via `LoadField`.
+Methods compile as top-level functions; `this` arrives as the closure env — appended last, so compileFuncBody(isMethod) binds `this` at R[arity]. Constructor creates object, sets default properties, stores method closures `{ fn: funcIdx, env: this }`, runs ctor body, returns `this`. Method calls flow through existing `CallIndirect` path via `LoadField`.
 
 ```
 Point_new(x, y):
@@ -132,8 +136,8 @@ Point_new(x, y):
   <compile ctor body>                   ← this.x = x; etc.
   Ret R_this
 
-Point_getX(this):                       ← this is R0
-  LoadField(R0, "x") → Ret
+Point_getX():                           ← this = env, bound at R[arity]
+  LoadField(R[arity], "x") → Ret
 ```
 
 ### Register Allocation
@@ -171,7 +175,7 @@ src/codegen/raiser/         src/raiser/
 
 The codegen imports types from `src/raiser/bytecode`, `src/raiser/value`, `src/raiser/module`. It produces a `RaiserModule` that the VM executes.
 
-## Available Opcodes (52 total, from src/raiser/bytecode.ms)
+## Available Opcodes (src/raiser/bytecode.ms)
 
 **Memory (3):** LoadConst (ABx), Move (ABC), LoadNil (ABC)
 **i64 Arithmetic (6):** AddI64, SubI64, MulI64, DivI64, ModI64, NegI64 (all ABC)
@@ -184,12 +188,13 @@ The codegen imports types from `src/raiser/bytecode`, `src/raiser/value`, `src/r
 **f64 Arithmetic (5):** AddF64, SubF64, MulF64, DivF64, NegF64 (all ABC)
 **f64 Compare-Branch (6):** BeqF64, BneF64, BltF64, BleF64, BgtF64, BgeF64 (all ABC)
 **Bitwise (6):** BitAnd, BitOr, BitXor, BitNot, ShiftLeft, ShiftRight (all ABC)
+**Beyond the core set:** IsNil (null tests), Spawn/Await (strands), Throw/Try/Catch/Finally/FinallyEnd (exceptions), Trap (ABx: fatal vmError, message K[Bx]) — new opcodes append at the enum END (vmDispatch.c hardcodes the numbers)
 
 Compare-branch semantics: `BgtI64 A B C` — if R[A] > R[B], skip C instructions (ip already incremented).
 
 ## Testing
 
-687 tests in rgen.ms across 27 test groups. 1272 tests in eval.ms (full pipeline + project + Phase 3 transforms).
+Lane totals 2026-09-05 (`msc test` = file + transitive dep tests): rgen.ms lane 1460 across 54 files; src/raiser/vm.ms lane 446 across 21 files. eval.ms adds full-pipeline + project + Phase 3 coverage.
 
 ```bash
 # Codegen-only tests (parse → codegen → VM, no checker/transforms)
