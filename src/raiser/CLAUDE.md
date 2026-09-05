@@ -275,25 +275,48 @@ stdlib, because they have nothing to delegate to.
   at the export side (`src/checker/context.ms`) — `importSymFromRegistry`
   already had the restore hook. Bytecode warnings now name the exact reason
   an identifier failed to bind (symbol kind, decl kind, no initializer…).
-- **Async runs eager-sync (fixed 2026-09-05).** The single-threaded VM has no
-  event loop, so `lowerRaiserAsyncSync` (`src/transform/lowering/raiserAsyncSync.ms`,
-  wired into `transformForRaiser` right before `lowerLambda`) collapses the
-  async surface to its synchronous equivalent BEFORE codegen: `await X → X`,
-  `spawn(fn) → fn()`, `waitFor(h) → h`, `Promise.resolve(v) → v`. Detection
-  keys off `resolvedSym.builtinKind` (`PromiseSpawn`/`WaitFor`/`PromiseResolve`),
-  set by the checker; the bottom-up walk folds `await spawn(fn)` to `fn()` in
-  one pass. For deterministic code the result is identical to C/JS — only
-  concurrency is lost, which is correct for sequential suite/corpus runs.
-  Previously async was a **silent no-op** (0 bytes, rc=0). `spawn`/`waitFor`
-  also needed `std/core/promise/index.rms` to type-check (the module was
-  `.cms`-only); the `.rms` only carries the surface — the `ms*` externs are
-  never reached because the lowering deletes every live call site. This dropped
-  `src/index.ms` from 20 unresolved names to 15 (only `fetch`×14 + `Buffer`
-  remain, both network/CLI-shell). A real async construct with no eager-sync
-  form (generator, unbridged combinator) still hits the `_ =>` warning arm in a
-  dead std body — kept a warning, not fatal, because node-kind is not a
-  reachability signal (marking it fatal aborts every whole-program run on
-  `NewExpr`/`MacroInvocation` in uncalled prelude bodies — measured).
+- **Async runs on strands (2026-09-05).** `spawn` starts a strand and hands
+  back the future it will complete; `await` and `waitFor` read a future,
+  parking the reader until it finishes. The pair is two opcodes — `Spawn` /
+  `Await`, appended at the END of the enum — over a future table and the
+  round-robin scheduler in `vm.ms`. Codegen emits them from `compileCallExpr` /
+  `compileExpr` keyed on `resolvedSym.builtinKind`
+  (`PromiseSpawn`/`WaitFor`/`PromiseResolve`), never on the name.
+  `Promise.resolve(v)` compiles to plain `v`: `Await` reads a finished future
+  as its value, so a future that starts finished is indistinguishable from the
+  value. This replaces the eager-sync lowering (`raiserAsyncSync.ms`, `await X
+  → X`, `spawn(fn) → fn()`), now deleted and unwired from `transformForRaiser`.
+  - A parked strand rewinds to its `Await` and re-executes it on resume, so no
+    partial-instruction state is saved anywhere. PARALOCK §6.2 needs three
+    separate `await` lowerings on C because its async frames are stackless; a
+    strand carries its whole frame stack, so one mechanism covers all three —
+    and `await` works at any call depth here.
+  - The main strand ending does not stop the program: strands left running
+    drain first, the way `msDrainUntilIdle` (`runtime/promise/drain.c`) pumps
+    the loop after the entry module returns. `process.exit` is abrupt —
+    `compileExitCall` emits `Halt` with `b=1`, which skips the drain (Node
+    parity). The drain path is reachable only from the VM API today: the
+    checker's affine rule (PARALOCK R1/E1) rejects a discarded `spawn`, so
+    valid source cannot leave a strand Ready at exit. Timers (S3) change that.
+  - Measured on `--target=raiser`: `spawn`+`waitFor` → `42`; interleave probe
+    → `1 2 5 3` (the worker's line lands between the reader's, proving park +
+    resume); two spawns → `A B 2 1`; capturing closure (env passed as the
+    callee's argument) → `42`; `await` on an async function → `7`;
+    `process.exit(3)` after a completed spawn → rc=3.
+  - **Failure has no path yet.** The VM has no throw/exception model, so
+    `RaiserFuture.failed` / `errorObserved` exist to mirror `msFutureBase` but
+    nothing sets them: the unhandled-rejection contract
+    (`msReportOrphanFailures`, exit 1) cannot be ported until the VM gets
+    exceptions. `sleepAsync`, the `Promise` combinators and `then`/`catch`/
+    `finally` are likewise unimplemented — they reach the unbridged-extern
+    warning, not an opcode.
+  - `std/core/promise/index.rms` carries the surface so the module type-checks
+    (it was `.cms`-only). This dropped `src/index.ms` from 20 unresolved names
+    to 15 (`fetch`×14 + `Buffer`, both network/CLI-shell). A construct with no
+    VM form still hits the `_ =>` warning arm in a dead std body — kept a
+    warning, not fatal, because node-kind is not a reachability signal
+    (marking it fatal aborts every whole-program run on
+    `NewExpr`/`MacroInvocation` in uncalled prelude bodies — measured).
 - **A VM runtime error now exits non-zero (fixed 2026-09-05).** `cmdRunRaiser`
   printed `raiser runtime error: …` under `if (!ranOk)` but only assigned an
   exit code under `if (ranOk)`, so the failure path fell through to 0. Now the
