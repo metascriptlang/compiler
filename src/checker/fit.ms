@@ -498,6 +498,18 @@ function arrayDisplay(t: Type | null): string {
 // Reference: sigmatch.nim implicitConv(nkHiddenSubConv, ...).
 export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): Node {
 	if (unwrapRefNullUnion(formal) !== null) return null as unknown as Node;
+	// A flow-narrowed reference types as the variant, but its storage is the
+	// declared union struct — wrapping it would deref that struct as a variant
+	// pointer. The fit is an identity pass; stamping the position's type as
+	// the union keeps every downstream repr decision (address-of at the call,
+	// return/NRVO shape) identical to an un-narrowed reference.
+	if (declaredTagUnionOf(expr) !== null) {
+		if (formal.kind === TypeKind.Union) {
+			expr.nodeType = formal;
+			return expr;
+		}
+		return null as unknown as Node;
+	}
 	const valueType = unwrapRef(exprType);
 	const vi = variantIndexInUnion(formal, valueType);
 	if (vi < 0) return null as unknown as Node;
