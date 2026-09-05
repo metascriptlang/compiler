@@ -22,6 +22,7 @@ import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
 import { lowerLambda } from "./lowering/lambdaLifting";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
+import { lowerRaiserAsyncSync } from "./lowering/raiserAsyncSync";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -43,6 +44,7 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerResultFieldCheck(result, ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
+	result = lowerRaiserAsyncSync(result, ctx);
 	result = lowerLambda(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
 	return result;
