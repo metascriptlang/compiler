@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, ArrayAccessData, BinaryExprData, ConditionalExprData, TypeAssertionData, UpdateExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, HiddenDerefData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, DecoratedDeclData, MacroDeclData, TestDeclData, ExternDeclData, ExternKind, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, SpreadExprData, NodeFlag, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, noneType, isUnresolvedType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable } from "./types";
+import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, noneType, isUnresolvedType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable, isMaybeType } from "./types";
 import { ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
@@ -281,10 +281,16 @@ function sgTypeToStringDepth(t: Type | null, depth: number): string {
 		TypeKind.Uint32 => "uint32", TypeKind.Uint64 => "uint64",
 		TypeKind.Float32 => "float32", TypeKind.Float64 => "float64",
 		TypeKind.CString => "cstring",
+		TypeKind.BigInt => "bigint",
+		TypeKind.Char => "char",
 		TypeKind.StringLiteral => "\"" + t.typeName + "\"",
 		_ => "",
 	};
 	if (prim.length > 0) return prim;
+
+	// Maybe<T> is the value-type carrier the resolver wraps `T | null` into.
+	// Hover must show what the user wrote, never the `{ value, present }` shape.
+	if (isMaybeType(t)) return sgTypeToStringDepth(t.typeReturn, depth + 1) + " | null";
 
 	if (t.kind === TypeKind.Array) {
 		const elem = sgTypeToStringDepth(t.typeReturn, depth + 1);
@@ -3367,17 +3373,6 @@ test "empty program" {
 	assert symbols.length === 0;
 }
 
-test "function with params" {
-	const params: Type[] = [numberType(), stringType()];
-	const names: string[] = ["line", "msg"];
-	const fnType = createFunction(params, names, voidType());
-	const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
-	const sigs = sgFormatSignature(sym);
-	assert sigs.length === 1;
-	assert sigs[0].label === "log(line: number, msg: string): void";
-	assert sigs[0].paramLabels.length === 2;
-}
-
 test "collects test blocks" {
 	const pr = parseSource("test \"adds two numbers\" { assert 1 === 1; }");
 	if (!pr.ok) { assert false; return; }
@@ -3431,6 +3426,17 @@ test "unwraps decorated decl" {
 	assert symbols.length === 1;
 	assert symbols[0].name === "Point";
 	assert symbols[0].kind === SymbolKind.Struct;
+}
+
+test "function with params" {
+	const params: Type[] = [numberType(), stringType()];
+	const names: string[] = ["line", "msg"];
+	const fnType = createFunction(params, names, voidType());
+	const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
+	const sigs = sgFormatSignature(sym);
+	assert sigs.length === 1;
+	assert sigs[0].label === "log(line: number, msg: string): void";
+	assert sigs[0].paramLabels.length === 2;
 }
 
 test "function no params" {
