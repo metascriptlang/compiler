@@ -377,6 +377,11 @@ export function mapChildren(node: Node, f: Visitor): void {
 				d.patternElements[i] = f(d.patternElements[i]);
 				i += 1;
 			}
+			i = 0;
+			while (i < d.patternDefaults.length) {
+				if (d.patternDefaults[i] !== null) { d.patternDefaults[i] = f(d.patternDefaults[i]); }
+				i += 1;
+			}
 		},
 		NodeKind.ObjectPattern => {
 			const d = node.data as ObjectPatternData;
@@ -389,6 +394,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 		NodeKind.ObjectPatternProp => {
 			const d = node.data as ObjectPatternPropData;
 			if (d.propAlias !== null) { d.propAlias = f(d.propAlias); }
+			if (d.propDefault !== null) { d.propDefault = f(d.propDefault); }
 		},
 		NodeKind.TypeGeneric => {
 			const d = node.data as TypeGenericData;

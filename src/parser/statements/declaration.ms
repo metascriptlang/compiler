@@ -1389,6 +1389,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.ArrayPattern, {
 		patternElements: elements,
 		hasRestElement: hasRest,
+		patternDefaults: [],
 	}, bracketToken));
 }
 
@@ -1421,12 +1422,14 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 					props.push(createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: nested,
+						propDefault: null,
 					}, keyToken));
 				} else if (current(state).kind === TokenKind.LBracket) {
 					const nested = try parseArrayPattern(state);
 					props.push(createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: nested,
+						propDefault: null,
 					}, keyToken));
 				} else if (isIdentLike(current(state))) {
 					const aliasToken = current(state);
@@ -1434,6 +1437,7 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 					props.push(createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: createNode(NodeKind.Identifier, { name: aliasToken.value }, aliasToken),
+						propDefault: null,
 					}, keyToken));
 					if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 						advance(state);
@@ -1445,6 +1449,7 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 				props.push(createNode(NodeKind.ObjectPatternProp, {
 					propKey: keyToken.value,
 					propAlias: createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken),
+					propDefault: null,
 				}, keyToken));
 				// Skip default value: { x = 5 }
 				if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {

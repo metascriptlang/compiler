@@ -361,6 +361,11 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 				cb(d.patternElements[i]);
 				i += 1;
 			}
+			i = 0;
+			while (i < d.patternDefaults.length) {
+				if (d.patternDefaults[i] !== null) { cb(d.patternDefaults[i]); }
+				i += 1;
+			}
 		},
 		NodeKind.ObjectPattern => {
 			const d = node.data as ObjectPatternData;
@@ -373,6 +378,7 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 		NodeKind.ObjectPatternProp => {
 			const d = node.data as ObjectPatternPropData;
 			if (d.propAlias !== null) { cb(d.propAlias); }
+			if (d.propDefault !== null) { cb(d.propDefault); }
 		},
 		NodeKind.TypeGeneric => {
 			const d = node.data as TypeGenericData;

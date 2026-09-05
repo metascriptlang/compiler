@@ -1541,7 +1541,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.ArrayPattern => {
 			const patternElements = readNodes(objHeap, arrHeap, h, "patternElements", loc);
 			const hasRestElement = readBool(objHeap, h, "hasRestElement");
-			return createNodeAt(NodeKind.ArrayPattern, { patternElements, hasRestElement }, loc);
+			return createNodeAt(NodeKind.ArrayPattern, { patternElements, hasRestElement, patternDefaults: [] }, loc);
 		},
 		NodeKind.ObjectPattern => {
 			const patternProps = readNodes(objHeap, arrHeap, h, "patternProps", loc);
@@ -1551,7 +1551,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.ObjectPatternProp => {
 			const propKey = readStr(objHeap, h, "propKey");
 			const propAlias = readNode(objHeap, arrHeap, h, "propAlias", loc);
-			return createNodeAt(NodeKind.ObjectPatternProp, { propKey, propAlias }, loc);
+			return createNodeAt(NodeKind.ObjectPatternProp, { propKey, propAlias, propDefault: null }, loc);
 		},
 		NodeKind.DestructuringDecl => {
 			const destrPattern = readNode(objHeap, arrHeap, h, "destrPattern", loc);

@@ -142,9 +142,9 @@ export function rebuildNodeData(n: Node, X: FieldXform): NodeData {
 	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) { const d = n.data as HiddenStdConvData; return { convExpr: X.node(d.convExpr) as Node, convType: X.typ(d.convType) as Type } as NodeData; }
 	if (kind === NodeKind.HiddenDeref || kind === NodeKind.HiddenAddr) { const d = n.data as ExprStmtData; return { expr: X.node(d.expr) as Node } as NodeData; }
 	if (kind === NodeKind.TypeAnnotation) { const d = n.data as TypeAnnotationData; return { annotationType: X.str(d.annotationType) } as NodeData; }
-	if (kind === NodeKind.ArrayPattern) { const d = n.data as ArrayPatternData; return { patternElements: X.nodes(d.patternElements) as Node[], hasRestElement: X.bool(d.hasRestElement) } as NodeData; }
+	if (kind === NodeKind.ArrayPattern) { const d = n.data as ArrayPatternData; return { patternElements: X.nodes(d.patternElements) as Node[], hasRestElement: X.bool(d.hasRestElement), patternDefaults: X.nodes(d.patternDefaults) as Node[] } as NodeData; }
 	if (kind === NodeKind.ObjectPattern) { const d = n.data as ObjectPatternData; return { patternProps: X.nodes(d.patternProps) as Node[], hasRestProp: X.bool(d.hasRestProp) } as NodeData; }
-	if (kind === NodeKind.ObjectPatternProp) { const d = n.data as ObjectPatternPropData; return { propKey: X.str(d.propKey), propAlias: X.node(d.propAlias) as Node } as NodeData; }
+	if (kind === NodeKind.ObjectPatternProp) { const d = n.data as ObjectPatternPropData; return { propKey: X.str(d.propKey), propAlias: X.node(d.propAlias) as Node, propDefault: X.node(d.propDefault) } as NodeData; }
 	if (kind === NodeKind.DestructuringDecl) { const d = n.data as DestructuringDeclData; return { destrPattern: X.node(d.destrPattern) as Node, destrInit: X.node(d.destrInit) as Node, destrIsConst: X.bool(d.destrIsConst) } as NodeData; }
 	if (kind === NodeKind.VariableDecl) { const d = n.data as VariableDeclData; return { declName: X.str(d.declName), declType: X.str(d.declType), initializer: X.node(d.initializer) as Node, declKind: X.integer(d.declKind as int32 as int64) as int32 as unknown as DeclKind, nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
 	if (kind === NodeKind.IfStmt) { const d = n.data as IfStmtData; return { condition: X.node(d.condition) as Node, consequent: X.node(d.consequent) as Node, alternate: X.node(d.alternate) as Node } as NodeData; }
@@ -237,9 +237,9 @@ export function nodeFields(n: Node, V: FieldSink): void {
 	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) { const d = n.data as HiddenStdConvData; V.node("convExpr", d.convExpr); V.typ("convType", d.convType); return; }
 	if (kind === NodeKind.HiddenDeref || kind === NodeKind.HiddenAddr) { const d = n.data as ExprStmtData; V.node("expr", d.expr); return; }
 	if (kind === NodeKind.TypeAnnotation) { const d = n.data as TypeAnnotationData; V.str("annotationType", d.annotationType); return; }
-	if (kind === NodeKind.ArrayPattern) { const d = n.data as ArrayPatternData; V.nodes("patternElements", d.patternElements); V.bool("hasRestElement", d.hasRestElement); return; }
+	if (kind === NodeKind.ArrayPattern) { const d = n.data as ArrayPatternData; V.nodes("patternElements", d.patternElements); V.bool("hasRestElement", d.hasRestElement); V.nodes("patternDefaults", d.patternDefaults); return; }
 	if (kind === NodeKind.ObjectPattern) { const d = n.data as ObjectPatternData; V.nodes("patternProps", d.patternProps); V.bool("hasRestProp", d.hasRestProp); return; }
-	if (kind === NodeKind.ObjectPatternProp) { const d = n.data as ObjectPatternPropData; V.str("propKey", d.propKey); V.node("propAlias", d.propAlias); return; }
+	if (kind === NodeKind.ObjectPatternProp) { const d = n.data as ObjectPatternPropData; V.str("propKey", d.propKey); V.node("propAlias", d.propAlias); V.node("propDefault", d.propDefault); return; }
 	if (kind === NodeKind.DestructuringDecl) { const d = n.data as DestructuringDeclData; V.node("destrPattern", d.destrPattern); V.node("destrInit", d.destrInit); V.bool("destrIsConst", d.destrIsConst); return; }
 	if (kind === NodeKind.VariableDecl) { const d = n.data as VariableDeclData; V.str("declName", d.declName); V.str("declType", d.declType); V.node("initializer", d.initializer); V.integer("declKind", d.declKind as int32 as int64); V.loc("nameLocation", d.nameLocation); return; }
 	if (kind === NodeKind.IfStmt) { const d = n.data as IfStmtData; V.node("condition", d.condition); V.node("consequent", d.consequent); V.node("alternate", d.alternate); return; }
@@ -328,7 +328,7 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	const block = createNodeAt(NodeKind.BlockStmt, { statements: [a] } as NodeData, makeLoc(7, 8));
 	const matchCase = createNodeAt(NodeKind.MatchCase, { casePatterns: [a], caseGuard: a, caseBody: a } as NodeData, makeLoc(9, 2));
 	const switchCase = createNodeAt(NodeKind.SwitchCase, { caseTests: [n1], caseStmts: [a], isDefault: true } as NodeData, makeLoc(10, 2));
-	const objPatProp = createNodeAt(NodeKind.ObjectPatternProp, { propKey: "k", propAlias: a } as NodeData, makeLoc(11, 2));
+	const objPatProp = createNodeAt(NodeKind.ObjectPatternProp, { propKey: "k", propAlias: a, propDefault: null } as NodeData, makeLoc(11, 2));
 	const objPat = createNodeAt(NodeKind.ObjectPattern, { patternProps: [objPatProp], hasRestProp: true } as NodeData, makeLoc(12, 2));
 	const fnDecl = createNodeAt(NodeKind.FunctionDecl, { fnName: "fd", params: ["p1", "p2"], fnParamTypes: ["int32", "string"], fnBody: block, fnFlags: "ff", fnReturnType: "int32", fnDefaults: [n1], nativeName: "nn", nameLocation: pkLoc(1) } as NodeData, makeLoc(13, 1));
 	// header-column coverage rides on two samples: flags/typeArg/typeExpr/
@@ -379,7 +379,7 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	out.push(createNodeAt(NodeKind.HiddenStdConv, { convExpr: a, convType: convTypeSample } as NodeData, makeLoc(17, 31)));
 	out.push(createNodeAt(NodeKind.HiddenSubConv, { convExpr: a, convType: convTypeSample } as NodeData, makeLoc(17, 32)));
 	out.push(createNodeAt(NodeKind.TypeAnnotation, { annotationType: "float32" } as NodeData, makeLoc(17, 33)));
-	out.push(createNodeAt(NodeKind.ArrayPattern, { patternElements: [a, n1], hasRestElement: true } as NodeData, makeLoc(17, 34)));
+	out.push(createNodeAt(NodeKind.ArrayPattern, { patternElements: [a, n1], hasRestElement: true, patternDefaults: [] } as NodeData, makeLoc(17, 34)));
 	out.push(objPat);
 	out.push(objPatProp);
 	out.push(createNodeAt(NodeKind.DestructuringDecl, { destrPattern: objPat, destrInit: n1, destrIsConst: true } as NodeData, makeLoc(17, 37)));
@@ -501,9 +501,9 @@ export function pkDumpNode(n: Node | null, withMeta: boolean = true): string {
 	if (kind === NodeKind.HiddenDeref || kind === NodeKind.HiddenAddr) { const d = n.data as ExprStmtData; return s + `hid=${pkDumpNode(d.expr, withMeta)}`; }
 	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) { const d = n.data as HiddenStdConvData; return s + `conv=${pkDumpNode(d.convExpr, withMeta)}:${d.convType.kind as int32}:${d.convType.typeName}`; }
 	if (kind === NodeKind.TypeAnnotation) { const d = n.data as TypeAnnotationData; return s + `ann=${d.annotationType}`; }
-	if (kind === NodeKind.ArrayPattern) { const d = n.data as ArrayPatternData; s = s + `apat=${d.hasRestElement ? "T" : "F"}`; for (const p of d.patternElements) s = s + pkDumpNode(p, withMeta) + ";"; return s; }
+	if (kind === NodeKind.ArrayPattern) { const d = n.data as ArrayPatternData; s = s + `apat=${d.hasRestElement ? "T" : "F"}`; for (const p of d.patternElements) s = s + pkDumpNode(p, withMeta) + ";"; for (const p of d.patternDefaults) if (p !== null) s = s + "d" + pkDumpNode(p, withMeta) + ";"; return s; }
 	if (kind === NodeKind.ObjectPattern) { const d = n.data as ObjectPatternData; s = s + `opat=${d.hasRestProp ? "T" : "F"}`; for (const p of d.patternProps) s = s + pkDumpNode(p, withMeta) + ";"; return s; }
-	if (kind === NodeKind.ObjectPatternProp) { const d = n.data as ObjectPatternPropData; return s + `oprop=${d.propKey}:${pkDumpNode(d.propAlias, withMeta)}`; }
+	if (kind === NodeKind.ObjectPatternProp) { const d = n.data as ObjectPatternPropData; s = s + `oprop=${d.propKey}:${pkDumpNode(d.propAlias, withMeta)}`; if (d.propDefault !== null) s = s + "=" + pkDumpNode(d.propDefault, withMeta); return s; }
 	if (kind === NodeKind.DestructuringDecl) { const d = n.data as DestructuringDeclData; return s + `destr=${pkDumpNode(d.destrPattern, withMeta)}=${pkDumpNode(d.destrInit, withMeta)}${d.destrIsConst ? "C" : "L"}`; }
 	if (kind === NodeKind.VariableDecl) { const d = n.data as VariableDeclData; return s + `var=${d.declName}:${d.declType}:${d.declKind as int32}:${pkDumpLoc(d.nameLocation)}=${pkDumpNode(d.initializer, withMeta)}`; }
 	if (kind === NodeKind.IfStmt) { const d = n.data as IfStmtData; return s + `if=(${pkDumpNode(d.condition, withMeta)}${pkDumpNode(d.consequent, withMeta)}${pkDumpNode(d.alternate, withMeta)})`; }

@@ -345,9 +345,9 @@ export type NodeData =
 	| { expr: Node }                                               // HiddenDeref, HiddenAddr
 	| { annotationType: string }                                   // TypeAnnotation
 	// Pattern variants
-	| { patternElements: Node[], hasRestElement: boolean }         // ArrayPattern
+	| { patternElements: Node[], hasRestElement: boolean, patternDefaults: Node[] } // ArrayPattern
 	| { patternProps: Node[], hasRestProp: boolean }               // ObjectPattern
-	| { propKey: string, propAlias: Node }                         // ObjectPatternProp
+	| { propKey: string, propAlias: Node, propDefault: Node | null } // ObjectPatternProp
 	| { destrPattern: Node, destrInit: Node, destrIsConst: boolean } // DestructuringDecl
 	// Statement variants
 	| { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation }  // VariableDecl
@@ -567,9 +567,9 @@ export type HiddenStdConvData = { convExpr: Node, convType: Type };
 export type TypeAnnotationData = { annotationType: string };
 
 // Patterns
-export type ArrayPatternData = { patternElements: Node[], hasRestElement: boolean };
+export type ArrayPatternData = { patternElements: Node[], hasRestElement: boolean, patternDefaults: Node[] };
 export type ObjectPatternData = { patternProps: Node[], hasRestProp: boolean };
-export type ObjectPatternPropData = { propKey: string, propAlias: Node };
+export type ObjectPatternPropData = { propKey: string, propAlias: Node, propDefault: Node | null };
 export type DestructuringDeclData = { destrPattern: Node, destrInit: Node, destrIsConst: boolean };
 
 // Statements

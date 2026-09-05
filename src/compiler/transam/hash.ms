@@ -266,7 +266,7 @@ export function transAmHashNode(node: Node): number {
 		// === Patterns ===
 		NodeKind.ArrayPattern => {
 			const d = node.data as ArrayPatternData;
-			h = hNodes(h, d.patternElements); h = hB(h, d.hasRestElement);
+			h = hNodes(h, d.patternElements); h = hB(h, d.hasRestElement); h = hNodes(h, d.patternDefaults);
 		},
 		NodeKind.ObjectPattern => {
 			const d = node.data as ObjectPatternData;
@@ -274,7 +274,7 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.ObjectPatternProp => {
 			const d = node.data as ObjectPatternPropData;
-			h = hS(h, d.propKey); h = hN(h, d.propAlias);
+			h = hS(h, d.propKey); h = hN(h, d.propAlias); h = hN(h, d.propDefault);
 		},
 		NodeKind.DestructuringDecl => {
 			const d = node.data as DestructuringDeclData;
