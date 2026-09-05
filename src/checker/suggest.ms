@@ -1960,12 +1960,6 @@ function sgCollectEnumChildren(ed: EnumDeclData, loc: SourceLocation): SgDocumen
 	return children;
 }
 
-function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentSymbol[]): void {
-	if (node === null) return;
-
-	if (node.kind === NodeKind.FunctionDecl) {
-		const fd = node.data as FunctionDeclData;
-		const dt = sgGetSymbolDetail(ctx, fd.fnName);
 function sgExternSymbolKind(ek: ExternKind): SymbolKind {
 	return match (ek) {
 		ExternKind.Class => SymbolKind.Class,
@@ -2010,6 +2004,12 @@ function sgCollectPatternNames(pattern: Node, isMutable: boolean, ctx: CheckerCo
 	}
 }
 
+function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentSymbol[]): void {
+	if (node === null) return;
+
+	if (node.kind === NodeKind.FunctionDecl) {
+		const fd = node.data as FunctionDeclData;
+		const dt = sgGetSymbolDetail(ctx, fd.fnName);
 		const item: SgDocumentSymbol = { name: fd.fnName, kind: SymbolKind.Function, location: node.location, detail: dt, isMutable: false, children: [] };
 		result.push(item);
 		return;
@@ -2060,17 +2060,6 @@ function sgCollectPatternNames(pattern: Node, isMutable: boolean, ctx: CheckerCo
 		result.push(item);
 		return;
 	}
-	if (node.kind === NodeKind.ExportDecl) {
-		const xd = node.data as ExportDeclData;
-		sgCollectOneSymbol(xd.exportedDecl, ctx, result);
-		return;
-	}
-}
-
-export function sgCollectSymbolsInFile(ctx: CheckerContext, program: Node): SgDocumentSymbol[] {
-	const result: SgDocumentSymbol[] = [];
-	if (program === null || program.kind !== NodeKind.Program) return result;
-	const pd = program.data as ProgramData;
 	if (node.kind === NodeKind.DecoratedDecl) {
 		const dcd = node.data as DecoratedDeclData;
 		sgCollectOneSymbol(dcd.decoratedNode, ctx, result);
@@ -2102,6 +2091,17 @@ export function sgCollectSymbolsInFile(ctx: CheckerContext, program: Node): SgDo
 		sgCollectPatternNames(dsd.destrPattern, !dsd.destrIsConst, ctx, result);
 		return;
 	}
+	if (node.kind === NodeKind.ExportDecl) {
+		const xd = node.data as ExportDeclData;
+		sgCollectOneSymbol(xd.exportedDecl, ctx, result);
+		return;
+	}
+}
+
+export function sgCollectSymbolsInFile(ctx: CheckerContext, program: Node): SgDocumentSymbol[] {
+	const result: SgDocumentSymbol[] = [];
+	if (program === null || program.kind !== NodeKind.Program) return result;
+	const pd = program.data as ProgramData;
 	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
 		sgCollectOneSymbol(pd.programStmts[i], ctx, result);
 	}
