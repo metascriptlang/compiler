@@ -208,6 +208,7 @@ test "cborArray nested" {
 	assert v.kind === CborKind.Array;
 	assert v.items.length === 3;
 	assert v.items[0].kind === CborKind.Int;
+	assert v.items[2].kind === CborKind.Int;
 	assert v.items[2].intVal === (3 as int64);
 }
 
@@ -218,7 +219,9 @@ test "cborMap any-keyed" {
 	assert v.kind === CborKind.Map;
 	assert v.keys.length === 2;
 	assert v.values.length === 2;
+	assert v.keys[0].kind === CborKind.Int;
 	assert v.keys[0].intVal === (1 as int64);
+	assert v.values[1].kind === CborKind.Text;
 	assert v.values[1].textVal === "two";
 }
 

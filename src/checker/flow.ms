@@ -11,8 +11,8 @@ import {
 	Node, NodeKind, DeclKind,
 	FlowNode, FlowFlags, FlowList,
 	Type, TypeKind,
-	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData,
-	StringLiteralData, HiddenStdConvData,
+	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
+	StringLiteralData, NumberLiteralData, HiddenStdConvData,
 	SwitchStmtData, SwitchCaseData, VariableDeclData, CallExprData,
 } from "../ast/node";
 import {
@@ -191,6 +191,43 @@ function isMatchingReference(source: Node, target: Node): boolean {
 			const td = target.data as MemberExprData;
 			if (sd.property !== td.property) return false;
 			return isMatchingReference(sd.object, td.object);
+		},
+		NodeKind.ArrayAccess => {
+			// `xs[0].ok` narrowing `xs[0]`: same base reference AND a
+			// structurally-identical index (equal literal, or the same symbol).
+			// Anything less conservative (computed indexes) would need effect
+			// analysis between the condition and the read — refuse instead.
+			const sd = source.data as ArrayAccessData;
+			const td = target.data as ArrayAccessData;
+			if (!isMatchingIndex(sd.index, td.index)) return false;
+			return isMatchingReference(sd.array, td.array);
+		},
+		_ => { return false; },
+	};
+	return false;
+}
+
+// Index equality for ArrayAccess reference matching. Only provably-stable
+// indexes qualify: identical number/string literals, or the same symbol on
+// both sides (its re-assignment invalidates the narrowing through the normal
+// Assignment mutation path).
+function isMatchingIndex(a: Node | null, b: Node | null): boolean {
+	if (a === null || b === null) return false;
+	if (a.kind !== b.kind) return false;
+	match (a.kind) {
+		NodeKind.NumberLiteral => {
+			const ad = a.data as NumberLiteralData;
+			const bd = b.data as NumberLiteralData;
+			return ad.value === bd.value;
+		},
+		NodeKind.StringLiteral => {
+			const ad = a.data as StringLiteralData;
+			const bd = b.data as StringLiteralData;
+			return ad.value === bd.value;
+		},
+		NodeKind.Identifier => {
+			if (a.resolvedSym === null || b.resolvedSym === null) return false;
+			return a.resolvedSym === b.resolvedSym;
 		},
 		_ => { return false; },
 	};

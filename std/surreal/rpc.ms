@@ -19,15 +19,15 @@ import { SurrealError, SurrealErrorKind, decodeError, rpcError } from "./errors"
 
 // ===== Request =====
 
-// Build a CBOR-encoded request frame as `number[]` bytes (each element 0..255).
+// Build a CBOR-encoded request frame as `uint8[]` bytes.
 // `params` is the list of method arguments — the caller constructs each as a
 // CborValue (e.g. `cborText("users:abc")` for a record id, or `cborTextMap`
 // for a credential record).
 //
-// Returns `number[]` rather than Buffer/string so the caller can hand the
-// frame straight to `ws.sendBinarySync(...)` (which takes `number[]`)
+// Returns `uint8[]` rather than Buffer/string so the caller can hand the
+// frame straight to `ws.sendBinarySync(...)` (which takes `uint8[]`)
 // without an extra encoding hop.
-export function buildRequest(id: string, method: string, params: CborValue[]): number[] {
+export function buildRequest(id: string, method: string, params: CborValue[]): uint8[] {
 	const envelope = cborTextMap(
 		["id", "method", "params"],
 		[cborText(id), cborText(method), cborArray(params)],
@@ -56,7 +56,7 @@ export interface RpcResponse {
 // Otherwise returns Result.ok with `RpcResponse.ok` indicating server-side
 // success vs failure. Server errors come back as `Result.ok({ ok: false,
 // error: rpcError(...) })` so the caller can correlate by `id` first.
-export function parseResponse(bytes: number[]): Result<RpcResponse, SurrealError> {
+export function parseResponse(bytes: uint8[]): Result<RpcResponse, SurrealError> {
 	const dr = decodeAll(bytes);
 	if (!dr.ok) {
 		return Result.err(decodeError("cbor parse: " + dr.error));
@@ -104,7 +104,7 @@ export function parseResponse(bytes: number[]): Result<RpcResponse, SurrealError
 // ===== Tests =====
 
 // Helper: encode a CborValue to bytes via the same writer the public API uses.
-function encodeToBytes(v: CborValue): number[] {
+function encodeToBytes(v: CborValue): uint8[] {
 	const w = newCborWriter();
 	encodeValue(w, v);
 	return w.bytes;

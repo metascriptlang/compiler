@@ -187,6 +187,18 @@ export function bindFunctionFlow(container: Node, body: Node): void {
 	bindContainer(state, container, body);
 }
 
+// Bind a freshly deserialized macro-expansion subtree from the invoking
+// site's flow. valueToNode rebuilds nodes with flowNode=null — without this,
+// narrowing (match arms, assert guards, &&) cannot apply to macro-emitted
+// code even though the same code as source would narrow. bindStatement's
+// `_ =>` fallback dispatches expressions, so one entry covers both shapes.
+export function bindExpandedSubtree(subtree: Node | null, seed: FlowNode | null): void {
+	if (subtree === null || seed === null) return;
+	const state = createBinderState();
+	state.currentFlow = seed;
+	bindStatement(state, subtree);
+}
+
 // Bind a nested function body. Saves and restores binder state so nested
 // control flow does not leak out of the function.
 function bindContainer(state: BinderState, container: Node, body: Node): void {
@@ -638,6 +650,16 @@ function bindAssertStmt(state: BinderState, node: Node): void {
 		const abortLabel = createBranchLabel();
 		bindCondition(state, d.assertExpr, thenLabel, abortLabel);
 		state.currentFlow = finishFlowLabel(thenLabel);
+		if (d.assertMessageExpr !== null) {
+			// The message only evaluates when the condition FAILED — bind it
+			// under the false edge so references inside narrow on !e
+			// (`assert r.ok, "..." + (r.ok ? "" : r.error)` reads a narrowed
+			// r.error). Continuation flow is untouched.
+			const continueAt = state.currentFlow;
+			state.currentFlow = finishFlowLabel(abortLabel);
+			bindExpression(state, d.assertMessageExpr);
+			state.currentFlow = continueAt;
+		}
 	}
 }
 
@@ -725,6 +747,10 @@ function bindExpression(state: BinderState, node: Node): void {
 			for (const arg of d.macroArgs) {
 				bindExpression(state, arg);
 			}
+			// Stamp the invocation's program point — when the checker expands
+			// this macro, bindExpandedSubtree re-binds the deserialized result
+			// from this flow so emitted code narrows like source at this site.
+			node.flowNode = state.currentFlow;
 		},
 		// Leaf literals — nothing to bind
 		NodeKind.NumberLiteral => {},

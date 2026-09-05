@@ -19,7 +19,7 @@
 // Assert on READ-BACK FIELD VALUES, not just lengths — a wrong pointer can still
 // produce the right element count.
 
-import { JsonValue } from "std/serialize/json/types";
+import { JsonValue, JsonKind } from "std/serialize/json/types";
 import { jsonValueToStruct } from "std/serialize/json";
 
 interface Row {
@@ -72,6 +72,9 @@ function rowsOf(): JsonValue[] {
 	const r = JSON.parseValue(SRC);
 	if (!r.ok) return [];
 	const v: JsonValue = r.value;
+	// Narrow to the Array variant — `items` exists only there (the strict
+	// union-subset read rule); SRC is always a top-level array.
+	if (v.kind !== JsonKind.Array) return [];
 	return v.items;
 }
 

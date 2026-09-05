@@ -4,13 +4,13 @@
 // for v0. Synchronous wrappers are provided for tests / simple scripts.
 //
 // Layered design:
-//   ./frame      — pure-MS frame parser/builder (number[] bytes)
+//   ./frame      — pure-MS frame parser/builder (uint8[] bytes)
 //   ./handshake  — pure-MS HTTP/1.1 upgrade builder + 101 response parser
 //   ./errors     — WsError + classification
 //   THIS FILE    — wires the layers into std/net + std/crypto and surfaces a
 //                  user-facing API: connect / sendText / sendBinary / recv / close
 //
-// All inbound bytes are accumulated in `WsClient._rxBuf` (number[]) and parsed
+// All inbound bytes are accumulated in `WsClient._rxBuf` (uint8[]) and parsed
 // frame-by-frame. Control frames (ping/pong/close) are handled internally;
 // only data frames surface to the caller. Fragmented messages are reassembled
 // in `_fragments` and surfaced once FIN=1 arrives.
@@ -78,7 +78,7 @@ export interface WsClient {
 	fd: int32;
 	state: WsState;
 	subprotocol: string;     // server-negotiated subprotocol; "" if none
-	_rxBuf: number[];        // accumulator for inbound bytes across recv() calls
+	_rxBuf: uint8[];        // accumulator for inbound bytes across recv() calls
 	_rxStart: int32;         // offset into _rxBuf — bytes [0.._rxStart) already consumed
 	_frag: FragState;        // fragmented-message reassembly state
 }
@@ -96,26 +96,26 @@ export interface ConnectOptions {
 
 // ===== Bytes ↔ string boundary =====
 //
-// Frame layer works on `number[]`; std/net works on `string`. Conversions are
-// localised here and call into std/core/buffer to allocate fresh strings. The
+// Frame layer works on `uint8[]`; std/net works on `string`. Conversions are
+// localised here: bytes→string rides the zero-copy `asString` bridge, the
 // string→bytes path is pure MS (charCodeAt loop) and is also exposed via
 // `stringToBytes` for callers building raw payloads.
 
-export function stringToBytes(s: string): number[] {
+export function stringToBytes(s: string): uint8[] {
 	// Use byteAt + byteLength — charCodeAt/length use UTF-16 indexing (with
 	// UTF-8 decoding internally), which corrupts and re-counts bytes ≥ 0x80
 	// (WS frame headers like 0x81 are invalid UTF-8 leads). Sockets deliver
 	// raw bytes; we want raw bytes back out.
 	const n = s.byteLength;
-	let out: number[] = [];
+	let out: uint8[] = [];
 	for (let i: int64 = 0; i < n; i = i + 1) {
-		out.push(s.byteAt(i));
+		out.push(s.byteAt(i) as uint8);
 	}
 	return out;
 }
 
-export function bytesToString(arr: number[]): string {
-	return Buffer.fromArray(arr);
+export function bytesToString(arr: uint8[]): string {
+	return arr.asString();
 }
 
 // ===== State helpers =====
@@ -152,7 +152,7 @@ function compactRxBuf(ws: WsClient): void {
 // back to a fixed key — that would defeat the masking entirely. Instead we
 // surface InternalError so the caller can decide.
 
-function buildAndMaskFrame(opcode: int32, fin: boolean, payload: number[]): Result<string, WsError> {
+function buildAndMaskFrame(opcode: int32, fin: boolean, payload: uint8[]): Result<string, WsError> {
 	const raw = msCryptoRandomBytesRaw(4);
 	const maskBytes = stringToBytes(raw);
 	if (maskBytes.length !== 4) {
@@ -162,7 +162,7 @@ function buildAndMaskFrame(opcode: int32, fin: boolean, payload: number[]): Resu
 	return Result.ok(bytesToString(frame));
 }
 
-async function sendFrameAsync(ws: WsClient, opcode: int32, payload: number[]): Promise<Result<void, WsError>> {
+async function sendFrameAsync(ws: WsClient, opcode: int32, payload: uint8[]): Promise<Result<void, WsError>> {
 	if (ws.state !== WsState.Open && opcode !== OPCODE_CLOSE) {
 		return Result.err(wsClosed("send on " + stateName(ws.state) + " connection"));
 	}
@@ -176,7 +176,7 @@ async function sendFrameAsync(ws: WsClient, opcode: int32, payload: number[]): P
 	return Result.ok(null);
 }
 
-function sendFrameSync(ws: WsClient, opcode: int32, payload: number[]): Result<void, WsError> {
+function sendFrameSync(ws: WsClient, opcode: int32, payload: uint8[]): Result<void, WsError> {
 	if (ws.state !== WsState.Open && opcode !== OPCODE_CLOSE) {
 		return Result.err(wsClosed("send on " + stateName(ws.state) + " connection"));
 	}
@@ -197,7 +197,7 @@ export async function sendText(this ws: WsClient, payload: string): Promise<Resu
 	return await sendFrameAsync(ws, OPCODE_TEXT, bytes);
 }
 
-export async function sendBinary(this ws: WsClient, payload: number[]): Promise<Result<void, WsError>> {
+export async function sendBinary(this ws: WsClient, payload: uint8[]): Promise<Result<void, WsError>> {
 	return await sendFrameAsync(ws, OPCODE_BINARY, payload);
 }
 
@@ -207,7 +207,7 @@ export function sendTextSync(this ws: WsClient, payload: string): Result<void, W
 	return sendFrameSync(ws, OPCODE_TEXT, bytes);
 }
 
-export function sendBinarySync(this ws: WsClient, payload: number[]): Result<void, WsError> {
+export function sendBinarySync(this ws: WsClient, payload: uint8[]): Result<void, WsError> {
 	return sendFrameSync(ws, OPCODE_BINARY, payload);
 }
 
@@ -221,7 +221,7 @@ export async function recv(this ws: WsClient): Promise<Result<WsMessage, WsError
 		if (!r.ok) {
 			// Protocol violation in the inbound stream. Try to send a Close
 			// frame, then close the socket.
-			const empty: number[] = [];
+			const empty: uint8[] = [];
 			const closePayload = encodeClosePayload(WsCloseCode.ProtocolError as int32, empty);
 			await sendFrameAsync(ws, OPCODE_CLOSE, closePayload);
 			netClose(ws.fd);
@@ -246,7 +246,7 @@ export async function recv(this ws: WsClient): Promise<Result<WsMessage, WsError
 
 		const d = processFrame(ws._frag, f);
 		if (d.action === "error") {
-			const empty: number[] = [];
+			const empty: uint8[] = [];
 			const closePayload = encodeClosePayload(d.closeCode, empty);
 			await sendFrameAsync(ws, OPCODE_CLOSE, closePayload);
 			netClose(ws.fd);
@@ -272,7 +272,7 @@ export function recvSync(this ws: WsClient): Result<WsMessage, WsError> {
 	while (true) {
 		const r = parseFrame(ws._rxBuf, ws._rxStart);
 		if (!r.ok) {
-			const empty: number[] = [];
+			const empty: uint8[] = [];
 			const closePayload = encodeClosePayload(WsCloseCode.ProtocolError as int32, empty);
 			sendFrameSync(ws, OPCODE_CLOSE, closePayload);
 			netClose(ws.fd);
@@ -297,7 +297,7 @@ export function recvSync(this ws: WsClient): Result<WsMessage, WsError> {
 
 		const d = processFrame(ws._frag, f);
 		if (d.action === "error") {
-			const empty: number[] = [];
+			const empty: uint8[] = [];
 			const closePayload = encodeClosePayload(d.closeCode, empty);
 			sendFrameSync(ws, OPCODE_CLOSE, closePayload);
 			netClose(ws.fd);
@@ -374,11 +374,11 @@ const HANDSHAKE_HEADER_CAP: int32 = 65536;
 // undercounts and corrupts non-ASCII bytes (e.g. 0x81 frame leads).
 export interface HandshakeRead {
 	headers: string;       // ASCII headers up to and including the trailing CRLF CRLF
-	postHeaderBytes: number[];  // any frame bytes that arrived in the same recv chunk
+	postHeaderBytes: uint8[];  // any frame bytes that arrived in the same recv chunk
 }
 
 async function readUntilHeaderEndAsync(fd: int32): Promise<Result<HandshakeRead, WsError>> {
-	let bytes: number[] = [];
+	let bytes: uint8[] = [];
 	while (true) {
 		const chunk = await recvAsync(fd, HANDSHAKE_RECV_BUF);
 		if (chunk.byteLength === 0) {
@@ -395,12 +395,12 @@ async function readUntilHeaderEndAsync(fd: int32): Promise<Result<HandshakeRead,
 			return Result.err(wsHandshakeFailed("response headers exceeded " + HANDSHAKE_HEADER_CAP.toString() + " bytes"));
 		}
 	}
-	const empty: number[] = [];
+	const empty: uint8[] = [];
 	return Result.err(wsHandshakeFailed("unreachable"));
 }
 
 function readUntilHeaderEndSync(fd: int32): Result<HandshakeRead, WsError> {
-	let bytes: number[] = [];
+	let bytes: uint8[] = [];
 	while (true) {
 		const chunk = netRecv(fd, HANDSHAKE_RECV_BUF);
 		if (chunk.byteLength === 0) {

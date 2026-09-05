@@ -57,7 +57,7 @@ function main(): void {
 	const rArr = decode(encode(cborArray([cborInt(1), cborText("a"), cborBool(true)])));
 	ok = check("array", rArr.ok && length(rArr.value) === 3 &&
 		asNumber(at(rArr.value, 0)) === 1 && asString(at(rArr.value, 1)) === "a") && ok;
-	ok = check("bool", asBoolean(at(rArr.value, 2)) === true) && ok;
+	ok = check("bool", rArr.ok && asBoolean(at(rArr.value, 2)) === true) && ok;
 
 	// text-keyed map.
 	const rMap = decode(encode(cborTextMap(["x", "y"], [cborInt(10), cborInt(20)])));

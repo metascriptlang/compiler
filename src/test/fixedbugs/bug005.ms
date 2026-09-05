@@ -79,7 +79,7 @@ test "bug005: method body indexes promoted array param" {
 class NumOp {
 	// number[] is also ccgIntroducedPtr (Array kind) — same promotion path.
 	sum(values: number[]): number {
-		let total = 0;
+		let total: number = 0;
 		for (const v of values) {
 			total = total + v;
 		}

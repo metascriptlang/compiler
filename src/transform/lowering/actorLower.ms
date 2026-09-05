@@ -16,6 +16,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	ExprStmtData, ReturnStmtData, TestDeclData,
 	Symbol, SymbolKind, SymbolState, createNode } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
+import { canFormAcycle } from "../cycles";
 import { containsExprKind, replaceInExpr } from "../walker";
 import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import {
@@ -453,25 +454,58 @@ function emitActorStruct(node: Node, d: ActorDeclData, loc: SourceLocation): Nod
 
 // ===== Emit _impl handlers + proxy functions for each method =====
 
-// SHARE boundary rc (PARALOCK Amendment I): packArgsIntoMsg's msMsgSetPtrShared
-// took the message's atomic incref; the _impl returns it exactly once when the
-// method body finishes. try/finally (not a trailing statement) so early
-// returns AND async suspension (finally rides the async body's completion)
-// both release. Applies to message-dispatched methods only — lifecycle hooks
-// never cross the boundary.
-function wrapImplBodyWithShareRelease(body: Node, params: string[], paramTypes: Type[] | null, loc: SourceLocation): Node {
+// Boundary rc release (PARALOCK Amendment I). Two verbs land here:
+//
+//   SHARE — Arc<T>, any method. packArgsIntoMsg's msMsgSetPtrShared took the
+//   message's atomic incref; the _impl returns it exactly once.
+//
+//   MOVE — a plain ref into a SEND-class (void) method. The proxy stores the
+//   pointer raw (no incref) because the caller already gave up its reference:
+//   the analyzer classifies the arg Consumed and emits wasMoved with no
+//   destroy. Nothing downstream owned it — dispatch hands msMsgGetPtr straight
+//   to the _impl and msMsgFree cannot see which slots are refs — so the _impl
+//   is the owner and must release. Unconditional release is sound because the
+//   checker rejects a plain ref at a SEND-class call unless it is `move`
+//   (sendable.ms, PARALOCK I21), and a void method cannot be awaited, so no
+//   BORROW shape ever reaches a void _impl.
+//
+// Non-void methods keep BORROW: their plain-ref args stay alive on the parked
+// sender's frame and must NOT be released here.
+//
+// try/finally (not a trailing statement) so early returns AND async suspension
+// (finally rides the async body's completion) both release. Applies to
+// message-dispatched methods only — lifecycle hooks never cross the boundary.
+function wrapImplBodyWithShareRelease(body: Node, params: string[], paramTypes: Type[] | null, isVoid: boolean, ctx: TransformContext, loc: SourceLocation): Node {
 	if (paramTypes === null) return body;
 	const releases: Node[] = [];
 	for (let ai = 1; ai < params.length; ai = ai + 1) {
 		const t = ai < paramTypes.length ? paramTypes[ai] : null;
 		if (t === null || t.kind !== TypeKind.Ref) continue;
-		if (!isAtomicRef(t)) continue;
+		// Actors are DRC-exempt (classify.ms Ref arm): the actor runtime owns
+		// their lifetime, the caller never gave up a count (the arg is not
+		// Consumed), and nothing increfed on the way in. Releasing one here
+		// would free a live actor out from under its own mailbox.
+		if (t.sym !== null && t.sym.symbolKind === SymbolKind.Actor) continue;
+		let releaseFn = "";
+		if (isAtomicRef(t)) {
+			releaseFn = "msAtomicDecref";
+		} else if (isVoid) {
+			// Mirror the analyzer's own choice for this type (classify.ms Ref arm)
+			// so an ORC build still unregisters a cycle-capable pointee.
+			releaseFn = canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache) ? "msDecrefCyclic" : "msDecref";
+		} else {
+			continue;
+		}
 		const argIdent = makeIdent(params[ai], loc);
 		argIdent.nodeType = t;
-		releases.push(makeExprStmt(makeCall(makeIdent("msAtomicDecref", loc), [argIdent], loc), loc));
+		releases.push(makeExprStmt(makeCall(makeIdent(releaseFn, loc), [argIdent], loc), loc));
 	}
 	if (releases.length === 0) return body;
-	return makeTryFinally(body, makeBlock(releases, loc), loc);
+	// Wrap the try in a Block: asyncBridge's rewriteAsyncFnBody requires the
+	// async impl's body to be a BlockStmt (a bare TryCatchStmt body threw
+	// "un-normalized"). Block-wrapping is semantically inert for the sync path.
+	const boundaryRelease = makeTryFinally(body, makeBlock(releases, loc), loc);
+	return makeBlock([boundaryRelease], loc);
 }
 
 function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext, loc: SourceLocation, result: Node[]): void {
@@ -525,7 +559,7 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 					fnName: implNativeName,
 					params: md.methodParams,
 					fnParamTypes: md.methodParamTypes,
-					fnBody: wrapImplBodyWithShareRelease(md.methodBody, md.methodParams, m.nodeType !== null ? m.nodeType.typeChildren : null, loc),
+					fnBody: wrapImplBodyWithShareRelease(md.methodBody, md.methodParams, m.nodeType !== null ? m.nodeType.typeChildren : null, isVoid, ctx, loc),
 					fnFlags: md.methodFlags,
 					fnReturnType: md.methodReturnType,
 					fnDefaults: [],
@@ -1208,11 +1242,18 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 
 			// Extract as top-level FunctionDecl with fnFlags: "async"
 			const implNativeName = name + "_" + md.methodName + "_impl";
+			// Plain-ref MOVE release is SYNC-ONLY: every method extracted here
+			// contains await, and putting the release in a try/finally around an
+			// await body trips a PRE-EXISTING async-lowering gap (a YieldExpr
+			// inside a try body survives to codegen — `async function f() { try
+			// { const n = await w; } finally {} }` fails identically without any
+			// actor involved). Async SEND leaks remain open, pinned by program
+			// 419; pass isVoid here once try×await lowering lands.
 			const implNode = createNode(NodeKind.FunctionDecl, {
 				fnName: implNativeName,
 				params: md.methodParams,
 				fnParamTypes: md.methodParamTypes,
-				fnBody: wrapImplBodyWithShareRelease(md.methodBody, md.methodParams, m.nodeType !== null ? m.nodeType.typeChildren : null, actorNode.location),
+				fnBody: wrapImplBodyWithShareRelease(md.methodBody, md.methodParams, m.nodeType !== null ? m.nodeType.typeChildren : null, false, ctx, actorNode.location),
 				fnFlags: "async",
 				fnReturnType: md.methodReturnType,
 				fnDefaults: [],

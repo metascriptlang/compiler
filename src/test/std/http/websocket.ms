@@ -47,7 +47,7 @@ async function main(): Promise<void> {
 	const r = await connect("ws://127.0.0.1:8000/rpc");
 	if (!r.ok) return;
 	const client = r.value;
-	const payload: number[] = [0xa1, 0x64, 0x70, 0x69, 0x6e, 0x67];
+	const payload: uint8[] = [0xa1, 0x64, 0x70, 0x69, 0x6e, 0x67];
 	const s = await client.sendBinary(payload);
 	if (!s.ok) return;
 	const msg = await client.recv();
@@ -128,7 +128,7 @@ test "E2E C: sendBinarySync compiles" {
 function main(): void {
 	const r = connectSync("ws://localhost:7000/ws");
 	if (!r.ok) return;
-	const bytes: number[] = [1, 2, 3, 4, 5];
+	const bytes: uint8[] = [1, 2, 3, 4, 5];
 	r.value.sendBinarySync(bytes);
 }
 `;
@@ -188,8 +188,8 @@ async function main(): Promise<void> {
 test "E2E C: parseFrame + buildFrame accessible from user code" {
 	const src = `
 function main(): void {
-	const key: number[] = [0xAA, 0xBB, 0xCC, 0xDD];
-	const payload: number[] = [0x68, 0x69];
+	const key: uint8[] = [0xAA, 0xBB, 0xCC, 0xDD];
+	const payload: uint8[] = [0x68, 0x69];
 	const frame = buildFrame(OPCODE_TEXT, true, payload, key);
 	const r = parseFrame(frame, 0);
 	if (!r.ok) return;
@@ -205,7 +205,7 @@ function main(): void {
 test "E2E C: encodeClosePayload + decodeClosePayload accessible" {
 	const src = `
 function main(): void {
-	const reason: number[] = [0x62, 0x79, 0x65];
+	const reason: uint8[] = [0x62, 0x79, 0x65];
 	const enc = encodeClosePayload(WsCloseCode.GoingAway as int32, reason);
 	const dec = decodeClosePayload(enc);
 	if (dec.code !== 1001) return;
@@ -337,11 +337,11 @@ function main(): void {
 
 test "E2E C: SurrealDB-style CBOR ping/response loop compiles" {
 	const src = `
-async function pingLoop(c: WsClient): Promise<Result<number[], WsError>> {
+	async function pingLoop(c: WsClient): Promise<Result<uint8[], WsError>> {
 	const subs: string[] = [];
 	const extras: string[] = [];
 	// Send a CBOR-encoded RPC ping (caller-supplied bytes, opaque to us).
-	const rpcBytes: number[] = [0xa3, 0x62, 0x69, 0x64, 0x01, 0x66, 0x6d, 0x65, 0x74, 0x68, 0x6f, 0x64, 0x64, 0x70, 0x69, 0x6e, 0x67, 0x66, 0x70, 0x61, 0x72, 0x61, 0x6d, 0x73, 0x80];
+	const rpcBytes: uint8[] = [0xa3, 0x62, 0x69, 0x64, 0x01, 0x66, 0x6d, 0x65, 0x74, 0x68, 0x6f, 0x64, 0x64, 0x70, 0x69, 0x6e, 0x67, 0x66, 0x70, 0x61, 0x72, 0x61, 0x6d, 0x73, 0x80];
 	const s = await c.sendBinary(rpcBytes);
 	if (!s.ok) return Result.err(s.error);
 	const m = await c.recv();
@@ -398,7 +398,7 @@ test "E2E C: parseFrame protocol-error path emits payloadTooLarge / protocolErro
 	const src = `
 function main(): void {
 	// 9-byte header + bogus huge length triggers payloadTooLarge.
-	const bad: number[] = [0x82, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00];
+	const bad: uint8[] = [0x82, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00];
 	const r = parseFrame(bad, 0);
 	if (r.ok) return;
 	if (r.error.kind === WsErrorKind.PayloadTooLarge) return;
@@ -412,7 +412,7 @@ function main(): void {
 test "E2E C: parseFrame reserved-opcode rejection reachable" {
 	const src = `
 function main(): boolean {
-	const bad: number[] = [0x83, 0x00];  // FIN=1, opcode=3 (reserved)
+	const bad: uint8[] = [0x83, 0x00];  // FIN=1, opcode=3 (reserved)
 	const r = parseFrame(bad, 0);
 	return !r.ok;
 }
@@ -440,7 +440,7 @@ async function main(): Promise<void> {
 	const r = await connect("ws://echo.websocket.events");
 	if (!r.ok) return;
 	const c = r.value;
-	const send: number[] = [];
+	const send: uint8[] = [];
 	let i = 0;
 	while (i < 1024) { send.push(i & 0xff); i = i + 1; }
 	const sr = await c.sendBinary(send);

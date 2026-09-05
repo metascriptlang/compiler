@@ -26,9 +26,9 @@ export enum CfgInstrKind {
 
 export interface CfgInstr {
 	kind: CfgInstrKind;
-	dest: number;      // relative offset for goto/fork/loop
-	line: number;      // source location for use/def (matching)
-	col: number;
+	dest: int32;       // relative offset for goto/fork/loop
+	line: int32;       // source location for use/def (matching)
+	col: int32;
 	n: Node;           // original AST node for alias-aware comparison (Phase B)
 }
 
@@ -39,8 +39,8 @@ export interface Cfg {
 // ===== Builder State =====
 
 interface LoopInfo {
-	conditionIdx: number;  // index of loop condition start (for continue → loop)
-	breakPatches: number[];  // indices of goto instrs needing patch (for break)
+	conditionIdx: int32;   // index of loop condition start (for continue → loop)
+	breakPatches: int32[];  // indices of goto instrs needing patch (for break)
 	label: string;         // loop label — labeled break/continue resolve by it
 }
 
@@ -55,38 +55,38 @@ interface BuildCtx {
 
 const nullNode = null as unknown as Node;
 
-function emitUse(ctx: BuildCtx, line: number, col: number, node: Node): void {
+function emitUse(ctx: BuildCtx, line: int32, col: int32, node: Node): void {
 	const instr: CfgInstr = { kind: CfgInstrKind.CfgUse, dest: 0, line, col, n: node };
 	ctx.cfg.push(instr);
 }
 
-function emitDef(ctx: BuildCtx, line: number, col: number, node: Node): void {
+function emitDef(ctx: BuildCtx, line: int32, col: int32, node: Node): void {
 	const instr: CfgInstr = { kind: CfgInstrKind.CfgDef, dest: 0, line, col, n: node };
 	ctx.cfg.push(instr);
 }
 
-function emitGoto(ctx: BuildCtx): number {
+function emitGoto(ctx: BuildCtx): int32 {
 	const idx = ctx.cfg.length;
 	const instr: CfgInstr = { kind: CfgInstrKind.CfgGoto, dest: 0, line: 0, col: 0, n: nullNode };
 	ctx.cfg.push(instr);
 	return idx;
 }
 
-function emitFork(ctx: BuildCtx): number {
+function emitFork(ctx: BuildCtx): int32 {
 	const idx = ctx.cfg.length;
 	const instr: CfgInstr = { kind: CfgInstrKind.CfgFork, dest: 0, line: 0, col: 0, n: nullNode };
 	ctx.cfg.push(instr);
 	return idx;
 }
 
-function emitLoop(ctx: BuildCtx, targetIdx: number): void {
+function emitLoop(ctx: BuildCtx, targetIdx: int32): void {
 	const idx = ctx.cfg.length;
 	const offset = targetIdx - idx;
 	const instr: CfgInstr = { kind: CfgInstrKind.CfgLoop, dest: offset, line: 0, col: 0, n: nullNode };
 	ctx.cfg.push(instr);
 }
 
-function patchDest(ctx: BuildCtx, instrIdx: number, targetIdx: number): void {
+function patchDest(ctx: BuildCtx, instrIdx: int32, targetIdx: int32): void {
 	ctx.cfg[instrIdx].dest = targetIdx - instrIdx;
 }
 
@@ -458,7 +458,7 @@ export function buildCfgForSym(body: Node, rootSym: Symbol): Cfg {
 
 // ===== Last-Read Query: BFS (reference isLastRead implementation) =====
 
-export function isLastReadCfg(cfg: Cfg, line: number, col: number): boolean {
+export function isLastReadCfg(cfg: Cfg, line: int32, col: int32): boolean {
 	const instrs = cfg.instrs;
 	const len = instrs.length;
 
@@ -473,15 +473,11 @@ export function isLastReadCfg(cfg: Cfg, line: number, col: number): boolean {
 
 	// BFS from j+1: explore all forward paths
 	// If any path finds another use before a def → not last read
-	const pcs: number[] = [];
+	const pcs: int32[] = [];
 	pcs.push(j + 1);
-	// Visited set: use number array (0=unvisited, 1=visited; no bool array in runtime)
-	const visited: number[] = [];
-	let vi = 0;
-	while (vi < len + 1) {
-		visited.push(0);
-		vi = vi + 1;
-	}
+	// Visited set: int32 array (0=unvisited, 1=visited; no bool array in runtime).
+	// Preallocated — a push-per-slot loop would realloc len times per query.
+	const visited: int32[] = new Array(len + 1);
 
 	while (pcs.length > 0) {
 		let pc = pcs.pop();
@@ -545,14 +541,9 @@ export function isLastReadCfgNode(cfg: Cfg, queryNode: Node): boolean {
 	if (j >= len) return false;  // use not found — conservative
 
 	// BFS from j+1: explore all forward paths
-	const pcs: number[] = [];
+	const pcs: int32[] = [];
 	pcs.push(j + 1);
-	const visited: number[] = [];
-	let vi = 0;
-	while (vi < len + 1) {
-		visited.push(0);
-		vi = vi + 1;
-	}
+	const visited: int32[] = new Array(len + 1);
 
 	while (pcs.length > 0) {
 		let pc = pcs.pop();
@@ -687,7 +678,7 @@ function getBody(code: string): Node {
 	return result.value;
 }
 
-function countKind(code: string, vn: string, kind: CfgInstrKind): number {
+function countKind(code: string, vn: string, kind: CfgInstrKind): int32 {
 	const body = getBody(code);
 	if (body === null) return 0;
 	const cfg = buildCfg(body, vn);

@@ -64,6 +64,7 @@ import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { RaiserVM, vmCallFunction } from "../../raiser/vm";
+import { bindExpandedSubtree } from "../../binder/binder";
 import { valueToNode, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym } from "./bridge";
 import { ensureShaped } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
@@ -1838,6 +1839,15 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	if (depth < 16 && hasUserMacroInvocation(result, ctx)) {
 		result = walkExpand(result, ctx, depth + 1);
 	}
+
+	// The deserialized expansion is fresh AST with no flow bindings — the
+	// binder ran before this expansion existed. Re-bind the subtree from the
+	// invocation's program point (stamped by bindExpression's MacroInvocation
+	// case / carried through mono's bindFunctionFlow) so narrowing applies to
+	// the emitted code exactly as if it were source at that site: match arms
+	// the macro emitted get their own arm flows, guards narrow, and reads
+	// inside the arms resolve against the narrowed variant.
+	bindExpandedSubtree(result, node.flowNode);
 
 	return result;
 }

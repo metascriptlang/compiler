@@ -1,7 +1,7 @@
 // WebSocket Frame parser/builder — RFC 6455 §5.2.
 //
-// Pure MetaScript: byte work is done on `number[]` (each element 0..255).
-// Converting `number[] ↔ string` happens only at the network boundary in
+// Pure MetaScript: byte work is done on `uint8[]` (1 byte per element).
+// Converting `uint8[] ↔ string` happens only at the network boundary in
 // client.cms, mirroring the CBOR encoder/decoder pattern.
 //
 // Server-to-client frames MUST NOT be masked (RFC 6455 §5.1) — parseFrame
@@ -49,7 +49,7 @@ export interface ParsedFrame {
 	fin: boolean;
 	opcode: int32;
 	masked: boolean;            // server-to-client should be false; client-to-server should be true
-	payload: number[];          // unmasked payload bytes
+	payload: uint8[];          // unmasked payload bytes
 	headerSize: int32;          // header bytes consumed (incl. extended length + mask key)
 	totalSize: int32;           // headerSize + payloadLen — caller advances offset by this
 }
@@ -61,7 +61,7 @@ export interface ParseFrameResult {
 }
 
 function emptyFrame(): ParsedFrame {
-	const empty: number[] = [];
+	const empty: uint8[] = [];
 	return { fin: false, opcode: 0, masked: false, payload: empty, headerSize: 0, totalSize: 0 };
 }
 
@@ -85,10 +85,10 @@ function xorByte(b: number, k: number): int32 {
 	return (b as int32) ^ (k as int32);
 }
 
-export function maskPayload(payload: number[], maskKey: number[]): number[] {
+export function maskPayload(payload: uint8[], maskKey: uint8[]): uint8[] {
 	const keyLen = maskKey.length;
 	const payloadLen = payload.length;
-	let bytes: number[] = [];
+	let bytes: uint8[] = [];
 	if (keyLen === 0) {
 		// Empty key — return an unchanged copy. This branch is purely
 		// defensive: internal callers always pass a 4-byte key.
@@ -98,7 +98,7 @@ export function maskPayload(payload: number[], maskKey: number[]): number[] {
 		return bytes;
 	}
 	for (let i: int32 = 0; i < payloadLen; i = i + 1) {
-		bytes.push(xorByte(payload[i], maskKey[i % keyLen]));
+		bytes.push(xorByte(payload[i], maskKey[i % keyLen]) as uint8);
 	}
 	return bytes;
 }
@@ -111,25 +111,25 @@ export function maskPayload(payload: number[], maskKey: number[]): number[] {
 //   payload — raw bytes
 //   maskKey — exactly 4 bytes (from std/crypto.randomBytes(4) at the call site)
 // Returns the full frame bytes (header + masked payload).
-export function buildFrame(opcode: int32, fin: boolean, payload: number[], maskKey: number[]): number[] {
+export function buildFrame(opcode: int32, fin: boolean, payload: uint8[], maskKey: uint8[]): uint8[] {
 	const len = payload.length;
-	let frame: number[] = [];
+	let frame: uint8[] = [];
 
 	// Byte 0: FIN(1) | RSV(3, all 0) | OPCODE(4)
 	let b0 = opcode & 0x0F;
 	if (fin) b0 = b0 | 0x80;
-	frame.push(b0);
+	frame.push(b0 as uint8);
 
 	// Byte 1: MASK(1, always 1 for c→s) | LEN7(7)
 	const maskBit: int32 = 0x80;
 	if (len <= 125) {
-		frame.push(maskBit | (len & 0x7F));
+		frame.push((maskBit | (len & 0x7F)) as uint8);
 	} else if (len <= 0xFFFF) {
-		frame.push(maskBit | 126);
-		frame.push((len >> 8) & 0xFF);
-		frame.push(len & 0xFF);
+		frame.push((maskBit | 126) as uint8);
+		frame.push(((len >> 8) & 0xFF) as uint8);
+		frame.push((len & 0xFF) as uint8);
 	} else {
-		frame.push(maskBit | 127);
+		frame.push((maskBit | 127) as uint8);
 		// 64-bit BE length. We cap payload at MAX_PAYLOAD_BYTES (16 MB) so
 		// the high 4 bytes are always zero. Use multiply/divide for the low 4
 		// bytes to avoid `>>` sign-extension issues if the cap ever rises
@@ -139,10 +139,10 @@ export function buildFrame(opcode: int32, fin: boolean, payload: number[], maskK
 		const b5 = (len / 65536) & 0xFF;
 		const b6 = (len / 256) & 0xFF;
 		const b7 = len & 0xFF;
-		frame.push(b4);
-		frame.push(b5);
-		frame.push(b6);
-		frame.push(b7);
+		frame.push(b4 as uint8);
+		frame.push(b5 as uint8);
+		frame.push(b6 as uint8);
+		frame.push(b7 as uint8);
 	}
 
 	// 4-byte mask key
@@ -154,7 +154,7 @@ export function buildFrame(opcode: int32, fin: boolean, payload: number[], maskK
 	// Masked payload
 	let i = 0;
 	while (i < len) {
-		frame.push(xorByte(payload[i], maskKey[i & 3]));
+		frame.push(xorByte(payload[i], maskKey[i & 3]) as uint8);
 		i = i + 1;
 	}
 	return frame;
@@ -162,29 +162,29 @@ export function buildFrame(opcode: int32, fin: boolean, payload: number[], maskK
 
 // Build an unmasked frame (for tests / hypothetical server use).
 // NEVER use this for client-to-server send — RFC 6455 mandates masking.
-export function buildFrameUnmasked(opcode: int32, fin: boolean, payload: number[]): number[] {
+export function buildFrameUnmasked(opcode: int32, fin: boolean, payload: uint8[]): uint8[] {
 	const len = payload.length;
-	let frame: number[] = [];
+	let frame: uint8[] = [];
 
 	let b0 = opcode & 0x0F;
 	if (fin) b0 = b0 | 0x80;
-	frame.push(b0);
+	frame.push(b0 as uint8);
 
 	if (len <= 125) {
-		frame.push(len & 0x7F);
+		frame.push((len & 0x7F) as uint8);
 	} else if (len <= 0xFFFF) {
 		frame.push(126);
-		frame.push((len >> 8) & 0xFF);
-		frame.push(len & 0xFF);
+		frame.push(((len >> 8) & 0xFF) as uint8);
+		frame.push((len & 0xFF) as uint8);
 	} else {
 		frame.push(127);
 		// See buildFrame's matching ext-64 comment — multiply/divide avoids
 		// `>>` sign-extension on bytes >= 0x80 once the cap rises.
 		frame.push(0); frame.push(0); frame.push(0); frame.push(0);
-		frame.push((len / 16777216) & 0xFF);
-		frame.push((len / 65536) & 0xFF);
-		frame.push((len / 256) & 0xFF);
-		frame.push(len & 0xFF);
+		frame.push(((len / 16777216) & 0xFF) as uint8);
+		frame.push(((len / 65536) & 0xFF) as uint8);
+		frame.push(((len / 256) & 0xFF) as uint8);
+		frame.push((len & 0xFF) as uint8);
 	}
 
 	let i = 0;
@@ -197,9 +197,9 @@ export function buildFrameUnmasked(opcode: int32, fin: boolean, payload: number[
 
 // ===== Frame parser =====
 
-// Slice helper — number[] doesn't have built-in slice.
-function sliceBytes(src: number[], start: int32, end: int32): number[] {
-	let out: number[] = [];
+// Slice helper — uint8[] doesn't have built-in slice.
+function sliceBytes(src: uint8[], start: int32, end: int32): uint8[] {
+	let out: uint8[] = [];
 	let i = start;
 	while (i < end) {
 		out.push(src[i]);
@@ -213,7 +213,7 @@ function sliceBytes(src: number[], start: int32, end: int32): number[] {
 //     — caller should recv() more bytes and retry from same offset.
 //   Result.ok({ needMore: false, frame }) on success — caller advances offset by frame.totalSize.
 //   Result.err(WsError) on protocol violation — caller should close 1002 (or 1009 for too-large).
-export function parseFrame(data: number[], offset: int32): Result<ParseFrameResult, WsError> {
+export function parseFrame(data: uint8[], offset: int32): Result<ParseFrameResult, WsError> {
 	const avail = data.length - offset;
 	if (avail < 2) return Result.ok(needMore());
 
@@ -280,7 +280,7 @@ export function parseFrame(data: number[], offset: int32): Result<ParseFrameResu
 		return Result.err(wsProtocolError("control frame payload > 125 bytes"));
 	}
 
-	let maskKey: number[] = [];
+	let maskKey: uint8[] = [];
 	if (masked) {
 		if ((cursor - offset) + 4 > avail) return Result.ok(needMore());
 		maskKey.push(data[cursor]);
@@ -320,14 +320,14 @@ export function parseFrame(data: number[], offset: int32): Result<ParseFrameResu
 
 export interface CloseInfo {
 	code: int32;             // 1000 if no code; otherwise the parsed code
-	reason: number[];        // raw UTF-8 reason bytes (empty if no reason)
+	reason: uint8[];        // raw UTF-8 reason bytes (empty if no reason)
 	hasCode: boolean;        // true if a code was actually present in the payload
 }
 
-export function encodeClosePayload(code: int32, reason: number[]): number[] {
-	let bytes: number[] = [];
-	bytes.push((code >> 8) & 0xFF);
-	bytes.push(code & 0xFF);
+export function encodeClosePayload(code: int32, reason: uint8[]): uint8[] {
+	let bytes: uint8[] = [];
+	bytes.push(((code >> 8) & 0xFF) as uint8);
+	bytes.push((code & 0xFF) as uint8);
 	let i = 0;
 	while (i < reason.length) {
 		bytes.push(reason[i]);
@@ -336,8 +336,8 @@ export function encodeClosePayload(code: int32, reason: number[]): number[] {
 	return bytes;
 }
 
-export function decodeClosePayload(payload: number[]): CloseInfo {
-	const empty: number[] = [];
+export function decodeClosePayload(payload: uint8[]): CloseInfo {
+	const empty: uint8[] = [];
 	if (payload.length === 0) {
 		return { code: 1000, reason: empty, hasCode: false };
 	}
@@ -346,7 +346,7 @@ export function decodeClosePayload(payload: number[]): CloseInfo {
 		return { code: 1000, reason: empty, hasCode: false };
 	}
 	const code = ((payload[0] * 256) + payload[1]) as int32;
-	let reason: number[] = [];
+	let reason: uint8[] = [];
 	for (let i: int32 = 2; i < payload.length; i = i + 1) {
 		reason.push(payload[i]);
 	}
@@ -379,7 +379,7 @@ export function isWireValidCloseCode(code: int32): boolean {
 
 // ===== Tests =====
 
-function bytesEqual(a: number[], b: number[]): boolean {
+function bytesEqual(a: uint8[], b: uint8[]): boolean {
 	if (a.length !== b.length) return false;
 	let i = 0;
 	while (i < a.length) {
@@ -408,8 +408,8 @@ test "isReservedOpcode" {
 }
 
 test "maskPayload is symmetric" {
-	const key: number[] = [0x12, 0x34, 0x56, 0x78];
-	const payload: number[] = [0x48, 0x65, 0x6C, 0x6C, 0x6F];  // "Hello"
+	const key: uint8[] = [0x12, 0x34, 0x56, 0x78];
+	const payload: uint8[] = [0x48, 0x65, 0x6C, 0x6C, 0x6F];  // "Hello"
 	const masked = maskPayload(payload, key);
 	assert !bytesEqual(masked, payload);  // actually masked
 	const round = maskPayload(masked, key);
@@ -417,15 +417,15 @@ test "maskPayload is symmetric" {
 }
 
 test "maskPayload empty" {
-	const key: number[] = [1, 2, 3, 4];
-	const empty: number[] = [];
+	const key: uint8[] = [1, 2, 3, 4];
+	const empty: uint8[] = [];
 	const m = maskPayload(empty, key);
 	assert m.length === 0;
 }
 
 test "maskPayload empty key returns unchanged copy (defensive)" {
-	const empty: number[] = [];
-	const payload: number[] = [0x10, 0x20, 0x30];
+	const empty: uint8[] = [];
+	const payload: uint8[] = [0x10, 0x20, 0x30];
 	const m = maskPayload(payload, empty);
 	assert m.length === 3;
 	assert m[0] === 0x10 && m[1] === 0x20 && m[2] === 0x30;
@@ -435,8 +435,8 @@ test "maskPayload empty key returns unchanged copy (defensive)" {
 }
 
 test "maskPayload 1-byte key cycles (defensive — RFC requires 4)" {
-	const key: number[] = [0xAA];
-	const payload: number[] = [0x01, 0x02, 0x03];
+	const key: uint8[] = [0xAA];
+	const payload: uint8[] = [0x01, 0x02, 0x03];
 	const m = maskPayload(payload, key);
 	assert m[0] === (0x01 ^ 0xAA);
 	assert m[1] === (0x02 ^ 0xAA);
@@ -444,8 +444,8 @@ test "maskPayload 1-byte key cycles (defensive — RFC requires 4)" {
 }
 
 test "maskPayload 2-byte key cycles" {
-	const key: number[] = [0xF0, 0x0F];
-	const payload: number[] = [0x01, 0x02, 0x03, 0x04];
+	const key: uint8[] = [0xF0, 0x0F];
+	const payload: uint8[] = [0x01, 0x02, 0x03, 0x04];
 	const m = maskPayload(payload, key);
 	assert m[0] === (0x01 ^ 0xF0);
 	assert m[1] === (0x02 ^ 0x0F);
@@ -454,8 +454,8 @@ test "maskPayload 2-byte key cycles" {
 }
 
 test "buildFrame text round-trip — short payload" {
-	const key: number[] = [0xAA, 0xBB, 0xCC, 0xDD];
-	const payload: number[] = [0x68, 0x65, 0x6C, 0x6C, 0x6F];  // "hello"
+	const key: uint8[] = [0xAA, 0xBB, 0xCC, 0xDD];
+	const payload: uint8[] = [0x68, 0x65, 0x6C, 0x6C, 0x6F];  // "hello"
 	const frame = buildFrame(OPCODE_TEXT, true, payload, key);
 	const r = parseFrame(frame, 0);
 	assert r.ok;
@@ -469,8 +469,8 @@ test "buildFrame text round-trip — short payload" {
 }
 
 test "buildFrame header bytes — opcode + FIN + length" {
-	const key: number[] = [0, 0, 0, 0];
-	const payload: number[] = [0x41, 0x42, 0x43];  // "ABC"
+	const key: uint8[] = [0, 0, 0, 0];
+	const payload: uint8[] = [0x41, 0x42, 0x43];  // "ABC"
 	const frame = buildFrame(OPCODE_BINARY, true, payload, key);
 	// Byte 0: 0x82 = FIN | Binary opcode
 	assert frame[0] === 0x82;
@@ -484,8 +484,8 @@ test "buildFrame header bytes — opcode + FIN + length" {
 }
 
 test "buildFrame binary round-trip — 200 byte payload (extended-16 length)" {
-	const key: number[] = [1, 2, 3, 4];
-	let payload: number[] = [];
+	const key: uint8[] = [1, 2, 3, 4];
+	let payload: uint8[] = [];
 	let i = 0;
 	while (i < 200) { payload.push(0x41); i = i + 1; }
 	const frame = buildFrame(OPCODE_BINARY, true, payload, key);
@@ -501,8 +501,8 @@ test "buildFrame binary round-trip — 200 byte payload (extended-16 length)" {
 }
 
 test "buildFrame extended-16 length encoding" {
-	const key: number[] = [0, 0, 0, 0];
-	let payload: number[] = [];
+	const key: uint8[] = [0, 0, 0, 0];
+	let payload: uint8[] = [];
 	let i = 0;
 	while (i < 1000) { payload.push(0); i = i + 1; }
 	const frame = buildFrame(OPCODE_BINARY, true, payload, key);
@@ -514,8 +514,8 @@ test "buildFrame extended-16 length encoding" {
 }
 
 test "buildFrame binary round-trip — 70k payload (extended-64 length)" {
-	const key: number[] = [0xFF, 0xFE, 0xFD, 0xFC];
-	let payload: number[] = [];
+	const key: uint8[] = [0xFF, 0xFE, 0xFD, 0xFC];
+	let payload: uint8[] = [];
 	let i = 0;
 	while (i < 70000) { payload.push(0x78); i = i + 1; }
 	const frame = buildFrame(OPCODE_BINARY, true, payload, key);
@@ -530,8 +530,8 @@ test "buildFrame binary round-trip — 70k payload (extended-64 length)" {
 }
 
 test "buildFrame extended-64 length encoding (low 24 bits)" {
-	const key: number[] = [0, 0, 0, 0];
-	let payload: number[] = [];
+	const key: uint8[] = [0, 0, 0, 0];
+	let payload: uint8[] = [];
 	let i = 0;
 	while (i < 70000) { payload.push(0); i = i + 1; }
 	const frame = buildFrame(OPCODE_BINARY, true, payload, key);
@@ -548,7 +548,7 @@ test "buildFrame extended-64 length encoding (low 24 bits)" {
 // ----- B1: ext-64 length must encode the full 4 low bytes (≥16 MB boundary) -----
 
 test "buildFrame ext-64 emits non-zero byte 4 for length 16 MB exactly" {
-	const key: number[] = [0, 0, 0, 0];
+	const key: uint8[] = [0, 0, 0, 0];
 	// We don't allocate 16 MB in the test — buildFrame doesn't actually need
 	// the bytes to compute the header. But MS arrays carry their own length,
 	// so we'd need a real array. Instead, we verify the encoding logic via
@@ -560,7 +560,7 @@ test "buildFrame ext-64 emits non-zero byte 4 for length 16 MB exactly" {
 	// Allocating 16 MB+ bytes via push is feasible (~50ms). Skip the
 	// payload-content allocation by using buildFrameUnmasked which doesn't
 	// XOR — the header bytes are still emitted from `len = payload.length`.
-	let payload: number[] = [];
+	let payload: uint8[] = [];
 	const target: int32 = 16777217;  // 16 MB + 1 byte (just past the old 24-bit cap)
 	for (let k: int32 = 0; k < target; k = k + 1) {
 		payload.push(0);
@@ -581,7 +581,7 @@ test "buildFrame ext-64 emits non-zero byte 4 for length 16 MB exactly" {
 test "parseFrame ext-64 rejects values above MAX_PAYLOAD_BYTES via b4 check" {
 	// Hand-craft a header claiming length 0x02000000 = 32 MB (above the cap).
 	// b4 = 0x02 alone triggers wsPayloadTooLarge.
-	const bad: number[] = [
+	const bad: uint8[] = [
 		0x82, 0x7F,                                   // FIN | Binary, ext-64
 		0, 0, 0, 0,                                   // high 4 bytes
 		0x02, 0x00, 0x00, 0x00,                       // low 4: 0x02000000
@@ -591,7 +591,7 @@ test "parseFrame ext-64 rejects values above MAX_PAYLOAD_BYTES via b4 check" {
 }
 
 test "parseFrame ext-64 rejects when high 4 bytes non-zero" {
-	const bad: number[] = [
+	const bad: uint8[] = [
 		0x82, 0x7F,
 		0, 0, 0, 0x01,                                // bit 32 set — too large
 		0, 0, 0, 0,
@@ -601,7 +601,7 @@ test "parseFrame ext-64 rejects when high 4 bytes non-zero" {
 }
 
 test "buildFrameUnmasked round-trip" {
-	const payload: number[] = [0x70, 0x69, 0x6E, 0x67];  // "ping"
+	const payload: uint8[] = [0x70, 0x69, 0x6E, 0x67];  // "ping"
 	const frame = buildFrameUnmasked(OPCODE_TEXT, true, payload);
 	const r = parseFrame(frame, 0);
 	assert r.ok;
@@ -612,14 +612,14 @@ test "buildFrameUnmasked round-trip" {
 }
 
 test "fragmented message — two frames of a Text message" {
-	const key: number[] = [0, 0, 0, 0];
-	const part1: number[] = [0x48, 0x65, 0x6C];  // "Hel"
-	const part2: number[] = [0x6C, 0x6F];        // "lo"
+	const key: uint8[] = [0, 0, 0, 0];
+	const part1: uint8[] = [0x48, 0x65, 0x6C];  // "Hel"
+	const part2: uint8[] = [0x6C, 0x6F];        // "lo"
 	// First frame: opcode=Text, FIN=0
 	const f1 = buildFrame(OPCODE_TEXT, false, part1, key);
 	// Continuation frame: opcode=0, FIN=1
 	const f2 = buildFrame(OPCODE_CONTINUATION, true, part2, key);
-	let combined: number[] = [];
+	let combined: uint8[] = [];
 	let i = 0;
 	while (i < f1.length) { combined.push(f1[i]); i = i + 1; }
 	i = 0;
@@ -643,15 +643,15 @@ test "fragmented message — two frames of a Text message" {
 }
 
 test "parseFrame needMore on truncated header (1 byte)" {
-	const partial: number[] = [0x81];
+	const partial: uint8[] = [0x81];
 	const r = parseFrame(partial, 0);
 	assert r.ok;
 	assert r.value.needMore;
 }
 
 test "parseFrame needMore on truncated payload" {
-	const key: number[] = [1, 2, 3, 4];
-	const payload: number[] = [0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A];
+	const key: uint8[] = [1, 2, 3, 4];
+	const payload: uint8[] = [0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A];
 	const full = buildFrame(OPCODE_TEXT, true, payload, key);
 	// Truncate to 6 bytes — header(2) + mask(4) = 6, payload missing
 	const truncated = sliceBytes(full, 0, 6);
@@ -663,26 +663,26 @@ test "parseFrame needMore on truncated payload" {
 test "parseFrame rejects RSV bits" {
 	// Byte 0: FIN=1, RSV1=1, opcode=Text → 0xC1
 	// Byte 1: MASK=0, len=0
-	const bad: number[] = [0xC1, 0x00];
+	const bad: uint8[] = [0xC1, 0x00];
 	const r = parseFrame(bad, 0);
 	assert !r.ok;
 }
 
 test "parseFrame rejects reserved opcode 0x3" {
-	const bad: number[] = [0x83, 0x00];  // FIN=1, opcode=3
+	const bad: uint8[] = [0x83, 0x00];  // FIN=1, opcode=3
 	const r = parseFrame(bad, 0);
 	assert !r.ok;
 }
 
 test "parseFrame rejects fragmented control frame (Ping with FIN=0)" {
-	const bad: number[] = [0x09, 0x00];  // FIN=0, opcode=Ping
+	const bad: uint8[] = [0x09, 0x00];  // FIN=0, opcode=Ping
 	const r = parseFrame(bad, 0);
 	assert !r.ok;
 }
 
 test "parseFrame rejects oversized control frame (Ping >125 bytes)" {
 	// FIN=1, opcode=Ping, MASK=0, LEN7=126 (extended-16 follows), ext16 = 200
-	let bad: number[] = [0x89, 0x7E, 0x00, 0xC8];
+	let bad: uint8[] = [0x89, 0x7E, 0x00, 0xC8];
 	let i = 0;
 	while (i < 200) { bad.push(0x78); i = i + 1; }
 	const r = parseFrame(bad, 0);
@@ -690,7 +690,7 @@ test "parseFrame rejects oversized control frame (Ping >125 bytes)" {
 }
 
 test "encodeClosePayload + decodeClosePayload round-trip with reason" {
-	const reason: number[] = [0x62, 0x79, 0x65];  // "bye"
+	const reason: uint8[] = [0x62, 0x79, 0x65];  // "bye"
 	const enc = encodeClosePayload(1000, reason);
 	const dec = decodeClosePayload(enc);
 	assert dec.hasCode;
@@ -699,7 +699,7 @@ test "encodeClosePayload + decodeClosePayload round-trip with reason" {
 }
 
 test "encodeClosePayload code-only" {
-	const empty: number[] = [];
+	const empty: uint8[] = [];
 	const enc = encodeClosePayload(1011, empty);
 	assert enc.length === 2;
 	assert enc[0] === 0x03;
@@ -711,15 +711,15 @@ test "encodeClosePayload code-only" {
 }
 
 test "decodeClosePayload empty payload defaults to 1000 no-code" {
-	const empty: number[] = [];
+	const empty: uint8[] = [];
 	const dec = decodeClosePayload(empty);
 	assert !dec.hasCode;
 	assert dec.code === 1000;
 }
 
 test "round-trip Close frame via build/parse + close-payload codec" {
-	const key: number[] = [7, 7, 7, 7];
-	const reason: number[] = [0x67, 0x6F, 0x69, 0x6E, 0x67];  // "going"
+	const key: uint8[] = [7, 7, 7, 7];
+	const reason: uint8[] = [0x67, 0x6F, 0x69, 0x6E, 0x67];  // "going"
 	const closePayload = encodeClosePayload(1001, reason);
 	const frame = buildFrame(OPCODE_CLOSE, true, closePayload, key);
 	const r = parseFrame(frame, 0);

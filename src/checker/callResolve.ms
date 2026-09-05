@@ -2968,7 +2968,16 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		// reinterpret the active variant's bytes. Reject instead of reading
 		// another variant's storage. No disc gate: structural no-disc unions
 		// route through v<N> in C just the same.
+		//
+		// flowNode gate: a reference that was never flow-bound has no program
+		// point to judge narrowing at — this is the signature of nodes the
+		// macro bridge deserialized into a macro expansion (valueToNode
+		// rebuilds fresh nodes; their flowNode is null while the ORIGINAL arg,
+		// checked at its source site, carried the binding). Synthetic
+		// checker-built nodes likewise. Real source references are always
+		// bound by src/binder/, so the gate never silences a genuine read.
 		if (narrowedSlot === 0 && !isUnresolvedType(propType)
+				&& d.object.flowNode !== null
 				&& duFieldRequiresNarrowing(resolvedObjType, d.property)) {
 			if (duSharedFieldOffsetDiffers(resolvedObjType, d.property)) {
 				addError(ctx, `field '${d.property}' sits at different offsets across variants of '${typeDisplayName(resolvedObjType)}' — narrow with match/if on the discriminant before accessing it`,

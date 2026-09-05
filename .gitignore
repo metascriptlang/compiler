@@ -47,6 +47,7 @@ nim-cache/
 # syncthing folder markers, never in git
 docs/.stfolder/
 docs/.stignore
+docs/.stversions/
 
 # local compiler build candidates + their debug PDBs (root only)
 /msc.exe
@@ -55,4 +56,6 @@ docs/.stignore
 /mscW*
 /mscL*
 /mscG*
+/mscH*
+/mscP*
 /*.pdb

@@ -17,7 +17,9 @@
 //             a void return argument emits the expression as a statement
 //             (identifiers emit nothing — no storage exists) then `return;`.
 
-let bug093Hits = 0;
+// float64 (not the inferred int32): the callbacks below take `tag: number`,
+// so `bug093Hits + tag` is a double — the repro shape is T=void, not numerics.
+let bug093Hits: float64 = 0;
 
 function bug093RunId<T>(fn: (tag: number) => T): T {
 	const result = fn(7);
