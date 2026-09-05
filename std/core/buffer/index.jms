@@ -108,9 +108,9 @@ function decodeUtf8Range(b: Buffer, start: number, end: number): string {
 		}
 		if (cp >= 65536) {
 			const v = cp - 65536;
-			out = out + fromCharCode(55296 + (v >> 10)) + fromCharCode(56320 + (v & 1023));
+			out = out + String.fromCharCode(55296 + (v >> 10)) + String.fromCharCode(56320 + (v & 1023));
 		} else {
-			out = out + fromCharCode(cp);
+			out = out + String.fromCharCode(cp);
 		}
 	}
 	return out;
@@ -312,7 +312,7 @@ export function toStringEncoded(this b: Buffer, encoding: string, start: number,
 		let out = "";
 		let i = start;
 		while (i < end) {
-			out = out + fromCharCode(b.byteAt(i));
+			out = out + String.fromCharCode(b.byteAt(i));
 			i += 1;
 		}
 		return out;
