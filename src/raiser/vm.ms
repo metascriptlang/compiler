@@ -953,8 +953,12 @@ function runStrandSlice(vm: RaiserVM): void {
 				vm.ip = vm.savedIp;
 				vm.savedIp = -1;
 			}
-		} else if (op === RaiserOpcode.Throw) {
+		} else if (op == RaiserOpcode.Throw) {
 			vmHandleThrow(vm, inst);
+		} else if (op == RaiserOpcode.Trap) {
+			const bx = getBx(inst);
+			const msg = bx < getFuncConstLen(func) ? getFuncConst(func, bx).strVal : "trap: bad message constant";
+			vmError(vm, msg);
 		} else {
 			vmError(vm, `Unknown opcode: ${op}`);
 		}
@@ -1054,6 +1058,9 @@ function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
 	}
 	const destReg = inst.a;
 	const funcIdxReg = getReg(vm, vm.baseReg + inst.b);
+	if (funcIdxReg.kind != RaiserValueKind.Int) {
+		vmError(vm, "indirect call target is not a function"); return;
+	}
 	const calleeFuncIdx = funcIdxReg.intVal;
 	const argCount = inst.c;
 
@@ -2901,6 +2908,34 @@ test "awaiting a plain value is the identity" {
 		],
 		[raiserInt(5)]
 	));
-	assert vm.error === "";
-	assert vm.exitValue.intVal === 5;
+	assert vm.error == "";
+	assert vm.exitValue.intVal == 5;
+}
+
+test "trap opcode fails the VM with its message" {
+	const code: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.Trap, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const consts: RaiserValue[] = [raiserString("compile-time-known-bad site")];
+	const f = createRaiserFunction("main", code, consts, 0, 0, 4);
+	const funcs: RaiserFunction[] = [f];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = execModule(mod, "arena");
+	assert vm.error == "compile-time-known-bad site";
+	assert vm.halted;
+}
+
+test "indirect call on a non-function value fails loud" {
+	const code: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 1, 0),
+		raiserABC(RaiserOpcode.CallIndirect, 2, 1, 0),
+		raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+	];
+	const consts: RaiserValue[] = [raiserNil()];
+	const f = createRaiserFunction("main", code, consts, 0, 0, 8);
+	const funcs: RaiserFunction[] = [f];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = execModule(mod, "arena");
+	assert vm.error == "indirect call target is not a function";
 }

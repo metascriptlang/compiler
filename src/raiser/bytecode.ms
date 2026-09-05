@@ -133,6 +133,12 @@ export enum RaiserOpcode {
 	Finally,          // ABC: pop the safepoint — reached only when nothing was raised
 	FinallyEnd,       // ABC: resume the pending unwind, if there is one
 	Throw,            // ABC: raise R[A]
+
+	// Compile-time-known-bad site: the bytecode compiler already reported it
+	// (queueRaiserCompileError); executing it is fatal by design — vmError,
+	// not a catchable raise, so guest code cannot swallow "the compiler could
+	// not compile this". Same append-at-the-END rule as the opcodes above.
+	Trap,             // ABx: fatal vmError with message K[Bx]
 }
 
 // --- Instruction ---
