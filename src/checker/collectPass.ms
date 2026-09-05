@@ -1064,7 +1064,7 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 			let ovi = 0;
 			while (ovi < expInfo.overloadExtReceiverTypes.length && ovi < expInfo.overloadTypes.length) {
 				const ovRecv = expInfo.overloadExtReceiverTypes[ovi];
-				if (ovRecv !== "" && findExtension(ctx.extensionRegistry, ovRecv, methName) === null) {
+				if (ovRecv !== "") {
 					const ovSym = makeSymbol(expInfo.name, SymbolKind.Function, expInfo.overloadTypes[ovi], false);
 					ovSym.modulePath = expInfo.definingModule !== "" ? expInfo.definingModule : sourcePath;
 					ovSym.overloadIdx = ovi + 1;
