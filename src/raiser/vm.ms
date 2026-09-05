@@ -16,7 +16,7 @@ import {
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
-	makeTestModule, getFuncConst, getFuncConstLen, getFuncInst, getModuleFunc, createRaiserFunction, createRaiserModule,
+	makeTestModule, getFuncConst, getFuncConstLen, getFuncInst, getFuncCodeLen, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
 import { orcCollectCycles } from "./orc";
 import { lookupHostFn, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap } from "./hostRegistry";
@@ -34,6 +34,7 @@ export interface RaiserCallFrame {
 	returnReg: number;
 	baseReg: number;
 	funcName: string;
+	safePoints: number[];   // the caller's pending try handlers, restored on return
 }
 
 export interface RaiserCallFrames {
@@ -63,6 +64,10 @@ export interface RaiserStrand {
 	status: RaiserStrandStatus;
 	result: RaiserValue;
 	resultFuture: number;   // future this strand completes when it finishes; -1 for main
+	safePoints: number[];
+	currentException: RaiserValue;
+	unwinding: boolean;
+	savedIp: number;
 }
 
 export interface RaiserStrands {
@@ -108,6 +113,14 @@ export interface RaiserVM {
 	nextStrandId: number;
 	yielded: boolean;     // set by Yield / strand completion, consumed by the scheduler
 	futures: RaiserFutures;
+	// Exception state of the running strand. safePoints holds the pending try
+	// handlers of the CURRENT function only — a call stashes them on the frame.
+	// savedIp is the instruction a `finally` must return to when it ends: the
+	// Throw that is still unwinding, or the Ret that is still returning.
+	safePoints: number[];
+	currentException: RaiserValue;
+	unwinding: boolean;
+	savedIp: number;
 }
 
 // Initial register file size. The slots array grows on demand via
@@ -156,12 +169,14 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const mainResult = raiserNil();
-	const mainStrand: RaiserStrand = { id: 0, regs, callStack, ip: 0, funcIdx: mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1 };
+	const mainSafePoints: number[] = [];
+	const mainStrand: RaiserStrand = { id: 0, regs, callStack, ip: 0, funcIdx: mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	const strandItems: RaiserStrand[] = [mainStrand];
 	const strands: RaiserStrands = { items: strandItems };
 	const futureItems: RaiserFuture[] = [];
 	const futures: RaiserFutures = { items: futureItems };
-	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, strands, current: 0, nextStrandId: 1, yielded: false, futures };
+	const safePoints: number[] = [];
+	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, strands, current: 0, nextStrandId: 1, yielded: false, futures, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -266,7 +281,10 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.strands.items.length = 0;
 	const result = raiserNil();
-	const mainStrand: RaiserStrand = { id: 0, regs: vm.regs, callStack: vm.callStack, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1 };
+	vm.safePoints.length = 0;
+	vm.unwinding = false;
+	vm.savedIp = -1;
+	const mainStrand: RaiserStrand = { id: 0, regs: vm.regs, callStack: vm.callStack, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException, unwinding: false, savedIp: -1 };
 	vm.strands.items.push(mainStrand);
 	vm.current = 0;
 	vm.nextStrandId = 1;
@@ -299,6 +317,150 @@ function futureComplete(vm: RaiserVM, handle: number, value: RaiserValue): void 
 	f.waiters.length = 0;
 }
 
+function futureFail(vm: RaiserVM, handle: number, message: string): void {
+	if (handle < 0 || handle >= vm.futures.items.length) {
+		vmError(vm, `future handle out of bounds: ${handle}`);
+		return;
+	}
+	const f = vm.futures.items[handle];
+	if (f.finished) return;
+	f.finished = true;
+	f.failed = true;
+	f.errorMsg = message;
+	for (const w of f.waiters) {
+		const s = vm.strands.items[w];
+		if (s.status === RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
+	}
+	f.waiters.length = 0;
+}
+
+// A future that failed and was never read is an unhandled rejection, the same
+// contract msReportOrphanFailures enforces at exit on C.
+export function vmOrphanFailures(vm: RaiserVM): string[] {
+	const out: string[] = [];
+	for (const f of vm.futures.items) {
+		if (f.failed && !f.errorObserved) out.push(f.errorMsg);
+	}
+	return out;
+}
+
+// --- Exceptions ---
+// A per-frame stack of safepoints, each holding the ip of the handler metadata
+// its `Try` registered, plus one in-flight exception. A `finally` can be
+// entered from an unwind or from a return; `savedIp` is the instruction it
+// hands control back to when it ends, so FinallyEnd re-executes the Throw that
+// is still searching or the Ret that is still returning.
+
+function popSafePoint(vm: RaiserVM): number {
+	const n = vm.safePoints.length;
+	if (n === 0) return -1;
+	const top = vm.safePoints[n - 1];
+	vm.safePoints.length = n - 1;
+	return top;
+}
+
+// Pop one call frame without delivering a return value: the call is being
+// abandoned by an exception.
+function unwindFrame(vm: RaiserVM): void {
+	const len = vm.callStack.items.length;
+	const frame = vm.callStack.items[len - 1];
+	vm.callStack.items.length = len - 1;
+	vm.funcIdx = frame.funcIdx;
+	vm.ip = frame.returnIp;
+	vm.baseReg = frame.baseReg;
+	vm.safePoints = frame.safePoints;
+}
+
+function unhandledException(vm: RaiserVM): void {
+	vm.unwinding = false;
+	vm.savedIp = -1;
+	const msg = raiserToString(vm.currentException);
+	const s = vm.strands.items[vm.current];
+	if (s.resultFuture >= 0) {
+		// A spawned strand dies into its future: a reader re-raises it, and a
+		// failure nobody reads is reported as an orphan at exit.
+		futureFail(vm, s.resultFuture, msg);
+		s.status = RaiserStrandStatus.Done;
+		vm.yielded = true;
+		return;
+	}
+	vmError(vm, `unhandled exception: ${msg}`);
+}
+
+// Landing on a Catch ends the unwind; landing on a Finally runs it and comes
+// back through FinallyEnd. Out of frames means nobody handled it.
+function unwindStep(vm: RaiserVM): void {
+	while (true) {
+		while (vm.safePoints.length > 0) {
+			const sp = popSafePoint(vm);
+			const func = getModuleFunc(vm.mod, vm.funcIdx);
+			if (sp < 0 || sp >= getFuncCodeLen(func)) {
+				vmError(vm, `safepoint out of bounds: ${sp}`);
+				return;
+			}
+			const meta = getFuncInst(func, sp);
+			if (meta.op === RaiserOpcode.Catch) {
+				vm.unwinding = false;
+				vm.savedIp = -1;
+				// Bind the caught value into the register the handler names,
+				// now rather than later: a throw inside the handler body
+				// overwrites currentException.
+				const bound = raiserNil();
+				copyValueInto(bound, vm.currentException);
+				setReg(vm, vm.baseReg + meta.a, bound);
+				vm.ip = sp + 1;
+				return;
+			}
+			if (meta.op === RaiserOpcode.Finally) {
+				vm.ip = sp + 1;
+				return;
+			}
+			vmError(vm, `safepoint ${sp} does not point at a handler`);
+			return;
+		}
+		if (vm.callStack.items.length === 0) {
+			unhandledException(vm);
+			return;
+		}
+		unwindFrame(vm);
+	}
+}
+
+// Leaving a guarded region by returning still runs its `finally` first.
+// Every Try emits a Finally marker, so the innermost safepoint is the only one
+// that can own the next finally to run; re-executing the Ret finds the next.
+function cleanUpOnReturn(vm: RaiserVM): number {
+	const n = vm.safePoints.length;
+	if (n === 0) return -1;
+	const func = getModuleFunc(vm.mod, vm.funcIdx);
+	let sp = vm.safePoints[n - 1];
+	if (sp < 0 || sp >= getFuncCodeLen(func)) return -1;
+	const meta = getFuncInst(func, sp);
+	if (meta.op === RaiserOpcode.Catch) sp = sp + getBx(meta);
+	if (sp < 0 || sp >= getFuncCodeLen(func)) return -1;
+	if (getFuncInst(func, sp).op !== RaiserOpcode.Finally) return -1;
+	vm.safePoints.length = n - 1;
+	return sp + 1;
+}
+
+function vmHandleThrow(vm: RaiserVM, inst: RaiserInstruction): void {
+	if (!vm.unwinding) {
+		copyValueInto(vm.currentException, getReg(vm, vm.baseReg + inst.a));
+		vm.unwinding = true;
+	}
+	vm.savedIp = vm.ip - 1;
+	unwindStep(vm);
+}
+
+// Re-raise a failed future in its reader — the VM's msFutureRaiseFrom.
+function raiseFromFuture(vm: RaiserVM, f: RaiserFuture): void {
+	f.errorObserved = true;
+	copyValueInto(vm.currentException, raiserString(f.errorMsg));
+	vm.unwinding = true;
+	vm.savedIp = vm.ip - 1;
+	unwindStep(vm);
+}
+
 function strandSave(vm: RaiserVM): void {
 	const s = vm.strands.items[vm.current];
 	s.regs = vm.regs;
@@ -307,6 +469,10 @@ function strandSave(vm: RaiserVM): void {
 	s.funcIdx = vm.funcIdx;
 	s.baseReg = vm.baseReg;
 	s.loopCount = vm.loopCount;
+	s.safePoints = vm.safePoints;
+	s.currentException = vm.currentException;
+	s.unwinding = vm.unwinding;
+	s.savedIp = vm.savedIp;
 }
 
 function strandResume(vm: RaiserVM, idx: number): void {
@@ -318,6 +484,10 @@ function strandResume(vm: RaiserVM, idx: number): void {
 	vm.funcIdx = s.funcIdx;
 	vm.baseReg = s.baseReg;
 	vm.loopCount = s.loopCount;
+	vm.safePoints = s.safePoints;
+	vm.currentException = s.currentException;
+	vm.unwinding = s.unwinding;
+	vm.savedIp = s.savedIp;
 	s.status = RaiserStrandStatus.Running;
 }
 
@@ -386,7 +556,8 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const id = vm.nextStrandId;
 	vm.nextStrandId = id + 1;
 	const result = raiserNil();
-	const s: RaiserStrand = { id, regs, callStack, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1 };
+	const sp: number[] = [];
+	const s: RaiserStrand = { id, regs, callStack, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.strands.items.push(s);
 	return id;
 }
@@ -422,7 +593,8 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
 	vm.nextStrandId = id + 1;
 	const fut = newFuture(vm);
 	const result = raiserNil();
-	const s: RaiserStrand = { id, regs, callStack, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut };
+	const sp: number[] = [];
+	const s: RaiserStrand = { id, regs, callStack, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.strands.items.push(s);
 	return fut;
 }
@@ -434,6 +606,14 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
 // stackless; a strand carries its whole frame stack, so one mechanism covers
 // all three — and `await` works at any call depth here.
 function vmHandleAwait(vm: RaiserVM, inst: RaiserInstruction): void {
+	// A finally between here and the handler hands control back to this
+	// instruction; the raise it started is still in flight, so continue it
+	// instead of reading the future again.
+	if (vm.unwinding) {
+		vm.savedIp = vm.ip - 1;
+		unwindStep(vm);
+		return;
+	}
 	const base = vm.baseReg;
 	const v = getReg(vm, base + inst.b);
 	if (v.kind !== RaiserValueKind.Future) {
@@ -449,7 +629,10 @@ function vmHandleAwait(vm: RaiserVM, inst: RaiserInstruction): void {
 	}
 	const f = vm.futures.items[v.intVal];
 	if (f.finished) {
-		if (f.failed) f.errorObserved = true;
+		if (f.failed) {
+			raiseFromFuture(vm, f);
+			return;
+		}
 		const copy = raiserNil();
 		copyValueInto(copy, f.value);
 		setReg(vm, base + inst.a, copy);
@@ -708,6 +891,20 @@ function runStrandSlice(vm: RaiserVM): void {
 			if (fut >= 0) setReg(vm, base + inst.a, raiserFuture(fut));
 		} else if (op === RaiserOpcode.Await) {
 			vmHandleAwait(vm, inst);
+		} else if (op === RaiserOpcode.Try) {
+			vm.safePoints.push(vm.ip - 1 + getBx(inst));
+		} else if (op === RaiserOpcode.Catch) {
+			vmError(vm, "Catch is handler metadata and must never execute");
+		} else if (op === RaiserOpcode.Finally) {
+			// Only reached when the guarded region completed without raising.
+			popSafePoint(vm);
+		} else if (op === RaiserOpcode.FinallyEnd) {
+			if (vm.savedIp >= 0) {
+				vm.ip = vm.savedIp;
+				vm.savedIp = -1;
+			}
+		} else if (op === RaiserOpcode.Throw) {
+			vmHandleThrow(vm, inst);
 		} else {
 			vmError(vm, `Unknown opcode: ${op}`);
 		}
@@ -746,8 +943,11 @@ function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
 		returnReg: vm.baseReg + destReg,
 		baseReg: vm.baseReg,
 		funcName: callerFunc.name,
+		safePoints: vm.safePoints,
 	};
 	vm.callStack.items.push(frame);
+	const calleeSafePoints: number[] = [];
+	vm.safePoints = calleeSafePoints;
 
 	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1])
 	vm.baseReg = newBase;
@@ -756,6 +956,13 @@ function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
 }
 
 function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
+	// Leaving a guarded region: its finally runs first and comes back here.
+	const finIp = cleanUpOnReturn(vm);
+	if (finIp >= 0) {
+		vm.savedIp = vm.ip - 1;
+		vm.ip = finIp;
+		return;
+	}
 	if (vm.callStack.items.length === 0) {
 		// Top-level return — the strand is finished; the main one ends the
 		// program, but only once the remaining strands have drained.
@@ -788,6 +995,7 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	vm.funcIdx = frame.funcIdx;
 	vm.baseReg = frame.baseReg;
 	vm.ip = frame.returnIp;
+	vm.safePoints = frame.safePoints;
 }
 
 function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
@@ -817,8 +1025,11 @@ function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
 		returnReg: vm.baseReg + destReg,
 		baseReg: vm.baseReg,
 		funcName: callerFunc.name,
+		safePoints: vm.safePoints,
 	};
 	vm.callStack.items.push(frame);
+	const calleeSafePoints: number[] = [];
+	vm.safePoints = calleeSafePoints;
 
 	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1])
 	vm.baseReg = newBase;
@@ -2381,6 +2592,186 @@ test "process.exit skips the drain" {
 	const vm = execModule(mod, "arena");
 	assert vm.output === "1\n";
 	assert vm.strands.items[1].status === RaiserStrandStatus.Ready;
+}
+
+// --- Exceptions ---
+// Every layout below is the one codegen emits: Try points at the handler
+// metadata, the normal path jumps to Finally (which pops the safepoint), and
+// the catch body jumps PAST Finally because the unwinder already popped it.
+
+test "throw lands in the enclosing catch, then the finally runs" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.Try, 0, 4),
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.Throw, 0, 0, 0),
+			raiserAx(RaiserOpcode.Jump, 3),
+			raiserABx(RaiserOpcode.Catch, 1, 3),
+			raiserABC(RaiserOpcode.Print, 1, 0, 0),
+			raiserAx(RaiserOpcode.Jump, 1),
+			raiserABC(RaiserOpcode.Finally, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),
+			raiserABC(RaiserOpcode.Print, 2, 0, 0),
+			raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserInt(5), raiserInt(9)]
+	));
+	assert vm.error === "";
+	assert vm.output === "5\n9\n";
+	assert vm.exitValue.intVal === 5;
+	assert vm.safePoints.length === 0;
+}
+
+test "no throw skips the catch and still runs the finally" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.Try, 0, 4),
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.Print, 0, 0, 0),
+			raiserAx(RaiserOpcode.Jump, 3),
+			raiserABx(RaiserOpcode.Catch, 1, 3),
+			raiserABC(RaiserOpcode.Print, 1, 0, 0),
+			raiserAx(RaiserOpcode.Jump, 1),
+			raiserABC(RaiserOpcode.Finally, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),
+			raiserABC(RaiserOpcode.Print, 2, 0, 0),
+			raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		],
+		[raiserInt(7), raiserInt(9)]
+	));
+	assert vm.error === "";
+	assert vm.output === "7\n9\n";
+	assert vm.safePoints.length === 0;
+}
+
+test "an uncaught throw on the main strand is a VM error" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.Throw, 0, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		],
+		[raiserString("boom")]
+	));
+	assert vm.output === "";
+	assert vm.error.length > 0;
+}
+
+test "a throw unwinds out of the callee into the caller's catch" {
+	const mainCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.Try, 0, 5),
+		raiserABC(RaiserOpcode.Call, 1, 1, 0),
+		raiserABx(RaiserOpcode.LoadConst, 3, 0),
+		raiserABC(RaiserOpcode.Print, 3, 0, 0),
+		raiserAx(RaiserOpcode.Jump, 4),
+		raiserABx(RaiserOpcode.Catch, 2, 3),
+		raiserABC(RaiserOpcode.Print, 2, 0, 0),
+		raiserAx(RaiserOpcode.Jump, 1),
+		raiserABC(RaiserOpcode.Finally, 0, 0, 0),
+		raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+	];
+	const boomCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Throw, 0, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const fMain = createRaiserFunction("main", mainCode, [raiserInt(0)], 0, 0, 8);
+	const fBoom = createRaiserFunction("boom", boomCode, [raiserInt(42)], 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fBoom];
+	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
+	assert vm.error === "";
+	// The statement after the throwing call must not run.
+	assert vm.output === "42\n";
+	assert vm.exitValue.intVal === 42;
+}
+
+test "a finally on the way out runs before the outer catch sees the throw" {
+	const mainCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.Try, 0, 5),
+		raiserABC(RaiserOpcode.Call, 1, 1, 0),
+		raiserABx(RaiserOpcode.LoadConst, 3, 0),
+		raiserABC(RaiserOpcode.Print, 3, 0, 0),
+		raiserAx(RaiserOpcode.Jump, 4),
+		raiserABx(RaiserOpcode.Catch, 2, 3),
+		raiserABC(RaiserOpcode.Print, 2, 0, 0),
+		raiserAx(RaiserOpcode.Jump, 1),
+		raiserABC(RaiserOpcode.Finally, 0, 0, 0),
+		raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+	];
+	// inner: try { throw 8 } finally { print 6 } — no catch, so the safepoint
+	// points straight at Finally and the throw resumes after it.
+	const innerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.Try, 0, 4),
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Throw, 0, 0, 0),
+		raiserAx(RaiserOpcode.Jump, 0),
+		raiserABC(RaiserOpcode.Finally, 0, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 1, 1),
+		raiserABC(RaiserOpcode.Print, 1, 0, 0),
+		raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const fMain = createRaiserFunction("main", mainCode, [raiserInt(0)], 0, 0, 8);
+	const fInner = createRaiserFunction("inner", innerCode, [raiserInt(8), raiserInt(6)], 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fInner];
+	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
+	assert vm.error === "";
+	assert vm.output === "6\n8\n";
+}
+
+test "a throw in a spawned strand fails its future and re-raises in the reader" {
+	const mainCode = closurePairCode();
+	mainCode.push(raiserABC(RaiserOpcode.Spawn, 3, 1, 0));
+	mainCode.push(raiserABx(RaiserOpcode.Try, 0, 5));
+	mainCode.push(raiserABC(RaiserOpcode.Await, 4, 3, 0));
+	mainCode.push(raiserABx(RaiserOpcode.LoadConst, 5, 4));
+	mainCode.push(raiserABC(RaiserOpcode.Print, 5, 0, 0));
+	mainCode.push(raiserAx(RaiserOpcode.Jump, 4));
+	mainCode.push(raiserABx(RaiserOpcode.Catch, 6, 3));
+	mainCode.push(raiserABC(RaiserOpcode.Print, 6, 0, 0));
+	mainCode.push(raiserAx(RaiserOpcode.Jump, 1));
+	mainCode.push(raiserABC(RaiserOpcode.Finally, 0, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Halt, 6, 0, 0));
+	const mainConsts = closurePairConsts(1);
+	mainConsts.push(raiserInt(0));
+	const workerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Throw, 0, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 12);
+	const fWorker = createRaiserFunction("worker", workerCode, [raiserString("boom")], 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fWorker];
+	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
+	assert vm.error === "";
+	assert vm.output === "boom\n";
+	assert vm.futures.items[0].failed;
+	assert vm.futures.items[0].errorObserved;
+	assert vmOrphanFailures(vm).length === 0;
+}
+
+test "a failed future nobody read is an orphan rejection" {
+	const mainCode = closurePairCode();
+	mainCode.push(raiserABC(RaiserOpcode.Spawn, 3, 1, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Halt, 3, 0, 0));
+	const workerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Throw, 0, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const fMain = createRaiserFunction("main", mainCode, closurePairConsts(1), 0, 0, 8);
+	const fWorker = createRaiserFunction("worker", workerCode, [raiserString("dropped")], 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fWorker];
+	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
+	assert vm.error === "";
+	const orphans = vmOrphanFailures(vm);
+	assert orphans.length === 1;
+	assert orphans[0] === "dropped";
 }
 
 test "awaiting a plain value is the identity" {
