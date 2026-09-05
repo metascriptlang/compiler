@@ -255,6 +255,18 @@ export function codeLen(s: RaiserCompState): int32 {
 	return s.code.length;
 }
 
+// Try/Catch carry their target as a FORWARD offset from their own slot, so
+// both are emitted blank and patched once the handler layout is known.
+export function emitAbxPlaceholder(s: RaiserCompState, op: RaiserOpcode): int32 {
+	const idx = s.code.length;
+	emitInst(s, raiserABx(op, 0, 0));
+	return idx;
+}
+
+export function patchAbxTo(s: RaiserCompState, idx: int32, op: RaiserOpcode, a: int32, target: int32): void {
+	s.code[idx] = raiserABx(op, a, target - idx);
+}
+
 // --- Loop helpers ---
 
 export function pushLoop(s: RaiserCompState, startIp: int32): void {

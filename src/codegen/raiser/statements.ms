@@ -8,6 +8,7 @@ import {
 	ForStmtData, ForOfStmtData,
 	ExportDeclData, DecoratedDeclData, ImportDeclData,
 	IdentifierData, SwitchStmtData, SwitchCaseData,
+	TryCatchStmtData, ThrowStmtData,
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { raiserNil, raiserInt } from "../../raiser/value";
@@ -15,6 +16,7 @@ import {
 	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
 	declareLocal, declareLocalStr, regIsFixedLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
+	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, currentLoop, hasLoop, patchLoopBreaks, patchLoopContinues,
 	resolveBuiltin, registerFunc, resolveFunc, emitClosurePair
 } from "./context";
@@ -79,6 +81,12 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 			compileStmt(s, d.decoratedNode);
 		},
 		NodeKind.SwitchStmt => { compileSwitchStmt(s, node); },
+		NodeKind.TryCatchStmt => { compileTryCatchStmt(s, node); },
+		NodeKind.ThrowStmt => {
+			const d = node.data as ThrowStmtData;
+			const reg = compileExpr(s, d.throwArg);
+			emitInst(s, raiserABC(RaiserOpcode.Throw, reg, 0, 0));
+		},
 		NodeKind.EnumDecl | NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.TypeAliasDecl | NodeKind.ClassDecl => {},
 		_ => {},
 	};
@@ -304,6 +312,51 @@ function compileImportDecl(s: RaiserCompState, node: Node): void {
 // --- Switch Statement ---
 // Compiled as sequential test-and-branch (Raiser has no jump table opcode).
 // Each case: compare disc with test values, if match execute body and jump past.
+
+// try/catch/finally lays out as:
+//
+//   Try →EH               safepoint = the handler metadata
+//   <try body>
+//   Jump →FIN             nothing raised: fall into Finally, which pops it
+//   EH: Catch a=<e> →FIN  never executed; the unwinder reads a and Bx
+//   <catch body>
+//   Jump →FIN+1           the unwinder already popped, so SKIP the marker
+//   FIN: Finally
+//   <finally body>
+//   FinallyEnd
+//
+// The Finally marker is emitted even when the source has no finally clause,
+// so the normal path always has exactly one place that pops the safepoint.
+function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
+	const d = node.data as TryCatchStmtData;
+	const tryIdx = emitAbxPlaceholder(s, RaiserOpcode.Try);
+	compileStmt(s, d.tryBody);
+	const toFinally = emitJumpPlaceholder(s);
+
+	let catchIdx = -1;
+	let catchEnd = -1;
+	let catchReg = 0;
+	if (d.hasCatchClause) {
+		catchIdx = emitAbxPlaceholder(s, RaiserOpcode.Catch);
+		catchReg = allocReg(s);
+		if (d.catchName !== "") declareLocal(s, d.catchName, catchReg);
+		if (d.catchBody !== null) compileStmt(s, d.catchBody);
+		catchEnd = emitJumpPlaceholder(s);
+	}
+
+	const finIdx = codeLen(s);
+	emitInst(s, raiserABC(RaiserOpcode.Finally, 0, 0, 0));
+	if (d.hasCatchClause) {
+		patchAbxTo(s, tryIdx, RaiserOpcode.Try, 0, catchIdx);
+		patchAbxTo(s, catchIdx, RaiserOpcode.Catch, catchReg, finIdx);
+		patchJumpTo(s, catchEnd, codeLen(s));
+	} else {
+		patchAbxTo(s, tryIdx, RaiserOpcode.Try, 0, finIdx);
+	}
+	patchJumpTo(s, toFinally, finIdx);
+	if (d.finallyBody !== null) compileStmt(s, d.finallyBody);
+	emitInst(s, raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0));
+}
 
 function compileSwitchStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as SwitchStmtData;
