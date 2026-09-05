@@ -432,6 +432,21 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		return;
 	}
 
+	const memberOverloadSym = node.resolvedSym;
+	if (d.callee.kind === NodeKind.MemberExpr && memberOverloadSym !== null
+			&& memberOverloadSym.overloadIdx > 0
+			&& memberOverloadSym.declNode !== null
+			&& memberOverloadSym.declNode.kind === NodeKind.MethodDecl) {
+		const mem = d.callee.data as MemberExprData;
+		emitNode(gen, mem.object);
+		emit(gen, mem.isOptional ? "?." : ".");
+		emit(gen, jsMethodMemberName(mem.property, memberOverloadSym));
+		emit(gen, "(");
+		emitJoinedNodes(gen, d.arguments, ", ");
+		emit(gen, ")");
+		return;
+	}
+
 	// Wrap a function-expression callee: (() => 5)()
 	const wrapCallee = d.callee.kind === NodeKind.ArrowFunction || d.callee.kind === NodeKind.FunctionExpr;
 	if (wrapCallee) {
@@ -447,6 +462,11 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 }
 
 // ===== Member Expression =====
+
+export function jsMethodMemberName(methodName: string, sym: Symbol | null): string {
+	if (sym === null || sym.overloadIdx <= 0) return methodName;
+	return `${methodName}_u${sym.overloadIdx}`;
+}
 
 export function emitMemberExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as MemberExprData;
