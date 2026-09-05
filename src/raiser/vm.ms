@@ -39,7 +39,34 @@ export interface RaiserCallFrames {
 	items: RaiserCallFrame[];
 }
 
-// Field order matters — dispatch.c mirrors this struct layout exactly.
+// A strand is one independent line of execution: its own register file and
+// its own frame stack. The whole of it is reified data — MS-level calls never
+// use the host stack (vmHandleCall pushes a frame and re-points funcIdx/ip/
+// baseReg) — so a strand suspends by copying six fields out of the VM and
+// resumes by copying them back. No CPS transform, no per-opcode changes.
+export enum RaiserStrandStatus {
+	Ready,
+	Running,
+	Blocked,
+	Done,
+}
+
+export interface RaiserStrand {
+	id: number;
+	regs: RaiserRegFile;
+	callStack: RaiserCallFrames;
+	ip: number;
+	funcIdx: number;
+	baseReg: number;
+	loopCount: number;
+	status: RaiserStrandStatus;
+	result: RaiserValue;
+}
+
+export interface RaiserStrands {
+	items: RaiserStrand[];
+}
+
 export interface RaiserVM {
 	mod: RaiserModule;
 	regs: RaiserRegFile;
@@ -57,6 +84,10 @@ export interface RaiserVM {
 	error: string;    // Non-empty when VM stopped due to error
 	gcMode: string;   // "arena" (default, no RC) | "orc" (refcount + cycle collector)
 	gcThreshold: number;  // live-object count that triggers a cycle collection (orc)
+	strands: RaiserStrands;
+	current: number;      // index into strands.items of the running strand
+	nextStrandId: number;
+	yielded: boolean;     // set by Yield / strand completion, consumed by the scheduler
 }
 
 // Initial register file size. The slots array grows on demand via
@@ -104,7 +135,11 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const callStack: RaiserCallFrames = { items: callFrames };
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
-	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256 };
+	const mainResult = raiserNil();
+	const mainStrand: RaiserStrand = { id: 0, regs, callStack, ip: 0, funcIdx: mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult };
+	const strandItems: RaiserStrand[] = [mainStrand];
+	const strands: RaiserStrands = { items: strandItems };
+	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, strands, current: 0, nextStrandId: 1, yielded: false };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -191,6 +226,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	vm.error = "";
 	vm.loopCount = 0;
 	vm.callStack.items.length = 0;
+	resetStrands(vm, funcIdx);
 	ensureSlots(vm.regs, callee.maxRegs);
 	let i = 0;
 	while (i < args.length) {
@@ -203,9 +239,103 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	return vm.exitValue;
 }
 
+// --- Strand scheduling ---
+
+function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
+	vm.strands.items.length = 0;
+	const result = raiserNil();
+	const mainStrand: RaiserStrand = { id: 0, regs: vm.regs, callStack: vm.callStack, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result };
+	vm.strands.items.push(mainStrand);
+	vm.current = 0;
+	vm.nextStrandId = 1;
+	vm.yielded = false;
+}
+
+function strandSave(vm: RaiserVM): void {
+	const s = vm.strands.items[vm.current];
+	s.regs = vm.regs;
+	s.callStack = vm.callStack;
+	s.ip = vm.ip;
+	s.funcIdx = vm.funcIdx;
+	s.baseReg = vm.baseReg;
+	s.loopCount = vm.loopCount;
+}
+
+function strandResume(vm: RaiserVM, idx: number): void {
+	const s = vm.strands.items[idx];
+	vm.current = idx;
+	vm.regs = s.regs;
+	vm.callStack = s.callStack;
+	vm.ip = s.ip;
+	vm.funcIdx = s.funcIdx;
+	vm.baseReg = s.baseReg;
+	vm.loopCount = s.loopCount;
+	s.status = RaiserStrandStatus.Running;
+}
+
+// Round-robin from the strand after the current one, so a yielding strand
+// hands the turn on rather than immediately reclaiming it.
+function schedulePick(vm: RaiserVM): number {
+	const n = vm.strands.items.length;
+	let k = 1;
+	while (k <= n) {
+		const idx = (vm.current + k) % n;
+		if (vm.strands.items[idx].status === RaiserStrandStatus.Ready) return idx;
+		k = k + 1;
+	}
+	return -1;
+}
+
+// Returns true when the finished strand was a spawned one and the scheduler
+// should pick another; false when the main strand finished, which ends the
+// program with its value.
+function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
+	const s = vm.strands.items[vm.current];
+	copyValueInto(s.result, value);
+	s.status = RaiserStrandStatus.Done;
+	return vm.current !== 0;
+}
+
+export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
+	if (funcIdx < 0 || funcIdx >= vm.mod.functions.length) {
+		vmError(vm, `vmSpawnStrand: function index out of bounds: ${funcIdx}`);
+		return -1;
+	}
+	const callee = getModuleFunc(vm.mod, funcIdx);
+	const slots: RaiserValue[] = [];
+	const regs: RaiserRegFile = { slots };
+	ensureSlots(regs, callee.maxRegs);
+	const frames: RaiserCallFrame[] = [];
+	const callStack: RaiserCallFrames = { items: frames };
+	const id = vm.nextStrandId;
+	vm.nextStrandId = id + 1;
+	const result = raiserNil();
+	const s: RaiserStrand = { id, regs, callStack, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result };
+	vm.strands.items.push(s);
+	return id;
+}
+
 export function execLoop(vm: RaiserVM): void {
+	while (true) {
+		runStrandSlice(vm);
+		if (vm.halted) return;
+		if (!vm.yielded) return;
+		vm.yielded = false;
+		const cur = vm.strands.items[vm.current];
+		if (cur.status === RaiserStrandStatus.Running) cur.status = RaiserStrandStatus.Ready;
+		strandSave(vm);
+		const next = schedulePick(vm);
+		if (next < 0) {
+			vmError(vm, "deadlock: no runnable strand");
+			return;
+		}
+		strandResume(vm, next);
+	}
+}
+
+function runStrandSlice(vm: RaiserVM): void {
 	const mod = vm.mod;
-	while (!vm.halted) {
+	while (!vm.halted && !vm.yielded) {
 		const func = getModuleFunc(mod, vm.funcIdx);
 		const inst = getFuncInst(func, vm.ip);
 		vm.ip = vm.ip + 1;
@@ -233,8 +363,13 @@ export function execLoop(vm: RaiserVM): void {
 		} else if (op === RaiserOpcode.LoadNil) {
 			setReg(vm, base + inst.a, raiserNil());
 		} else if (op === RaiserOpcode.Halt) {
-			vm.halted = true;
-			vm.exitValue = getReg(vm, base + inst.a);
+			const haltVal = getReg(vm, base + inst.a);
+			if (strandFinish(vm, haltVal)) {
+				vm.yielded = true;
+			} else {
+				vm.halted = true;
+				vm.exitValue = haltVal;
+			}
 		} else if (op === RaiserOpcode.Jump) {
 			const offset = getSignedAx(inst);
 			if (offset < 0) {
@@ -413,6 +548,8 @@ export function execLoop(vm: RaiserVM): void {
 		} else if (op === RaiserOpcode.IsNil) {
 			const v = getReg(vm, base + inst.b);
 			setReg(vm, base + inst.a, raiserBool(v.kind === RaiserValueKind.Nil));
+		} else if (op === RaiserOpcode.Yield) {
+			vm.yielded = true;
 		} else {
 			vmError(vm, `Unknown opcode: ${op}`);
 		}
@@ -462,8 +599,13 @@ function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
 
 function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	if (vm.callStack.items.length === 0) {
-		// Top-level return — halt
-		copyValueInto(vm.exitValue, getReg(vm, vm.baseReg + inst.a));
+		// Top-level return — the strand is finished; only the main one halts the VM.
+		const retVal = getReg(vm, vm.baseReg + inst.a);
+		if (strandFinish(vm, retVal)) {
+			vm.yielded = true;
+			return;
+		}
+		copyValueInto(vm.exitValue, retVal);
 		vm.halted = true;
 		return;
 	}
@@ -1834,4 +1976,105 @@ test "vmCallFunction: nested Call/Ret through trampoline" {
 	const args: RaiserValue[] = [a];
 	const r = vmCallFunction(vm, 1, args);
 	assert r.intVal === 7;
+}
+
+// --- Strand scheduling ---
+
+test "single strand: no scheduler involvement" {
+	const vm = execModule(makeTestModule(
+		[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
+		[raiserInt(42)]
+	));
+	assert vm.exitValue.intVal === 42;
+	assert vm.strands.items.length === 1;
+	assert vm.strands.items[0].status === RaiserStrandStatus.Done;
+}
+
+test "two strands interleave at Yield" {
+	const mainCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Print, 0, 0, 0),
+		raiserABC(RaiserOpcode.Yield, 0, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 0, 1),
+		raiserABC(RaiserOpcode.Print, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const mainConsts: RaiserValue[] = [raiserInt(1), raiserInt(3)];
+	const workerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Print, 0, 0, 0),
+		raiserABC(RaiserOpcode.Yield, 0, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 0, 1),
+		raiserABC(RaiserOpcode.Print, 0, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const workerConsts: RaiserValue[] = [raiserInt(2), raiserInt(4)];
+	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 4);
+	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fWorker];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = createVM(mod, "arena");
+	vmSpawnStrand(vm, 1);
+	execLoop(vm);
+	// The worker's 2 lands between main's 1 and 3. What happens to the
+	// worker's remaining half when main ends is drain semantics — S2 owns it,
+	// so this pins only the switch.
+	assert vm.output.slice(0, 4) === "1\n2\n";
+
+	// Control: the same main with no strand to switch to yields to itself,
+	// so the 2 above came from the scheduler.
+	const vmAlone = createVM(mod, "arena");
+	execLoop(vmAlone);
+	assert vmAlone.output === "1\n3\n";
+}
+
+test "spawned strand finishes and hands the turn back" {
+	const mainCode: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.Yield, 0, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Print, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const mainConsts: RaiserValue[] = [raiserInt(9)];
+	const workerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Print, 0, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const workerConsts: RaiserValue[] = [raiserInt(7)];
+	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 4);
+	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fWorker];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = createVM(mod, "arena");
+	vmSpawnStrand(vm, 1);
+	execLoop(vm);
+	assert vm.output === "7\n9\n";
+	assert vm.strands.items[1].status === RaiserStrandStatus.Done;
+	assert vm.strands.items[1].result.intVal === 7;
+}
+
+test "each strand keeps its own registers" {
+	// Both functions write R0; if they shared a register file the main
+	// strand's value would come back as the worker's.
+	const mainCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Yield, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const mainConsts: RaiserValue[] = [raiserInt(11)];
+	const workerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const workerConsts: RaiserValue[] = [raiserInt(22)];
+	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 4);
+	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fWorker];
+	const mod = createRaiserModule("t", funcs, 0);
+	const vm = createVM(mod, "arena");
+	vmSpawnStrand(vm, 1);
+	execLoop(vm);
+	assert vm.exitValue.intVal === 11;
+	assert vm.strands.items[1].result.intVal === 22;
 }
