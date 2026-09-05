@@ -21,7 +21,7 @@
 //     const f = { fn: $lifted_outer_1, env: { x: x } };
 //   }
 
-import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, ObjectLiteralData, ArrayLiteralData, TestDeclData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, MemberExprData, ObjectLiteralData, ArrayLiteralData, TestDeclData, Type, TypeKind } from "../../ast/node";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
 import {
@@ -38,6 +38,7 @@ import {
 } from "./lambdaLiftingDetect";
 import {
 	ScopeStack, createScopeStack, cloneScopeStack, pushFuncBoundary, popFuncBoundary,
+	pushLoopBoundary, popLoopBoundary, isLoopLocalVar,
 	defineVar, isLocalVar, isOuterVar, isModuleLevelVar, isDirectParentVar,
 	isBuiltinName,
 } from "./lambdaLiftingScope";
@@ -78,6 +79,17 @@ interface PendingEnvRewrite {
 	// code in the outer function must continue to read/write the shared env,
 	// not the per-closure snapshot. Default false = classic behavior.
 	snapshotOnly: boolean;
+	// A variable declared inside the loop body has no home outside the
+	// iteration, so the snapshot env IS its home and the enclosing code must
+	// read it there. That rewrite has to run before the function-wide shared-env
+	// rewrite, which would otherwise consume the bare ident first.
+	takesPrecedence: boolean;
+	// Enclosing shared-env var whose field reads this rewrite reclaims. The
+	// statement carrying the closure is rewritten as one subtree at the OUTER
+	// list level, so by activation time the shared-env rewrite has already
+	// turned the loop body's remaining `x` into `_env_fn_->x` — matching bare
+	// idents alone would find nothing left. Empty = no reclaim.
+	redirectFrom: string;
 }
 
 interface LiftState {
@@ -374,7 +386,7 @@ function preRegisterVarTypes(body: Node, state: LiftState): void {
 
 let _captureCC: NameSet = createNameSet();
 let _captureIdents: Node[] = [];
-let _captureSS: ScopeStack = { names: [], funcMarkers: [] };
+let _captureSS: ScopeStack = { names: [], funcMarkers: [], loopMarkers: [] };
 
 function detectCaptures(body: Node, ss: ScopeStack, identNodes: Node[]): NameSet {
 	_captureCC = createNameSet();
@@ -588,6 +600,21 @@ function rewriteNode(
 
 function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 	if (node === null) return null;
+	if (rewrite.redirectFrom !== "" && node.kind === NodeKind.MemberExpr) {
+		const md = node.data as MemberExprData;
+		const obj = md.object;
+		if (obj !== null && obj.kind === NodeKind.Identifier && nameSetContains(rewrite.capturedNames, md.property)) {
+			const od = obj.data as IdentifierData;
+			if (od.name === rewrite.redirectFrom) {
+				const envIdent = makeIdent(rewrite.envVarName, node.location);
+				envIdent.nodeType = createRef(rewrite.envStructType);
+				const redirected = makeMember(envIdent, md.property, node.location);
+				const ft = envFieldType(rewrite.envStructType, md.property);
+				redirected.nodeType = ft !== null ? ft : node.nodeType;
+				return redirected;
+			}
+		}
+	}
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		// Skip function captures — module-level functions are always accessible in C,
@@ -637,6 +664,14 @@ function applyActiveRewrites(node: Node, rewrites: PendingEnvRewrite[]): Node {
 		result = rewriteOuterRef(result, rw);
 	}
 	return result;
+}
+
+function loopLocalSubset(captures: NameSet, state: LiftState): NameSet {
+	const out = createNameSet();
+	for (const name of captures.items) {
+		if (isLoopLocalVar(state.ss, name)) nameSetAdd(out, name);
+	}
+	return out;
 }
 
 // ===== Closure Lifting =====
@@ -762,7 +797,6 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 		// Per-closure env: each closure gets its own env declaration + init.
 		// If we're here BECAUSE of a loop escape (snapshot mode), outer function
 		// code must keep using the shared env, so mark this rewrite snapshot-only.
-		const snapshotOnly = state.sharedEnvActive;
 		// Up-chain parent: per-closure env's `$up` points to enclosing fn's
 		// shared env. Use `currentEnvAccessName` to pick the right access form
 		// for the surrounding scope (named var in fn body, `_envP` in nested
@@ -771,15 +805,20 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 		const parentEnvStructType = hasEnclosingFnEnv(state) ? state.sharedEnvStructType : (null as unknown as Type);
 		const initCaptures = preEnv !== null ? preEnv.fields : captures;
 		const initIdents = preEnv !== null ? preEnv.fieldIdents : state.capturedIdents;
+		const loopLocals = state.sharedEnvActive ? loopLocalSubset(initCaptures, state) : createNameSet();
+		const ownsIteration = loopLocals.items.length > 0;
+		const snapshotOnly = state.sharedEnvActive && !ownsIteration;
 		const envPair = makeEnvVarAndClosurePair(envVarName, liftedName, envStructType, initCaptures, state.lastUseCaptures, initIdents, state.currentParams, state.ss, parentEnvVarName, parentEnvStructType, loc, preEnv !== null);
 		state.hoistedEnvDecls.push(envPair.envDeclHoisted);
 		state.pendingEnvRewrites.push({
 			envVarName, envStructType,
-			capturedNames: initCaptures,
+			capturedNames: ownsIteration ? loopLocals : initCaptures,
 			chainNames: [] as string[],
 			chainTypes: [] as Type[],
 			envVarDecl: envPair.envInitStmt,
 			snapshotOnly,
+			takesPrecedence: ownsIteration,
+			redirectFrom: ownsIteration ? state.sharedEnvVarName : "",
 		});
 		// Load-bearing for DRC (see the shared-env branch): nodeType lets the analyzer classify +
 		// destroy the fresh closure-pair temporary so its captured env doesn't leak as a call arg.
@@ -1150,6 +1189,8 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 		chainTypes: state.sharedEnvChainTypes,
 		envVarDecl: null as unknown as Node,
 		snapshotOnly: false,
+		takesPrecedence: false,
+		redirectFrom: "",
 	});
 }
 
@@ -1196,7 +1237,13 @@ function drainPendingRewrites(state: LiftState, pendingBefore: number, result: N
 		// they don't activate an outer-ref rewrite because the outer function
 		// must keep writing to the shared env, not the snapshot.
 		if (!rewrite.snapshotOnly) {
-			state.activeEnvRewrites.push(rewrite);
+			if (rewrite.takesPrecedence) {
+				const reordered: PendingEnvRewrite[] = [rewrite];
+				for (const rw of state.activeEnvRewrites) { reordered.push(rw); }
+				state.activeEnvRewrites = reordered;
+			} else {
+				state.activeEnvRewrites.push(rewrite);
+			}
 		}
 		pi += 1;
 	}
@@ -1409,13 +1456,17 @@ function walkLift(node: Node, state: LiftState): void {
 			const d = node.data as WhileStmtData;
 			d.whileCondition = walkOrLift(d.whileCondition, state);
 			state.insideLoop += 1;
+			pushLoopBoundary(state.ss);
 			walkLift(d.whileBody, state);
+			popLoopBoundary(state.ss);
 			state.insideLoop -= 1;
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
 			state.insideLoop += 1;
+			pushLoopBoundary(state.ss);
 			walkLift(d.doBody, state);
+			popLoopBoundary(state.ss);
 			state.insideLoop -= 1;
 			d.doCondition = walkOrLift(d.doCondition, state);
 		},
@@ -1617,7 +1668,9 @@ function walkLiftBody(body: Node, state: LiftState, preWalk: () => void = noopPr
 	const savedHoisted = state.hoistedEnvDecls;
 	// Loop depth is per-function-frame; every call site of this helper is a frame boundary.
 	const savedInsideLoop = state.insideLoop;
+	const savedLoopMarkers = state.ss.loopMarkers;
 	state.insideLoop = 0;
+	state.ss.loopMarkers = [];
 	state.hoistedEnvDecls = [];
 	preWalk();
 	walkLift(body, state);
@@ -1627,6 +1680,7 @@ function walkLiftBody(body: Node, state: LiftState, preWalk: () => void = noopPr
 	}
 	state.hoistedEnvDecls = savedHoisted;
 	state.insideLoop = savedInsideLoop;
+	state.ss.loopMarkers = savedLoopMarkers;
 }
 
 // Walk a node, lifting closures if it's an ArrowFunction/FunctionExpr with captures.

@@ -87,7 +87,7 @@ export function detectionGetCapturedIdents(state: DetectionState, fnNode: Node):
 // lambda-lifting-relevant and we run it BEFORE any lifting happens.
 
 let _detectAllNames: NameSet = createNameSet();
-let _detectAllSS: ScopeStack = { names: [], funcMarkers: [] };
+let _detectAllSS: ScopeStack = { names: [], funcMarkers: [], loopMarkers: [] };
 let _detectAllIdents: Node[] = [];
 let _detectClosureDepth: number = 0;  // >0 when inside a closure
 // Number of funcMarkers at start of the current detectAllCaptures call.

@@ -11,10 +11,11 @@
 export interface ScopeStack {
 	names: string[];
 	funcMarkers: number[];
+	loopMarkers: number[];
 }
 
 export function createScopeStack(): ScopeStack {
-	const ss: ScopeStack = { names: [], funcMarkers: [] };
+	const ss: ScopeStack = { names: [], funcMarkers: [], loopMarkers: [] };
 	return ss;
 }
 
@@ -34,6 +35,29 @@ export function defineVar(ss: ScopeStack, name: string): void {
 	ss.names.push(name);
 }
 
+export function pushLoopBoundary(ss: ScopeStack): void {
+	ss.loopMarkers.push(ss.names.length);
+}
+
+export function popLoopBoundary(ss: ScopeStack): void {
+	ss.loopMarkers.pop();
+}
+
+// A name bound at or past the innermost loop mark is re-bound on every
+// iteration, so its storage is the per-iteration env rather than the function's
+// shared env (NIM-REF row 115 addendum: the pair env's fields are complete and
+// chain walks terminate there). Names bound before the mark keep one home for
+// the whole call and stay in the shared env.
+export function isLoopLocalVar(ss: ScopeStack, name: string): boolean {
+	if (ss.loopMarkers.length === 0) return false;
+	let i = ss.loopMarkers[ss.loopMarkers.length - 1];
+	while (i < ss.names.length) {
+		if (ss.names[i] === name) return true;
+		i += 1;
+	}
+	return false;
+}
+
 // Deep copy of the scope stack — both arrays cloned so the source remains
 // independent of subsequent mutations. Used by the detection pass to fork a
 // fresh frame for each function body without aliasing the parent walk's stack.
@@ -42,7 +66,9 @@ export function cloneScopeStack(ss: ScopeStack): ScopeStack {
 	for (const n of ss.names) names.push(n);
 	const markers: number[] = [];
 	for (const m of ss.funcMarkers) markers.push(m);
-	return { names, funcMarkers: markers };
+	const loops: number[] = [];
+	for (const m of ss.loopMarkers) loops.push(m);
+	return { names, funcMarkers: markers, loopMarkers: loops };
 }
 
 export function isLocalVar(ss: ScopeStack, name: string): boolean {
