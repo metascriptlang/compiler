@@ -87,7 +87,7 @@ src/codegen/raiser/
 
 | NodeKind | Notes |
 |----------|-------|
-| ThrowStmt | Error handling not yet in VM |
+| NewExpr (whole-program run path) | **Evaluates to nil, silently.** `const o = new MyErr("x"); o.message` prints `nil` under `msc run --target=raiser`, with no diagnostic at the offending line — for a plain user class, no try/catch involved (measured 2026-09-05). The 31 ClassDecl tests here pass because they exercise the codegen unit path, not the project-wide run path; the two disagree. Makes `throw new Error(msg)` lose its payload — see the exception row below |
 | ClassDecl (extends) | Inheritance deferred |
 | ClassDecl (static) | Static methods/properties deferred |
 | ClassDecl (get/set) | Getter/setter deferred |

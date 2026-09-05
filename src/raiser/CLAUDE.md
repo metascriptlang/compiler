@@ -303,13 +303,9 @@ stdlib, because they have nothing to delegate to.
     resume); two spawns → `A B 2 1`; capturing closure (env passed as the
     callee's argument) → `42`; `await` on an async function → `7`;
     `process.exit(3)` after a completed spawn → rc=3.
-  - **Failure has no path yet.** The VM has no throw/exception model, so
-    `RaiserFuture.failed` / `errorObserved` exist to mirror `msFutureBase` but
-    nothing sets them: the unhandled-rejection contract
-    (`msReportOrphanFailures`, exit 1) cannot be ported until the VM gets
-    exceptions. `sleepAsync`, the `Promise` combinators and `then`/`catch`/
-    `finally` are likewise unimplemented — they reach the unbridged-extern
-    warning, not an opcode.
+  - Failure now has a path — see **Exceptions** below. `sleepAsync`, the
+    `Promise` combinators and `then`/`catch`/`finally` are still
+    unimplemented: they reach the unbridged-extern warning, not an opcode.
   - `std/core/promise/index.rms` carries the surface so the module type-checks
     (it was `.cms`-only). This dropped `src/index.ms` from 20 unresolved names
     to 15 (`fetch`×14 + `Buffer`, both network/CLI-shell). A construct with no
@@ -317,6 +313,49 @@ stdlib, because they have nothing to delegate to.
     warning, not fatal, because node-kind is not a reachability signal
     (marking it fatal aborts every whole-program run on
     `NewExpr`/`MacroInvocation` in uncalled prelude bodies — measured).
+- **Exceptions run on safepoints (2026-09-05).** `throw` / `try` / `catch` /
+  `finally` are five opcodes — `Throw`, `Try`, `Catch`, `Finally`,
+  `FinallyEnd` — over a per-frame stack of safepoints and one in-flight
+  exception, the reference VM's model. `Try` pushes a safepoint holding the ip
+  of its handler metadata; `Catch` is never executed (the unwinder reads its
+  operands: `a` = the register the caught value binds into, `Bx` = where the
+  guarded block ends); `Finally` pops the safepoint on the normal path only;
+  `FinallyEnd` hands control back to whatever the finally interrupted.
+  - The emitted layout is the reference's, including the subtle part: the
+    catch body jumps **past** the `Finally` marker, because the unwinder
+    already popped that safepoint and executing the marker would pop an outer
+    one. A `Finally` is emitted even when the source has no finally clause, so
+    the normal path always has exactly one pop.
+  - A finally can be entered while an unwind or a return is in progress;
+    `savedIp` is the instruction it resumes — the still-searching `Throw` or
+    the still-returning `Ret`. The reference does this with `savedPC` and
+    re-executes the same instruction; the difference here is only that the
+    continuation is VM state rather than a rewound dispatcher.
+  - Unwinding walks out of call frames (`safePoints` rides on the frame and is
+    restored on the way out). Nobody handling it means: main strand →
+    `vmError`; spawned strand → its future FAILS, which a reader re-raises on
+    await (`msFutureRaiseFrom` parity) and which `vmOrphanFailures` reports as
+    an unhandled rejection at exit — `cmdRunRaiser` prints
+    `Error: unhandled rejection: …` and exits 1, the C contract.
+  - The reference matches a chain of typed `except` patterns; the MS surface
+    (`TryCatchStmtData`) has ONE untyped catch clause, so that loop collapses
+    to a single entry. This is the surface's shape, not a shortcut.
+  - Measured from source on `--target=raiser`: catch+continue, try/finally
+    ordering, cross-function throw (the statement after the throwing call does
+    NOT run), finally-during-unwind then outer catch (`inner-finally` before
+    `outer caught: deep`), uncaught → rc=1, `return` inside try runs the
+    finally and still returns 7, rethrow across frames, nested try where the
+    catch itself throws, and a throw inside `spawn` caught by the awaiting
+    reader.
+  - **Payload gap, pre-existing and not exception-specific:** `new` evaluates
+    to nil on the whole-program run path (see `src/codegen/raiser/CLAUDE.md`),
+    so `throw new Error(msg)` throws nil and `e.message` reads `nil`. Throwing
+    a string carries its value correctly. Fixing that is a NewExpr ticket, not
+    an exception one.
+  - Orphan reporting, like the strand drain, is **not reachable from valid
+    source yet**: the affine rule (PARALOCK R1/E1) rejects a discarded
+    `spawn`, so every failing future has a reader. The VM-level tests cover
+    the path.
 - **A VM runtime error now exits non-zero (fixed 2026-09-05).** `cmdRunRaiser`
   printed `raiser runtime error: …` under `if (!ranOk)` but only assigned an
   exit code under `if (ranOk)`, so the failure path fell through to 0. Now the
