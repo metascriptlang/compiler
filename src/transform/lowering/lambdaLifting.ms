@@ -1457,7 +1457,12 @@ function walkLift(node: Node, state: LiftState): void {
 			d.whileCondition = walkOrLift(d.whileCondition, state);
 			state.insideLoop += 1;
 			pushLoopBoundary(state.ss);
+			const savedWhileRewrites = state.activeEnvRewrites;
+			const whileBodyRewrites: PendingEnvRewrite[] = [];
+			for (const rw of savedWhileRewrites) whileBodyRewrites.push(rw);
+			state.activeEnvRewrites = whileBodyRewrites;
 			walkLift(d.whileBody, state);
+			state.activeEnvRewrites = savedWhileRewrites;
 			popLoopBoundary(state.ss);
 			state.insideLoop -= 1;
 		},
@@ -1465,7 +1470,12 @@ function walkLift(node: Node, state: LiftState): void {
 			const d = node.data as DoWhileStmtData;
 			state.insideLoop += 1;
 			pushLoopBoundary(state.ss);
+			const savedDoRewrites = state.activeEnvRewrites;
+			const doBodyRewrites: PendingEnvRewrite[] = [];
+			for (const rw of savedDoRewrites) doBodyRewrites.push(rw);
+			state.activeEnvRewrites = doBodyRewrites;
 			walkLift(d.doBody, state);
+			state.activeEnvRewrites = savedDoRewrites;
 			popLoopBoundary(state.ss);
 			state.insideLoop -= 1;
 			d.doCondition = walkOrLift(d.doCondition, state);
